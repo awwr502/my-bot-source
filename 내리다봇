@@ -57,6 +57,7 @@ var activeThefts = {}; // 현재 진행 중인 도둑질 시도 데이터
 var duelData = {}; // 유저 간 결투 신청 데이터
 var selectWaitState = {}; // 닉네임 중복 시 선택 대기 상태
 var bankProcessState = {}; // 은행 세부 업무(송금, 예금 등) 진행 상태
+var marketOpenPrice = 0; // [추가] 당일 장 오픈 가격 (기준점)
 
 /* 사채 및 광산 시스템 전용 상태 변수 */
 var loanRegisterState = {}; // 사채 매물 등록 절차 상태
@@ -103,7 +104,7 @@ var SYSTEM_CONFIG = {
             MANIPULATION: {
                 TARGET: "네이버통신", // 조작 타겟 종목명
                 IS_UP: false,      // 조작 시 상승 여부 (true: 상승, false: 하락)
-                RATE: 0.23,        // 조작 변동 비율 (0.25 = 25%)
+                RATE: 0.25,        // 조작 변동 비율 (0.25 = 25%)
                 ACTIVE: false      // 조작 시스템 활성화 여부
             },
             SETTINGS: {
@@ -111,7 +112,10 @@ var SYSTEM_CONFIG = {
                 OPEN_HOUR: 7,      // 주식 장 시작 시간
                 CLOSE_HOUR: 23,    // 주식 장 마감 시간
                 MANI_RATE: 0.25,   // 기본 특수 이벤트 변동폭
-                DELIST_LIMIT: 0.03 // 상장폐지 기준 비율
+                DELIST_LIMIT: 0.03, // 상장폐지 기준 비율
+                CLOSING_LIMIT: 1.20, // [신규] 종가 제한 상한선 (+20%)
+                RESISTANCE_START: 1.15, // [신규] 저항 구간 시작점 (+15%)
+                GRAVITY: 0.05      // [신규] 가격 억제 중력 계수
             }
         },
         MINE: {
@@ -598,6 +602,57 @@ function formatError(user, content, nextStep) {
     var msg = "🚫 오류 발생\n━━━━━━━━━━━━━━━\n" + nameTag + "님\n사유: " + content + "\n━━━━━━━━━━━━━━━"; 
     if (nextStep) msg += "\n💡 [가이드]: " + nextStep; 
     return msg; 
+}
+
+/**
+ * [신규] 주식 가격 변동 엔진 (동적 저항 및 종가 제한 적용)
+ * @param {Number} currentPrice - 현재 주식 가격
+ * @returns {Number} 계산된 신규 가격
+ */
+function stock_calculateNextPrice(currentPrice) {
+    if (marketOpenPrice === 0) return currentPrice; // 시가 미설정 시 변동 없음
+
+    var cfg = SYSTEM_CONFIG.ECO.STOCK.SETTINGS;
+    var growthRate = (currentPrice - marketOpenPrice) / marketOpenPrice;
+    
+    // 1. 기본 랜덤 변동치 (-1.2% ~ +1.2%)
+    var change = (Math.random() * 2.4 - 1.2) / 100;
+
+    // 2. 동적 저항 시스템 (Invisible Resistance)
+    if (growthRate > cfg.RESISTANCE_START) {
+        var now = new Date();
+        var elapsed = (now.getHours() - cfg.OPEN_HOUR) * 60 + now.getMinutes();
+        var total = (cfg.CLOSE_HOUR - cfg.OPEN_HOUR) * 60;
+        var timeWeight = Math.min(Math.max(elapsed / total, 0), 1.0); 
+
+        // 15% 초과 시 중력(Gravity) 발생: 시간에 비례하여 강해짐
+        var resistance = (growthRate - cfg.RESISTANCE_START) * cfg.GRAVITY * (1 + timeWeight);
+        change -= resistance;
+
+        // 20% 근접 시 상승 시도 80% 확률로 억제
+        if (growthRate >= (cfg.CLOSING_LIMIT - 0.01) && change > 0) {
+            if (Math.random() < 0.8) change = -Math.abs(change) * 0.5;
+        }
+    }
+
+    return Math.max(1, currentPrice + (currentPrice * change));
+}
+
+/**
+ * [신규] 장 마감 보정 로직
+ * @param {Number} currentPrice - 현재가
+ * @returns {Number} 보정된 종가
+ */
+function stock_applyClosingCorrection(currentPrice) {
+    var cfg = SYSTEM_CONFIG.ECO.STOCK.SETTINGS;
+    var growthRate = (currentPrice - marketOpenPrice) / marketOpenPrice;
+    
+    if (growthRate >= cfg.CLOSING_LIMIT) {
+        // 20%를 넘겼을 경우 19.1~19.8% 사이로 자연스럽게 미세 조정
+        var safeRate = (cfg.CLOSING_LIMIT - 0.01) + (Math.random() * 0.008);
+        return marketOpenPrice * safeRate;
+    }
+    return currentPrice;
 }
 
 //==========섹터8==========
@@ -1303,7 +1358,33 @@ function updateStockPrices(data) {
             var trafficImpact = Math.max(-0.15, Math.min(0.15, ((traffic.buy - traffic.sell) / (activeUserCount * 5)) * 0.01));
             changePercent += trafficImpact;
         }
-        
+
+        /* [신규 통합] 동적 저항(Dynamic Resistance) 시스템 */
+            // 시가가 설정되어 있고 현재가가 저항 시작점(+15%)을 넘었을 때 작동
+            if (marketOpenPrice > 0) {
+                var growthRate = (stock.price - marketOpenPrice) / marketOpenPrice;
+                var sConf = conf.SETTINGS;
+
+                if (growthRate > sConf.RESISTANCE_START) {
+                    // 장 시간에 따른 가중치 계산
+                    var elapsed = (currentHour - sConf.OPEN_HOUR) * 60 + currentMin;
+                    var totalTime = (sConf.CLOSE_HOUR - sConf.OPEN_HOUR) * 60;
+                    var timeWeight = Math.min(Math.max(elapsed / totalTime, 0), 1.0);
+
+                    // 저항 압력(Gravity) 적용: 멀어질수록, 시간이 지날수록 강해짐
+                    var resistance = (growthRate - sConf.RESISTANCE_START) * sConf.GRAVITY * (1 + timeWeight);
+                    changePercent -= resistance;
+
+                    // +19% 초과 시 상승 시도 확률적 차단 (심리적 상한선 연출)
+                    if (growthRate >= (sConf.CLOSING_LIMIT - 0.01) && changePercent > 0) {
+                        if (Math.random() < 0.85) {
+                            changePercent = -Math.abs(changePercent) * 0.4; // 85% 확률로 상승분 반납 및 미세 하락
+                        }
+                    }
+                }
+            }
+        }
+
         /* [핵심 수정] Math.floor 대신 Math.round를 사용하여 미세 변동이 절사되는 문제 해결 */
         var nextPrice = stock.price * (1 + changePercent);
         stock.price = Math.max(10, Math.round(nextPrice)); 
@@ -1469,6 +1550,20 @@ function _runSector16Logic(data, ctx) {
         ctx.isForceBackup = true; 
     }
 
+    /* [신규] 주식 장 오픈 시가 기록 (오전 7시 0분) */
+    if (currentHour === conf.SETTINGS.OPEN_HOUR && currentMin === 0 && data.lastMarketOpenMin !== currentMin) {
+        data.lastMarketOpenMin = currentMin;
+        // 시장의 대표 기준가(marketOpenPrice)를 현재 주식들의 평균값 또는 특정 지표로 기록
+        // 여기서는 시스템 설계에 따라 현재가를 시가로 고정합니다.
+        if (data.stockMarket) {
+            var stocks = Object.keys(data.stockMarket);
+            if (stocks.length > 0) {
+                // 첫 번째 종목 혹은 시장 평균을 기준으로 시가 설정 (로직에 따라 조정 가능)
+                marketOpenPrice = data.stockMarket[stocks[0]].price; 
+            }
+        }
+    }
+
     /* 1. 방별 유저 간 사채 시스템 자동 엔진 (이자 주기 3시간 반영) */
     for (var rName in data.rooms) {
         var roomData = data.rooms[rName];
@@ -1601,11 +1696,19 @@ function _runSector16Logic(data, ctx) {
     }
 
     /* 3. 주식 주기적 변동 처리 (매 0분) */
-    if (currentHour >= 7 && currentHour <= 23 && currentMin % 10 === 0 && data.lastStockUpdateMin !== currentMin) {
+    if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && currentMin % 10 === 0 && data.lastStockUpdateMin !== currentMin) {
         data.lastStockUpdateMin = currentMin; 
         try { java.lang.Thread.sleep(1000); } catch(e){}
+
+        /* [수정] 장 마감 시간(23시 0분)인 경우 종가 보정 로직 선행 실행 */
+        if (currentHour === conf.SETTINGS.CLOSE_HOUR && typeof stock_applyClosingCorrection === 'function') {
+            for (var sName in data.stockMarket) {
+                data.stockMarket[sName].price = stock_applyClosingCorrection(data.stockMarket[sName].price);
+            }
+        }
+
         var stockResult = updateStockPrices(data); 
-        var isMarketOpen = (currentHour >= 7 && currentHour <= 23);
+        var isMarketOpen = (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR);
         var statusText = isMarketOpen ? "🟢 장 운영 중" : "🔴 장 마감";
         var body = "📉 주식 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateStockList(data) || "시세 정보 없음"); 
         if (stockResult.length > 0) body += "\n\n" + stockResult.join("\n");

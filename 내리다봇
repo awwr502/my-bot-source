@@ -83,6 +83,7 @@ var ADMIN_CMD_LIST = [
     "25. /제보초기화", "26. /오류초기화", "27. /포인트지급 [닉네임] [수량]", 
     "28. /물가조정 [기준값|초기화]", "29. /관리자해제 [닉네임]", "30. /관리자목록", 
     "31. /물가완충 [0.0~1.0]", "32. /재원수정 [금액] (은행금고수정)" , "33. /경제정보(통합지표확인)"
+    "34. /시장자산복구 (주가복구)"
 ];
 
 /* 시스템 핵심 상수 설정 */
@@ -479,6 +480,7 @@ var CMD_LIST = {
     ],
     admin: [
         { cmd: "/봇구동", desc: "[온|오프] 시스템 제어", func: "_adminSystemLogic" },
+        { cmd: "/시장자산복구", desc: "유저 평단가 기반 주가 긴급 복구", func: "_adminEconomyLogic" },
         { cmd: "/경제정보", desc: "은행 재원 및 경제 지표 확인", func: "_adminEconomyLogic" },
         { cmd: "/재원수정", desc: "[금액] 은행 금고 자본 조정", func: "_adminEconomyLogic" },
         { cmd: "/데이터교정", desc: "은행 재원 및 유저 데이터 동기화", func: "_adminEconomyLogic" },
@@ -4032,6 +4034,60 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             "📢 이제 유저들이 이 금액 내에서 대출 가능합니다."));
         return true;
     }
+
+    /* [고급] 유저 보유 자산 기반 시장 재건 명령어 */
+    if (msg === "/시장자산복구") {
+        var roomData = data.rooms[roomName];
+        if (!roomData) return true;
+
+        var recoveredCount = 0;
+        var conf = SYSTEM_CONFIG.ECO.STOCK;
+        
+        // 1. 모든 유저의 주식 보유 현황 스캔
+        for (var uid in roomData.users) {
+            var u = roomData.users[uid];
+            if (u.stockHoldings) {
+                for (var sName in u.stockHoldings) {
+                    // 시장에 없거나 가격이 10P인 종목 발견 시
+                    if (!data.stockMarket[sName] || data.stockMarket[sName].price <= 10) {
+                        var type = assignStockType();
+                        // 유저들의 평균 매수가(stockAvg)를 기준으로 가격 복구, 없으면 1000P
+                        var recoverPrice = Number(u.stockAvg ? u.stockAvg[sName] : 1000) || 1000;
+                        
+                        data.stockMarket[sName] = {
+                            price: recoverPrice,
+                            lastPrice: recoverPrice,
+                            type: type,
+                            delistTick: 0,
+                            delistLimit: 5,
+                            trend: "none",
+                            trendTick: 0
+                        };
+                        recoveredCount++;
+                    }
+                }
+            }
+        }
+
+        // 2. 붕괴된 시가 정상화
+        marketOpenPrice = 1000;
+        data.marketOpenPrice = 1000;
+
+        // 3. 즉시 저장
+        safeSaveData(data);
+        
+        var resMsg = "✅ [자산 기반 시장 복구 완료]\n" +
+                     "- 부활시킨 종목 수: " + recoveredCount + "개\n" +
+                     "- 복구 기준: 유저 보유 평단가 반영\n" +
+                     "- 시가 정상화: 1,000P 설정\n\n" +
+                     "📢 유저들이 보유했던 종목들이 시장에 다시 상장되었습니다.";
+        replier.reply(formatAdmin("시스템 복구 보고", resMsg));
+        return true;
+    }
+
+    // ... 기존 /재원수정 등 로직 유지
+    return false;
+}
 
     /* 경제 지표 상세 조회 */
     if (msg === "/경제정보") {

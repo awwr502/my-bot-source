@@ -1,9 +1,9 @@
 //==========섹터1==========
 
 /* [신규] 명령어 자동 등록 시스템 (Command Registry) */
-// 모든 유저/관리자 명령어를 객체 형태로 관리하여 자동화된 도움말 및 분배 시스템을 지원합니다.
-var USER_COMMANDS = {}; // 유저용 명령어를 저장하는 객체
-var ADMIN_COMMANDS = {}; // 관리자용 명령어를 저장하는 객체
+// [수정] 리로드 시 기존 명령어 레지스트리가 초기화되지 않도록 보호 (|| {} 추가)
+var USER_COMMANDS = USER_COMMANDS || {}; 
+var ADMIN_COMMANDS = ADMIN_COMMANDS || {}; 
 
 /**
  * @param {String} cmd - 명령어 이름 (예: "/출석")
@@ -25,49 +25,50 @@ function registerAdminCmd(cmd, desc, func) {
 }
 
 /* 파일 및 데이터 동기화 객체 */
-var Lock = java.util.concurrent.locks.ReentrantLock; // 파일 쓰기 시 충돌 방지를 위한 재진입 락 객체
-var lock = new Lock(); // 실제 락 인스턴스 생성
-var SD_PATH = android.os.Environment.getExternalStorageDirectory().getAbsolutePath(); // 기기의 외부 저장소 절대 경로 추출
-var BASE_DIR = SD_PATH + "/kakaobot/data/"; // 봇 데이터가 저장될 기본 디렉토리 경로
-var FILE_PATH = BASE_DIR + "attendance.json"; // 메인 데이터베이스(JSON) 파일 경로
-var BACKUP_DIR = BASE_DIR + "backup/"; // 데이터 백업 파일이 저장되는 디렉토리 경로
+var Lock = java.util.concurrent.locks.ReentrantLock; 
+// [수정] 락 객체 재생성 방지
+var lock = lock || new Lock(); 
+var SD_PATH = android.os.Environment.getExternalStorageDirectory().getAbsolutePath(); 
+var BASE_DIR = SD_PATH + "/kakaobot/data/"; 
+var FILE_PATH = BASE_DIR + "attendance.json"; 
+var BACKUP_DIR = BASE_DIR + "backup/"; 
 
 /* [최적화] 전역 UID 캐시 시스템 (Deep Optimization 핵심) */
-// 유저 식별 시 반복문을 제거하고 메모리에서 즉시 UID를 찾기 위한 해시 테이블입니다.
 var uidCache = uidCache || {}; 
 
 /* [신규] 고정 스레드 풀 엔진 (Fixed Thread Pool) */
-// 최대 8개의 명령어를 동시에 병렬 처리하며, 그 이상의 입력은 대기열(Queue)에 쌓아 관리합니다.
-var Executor = java.util.concurrent.Executors.newFixedThreadPool(8);
+// [수정] 스레드 풀 중복 생성 방지 (메모리 누수 방지 핵심)
+var Executor = Executor || java.util.concurrent.Executors.newFixedThreadPool(8);
 
 /* 로그 저장 경로 및 디렉토리 설정 */ 
-var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt"; // 유저가 제보한 버그 내용 저장 경로
-var ERROR_LOG_PATH = BASE_DIR + "logs/error_log.txt"; // 시스템 로직 에러 로그 파일 경로
-var logDir = new java.io.File(BASE_DIR + "logs/"); // 로그 디렉토리 객체 생성
-if (!logDir.exists()) logDir.mkdirs(); // 로그 폴더가 없으면 생성
-var dir = new java.io.File(BACKUP_DIR); // 백업 디렉토리 객체 생성
-if (!dir.exists()) dir.mkdirs(); // 백업 폴더가 없으면 생성
+var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt"; 
+var ERROR_LOG_PATH = BASE_DIR + "logs/error_log.txt"; 
+var logDir = new java.io.File(BASE_DIR + "logs/"); 
+if (!logDir.exists()) logDir.mkdirs(); 
+var dir = new java.io.File(BACKUP_DIR); 
+if (!dir.exists()) dir.mkdirs(); 
 
 /* 전역 상태 변수 (휘발성 변수: 앱 재구동 시 초기화됨) */ 
-var globalData = null; // 메모리에 로드된 전체 유저 및 시스템 데이터
-var menuWaitState = {}; // 메인 메뉴(/도움말, /은행 등) 선택 대기 상태
-var lottoPurchaseState = {}; // 로또 번호 입력 대기 상태
-var sprinkleData = { active: false, winners: [] }; // 포인트 뿌리기 이벤트 상태
-var activeThefts = {}; // 현재 진행 중인 도둑질 시도 데이터
-var duelData = {}; // 유저 간 결투 신청 데이터
-var selectWaitState = {}; // 닉네임 중복 시 선택 대기 상태
-var bankProcessState = {}; // 은행 세부 업무(송금, 예금 등) 진행 상태
+// [수정] 모든 상태 변수에 '||' 연산자를 적용하여 리로드 시 데이터 증발 방지
+var globalData = globalData || null; 
+var menuWaitState = menuWaitState || {}; // 메인 메뉴 선택 대기 상태 유지
+var lottoPurchaseState = lottoPurchaseState || {}; 
+var sprinkleData = sprinkleData || { active: false, winners: [] }; 
+var activeThefts = activeThefts || {}; 
+var duelData = duelData || {}; 
+var selectWaitState = selectWaitState || {}; 
+var bankProcessState = bankProcessState || {}; 
 
 /* 사채 및 광산 시스템 전용 상태 변수 */
-var loanRegisterState = {}; // 사채 매물 등록 절차 상태
-var loanContractWaitState = {}; // 사채 대출 계약 승낙 대기 상태
-var miningState = {}; // 광산 채굴 중인 유저의 작업 상태
+var loanRegisterState = loanRegisterState || {}; 
+var loanContractWaitState = loanContractWaitState || {}; 
+var miningState = miningState || {}; 
 
 /* 홀짝 피버타임 전역 변수 */ 
-var feverData = { active: false, endTime: 0, scheduled: [] }; // 피버타임 활성 여부 및 스케줄
+var feverData = feverData || { active: false, endTime: 0, scheduled: [] }; 
 
 /* 관리자 UID 기반 인증 */ 
-var adminUIDs = ["fixed-uuid-관리자1", "fixed-uuid-관리자2"]; // 고유 ID를 통한 관리자 권한 목록
+var adminUIDs = ["fixed-uuid-관리자1", "fixed-uuid-관리자2"]; 
 
 /* 관리자 명령어 목록 */ 
 var ADMIN_CMD_LIST = [ 
@@ -85,85 +86,86 @@ var ADMIN_CMD_LIST = [
 ];
 
 /* 시스템 핵심 상수 설정 */
+// 설정값(상수)은 수정 즉시 반영을 위해 보호 로직 제외 (|| 연산자 미사용)
 var SYSTEM_CONFIG = {
     ECO: {
-        ATTEND_MIN: 1000, // 출석 체크 시 최소 지급 포인트
-        ATTEND_MAX: 1500, // 출석 체크 시 최대 지급 포인트
-        GAMBLE_MIN: 500,  // 홀짝 도박 최소 베팅금
-        GAMBLE_MAX: 1500, // 홀짝 도박 최대 베팅금
+        ATTEND_MIN: 1000, 
+        ATTEND_MAX: 1500, 
+        GAMBLE_MIN: 500,  
+        GAMBLE_MAX: 1500, 
         
         STOCK: {
-            PREFIXES: ["롯데", "엘지", "한화", "삼성", "두바이쫀득", "현대", "카카오", "네이버", "애플", "테슬라", "광어", "도다리", "두유노", "천연"], // 주식 종목명 앞글자
-            SUFFIXES: ["전자", "생명", "화학", "건설", "중공업", "바이오", "제약", "엔터", "식품", "모터스", "쿠키", "에너지", "보험", "통신", "증권", "가스"], // 주식 종목명 뒷글자
+            PREFIXES: ["롯데", "엘지", "한화", "삼성", "두바이쫀득", "현대", "카카오", "네이버", "애플", "테슬라", "광어", "도다리", "두유노", "천연"], 
+            SUFFIXES: ["전자", "생명", "화학", "건설", "중공업", "바이오", "제약", "엔터", "식품", "모터스", "쿠키", "에너지", "보험", "통신", "증권", "가스"], 
             TRAITS: {
-                "normal": { label: "일반", volatility: 1.5, prob: 44, icon: "🌱" }, // 일반주 특성
-                "bluechip": { label: "우량주", volatility: 1, prob: 28, icon: "🛡️" }, // 우량주 특성
-                "scam": { label: "작전주", volatility: 3, prob: 28, icon: "🔥" } // 작전주 특성
+                "normal": { label: "일반", volatility: 1.5, prob: 44, icon: "🌱" }, 
+                "bluechip": { label: "우량주", volatility: 1, prob: 28, icon: "🛡️" }, 
+                "scam": { label: "작전주", volatility: 3, prob: 28, icon: "🔥" } 
             },
             MANIPULATION: {
-                TARGET: "ㅇㅇ", // 조작 타겟 종목명
-                IS_UP: false,      // 조작 시 상승 여부 (true: 상승, false: 하락)
-                RATE: 0.24,        // 조작 변동 비율 (0.25 = 25%)
-                ACTIVE: false      // 조작 시스템 활성화 여부
+                TARGET: "ㅇㅇ", 
+                IS_UP: false,      
+                RATE: 0.24,        
+                ACTIVE: false      
             },
             SETTINGS: {
-                MAX_COUNT: 10,     // 시장 유지 최대 종목 수
-                OPEN_HOUR: 7,      // 주식 장 시작 시간
-                CLOSE_HOUR: 23,    // 주식 장 마감 시간
-                MANI_RATE: 0.25,   // 기본 특수 이벤트 변동폭
-                DELIST_LIMIT: 0.03 // 상장폐지 기준 비율
+                MAX_COUNT: 10,      
+                OPEN_HOUR: 7,       
+                CLOSE_HOUR: 23,     
+                MANI_RATE: 0.25,    
+                DELIST_LIMIT: 0.03 
             }
         },
         MINE: {
-            BASE_PER_MIN: 3, // 광산 분당 기본 채굴 수익
-            COPPER_PROB: 0.05, // 구리 발견 확률
-            GOLD_PROB: 0.03,   // 금 발견 확률
-            DIA_PROB: 0.002,   // 다이아몬드 발견 확률
-            COPPER_MULT: 1.5,  // 구리 발견 시 수익 배율
-            GOLD_MULT: 2.0,    // 금 발견 시 수익 배율
-            DIA_MULT: 10.0     // 다이아 발견 시 수익 배율
+            BASE_PER_MIN: 3, 
+            COPPER_PROB: 0.05, 
+            GOLD_PROB: 0.03,   
+            DIA_PROB: 0.002,   
+            COPPER_MULT: 1.5,  
+            GOLD_MULT: 2.0,    
+            DIA_MULT: 10.0     
         },
         PRIVATE_LOAN: {
-            MIN_AMOUNT: 1000,       // 사채 등록 최소 금액
-            MAX_RATE: 15,           // 사채 법정 최고 이율 (%)
-            COLLECTION_LIMIT: 24,   // 추심 시작 연체 시간 (시간)
-            INTEREST_PERIOD: 3,     // 이자 계산 주기 (시간)
-            MIN_BORROW: 1000,       // 최소 대출 단위
-            DAILY_LIMIT: 1          // 일일 은행 대출 횟수 제한
+            MIN_AMOUNT: 1000,        
+            MAX_RATE: 15,            
+            COLLECTION_LIMIT: 24,    
+            INTEREST_PERIOD: 3,      
+            MIN_BORROW: 1000,        
+            DAILY_LIMIT: 1           
         },
         CREDIT: { 
-            SCORES: [900, 800, 700, 600, 500], // 등급별 요구 신용 점수
-            LIMITS: [30000, 20000, 15000, 10000, 8000, 3000], // 등급별 대출 한도
-            RATES: [1.03, 1.05, 1.13, 1.17, 1.20, 1.35], // 등급별 대출 이율
-            LABELS: ["1등급", "2등급", "3등급", "4등급", "5등급", "신용불량자"], // 등급 명칭
-            ICONS: ["👑", "💎", "🥇", "🥈", "🥉", "🚫"] // 등급별 아이콘
+            SCORES: [900, 800, 700, 600, 500], 
+            LIMITS: [30000, 20000, 15000, 10000, 8000, 3000], 
+            RATES: [1.03, 1.05, 1.13, 1.17, 1.20, 1.35], 
+            LABELS: ["1등급", "2등급", "3등급", "4등급", "5등급", "신용불량자"], 
+            ICONS: ["👑", "💎", "🥇", "🥈", "🥉", "🚫"] 
         }
     },
 
     /* [신규] 도배 방지 및 타임아웃 설정 */
     SPAM: {
-        LIMIT_COUNT: 5,        // 짧은 시간 내 허용할 최대 채팅 수 (5회 초과 시 차단)
-        LIMIT_WINDOW: 2000,    // 도배 판정 기준 시간 (3000ms = 3초)
-        TIMEOUT_MS: 300000     // 도배 시 이용 제한 시간 (600,000ms = 10분)
+        LIMIT_COUNT: 5,        
+        LIMIT_WINDOW: 2000,    
+        TIMEOUT_MS: 300000     
     },
 
     PROB: {
-        ODD_EVEN_WIN: 0.47,        // 홀짝 기본 승률
-        ODD_EVEN_FEVER: 0.52,      // 피버타임 홀짝 승률
-        STOCK_NEW_LISTING: 0.5,    // 신규 상장 발생 확률
-        STOCK_SPECIAL: 0.5,        // 주식 특수 이벤트 발생 확률
-        STOCK_UP_CHANCE: 0.45       // 특수 이벤트 시 상승 확률
+        ODD_EVEN_WIN: 0.47,        
+        ODD_EVEN_FEVER: 0.52,      
+        STOCK_NEW_LISTING: 0.5,    
+        STOCK_SPECIAL: 0.5,        
+        STOCK_UP_CHANCE: 0.45        
     },
     
     MSG: {
         PREFIX: {
             INFO: "ℹ️", ERROR: "🚫", ADMIN: "⚙️", SUCCESS: "✅", 
             WARN: "⚠️", GAMBLE_WIN: "🎊", GAMBLE_LOSE: "💀", LOAN: "🚬", MINE: "⛏️", TIMEOUT: "🔇"
-        }, // 각 메시지 타입별 접두사 아이콘 설정
-        ERR_FORM: "형식이 올바르지 않습니다.", // 입력 형식 오류 메시지
-        ERR_MONEY: "포인트가 부족합니다.", // 자금 부족 메시지
-        ERR_USER: "대상을 찾을 수 없습니다.", // 대상 유저 부재 메시지
-        ERR_TIMEOUT: "도배로 인해 이용이 일시 제한되었습니다." // 타임아웃 유저 알림 메시지
+        }, 
+        ERR_FORM: "형식이 올바르지 않습니다.", 
+        ERR_MONEY: "포인트가 부족합니다.", 
+        ERR_USER: "대상을 찾을 수 없습니다.", 
+        ERR_TIMEOUT: "도배로 인해 이용이 일시 제한되었습니다." 
     }
 };
 
@@ -497,8 +499,9 @@ var CMD_LIST = {
 
 //==========섹터7==========
 
-/* 전역 상태 변수들 (섹터1과 중복 방지 처리) */ 
-var sprayData = { 
+/* 전역 상태 변수들 (섹터1과 중복 방지 및 상태 유지 처리) */ 
+// [수정] 리로드 시 뿌리기 데이터가 초기화되지 않도록 보호
+var sprayData = sprayData || { 
     totalPoint: 0, 
     remainingPoint: 0, 
     maxWinners: 0, 
@@ -508,9 +511,10 @@ var sprayData = {
     timer: null 
 };
 
-/* 섹터1에 없는 변수만 신규 선언 */ 
-var selectWaitState = {}; 
-var bankProcessState = {};
+/* 섹터1에 없는 변수만 신규 선언하되, 기존 값 유지 */ 
+// [수정] 선택 대기 및 은행 업무 상태 유지 (중요)
+var selectWaitState = selectWaitState || {}; 
+var bankProcessState = bankProcessState || {};
 
 /* [수정] 섹터1에서 이미 선언된 변수들은 중복 선언 방지를 위해 주석 처리하거나 기존 객체 사용 */ 
 // var duelData = {}; 

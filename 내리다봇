@@ -132,7 +132,10 @@ var SYSTEM_CONFIG = {
             DIA_PROB: 0.005,   // 다이아몬드 발견 확률
             COPPER_MULT: 1.5,  // 구리 발견 시 수익 배율
             GOLD_MULT: 2.0,    // 금 발견 시 수익 배율
-            DIA_MULT: 10.0     // 다이아 발견 시 수익 배율
+            DIA_MULT: 10.0,    // 다이아 발견 시 수익 배율
+            /* [신규] 유물 시스템 설정 */
+            ARTIFACT_CHANCE: 0.001, // 유물 조각 발견 확률 (0.05%)
+            ARTIFACT_GOAL: 10         // [도굴왕] 칭호 획득을 위한 필요 조각 수
         },
         PRIVATE_LOAN: {
             MIN_AMOUNT: 1000,       // 사채 등록 최소 금액
@@ -443,11 +446,12 @@ function generateAdminHelp() {
     return "⚙️ [관리자 전용 명령어]\n" + list.join("\n");
 }
 
-/* [2] 명령어 리스트 데이터 (수정됨: /분해 추가) */
+/* [2] 명령어 리스트 데이터 (수정됨: /유물도감 추가) */
 var CMD_LIST = {
     user: [
         { cmd: "/출석", desc: "매일 포인트 획득", cat: "조회", func: "_gameShopLogic" },
         { cmd: "/내정보", desc: "내 스탯 확인", cat: "조회", func: "_gameInfoLogic" },
+        { cmd: "/유물도감", desc: "유물 조각 수집 현황 확인", cat: "조회", func: "_gameInfoLogic" }, // [신규] 유물 시스템 명령어
         { cmd: "/신용등급", desc: "신용 점수와 등급 확인", cat: "조회", func: "_gameInfoLogic" },
         { cmd: "/출석순위", desc: "포인트 랭킹 확인", cat: "조회", func: "_gameInfoLogic" },
         { cmd: "/유저정보", desc: "[닉네임] 상세정보 보기", cat: "조회", func: "_gameInfoLogic" },
@@ -463,7 +467,7 @@ var CMD_LIST = {
         { cmd: "/구매", desc: "[번호] 상점 물품 구매", cat: "상점", func: "_gameShopLogic" },
         { cmd: "/가방", desc: "보유 중인 아이콘/칭호 확인", cat: "상점", func: "_handleInventoryLogic" },
         { cmd: "/장착", desc: "[번호] 보유 아이템 장착", cat: "상점", func: "_handleInventoryLogic" },
-        { cmd: "/분해", desc: "[번호] 아이콘 분해 및 포인트 회수", cat: "상점", func: "_handleInventoryLogic" }, // ← 이 줄이 추가되어야 도움말에 나옵니다.
+        { cmd: "/분해", desc: "[번호] 아이콘 분해 및 포인트 회수", cat: "상점", func: "_handleInventoryLogic" },
         { cmd: "/로또정보", desc: "내 로또 번호 및 결과 확인", cat: "상점", func: "_handleLottoLogic" },
         { cmd: "/아이콘초기화", desc: "설정한 아이콘 삭제", cat: "상점", func: "_handleLottoLogic" },
         { cmd: "/은행", desc: "예금/출금/송금/대출/사채 종합 관리", cat: "경제", func: "_gameBankLogic" },
@@ -2155,7 +2159,9 @@ if (!targetUid) {
         purchasedAuthCount: 0, // 이번 시즌 인증권 구매 횟수
         /* [신규] 도배 방지 및 타임아웃 데이터 */
         chatLog: [],           // 채팅 발송 시각 기록 배열
-        timeoutEndTime: 0      // 타임아웃 종료 시각 (0이면 정상 상태)
+        timeoutEndTime: 0,     // 타임아웃 종료 시각 (0이면 정상 상태)
+        /* [신규] 유물 시스템 데이터 초기화 */
+        artifactPieces: 0      // 보유 중인 유물 조각 수
     };
     
     uidCache[cacheKey] = targetUid;
@@ -3474,157 +3480,201 @@ function _handleLottoLogic(msg, user, data, replier, roomName, targetUid) {
 //==========섹터29==========
 
 /**
- * [독립형] 방치형 광산 시스템 로직 구현부
- * 설명: 섹터 46(구 섹터 27 호출부)에서 호출되며, 광산 시작/정보/종료 및 보상 정산 로직을 수행합니다.
- */
+ * [독립형] 방치형 광산 시스템 로직 구현부
+ * 설명: 섹터 46(구 섹터 27 호출부)에서 호출되며, 광산 시작/정보/종료 및 보상 정산 로직을 수행합니다.
+ * 수정 사항: 유물 조각 발견 확률(0.05%) 및 [도굴왕] 칭호 자동 지급 로직 추가
+ */
 function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName]; 
+    var roomData = data.rooms[roomName]; 
 
-    // 1. 광산 시작
-    if (msg === "/광산시작") {
-        if (user.jailReleaseTime && Date.now() < user.jailReleaseTime) {
-            var diff = user.jailReleaseTime - Date.now();
-            var remainMin = Math.ceil(diff / (1000 * 60));
-            var timeMsg = remainMin >= 60 ? Math.ceil(remainMin / 60) + "시간" : remainMin + "분";
-            replier.reply(formatError(user, "입장 불가", "현재 징역 중입니다. " + timeMsg + " 후 가능합니다."));
+    // 1. 광산 시작
+    if (msg === "/광산시작") {
+        if (user.jailReleaseTime && Date.now() < user.jailReleaseTime) {
+            var diff = user.jailReleaseTime - Date.now();
+            var remainMin = Math.ceil(diff / (1000 * 60));
+            var timeMsg = remainMin >= 60 ? Math.ceil(remainMin / 60) + "시간" : remainMin + "분";
+            replier.reply(formatError(user, "입장 불가", "현재 징역 중입니다. " + timeMsg + " 후 가능합니다."));
             return true;
-        }
-        
-        if (user.mining && user.mining.active) {
-            replier.reply(formatError(user, "활동 중", "이미 광산에서 채굴 중입니다."));
+        }
+        
+        if (user.mining && user.mining.active) {
+            replier.reply(formatError(user, "활동 중", "이미 광산에서 채굴 중입니다."));
             return true;
-        }
-        
-        if (isUserBusy(targetUid)) {
-            replier.reply(formatError(user, "활동 중", "이미 다른 활동(도박/결투/도둑질) 중입니다."));
+        }
+        
+        if (isUserBusy(targetUid)) {
+            replier.reply(formatError(user, "활동 중", "이미 다른 활동(도박/결투/도둑질) 중입니다."));
             return true;
-        }
+        }
 
-        user.mining = { active: true, startTime: Date.now(), room: roomName };
-        replier.reply(formatCommand("⛏️ 광산 입성", user, "광산에서 채굴을 시작했습니다.\n채굴 중에는 도박, 주식, 도둑질 등 수익형 활동이 제한됩니다.", "종료: [/광산종료]"));
-        safeSaveData(data);
-        return true;
-    }
-
-    // 2. 광산 정보
-    if (msg === "/광산정보") {
-        if (!user.mining || !user.mining.active) {
-            replier.reply(formatError(user, "상태 오류", "현재 광산에서 작업 중이 아닙니다."));
-            return true;
-        }
-
-        var durationMin = Math.floor((Date.now() - user.mining.startTime) / 60000);
-        
-        var multiplier = 1.0;
-        if (roomData.economyBase && roomData.economyBase > 0) {
-            var eco = calculateEconomy(data, roomName);
-            var rawRatio = eco.total / roomData.economyBase;
-            var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.5;
-            multiplier = 1 + (rawRatio - 1) * damping;
-            if (multiplier < 0.5) multiplier = 0.5;
-        }
-
-        var hasDebt = (user.loan && Number(user.loan.debt) > 0);
-        if (!hasDebt && roomData.loanContracts) {
-            for (var cid in roomData.loanContracts) {
-                if (roomData.loanContracts[cid].borrowerUid === targetUid) { hasDebt = true; break; }
-            }
-        }
-        if (hasDebt) multiplier *= 1.5;
-
-        var basePrice = SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN; 
-        var estimatedEarn = Math.floor(durationMin * basePrice * multiplier);
-
-        replier.reply(formatCommand("⛏️ 광산 진행 현황", user, "\n채굴 진행: " + durationMin + "분째...\n예상 기본수익: +" + fp(estimatedEarn) + "P\n\n✨ 광물 발견 수익은 종료 시 합산됩니다.", "종료 및 정산은 [/광산종료]"));
-        return true;
-    }
-
-    // 3. 광산 종료
-    if (msg === "/광산종료") {
-        if (!user.mining || !user.mining.active) {
-            replier.reply(formatError(user, "상태 오류", "현재 작업 중이지 않습니다."));
-            return true;
-        }
-
-        if (user.jailReleaseTime && Date.now() < user.jailReleaseTime) {
-            user.mining.active = false; 
-            safeSaveData(data);
-            replier.reply(formatError(user, "검거 확인", "징역형 선고로 인해 광산에서 강제 퇴거되었습니다.\n(누적 채굴 수익 소멸)"));
-            return true;
-        }
-
-        var now = Date.now();
-        var durationMin = Math.floor((now - user.mining.startTime) / 60000); 
-
-        if (durationMin < 1) {
-            user.mining.active = false; 
-            safeSaveData(data);
-            replier.reply(formatCommand("⛏️ 광산 퇴거", user, "채굴 시간이 너무 짧아 수익이 발생하지 않았습니다.\n(최소 1분 이상 유지 필요)", "다시 시작: [/광산시작]"));
-            return true;
-        }
-
-        var multiplier = 1.0;
-        if (roomData.economyBase && roomData.economyBase > 0) {
-            var eco = calculateEconomy(data, roomName);
-            var rawRatio = eco.total / roomData.economyBase;
-            var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.5;
-            multiplier = 1 + (rawRatio - 1) * damping;
-            if (multiplier < 0.5) multiplier = 0.5;
-        }
-
-        var hasDebt = (user.loan && Number(user.loan.debt) > 0);
-        if (!hasDebt && roomData.loanContracts) {
-            for (var cid in roomData.loanContracts) {
-                if (roomData.loanContracts[cid].borrowerUid === targetUid) { hasDebt = true; break; }
-            }
-        }
-        if (hasDebt) multiplier *= 1.5;
-
-        var basePrice = SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN;
-        var conf = SYSTEM_CONFIG.ECO.MINE;
-        var totalEarn = 0;
-        var copperCount = 0, goldCount = 0, diaCount = 0;
-
-        for (var i = 0; i < durationMin; i++) {
-            var rand = Math.random();
-            var minIncome = basePrice * multiplier;
-
-            if (rand < conf.DIA_PROB) { 
-                diaCount++; 
-                totalEarn += (minIncome * conf.DIA_MULT); 
-            } else if (rand < conf.GOLD_PROB) { 
-                goldCount++; 
-                totalEarn += (minIncome * conf.GOLD_MULT); 
-            } else if (rand < conf.COPPER_PROB) { 
-                copperCount++; 
-                totalEarn += (minIncome * conf.COPPER_MULT); 
-            } else { 
-                totalEarn += minIncome; 
-            }
-        }
-
-        totalEarn = Math.floor(totalEarn);
-
-        var borrowerUid = targetUid || user.uid; 
-        var res = processRepayment(user, totalEarn, borrowerUid, roomName); 
-        
-        var prePoint = Number(user.point);
-        user.point = Number(user.point) + Number(res.actualGain);
-        verifyPointTransaction(user, prePoint, Number(res.actualGain), "광산 채굴 최종정산");
-
-        user.mining.active = false;
-        
-        var repayInfo = res.repayMsg ? "\n\n" + res.repayMsg : "";
-        var resultBody = "\n⛏️ 채굴 시간: " + durationMin + "분\n" +
-                         "🟫 구리 " + copperCount + "회 🗂️ 황금 " + goldCount + "회\n" +
-                         "💎다이아 " + diaCount + "회\n\n" +
-                         "💰 채굴 수익: " + fp(totalEarn) + "P\n" +
-                         "P" + repayInfo;
-                         
-        replier.reply(formatCommand("⛏️ 채굴 결과", user, resultBody, "내 잔액: " + fP(user.point) + "P"));
-        safeSaveData(data);
+        user.mining = { active: true, startTime: Date.now(), room: roomName };
+        replier.reply(formatCommand("⛏️ 광산 입성", user, "광산에서 채굴을 시작했습니다.\n채굴 중에는 도박, 주식, 도둑질 등 수익형 활동이 제한됩니다.", "종료: [/광산종료]"));
+        safeSaveData(data);
         return true;
-    }
+    }
+
+    // 2. 광산 정보
+    if (msg === "/광산정보") {
+        if (!user.mining || !user.mining.active) {
+            replier.reply(formatError(user, "상태 오류", "현재 광산에서 작업 중이 아닙니다."));
+            return true;
+        }
+
+        var durationMin = Math.floor((Date.now() - user.mining.startTime) / 60000);
+        
+        var multiplier = 1.0;
+        if (roomData.economyBase && roomData.economyBase > 0) {
+            var eco = calculateEconomy(data, roomName);
+            var rawRatio = eco.total / roomData.economyBase;
+            var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.5;
+            multiplier = 1 + (rawRatio - 1) * damping;
+            if (multiplier < 0.5) multiplier = 0.5;
+        }
+
+        var hasDebt = (user.loan && Number(user.loan.debt) > 0);
+        if (!hasDebt && roomData.loanContracts) {
+            for (var cid in roomData.loanContracts) {
+                if (roomData.loanContracts[cid].borrowerUid === targetUid) { hasDebt = true; break; }
+            }
+        }
+        if (hasDebt) multiplier *= 1.5;
+
+        var basePrice = SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN; 
+        var estimatedEarn = Math.floor(durationMin * basePrice * multiplier);
+
+        replier.reply(formatCommand("⛏️ 광산 진행 현황", user, "\n채굴 진행: " + durationMin + "분째...\n예상 기본수익: +" + fp(estimatedEarn) + "P\n\n✨ 광물 발견 수익은 종료 시 합산됩니다.", "종료 및 정산은 [/광산종료]"));
+        return true;
+    }
+
+    // 3. 광산 종료
+    if (msg === "/광산종료") {
+        if (!user.mining || !user.mining.active) {
+            replier.reply(formatError(user, "상태 오류", "현재 작업 중이지 않습니다."));
+            return true;
+        }
+
+        if (user.jailReleaseTime && Date.now() < user.jailReleaseTime) {
+            user.mining.active = false; 
+            safeSaveData(data);
+            replier.reply(formatError(user, "검거 확인", "징역형 선고로 인해 광산에서 강제 퇴거되었습니다.\n(누적 채굴 수익 소멸)"));
+            return true;
+        }
+
+        var now = Date.now();
+        var durationMin = Math.floor((now - user.mining.startTime) / 60000); 
+
+        if (durationMin < 1) {
+            user.mining.active = false; 
+            safeSaveData(data);
+            replier.reply(formatCommand("⛏️ 광산 퇴거", user, "채굴 시간이 너무 짧아 수익이 발생하지 않았습니다.\n(최소 1분 이상 유지 필요)", "다시 시작: [/광산시작]"));
+            return true;
+        }
+
+        var multiplier = 1.0;
+        if (roomData.economyBase && roomData.economyBase > 0) {
+            var eco = calculateEconomy(data, roomName);
+            var rawRatio = eco.total / roomData.economyBase;
+            var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.5;
+            multiplier = 1 + (rawRatio - 1) * damping;
+            if (multiplier < 0.5) multiplier = 0.5;
+        }
+
+        var hasDebt = (user.loan && Number(user.loan.debt) > 0);
+        if (!hasDebt && roomData.loanContracts) {
+            for (var cid in roomData.loanContracts) {
+                if (roomData.loanContracts[cid].borrowerUid === targetUid) { hasDebt = true; break; }
+            }
+        }
+        if (hasDebt) multiplier *= 1.5;
+
+        var basePrice = SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN;
+        var conf = SYSTEM_CONFIG.ECO.MINE;
+        var totalEarn = 0;
+        var copperCount = 0, goldCount = 0, diaCount = 0;
+        var artifactFound = 0;
+
+        for (var i = 0; i < durationMin; i++) {
+            var rand = Math.random();
+            var minIncome = basePrice * multiplier;
+
+            // 광물 계산
+            if (rand < conf.DIA_PROB) { 
+                diaCount++; 
+                totalEarn += (minIncome * conf.DIA_MULT); 
+            } else if (rand < conf.GOLD_PROB) { 
+                goldCount++; 
+                totalEarn += (minIncome * conf.GOLD_MULT); 
+            } else if (rand < conf.COPPER_PROB) { 
+                copperCount++; 
+                totalEarn += (minIncome * conf.COPPER_MULT); 
+            } else { 
+                totalEarn += minIncome; 
+            }
+
+            // [신규] 유물 조각 계산 (0.05%)
+            if (Math.random() < (conf.ARTIFACT_CHANCE || 0.0005)) {
+                artifactFound++;
+            }
+        }
+
+        totalEarn = Math.floor(totalEarn);
+        var borrowerUid = targetUid || user.uid; 
+        var res = processRepayment(user, totalEarn, borrowerUid, roomName); 
+        
+        var prePoint = Number(user.point);
+        user.point = Number(user.point) + Number(res.actualGain);
+        verifyPointTransaction(user, prePoint, Number(res.actualGain), "광산 채굴 최종정산");
+
+        // 유물 데이터 누적 및 칭호 체크
+        user.artifactPieces = (user.artifactPieces || 0) + artifactFound;
+        var goal = conf.ARTIFACT_GOAL || 10;
+        var titleAwarded = false;
+
+        if (user.artifactPieces >= goal) {
+            if (!user.inventory) user.inventory = [];
+            var hasTombTitle = false;
+            for (var k = 0; k < user.inventory.length; k++) {
+                if (user.inventory[k].title === "도굴왕") { hasTombTitle = true; break; }
+            }
+            if (!hasTombTitle) {
+                user.inventory.push({ id: 888, name: "[도굴왕] 칭호", icon: "🏺", effect: "title", title: "도굴왕" });
+                titleAwarded = true;
+            }
+        }
+
+        user.mining.active = false;
+        
+        var repayInfo = res.repayMsg ? "\n\n" + res.repayMsg : "";
+        var resultBody = "\n⛏️ 채굴 시간: " + durationMin + "분\n" +
+                         "🟫 구리 " + copperCount + "회 🗂️ 황금 " + goldCount + "회\n" +
+                         "💎 다이아 " + diaCount + "회\n\n" +
+                         "💰 채굴 수익: " + fp(totalEarn) + "P" + repayInfo;
+
+        // 조각 발견 시 추가 멘트
+        if (artifactFound > 0) {
+            resultBody += "\n\n✨ [특별 발견] ✨\n━━━━━━━━━━━━━━━\n" +
+                           "먼지 쌓인 흙더미 속에서 \n" +
+                           "심상치 않은 기운의 조각을 발견했습니다!\n\n" +
+                           "🧩 유물 조각 획득 (+" + artifactFound + ")\n" +
+                           "(현재 보유: " + user.artifactPieces + " / " + goal + " 개)";
+        }
+                         
+        replier.reply(formatCommand("⛏️ 채굴 결과", user, resultBody, "내 잔액: " + fP(user.point) + "P"));
+
+        // 유물 수집 완료 축하 메시지 (칭호 최초 획득 시)
+        if (titleAwarded) {
+            var celebMsg = "드디어 " + goal + "개의 유물 조각을 모두 모았습니다.\n\n" +
+                           "흩어져 있던 조각들이 하나로 합쳐지며 \n" +
+                           "찬란한 빛과 함께 고대의 기운이 \n" +
+                           "당신의 온몸을 감쌉니다...\n\n" +
+                           "🎁 수집 보상 완료\n" +
+                           "🎖️ 칭호 획득: [도굴왕]";
+            replier.reply(formatCommand("🏺 [전설의 완성: 도굴왕]", user, celebMsg, "[/가방] 메뉴에서 장착 가능합니다!"));
+        }
+
+        safeSaveData(data);
+        return true;
+    }
 }
 
 //==========섹터30==========
@@ -4641,162 +4691,182 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
 //==========섹터38==========
 
 /**
- * [게임 하위 모듈 2] 정보 및 랭킹 조회 (부채 통합 표시 및 예외 처리 강화)
- * 기능: 내정보, 신용등급, 대출한도, 명예의전당, 순위, 유저정보
- * 설명: 조회 시 은행 대출뿐만 아니라 사채 및 연체 현황을 통합하여 출력하며, 입력 오류를 검증합니다.
- */
+ * [게임 하위 모듈 2] 정보 및 랭킹 조회 (부채 통합 표시 및 예외 처리 강화)
+ * 기능: 내정보, 유물도감, 신용등급, 대출한도, 명예의전당, 순위, 유저정보
+ * 설명: 조회 시 은행 대출뿐만 아니라 사채 및 연체 현황을 통합하여 출력하며, 입력 오류를 검증합니다.
+ */
 function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
+    var roomData = data.rooms[roomName];
 
-    /* [기능 3] 내 정보 조회 */
-    if (msg === "/내정보") {
-        var cr = getCreditInfo(user.creditScore);
-        /* [수정] 게임 인증 횟수 표시 한도 변경 (3 -> 2) */
-        var authInfo = "🎮 게임 인증: " + (user.gameAuthCount || 0) + "/2 (시즌)";
-        
-        var infoBody = authInfo + "\n" +
-                       "💰 보유 포인트: " + fp(user.point) + "P\n" +
-                       "🏦 은행 예금: " + fp(user.bank) + "P\n" +
-                       "💳 신용 등급: " + cr.label + " (" + user.creditScore + "점)\n" +
-                       "🏅 현재 티어: " + (TIERS[user.tier] || "아이언") + "\n" +
-                       "📅 누적 출석: " + (user.totalAttendance || 0) + "일";
-        
-        // --- 부채 통합 계산 및 표시 로직 ---
-        var bankDebt = (user.loan && user.loan.debt) ? Math.floor(Number(user.loan.debt)) : 0;
-        var sacheDebt = 0;
-        var overdueSache = 0;
+    /* [기능 3] 내 정보 조회 */
+    if (msg === "/내정보") {
+        var cr = getCreditInfo(user.creditScore);
+        /* [수정] 게임 인증 횟수 표시 한도 변경 (3 -> 2) */
+        var authInfo = "🎮 게임 인증: " + (user.gameAuthCount || 0) + "/2 (시즌)";
+        
+        var infoBody = authInfo + "\n" +
+                       "💰 보유 포인트: " + fp(user.point) + "P\n" +
+                       "🏦 은행 예금: " + fp(user.bank) + "P\n" +
+                       "💳 신용 등급: " + cr.label + " (" + user.creditScore + "점)\n" +
+                       "🏅 현재 티어: " + (TIERS[user.tier] || "아이언") + "\n" +
+                       "📅 누적 출석: " + (user.totalAttendance || 0) + "일";
+        
+        // --- 부채 통합 계산 및 표시 로직 ---
+        var bankDebt = (user.loan && user.loan.debt) ? Math.floor(Number(user.loan.debt)) : 0;
+        var sacheDebt = 0;
+        var overdueSache = 0;
 
-        if (roomData && roomData.loanContracts) {
-            for (var cid in roomData.loanContracts) {
-                var c = roomData.loanContracts[cid];
-                if (c.borrowerUid === targetUid) {
-                    sacheDebt += Math.floor(c.currentDebt);
-                    if (c.status === 'overdue') overdueSache += Math.floor(c.currentDebt);
-                }
-            }
-        }
+        if (roomData && roomData.loanContracts) {
+            for (var cid in roomData.loanContracts) {
+                var c = roomData.loanContracts[cid];
+                if (c.borrowerUid === targetUid) {
+                    sacheDebt += Math.floor(c.currentDebt);
+                    if (c.status === 'overdue') overdueSache += Math.floor(c.currentDebt);
+                }
+            }
+        }
 
-        // 1. 은행 대출금 표시 (대환 채무 여부 포함)
-        if (bankDebt > 0) {
-            var transferTag = user.isTransferred ? " (🚨대환 채무: 100% 압류)" : "";
-            infoBody += "\n🏦 미상환 대출: " + fp(bankDebt) + "P" + transferTag;
-        }
+        // 1. 은행 대출금 표시 (대환 채무 여부 포함)
+        if (bankDebt > 0) {
+            var transferTag = user.isTransferred ? " (🚨대환 채무: 100% 압류)" : "";
+            infoBody += "\n🏦 미상환 대출: " + fp(bankDebt) + "P" + transferTag;
+        }
 
-        // 2. 사채 현황 표시 (연체 정보 포함)
-        if (sacheDebt > 0) {
-            infoBody += "\n🚬 미상환 사채: " + fp(sacheDebt) + "P";
-            if (overdueSache > 0) {
-                infoBody += "\n🚨 사채 연체: " + fp(overdueSache) + "P (50% 자동상환)";
-            }
-        }
+        // 2. 사채 현황 표시 (연체 정보 포함)
+        if (sacheDebt > 0) {
+            infoBody += "\n🚬 미상환 사채: " + fp(sacheDebt) + "P";
+            if (overdueSache > 0) {
+                infoBody += "\n🚨 사채 연체: " + fp(overdueSache) + "P (50% 자동상환)";
+            }
+        }
 
-        var totalPromotion = Number(user.dailyPromotionAttempts || 0) + Number(user.purchasedPromotionAttempts || 0);
-        infoBody += "\n🔂 승급 기회: " + totalPromotion + "회";
-        
-        replier.reply(formatCommand("📌 내 상세 정보", user, infoBody, "아이템 구매: [/상점]")); 
-        return true;
-    }
+        var totalPromotion = Number(user.dailyPromotionAttempts || 0) + Number(user.purchasedPromotionAttempts || 0);
+        infoBody += "\n🔂 승급 기회: " + totalPromotion + "회";
+        
+        replier.reply(formatCommand("📌 내 상세 정보", user, infoBody, "아이템 구매: [/상점]")); 
+        return true;
+    }
 
-    /* [기능 4] 신용 등급 및 대출 한도 조회 */
-    if (msg === "/신용등급" || msg === "/대출한도") {
-        var cr = getCreditInfo(user.creditScore);
-        var table = getCreditLimitTable(); 
-        var myCredit = "\n[내 신용 상태]\n점수: " + user.creditScore + "점\n등급: " + cr.label + "\n대출 가능 한도: " + fp(cr.limit) + "P";
-        
-        replier.reply(formatCommand("💳 신용 등급 및 한도", user, table + "\n" + myCredit, "은행 이용: [/은행]"));
-        return true;
-    }
+    /* [수정] 유물 도감 조회 (UI 레이아웃 변경 및 안내 문구 자동 연동) */
+    if (msg === "/유물도감") {
+        var pieces = Number(user.artifactPieces || 0);
+        var conf = SYSTEM_CONFIG.ECO.MINE;
+        var goal = conf.ARTIFACT_GOAL || 10;
+        
+        // 가이드 문구에 들어갈 확률 계산 (0.001 -> 0.1%)
+        var chancePercent = (conf.ARTIFACT_CHANCE * 100).toFixed(2).replace(/\.?0+$/, "") + "%";
+        
+        var rewardStatus = (pieces >= goal) ? "🎖️ 칭호: [도굴왕] (획득 완료!)" : "🎖️ 칭호: [도굴왕] (진행 중...)";
+        
+        // 요청하신 깔끔한 UI 형태로 변경 (진행바 및 % 제거)
+        var content = pieces >= goal ? "" : "\n"; // 상단 여백 조절
+        content += "✨ 유물 조각 (Fragment)\n" +
+                   "🧩 보유: " + pieces + " / " + goal + " 개\n\n" +
+                   "🎁 수집 달성 보상\n" +
+                   rewardStatus;
+        
+        var guide = "광산에서 " + chancePercent + " 확률로 조각이 발견됩니다. " + goal + "개를 모으면 자동으로 칭호가 부여됩니다.";
+        replier.reply(formatCommand("🏺 유물 도감 (Artifacts)", user, content, guide));
+        return true;
+    }
 
-    /* [기능 5] 명예의 전당 (챌린저 조회) */
-    if (msg === "/명예의전당") {
-        var challengers = [];
-        var roomUsers = roomData.users;
-        for (var id in roomUsers) {
-            var u = roomUsers[id];
-            if (u && u.tier === 9) {
-                var count = Math.max(1, u.challengerCount || 0);
-                 challengers.push("🏆 " + u.name + " (누적 " + count + "회)");
-            }
-        }
-        var content = challengers.length > 0 ? challengers.join("\n") : "현재 이 방에 등록된 챌린저가 없습니다.";
-        replier.reply(formatSimple("🏅 명예의 전당", content, "최고 티어 달성 시 등록됩니다."));
-        return true;
-    }
+    /* [기능 4] 신용 등급 및 대출 한도 조회 */
+    if (msg === "/신용등급" || msg === "/대출한도") {
+        var cr = getCreditInfo(user.creditScore);
+        var table = getCreditLimitTable(); 
+        var myCredit = "\n[내 신용 상태]\n점수: " + user.creditScore + "점\n등급: " + cr.label + "\n대출 가능 한도: " + fp(cr.limit) + "P";
+        
+        replier.reply(formatCommand("💳 신용 등급 및 한도", user, table + "\n" + myCredit, "은행 이용: [/은행]"));
+        return true;
+    }
 
-    /* [기능 7] 자산 순위 (지갑 + 예금 합산) */
-    if (msg === "/출석순위") {
-        var users = [];
-        var roomUsers = roomData.users;
-        for (var id in roomUsers) {
-            var u = roomUsers[id];
-            var totalAssets = Number(u.point || 0) + Number(u.bank || 0);
-            if (totalAssets >= 1) users.push({ data: u, total: totalAssets });
-        }
-        
-        users.sort(function(a, b) { return b.total - a.total; });
-        
-        var rankList = [];
-        for (var i = 0; i < Math.min(10, users.length); i++) {
-            rankList.push((i + 1) + ". " + getDisplayName(users[i].data) + " (" + fp(users[i].total) + "P)");
-        }
-        
-        var rankMsg = (rankList.length > 0 ? rankList.join("\n") : "순위 데이터가 없습니다.");
-        replier.reply(formatSimple("자산 랭킹 (지갑+예금)", rankMsg, "내 정보: [/내정보]"));
-        return true;
-    }
+    /* [기능 5] 명예의 전당 (챌린저 조회) */
+    if (msg === "/명예의전당") {
+        var challengers = [];
+        var roomUsers = roomData.users;
+        for (var id in roomUsers) {
+            var u = roomUsers[id];
+            if (u && u.tier === 9) {
+                var count = Math.max(1, u.challengerCount || 0);
+                 challengers.push("🏆 " + u.name + " (누적 " + count + "회)");
+            }
+        }
+        var content = challengers.length > 0 ? challengers.join("\n") : "현재 이 방에 등록된 챌린저가 없습니다.";
+        replier.reply(formatSimple("🏅 명예의 전당", content, "최고 티어 달성 시 등록됩니다."));
+        return true;
+    }
 
-    /* [기능 8] 타 유저 정보 조회 (수정: 입력 예외 처리 추가) */
-    if (msg.indexOf("/유저정보") === 0) {
-        // "/유저정보 " 이후의 텍스트를 추출
-        var tn = msg.substring(5).trim(); 
-        
-        // [수정 사항] 닉네임 미입력 시 에러 메시지 출력
-        if (tn === "") {
-            replier.reply(formatError(user, "입력 오류", "조회할 유저의 닉네임을 입력하세요.\n(예: /유저정보 홍길동)"));
-            return true;
-        }
-        
-        var found = findUserByName(roomData, tn);
-        
-        if (found.length === 0) { 
-            replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); 
-            return true; 
-        }
-        
-        if (found.length === 1) {
-            var targetUser = found[0].data;
-            var targetIdInside = found[0].id;
-            var cr = getCreditInfo(targetUser.creditScore);
-            
-            // 타 유저의 사채 합계 계산
-            var sDebt = 0;
-            if (roomData.loanContracts) {
-                for (var cid in roomData.loanContracts) {
-                    var c = roomData.loanContracts[cid];
-                    if (c.borrowerUid === targetIdInside) {
-                        sDebt += Math.floor(c.currentDebt);
-                    }
-                }
-            }
+    /* [기능 7] 자산 순위 (지갑 + 예금 합산) */
+    if (msg === "/출석순위") {
+        var users = [];
+        var roomUsers = roomData.users;
+        for (var id in roomUsers) {
+            var u = roomUsers[id];
+            var totalAssets = Number(u.point || 0) + Number(u.bank || 0);
+            if (totalAssets >= 1) users.push({ data: u, total: totalAssets });
+        }
+        
+        users.sort(function(a, b) { return b.total - a.total; });
+        
+        var rankList = [];
+        for (var i = 0; i < Math.min(10, users.length); i++) {
+            rankList.push((i + 1) + ". " + getDisplayName(users[i].data) + " (" + fp(users[i].total) + "P)");
+        }
+        
+        var rankMsg = (rankList.length > 0 ? rankList.join("\n") : "순위 데이터가 없습니다.");
+        replier.reply(formatSimple("자산 랭킹 (지갑+예금)", rankMsg, "내 정보: [/내정보]"));
+        return true;
+    }
 
-            var info = "💰 포인트: " + fp(targetUser.point) + "P\n" +
-                       "🏦 예금: " + fp(targetUser.bank) + "P\n" +
-                       "💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n" +
-                       "🏅 티어: " + (TIERS[targetUser.tier] || "아이언") + "\n" +
-                       "📅 출석: " + (targetUser.totalAttendance || 0) + "일";
-            
-            var bDebt = (targetUser.loan && targetUser.loan.debt) ? Math.floor(Number(targetUser.loan.debt)) : 0;
-            if (bDebt > 0) info += "\n🏦 미상환 대출: " + fp(bDebt) + "P";
-            if (sDebt > 0) info += "\n🚬 미상환 사채: " + fp(sDebt) + "P";
+    /* [기능 8] 타 유저 정보 조회 (수정: 입력 예외 처리 추가) */
+    if (msg.indexOf("/유저정보") === 0) {
+        var tn = msg.substring(5).trim(); 
+        
+        if (tn === "") {
+            replier.reply(formatError(user, "입력 오류", "조회할 유저의 닉네임을 입력하세요.\n(예: /유저정보 홍길동)"));
+            return true;
+        }
+        
+        var found = findUserByName(roomData, tn);
+        
+        if (found.length === 0) { 
+            replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); 
+            return true; 
+        }
+        
+        if (found.length === 1) {
+            var targetUser = found[0].data;
+            var targetIdInside = found[0].id;
+            var cr = getCreditInfo(targetUser.creditScore);
+            
+            var sDebt = 0;
+            if (roomData.loanContracts) {
+                for (var cid in roomData.loanContracts) {
+                    var c = roomData.loanContracts[cid];
+                    if (c.borrowerUid === targetIdInside) {
+                        sDebt += Math.floor(c.currentDebt);
+                    }
+                }
+            }
 
-            replier.reply(formatCommand("🔍 유저 상세 정보", targetUser, info, null));
-        } else {
-            handleUserSelection(replier, targetUid, found, "info", null, user);
-        }
-        return true;
-    }
+            var info = "💰 포인트: " + fp(targetUser.point) + "P\n" +
+                       "🏦 예금: " + fp(targetUser.bank) + "P\n" +
+                       "💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n" +
+                       "🏅 티어: " + (TIERS[targetUser.tier] || "아이언") + "\n" +
+                       "📅 출석: " + (targetUser.totalAttendance || 0) + "일";
+            
+            var bDebt = (targetUser.loan && targetUser.loan.debt) ? Math.floor(Number(targetUser.loan.debt)) : 0;
+            if (bDebt > 0) info += "\n🏦 미상환 대출: " + fp(bDebt) + "P";
+            if (sDebt > 0) info += "\n🚬 미상환 사채: " + fp(sDebt) + "P";
 
-    return false;
+            replier.reply(formatCommand("🔍 유저 상세 정보", targetUser, info, null));
+        } else {
+            handleUserSelection(replier, targetUid, found, "info", null, user);
+        }
+        return true;
+    }
+
+    return false;
 }
 
 //==========섹터39==========

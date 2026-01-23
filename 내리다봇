@@ -1534,11 +1534,16 @@ function _runSector16Logic(data, ctx) {
                     borrower.loan.items.push(amountToPay);
                     borrower.isTransferred = true; // 100% 강제 압류 대상 플래그
 
+                    /* [신규 추가] 연체 페널티: 신용점수 200점 차감 및 즉시 상태 제어 */
+                    borrower.creditScore = Math.max(0, (borrower.creditScore || 600) - 200);
+                    checkAndHandleDefaulter(borrower, rName);
+
                     // 3. 대환 완료 알림
                     var takeoverMsg = "🏛️ [중앙은행 대환 집행]\n━━━━━━━━━━━━━━━\n" +
                                       "👤 채무자: " + c.borrowerName + "님\n" +
                                       "🤝 채권자: " + c.lenderName + "님\n\n" +
                                       "내용: 사채 연체 48시간 경과로 인해 은행이 " + fp(amountToPay) + "P를 대납 처리하였습니다.\n\n" +
+                                      "⚠️ [페널티]: 신용점수 -200점 강등\n" +
                                       "⚠️ 해당 채무는 [은행 대출]로 전환되었으며, 완납 시까지 모든 수익의 100%가 강제 상환됩니다.\n" +
                                       "━━━━━━━━━━━━━━━";
                     Api.replyRoom(rName, takeoverMsg);
@@ -1558,16 +1563,20 @@ function _runSector16Logic(data, ctx) {
         data.lastNewsMin = currentMin;
         var mani = conf.MANIPULATION;
 
-        // [A] 수동 조작(MANIPULATION)이 활성화된 경우 예고 알림 최우선 발송
         if (mani && mani.ACTIVE === true) {
+            data.pendingSpecialEffect = { 
+                stock: mani.TARGET, 
+                factor: mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE),
+                forceMani: true 
+            };
             var maniMsg = "📢 [시장 동향: 특보]\n━━━━━━━━━━━━━━━\n" +
                           "잠시 후 시장에 대규모 변동이 발생합니다!\n" +
                           "(30초 후 반영)\n\n" +
                           "대상: " + mani.TARGET + "\n" +
                           "예상: " + (mani.IS_UP ? "🚀 급등 조짐" : "📉 급락 주의");
             try { Api.replyRoom(ctx.targetRoom, maniMsg); } catch(e){}
+            data.pendingNewStock = false; 
         } 
-        // [B] 수동 조작이 없을 때만 기존 무작위 이벤트 체크
         else {
             var currentStockCount = Object.keys(data.stockMarket || {}).length;
             if (currentStockCount < 10 && Math.random() < SYSTEM_CONFIG.PROB.STOCK_NEW_LISTING) { 
@@ -1602,7 +1611,7 @@ function _runSector16Logic(data, ctx) {
         ctx.isUpdated = true;
     }
 
-    /* 4. 홀짝 피버타임 체크 (기존 유지) */
+    /* 4. 홀짝 피버타임 체크 */
     if (!data.feverData) data.feverData = { active: false, endTime: 0, scheduled: [] };
     var timeKey = (currentHour < 10 ? "0"+currentHour : currentHour) + ":" + (currentMin < 10 ? "0"+currentMin : currentMin);
     if (data.feverData.scheduled.indexOf(timeKey) !== -1 && !data.feverData.active) {
@@ -1618,7 +1627,7 @@ function _runSector16Logic(data, ctx) {
         ctx.isUpdated = true;
     }
 
-    /* 5. 결투 만료 체크 (기존 유지) */
+    /* 5. 결투 만료 체크 */
     for (var dKey in duelData) {
         var d = duelData[dKey];
         if (nowTs > d.expire) {
@@ -1638,97 +1647,97 @@ runScheduler();
 //==========섹터17==========
 
 /**
- * 섹터 17 로직 함수: 주식 장 마감, 일일 데이터 초기화 및 시즌 리셋 관리
- * @param {Object} data - 데이터베이스 객체
- * @param {Object} ctx - 스케줄러 공유 컨텍스트 (isUpdated, now, today, targetRoom 등)
- */
+ * 섹터 17 로직 함수: 주식 장 마감, 일일 데이터 초기화 및 시즌 리셋 관리
+ * @param {Object} data - 데이터베이스 객체
+ * @param {Object} ctx - 스케줄러 공유 컨텍스트 (isUpdated, now, today, targetRoom 등)
+ */
 function _runSector17Logic(data, ctx) {
-    var currentHour = ctx.now.getHours();
-    var currentMin = ctx.now.getMinutes();
+    var currentHour = ctx.now.getHours();
+    var currentMin = ctx.now.getMinutes();
 
-    // 자정(00:00)에 실행되는 로직들 모음
-    if (currentHour === 0 && currentMin === 0) {
-        
-        /* 6. 주식 장 마감 알림 */
-        if (data.lastStockClose !== ctx.today) {
-            data.lastStockClose = ctx.today;
-            try { 
-                Api.replyRoom(ctx.targetRoom, formatAdmin("📉 장 마감 알림", "금일 주식 시장이 종료되었습니다.")); 
-            } catch(e) {}
-            ctx.isUpdated = true;
-        }
+    // 자정(00:00)에 실행되는 로직들 모음
+    if (currentHour === 0 && currentMin === 0) {
+        
+        /* 6. 주식 장 마감 알림 */
+        if (data.lastStockClose !== ctx.today) {
+            data.lastStockClose = ctx.today;
+            try { 
+                Api.replyRoom(ctx.targetRoom, formatAdmin("📉 장 마감 알림", "금일 주식 시장이 종료되었습니다.")); 
+            } catch(e) {}
+            ctx.isUpdated = true;
+        }
 
-        /* 7. 일일 데이터 초기화 (출석, 대출 횟수, 로또 등) */
-        if (data.lastDailyReset !== ctx.today) {
-            data.lastDailyReset = ctx.today; 
-            if (!data.lotto) data.lotto = {}; 
-            data.lotto.entries = {}; 
-            
-            // 피버타임 스케줄 재생성
-            data.feverData.scheduled = [];
-            while(data.feverData.scheduled.length < 5) {
-                var h = Math.floor(Math.random() * 15) + 9; 
-                var m = Math.floor(Math.random() * 60);
-                var tStr = (h < 10 ? "0"+h : h) + ":" + (m < 10 ? "0"+m : m);
-                if (data.feverData.scheduled.indexOf(tStr) === -1) data.feverData.scheduled.push(tStr);
-            }
-            data.feverData.active = false; 
+        /* 7. 일일 데이터 초기화 (출석, 대출 횟수, 로또 등) */
+        if (data.lastDailyReset !== ctx.today) {
+            data.lastDailyReset = ctx.today; 
+            if (!data.lotto) data.lotto = {}; 
+            data.lotto.entries = {}; 
+            
+            // 피버타임 스케줄 재생성
+            data.feverData.scheduled = [];
+            while(data.feverData.scheduled.length < 5) {
+                var h = Math.floor(Math.random() * 15) + 9; 
+                var m = Math.floor(Math.random() * 60);
+                var tStr = (h < 10 ? "0"+h : h) + ":" + (m < 10 ? "0"+m : m);
+                if (data.feverData.scheduled.indexOf(tStr) === -1) data.feverData.scheduled.push(tStr);
+            }
+            data.feverData.active = false; 
 
-            // 요일별 피버타임 알림
-            var dayOfWeek = ctx.now.getDay(); 
-            if (dayOfWeek === 0) {
-                try { Api.replyRoom(ctx.targetRoom, formatAdmin("🔥 피버타임 시작", "일요일 한정 이벤트!\n승급 확률 +5% 상승이 적용됩니다.")); } catch(e){}
-            } else if (dayOfWeek === 1) {
-                try { Api.replyRoom(ctx.targetRoom, formatAdmin("❄️ 피버타임 종료", "이벤트가 종료되어\n승급 확률이 정상화되었습니다.")); } catch(e){}
-            }
+            // 요일별 피버타임 알림
+            var dayOfWeek = ctx.now.getDay(); 
+            if (dayOfWeek === 0) {
+                try { Api.replyRoom(ctx.targetRoom, formatAdmin("🔥 피버타임 시작", "일요일 한정 이벤트!\n승급 확률 +5% 상승이 적용됩니다.")); } catch(e){}
+            } else if (dayOfWeek === 1) {
+                try { Api.replyRoom(ctx.targetRoom, formatAdmin("❄️ 피버타임 종료", "이벤트가 종료되어\n승급 확률이 정상화되었습니다.")); } catch(e){}
+            }
 
-            // 전 유저 일일 제한값 초기화 및 이자 지급
-            for (var r in data.rooms) {
-                for (var id in data.rooms[r].users) {
-                    var u = data.rooms[r].users[id];
-                    // 일일 제한 데이터 초기화
-                    u.dailyLoanCount = 0; 
-                    u.dailyGambleCount = 0; 
-                    u.dailyPromotionAttempts = 1; 
-                    u.dailyStimulusCount = 0; 
-                    
-                    // [수정] 은행 이자 콤마 적용
-                    if (Number(u.bank) > 0) u.bank = Number(u.bank) + Math.floor(Number(u.bank) * 0.02); 
-                    
-                    // 대출 페널티 및 연체 이자 계산
-                    if (u.loan && Number(u.loan.debt) > 0) { 
-                        u.creditScore = Math.max(0, Number(u.creditScore) - 5); 
-                        var dailyInterest = Math.floor(Number(u.loan.debt) * 0.05);
-                        u.loan.debt = Number(u.loan.debt) + dailyInterest;
-                        checkAndHandleDefaulter(u, r); 
-                    }
-                }
-            }
-            try { 
-                Api.replyRoom(ctx.targetRoom, formatAdmin("🎫 로또 판매 시작", "새로운 로또 판매가 시작되었습니다.")); 
-            } catch(e) {}
-            ctx.isUpdated = true;
-        }
+            // 전 유저 일일 제한값 초기화 및 이자 지급
+            for (var r in data.rooms) {
+                for (var id in data.rooms[r].users) {
+                    var u = data.rooms[r].users[id];
+                    // 일일 제한 데이터 초기화
+                    u.dailyLoanCount = 0; 
+                    u.dailyGambleCount = 0; 
+                    u.dailyPromotionAttempts = 1; 
+                    u.dailyStimulusCount = 0; 
+                    
+                    // [수정] 은행 이자 콤마 적용
+                    if (Number(u.bank) > 0) u.bank = Number(u.bank) + Math.floor(Number(u.bank) * 0.02); 
+                    
+                    // 대출 페널티 및 연체 이자 계산
+                    if (u.loan && Number(u.loan.debt) > 0) { 
+                        u.creditScore = Math.max(0, Number(u.creditScore) - 5); 
+                        var dailyInterest = Math.floor(Number(u.loan.debt) * 0.05);
+                        u.loan.debt = Number(u.loan.debt) + dailyInterest;
+                        checkAndHandleDefaulter(u, r); 
+                    }
+                }
+            }
+            try { 
+                Api.replyRoom(ctx.targetRoom, formatAdmin("🎫 로또 판매 시작", "새로운 로또 판매가 시작되었습니다.")); 
+            } catch(e) {}
+            ctx.isUpdated = true;
+        }
 
-        /* 8. 시즌 리셋 (매월 1일 자정) */
-        if (ctx.now.getDate() === 1 && data.lastSeasonReset !== ctx.season) {
-            data.lastSeasonReset = ctx.season;
-            for (var r in data.rooms) { 
-                for (var id in data.rooms[r].users) { 
-                    var u = data.rooms[r].users[id];
-                    u.tier = 0; // 티어 초기화
-                    
-                    /* [수정] 시즌제 판수 인증 데이터 초기화 (2회 한도 반영) */
-                    u.gameAuthCount = 0;      // 인증 횟수 초기화 (0/2)
-                    u.purchasedAuthCount = 0; // 인증권 구매 횟수 초기화 (시즌당 2회 제한 리셋)
-                } 
-            }
-            try { 
-                Api.replyRoom(ctx.targetRoom, formatAdmin("🏆 시즌 리셋", "새로운 시즌이 시작되어 모든 티어 및 게임 인증 기록이 초기화되었습니다.")); 
-            } catch(e) {}
-            ctx.isUpdated = true;
-        }
-    }
+        /* 8. 시즌 리셋 (매월 1일 자정) */
+        if (ctx.now.getDate() === 1 && data.lastSeasonReset !== ctx.season) {
+            data.lastSeasonReset = ctx.season;
+            for (var r in data.rooms) { 
+                for (var id in data.rooms[r].users) { 
+                    var u = data.rooms[r].users[id];
+                    u.tier = 0; // 티어 초기화
+                    
+                    /* [수정] 시즌제 판수 인증 데이터 초기화 (2회 한도 반영) */
+                    u.gameAuthCount = 0;      // 인증 횟수 초기화
+                    u.purchasedAuthCount = 0; // 인증권 구매 횟수 초기화 (시즌당 2회)
+                } 
+            }
+            try { 
+                Api.replyRoom(ctx.targetRoom, formatAdmin("🏆 시즌 리셋", "새로운 시즌이 시작되어 모든 티어 및 게임 인증 기록이 초기화되었습니다.")); 
+            } catch(e) {}
+            ctx.isUpdated = true;
+        }
+    }
 }
 
 //==========섹터 18==========
@@ -2708,78 +2717,77 @@ if (bankProcessState && bankProcessState[targetUid]) {
 
 /* [독립형] 통합 업무 처리 핸들러 (5단계: 상점 아이템 구매 처리) */
 if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUid].type === 'shop_buy') {
-    var state = bankProcessState[targetUid];
+    var state = bankProcessState[targetUid];
 
-    // 1. 입력 대기 시간 초과 검증 (30초)
-    if (Date.now() - state.time > 30000) {
-        delete bankProcessState[targetUid];
-    }
-    // 2. 작업 취소 처리
-    else if (msg === "취소") {
-        delete bankProcessState[targetUid];
-        replier.reply(formatCommand("🚫 상점 구매 취소", user, "아이템 구매를 취소했습니다."));
-    }
-    else {
-        /* [기능 11] 상점 아이템 구매 처리 핸들러 (하이재킹 방지) */
-        var idx = parseInt(msg) - 1;
-        var filteredItems = (state.extra && state.extra.items) ? state.extra.items : [];
+    // 1. 입력 대기 시간 초과 검증 (30초)
+    if (Date.now() - state.time > 30000) {
+        delete bankProcessState[targetUid];
+    }
+    // 2. 작업 취소 처리
+    else if (msg === "취소") {
+        delete bankProcessState[targetUid];
+        replier.reply(formatCommand("🚫 상점 구매 취소", user, "아이템 구매를 취소했습니다."));
+    }
+    else {
+        /* [기능 11] 상점 아이템 구매 처리 핸들러 (하이재킹 방지) */
+        var idx = parseInt(msg) - 1;
+        var filteredItems = (state.extra && state.extra.items) ? state.extra.items : [];
 
-        // 1. 번호 유효성 검사
-        if (isNaN(idx) || idx < 0 || idx >= filteredItems.length) {
-            replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 입력해주세요."));
-        } else {
-            var item = filteredItems[idx];
-            var finalPrice = getItemPrice(item, user, roomName);
+        // 1. 번호 유효성 검사
+        if (isNaN(idx) || idx < 0 || idx >= filteredItems.length) {
+            replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 입력해주세요."));
+        } else {
+            var item = filteredItems[idx];
+            var finalPrice = getItemPrice(item, user, roomName);
 
-            // 2. 자산 보유 확인
-            if (Number(user.point) < finalPrice) {
-                delete bankProcessState[targetUid];
-                replier.reply(formatError(user, "포인트 부족", fp(finalPrice) + "P가 필요합니다."));
-            } else {
-                // 3. 아이콘/칭호 중복 소유 체크 (가방 확인)
-                var hasItem = false;
-                if (item.effect === "icon" || item.effect === "title") {
-                    var inv = user.inventory || [];
-                    for (var i = 0; i < inv.length; i++) {
-                        if (inv[i].id === item.id) {
-                            hasItem = true;
-                            break;
-                        }
-                    }
-                }
+            // 2. 자산 보유 확인
+            if (Number(user.point) < finalPrice) {
+                delete bankProcessState[targetUid];
+                replier.reply(formatError(user, "포인트 부족", fp(finalPrice) + "P가 필요합니다."));
+            } else {
+                // 3. 아이콘/칭호 중복 소유 체크 (가방 확인)
+                var hasItem = false;
+                if (item.effect === "icon" || item.effect === "title") {
+                    var inv = user.inventory || [];
+                    for (var i = 0; i < inv.length; i++) {
+                        if (inv[i].id === item.id) {
+                            hasItem = true;
+                            break;
+                        }
+                    }
+                }
 
-                if (hasItem) {
-                    delete bankProcessState[targetUid];
-                    replier.reply(formatError(user, "중복 소유", "이미 보유 중인 아이템입니다."));
-                } else {
-                    /* [수정] 게임 인증권 구매 한도 검증 로직 추가 (2회 제한) */
-                    if (item.effect === "gameAuth" && (user.purchasedAuthCount || 0) >= 2) {
-                        delete bankProcessState[targetUid];
-                        return replier.reply(formatError(user, "구매 한도 초과", "인증권은 시즌당 최대 2회까지만 구매 가능합니다."));
-                    }
+                if (hasItem) {
+                    delete bankProcessState[targetUid];
+                    replier.reply(formatError(user, "중복 소유", "이미 보유 중인 아이템입니다."));
+                } else {
+                    /* [수정] 게임 인증권 구매 한도 검증 (2회 제한 반영) */
+                    if (item.effect === "gameAuth" && (user.purchasedAuthCount || 0) >= 2) {
+                        delete bankProcessState[targetUid];
+                        return replier.reply(formatError(user, "구매 한도 초과", "인증권은 시즌당 최대 2회까지만 구매 가능합니다."));
+                    }
 
-                    // 4. 포인트 차감 및 실시간 검증
-                    var preP = Number(user.point);
-                    user.point -= finalPrice;
-                    verifyPointTransaction(user, preP, -finalPrice, "상점 구매: " + item.name);
+                    // 4. 포인트 차감 및 실시간 검증
+                    var preP = Number(user.point);
+                    user.point -= finalPrice;
+                    verifyPointTransaction(user, preP, -finalPrice, "상점 구매: " + item.name);
 
-                    // 5. 상태 초기화 후 아이템 효과 실행 (섹터 36-2와 연동)
-                    delete bankProcessState[targetUid];
+                    // 5. 상태 초기화 후 아이템 효과 실행
+                    delete bankProcessState[targetUid];
 
-                    if (typeof _handleShopEffect === 'function') {
-                        _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice);
-                    } else {
-                        // [진단] 함수를 찾지 못할 경우 유저에게 즉시 알림 (무응답 방지)
-                        replier.reply(formatError(user, "시스템 오류", "아이템 처리 엔진(_handleShopEffect)이 로드되지 않았습니다.\n스크립트 하단에 함수가 있는지 확인하세요."));
-                        Log.error("_handleShopEffect 함수를 찾을 수 없습니다. 선언 위치를 확인하세요.");
-                    }
+                    if (typeof _handleShopEffect === 'function') {
+                        _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice);
+                    } else {
+                        replier.reply(formatError(user, "시스템 오류", "아이템 처리 엔진이 로드되지 않았습니다."));
+                        Log.error("_handleShopEffect 함수를 찾을 수 없습니다.");
+                    }
 
-                    // 모든 업무 처리 후 데이터 저장 및 로직 종료
-                    safeSaveData(data);
-                }
-            }
-        }
-    }
+                    // 모든 업무 처리 후 데이터 저장
+                    safeSaveData(data);
+                }
+            }
+        }
+    }
 }
 
 //==========섹터23-1==========
@@ -4588,7 +4596,6 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
 
 /**
  * [게임 하위 모듈 3-2] 액션 및 도박 게임 (결투 시스템)
- * 설명: 결투 신청, 취소, 수락, 거절의 모든 예외 처리와 에러 메시지를 원본 규격 그대로 유지합니다.
  */
 function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
@@ -4640,15 +4647,12 @@ function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [복구 완료] 결투 수락 */
+    /* 결투 수락 */
     if (msg === "수락" && duelData[targetUid]) {
-        // [복구] 도박 제한 체크
         if (data.gambleLimit) { replier.reply(formatError(user, "도박 제한", "현재 도박 기능이 제한되어 있습니다.")); return true; }
-        
         var d = duelData[targetUid];
         var challenger = roomData.users[d.challengerUid];
         
-        // [복구] 신청자 정보 없음 체크 및 전용 에러 메시지
         if (!challenger) { 
             delete duelData[targetUid]; 
             replier.reply(formatError(user, "신청자 정보 없음")); 
@@ -4672,15 +4676,16 @@ function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
         var winner = isChallengerWin ? challenger : user;
         var winPrize = d.point * 2;
 
+        /* [수정] 정의되지 않았던 winnerUid를 상황에 맞게 할당 */
+        var winnerUid = isChallengerWin ? d.challengerUid : targetUid;
         var preWinner = Number(winner.point);
 
-        /* [핵심 수정] 결투 승리금 획득 시 방 정보와 UID를 포함한 통합 상환 엔진 호출 */
+        /* 통합 상환 엔진 호출 및 승리금 지급 */
         var res = processRepayment(winner, winPrize, winnerUid, roomName);
+        winner.point = Number(winner.point) + Number(res.actualGain);
+        verifyPointTransaction(winner, preWinner, Number(res.actualGain), "결투 승리 보상");
 
-        winner.point = Number(winner.point) + winPrize;
-        verifyPointTransaction(winner, preWinner, winPrize, "결투 승리 보상");
-
-        var resBody = "⚔️ 결투 결과\n" + getDisplayName(challenger) + " VS " + getDisplayName(user) + "\n\n🏆 승자: " + getDisplayName(winner) + "\n💰 획득: " + fp(winPrize) + "P";
+        var resBody = "⚔️ 결투 결과\n" + getDisplayName(challenger) + " VS " + getDisplayName(user) + "\n\n🏆 승자: " + getDisplayName(winner) + "\n💰 획득: " + fp(winPrize) + "P" + (res.repayMsg || "");
         replier.reply(formatCommand("⚔️ 결투 종료", winner, resBody, null));
         delete duelData[targetUid];
         safeSaveData(data);

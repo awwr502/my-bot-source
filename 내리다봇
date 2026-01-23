@@ -4014,7 +4014,7 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
  */
 function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
 
-    /* [신규] 은행 가용 재원 수동 수정 */
+    /* [1] 은행 가용 재원 수동 수정 */
     if (msg.indexOf("/재원수정 ") === 0) {
         var val = parseInt(msg.split(" ")[1].replace(/,/g, ""));
         if (isNaN(val)) {
@@ -4035,23 +4035,19 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [고급] 유저 보유 자산 기반 시장 재건 명령어 */
+    /* [2] 유저 보유 자산 기반 시장 재건 (주가 10원 사태 복구) */
     if (msg === "/시장자산복구") {
         var roomData = data.rooms[roomName];
         if (!roomData) return true;
 
         var recoveredCount = 0;
-        var conf = SYSTEM_CONFIG.ECO.STOCK;
         
-        // 1. 모든 유저의 주식 보유 현황 스캔
         for (var uid in roomData.users) {
             var u = roomData.users[uid];
             if (u.stockHoldings) {
                 for (var sName in u.stockHoldings) {
-                    // 시장에 없거나 가격이 10P인 종목 발견 시
                     if (!data.stockMarket[sName] || data.stockMarket[sName].price <= 10) {
                         var type = assignStockType();
-                        // 유저들의 평균 매수가(stockAvg)를 기준으로 가격 복구, 없으면 1000P
                         var recoverPrice = Number(u.stockAvg ? u.stockAvg[sName] : 1000) || 1000;
                         
                         data.stockMarket[sName] = {
@@ -4069,27 +4065,20 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             }
         }
 
-        // 2. 붕괴된 시가 정상화
         marketOpenPrice = 1000;
         data.marketOpenPrice = 1000;
-
-        // 3. 즉시 저장
         safeSaveData(data);
         
         var resMsg = "✅ [자산 기반 시장 복구 완료]\n" +
                      "- 부활시킨 종목 수: " + recoveredCount + "개\n" +
                      "- 복구 기준: 유저 보유 평단가 반영\n" +
                      "- 시가 정상화: 1,000P 설정\n\n" +
-                     "📢 유저들이 보유했던 종목들이 시장에 다시 상장되었습니다.";
+                     "📢 유저들이 보유했던 종목들이 다시 상장되었습니다.";
         replier.reply(formatAdmin("시스템 복구 보고", resMsg));
         return true;
     }
 
-    // ... 기존 /재원수정 등 로직 유지
-    return false;
-}
-
-    /* 경제 지표 상세 조회 */
+    /* [3] 경제 지표 상세 조회 */
     if (msg === "/경제정보") {
         var eco = calculateEconomy(data, roomName);
         var rData = data.rooms[roomName];
@@ -4116,7 +4105,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* 데이터 교정 */
+    /* [4] 데이터 교정 및 무결성 검사 */
     if (msg.trim() === "/데이터교정") {
         var fixCount = 0;
         var refundCount = 0;
@@ -4132,7 +4121,6 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
                 var u = currentRoom.users[id];
                 if (!u) continue;
 
-                // 출석 3일 이하 유저의 사채 데이터 정리 (먹튀 방지 로직)
                 if (Number(u.totalAttendance || 0) <= 3) {
                     for (var cid in currentRoom.loanContracts) {
                         var c = currentRoom.loanContracts[cid];
@@ -4148,7 +4136,6 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
                     }
                 }
                 
-                // 데이터 무결성 검사 및 정수화
                 u.point = Math.floor(Number(u.point || 0));
                 u.bank = Math.floor(Number(u.bank || 0));
                 u.creditScore = Math.min(1000, Math.max(0, Number(u.creditScore || 600)));
@@ -4156,17 +4143,10 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
                 if (!u.loan) u.loan = { debt: 0, items: [] };
                 if (!u.stockHoldings) u.stockHoldings = {};
                 if (!u.stockAvg) u.stockAvg = {};
-                u.tier = Math.min(9, Math.max(0, Number(u.tier || 0)));
-                if (u.tier === 9) u.challengerCount = Math.max(1, u.challengerCount || 0);
-                if (u.jailReleaseTime && u.jailReleaseTime > now) {
-                    var remaining = u.jailReleaseTime - now;
-                    if (remaining > 3600000) u.jailReleaseTime = now + 3600000;
-                }
                 fixCount++;
             }
         }
         
-        // 구형 전역 풀 데이터 청소 (deprecated structure clean)
         if (data.loanPools) { delete data.loanPools; data.loanPools = {}; }
         if (data.loanContracts) { delete data.loanContracts; data.loanContracts = {}; }
         
@@ -4177,7 +4157,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* 물가 조정 */
+    /* [5] 물가 조정 (Base 설정) */
     if (msg.indexOf("/물가조정") === 0) {
         var args = msg.split(" ");
         var currentEco = calculateEconomy(data, roomName); 
@@ -4190,7 +4170,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* 물가 완충 비율 설정 */
+    /* [6] 물가 완충 비율 설정 */
     if (msg.indexOf("/물가완충") === 0) {
         var val = parseFloat(msg.split(" ")[1]);
         if (isNaN(val) || val < 0.0 || val > 1.0) { replier.reply(formatAdmin("오류", "0.0 ~ 1.0 사이의 소수를 입력하세요.")); return true; }
@@ -4200,59 +4180,50 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* 포인트 지급 */
+    /* [7] 포인트 지급 */
     if (msg.indexOf("/포인트지급 ") === 0) {
         var parts = msg.trim().split(/\s+/);
         if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/포인트지급 [닉네임] [금액]")); return true; }
         var am = parseInt(parts.pop());
         var tn = parts.slice(1).join(" ").trim();
         var roomData = data.rooms[roomName];
-        if (isNaN(am) || am <= 0) { replier.reply(formatError(user, "금액 오류", "양수 금액만 입력 가능합니다.")); return true; }
         var found = findUserByName(roomData, tn);
         if (found.length === 0) { replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); return true; }
         if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_give", { amount: am }, user); return true; }
-        var targetUser = found[0].data;
-
-        var prePoint = Number(targetUser.point);
-        targetUser.point = Number(targetUser.point) + am;
-        verifyPointTransaction(targetUser, prePoint, am, "관리자 지급");
         
-        replier.reply(formatAdmin("포인트 지급 완료", getDisplayName(targetUser) + "님: +" + fp(am) + "P\n(현재: " + fp(targetUser.point) + "P)"));
+        var targetUser = found[0].data;
+        util_updatePoint(targetUser, null, am, "관리자 직접 지급");
+        replier.reply(formatAdmin("포인트 지급 완료", getDisplayName(targetUser) + "님: +" + fp(am) + "P"));
         safeSaveData(data);
         return true;
     }
 
-    /* 포인트 차감 */
+    /* [8] 포인트 차감 */
     if (msg.indexOf("/포인트차감 ") === 0) {
         var parts = msg.trim().split(/\s+/);
         if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/포인트차감 [닉네임] [금액]")); return true; }
         var am = parseInt(parts.pop());
         var tn = parts.slice(1).join(" ").trim();
         var roomData = data.rooms[roomName];
-        if (isNaN(am) || am <= 0) { replier.reply(formatError(user, "금액 오류", "양수 금액만 입력 가능합니다.")); return true; }
         var found = findUserByName(roomData, tn);
         if (found.length === 0) { replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); return true; }
         if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_take", { amount: am }, user); return true; }
-        var targetUser = found[0].data;
-
-        var prePoint = Number(targetUser.point);
-        targetUser.point = Math.max(0, Number(targetUser.point) - am);
-        verifyPointTransaction(targetUser, prePoint, -am, "관리자 차감");
         
-        replier.reply(formatAdmin("포인트 차감 완료", getDisplayName(targetUser) + "님: -" + fp(am) + "P\n(현재: " + fp(targetUser.point) + "P)"));
+        var targetUser = found[0].data;
+        util_updatePoint(targetUser, null, -am, "관리자 직접 차감");
+        replier.reply(formatAdmin("포인트 차감 완료", getDisplayName(targetUser) + "님: -" + fp(am) + "P"));
         safeSaveData(data);
         return true;
     }
 
-    /* 전체 포인트 지급 */
+    /* [9] 전체 포인트 지급 */
     if (msg.indexOf("/전체포인트지급 ") === 0) {
         var amt = parseInt(msg.split(" ")[1]);
-        if (isNaN(amt) || amt <= 0) { replier.reply(formatAdmin("오류", "금액을 확인하세요.")); return true; }
+        if (isNaN(amt)) return true;
         var count = 0;
         for (var r in data.rooms) {
             for (var id in data.rooms[r].users) {
-                var u = data.rooms[r].users[id];
-                u.point = Number(u.point) + amt;
+                data.rooms[r].users[id].point = Number(data.rooms[r].users[id].point) + amt;
                 count++;
             }
         }
@@ -4261,12 +4232,17 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* 뿌리기 이벤트 */
+    /* [10] 포인트 뿌리기 (원본 타이머 및 경제 배율 로직 완벽 복구) */
     if (msg === "/뿌리기") {
-        if (sprinkleData.active) { replier.reply(formatAdmin("오류", "이미 뿌리기가 진행 중입니다.")); return true; }
-        var count = Math.floor(Math.random() * 3) + 2; 
+        if (sprinkleData.active) {
+            replier.reply(formatAdmin("오류", "이미 뿌리기가 진행 중입니다."));
+            return true;
+        }
+
         var roomData = data.rooms[roomName];
+        var count = Math.floor(Math.random() * 3) + 2; // 2~4명 선착순
         
+        // 경제 지표에 따른 뿌리기 금액 보정
         var multiplier = 1.0;
         if (roomData.economyBase && roomData.economyBase > 0) {
             var eco = calculateEconomy(data, roomName);
@@ -4279,36 +4255,46 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         var portions = [];
         var totalSprinkle = 0;
         for(var i=0; i<count; i++) {
-            var baseP = Math.floor(Math.random() * 501) + 500;
+            var baseP = Math.floor(Math.random() * 501) + 500; // 기본 500~1000P
             var finalP = Math.floor(baseP * multiplier);
             portions.push(finalP);
             totalSprinkle += finalP;
         }
-        
+
+        // 전역 상태 업데이트
         sprinkleData = {
-            active: true, totalPoint: totalSprinkle, remainingPoint: totalSprinkle,
-            limit: count, currentWinners: 0, winners: [], portions: portions
+            active: true,
+            totalPoint: totalSprinkle,
+            remainingPoint: totalSprinkle,
+            limit: count,
+            currentWinners: 0,
+            winners: [],
+            portions: portions
         };
-        
-        Api.replyRoom(roomName, formatAdmin("🎉 포인트 뿌리기 시작!", "선착순 " + count + "명!\n채팅창에 [줍기]를 입력하세요!\n(제한시간: 1분)"));
+
+        Api.replyRoom(roomName, formatAdmin("🎉 포인트 뿌리기 시작!", 
+            "선착순 " + count + "명!\n" +
+            "채팅창에 [줍기]를 입력하세요!\n" +
+            "💰 총 배정 포인트: " + fp(totalSprinkle) + "P\n" +
+            "(제한시간: 1분)"));
+
+        // [핵심] 1분 후 자동 종료 타이머 (비동기 처리)
         setTimeout(function() {
             if (sprinkleData.active) {
                 sprinkleData.active = false;
-                Api.replyRoom(roomName, formatAdmin("🏁 뿌리기 시간 초과", "1분이 경과하여 이벤트가 자동 종료되었습니다."));
+                Api.replyRoom(roomName, formatAdmin("🏁 뿌리기 시간 초과", "시간이 경과하여 이벤트가 종료되었습니다."));
             }
         }, 60000);
         return true;
     }
 
-    /* 로또 데이터 초기화 */
+    /* [11] 시스템 초기화 세트 (로또, 승급횟수, 시즌) */
     if (msg === "/로또데이터초기화") {
         data.lotto = { round: (data.lotto.round || 0) + 1, entries: {}, dailyPool: 0, jackpot: 0, lastWinNums: [] };
         safeSaveData(data);
-        replier.reply(formatAdmin("완료", "로또 데이터 리셋 완료"));
+        replier.reply(formatAdmin("완료", "로또 시스템 리셋 완료"));
         return true;
     }
-
-    /* 승급 횟수 초기화 */
     if (msg === "/승급횟수초기화") {
         for (var r in data.rooms) {
             for (var id in data.rooms[r].users) {
@@ -4320,48 +4306,72 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         replier.reply(formatAdmin("완료", "전체 승급 기회 초기화"));
         return true;
     }
-
-    /* 시즌 강제 종료 */
     if (msg === "/시즌강제종료") {
         for (var r in data.rooms) {
             for (var id in data.rooms[r].users) { data.rooms[r].users[id].tier = 0; }
         }
         safeSaveData(data);
-        replier.reply(formatAdmin("완료", "모든 유저 티어 아이언 초기화"));
+        replier.reply(formatAdmin("완료", "모든 유저 티어 초기화"));
         return true;
     }
 
-    /* 시스템 자가 복원 */
+    /* [12] 시스템 복원 세트 */
     if (msg.trim() === "/시스템자가복원") {
-        lottoPurchaseState = {}; sprinkleData = { active: false, winners: [] };
-        activeThefts = {}; duelData = {}; selectWaitState = {}; bankProcessState = {}; menuWaitState = {};
-        if (typeof uidCache !== 'undefined') uidCache = {};
+        // 1. 휘발성 대기 상태값 일괄 초기화
+        lottoPurchaseState = {};
+        sprinkleData = { active: false, winners: [] };
+        activeThefts = {};
+        duelData = {};
+        selectWaitState = {};
+        bankProcessState = {};
+        menuWaitState = {};
         
+        // 2. UID 캐시 초기화 (렉 방지)
+        if (typeof uidCache !== 'undefined') uidCache = {};
+
+        // 3. 전 유저 데이터 수치 정규화 (실수 -> 정수화 및 한도 교정)
+        var fixCount = 0;
         for (var r in data.rooms) {
             for (var id in data.rooms[r].users) {
                 var u = data.rooms[r].users[id];
+                if (!u) continue;
+                
                 u.point = Math.floor(Number(u.point || 0));
+                u.bank = Math.floor(Number(u.bank || 0));
                 u.creditScore = Math.min(1000, Math.max(0, Number(u.creditScore || 600)));
+                
+                // 필수 객체 누락 시 복구
+                if (!u.loan) u.loan = { debt: 0, items: [] };
+                if (!u.stockHoldings) u.stockHoldings = {};
+                
+                fixCount++;
             }
         }
+
+        // 4. 시스템 락(Lock) 강제 해제 시도
+        if (lock.isLocked()) {
+            try { lock.unlock(); } catch(e) {}
+        }
+
         safeSaveData(data);
-        replier.reply(formatAdmin("완료", "메모리 정리 및 변수 초기화 완료"));
+        replier.reply(formatAdmin("⚙️ 시스템 자가 복원 완료", 
+            "1. 모든 입력 대기 상태 초기화\n" +
+            "2. 전역 UID 캐시 메모리 정리\n" +
+            "3. 유저 " + fixCount + "명의 데이터 정수화 완료\n" +
+            "4. 시스템 파일 락(Lock) 점검 완료"));
         return true;
     }
-
-    /* 전체 복원 */
     if (msg.trim() === "/전체복원") {
         var stablePath = BACKUP_DIR + "last_stable_backup.json";
         if (!new java.io.File(stablePath).exists()) { replier.reply(formatAdmin("오류", "백업 파일 유실")); return true; }
         var content = FileStream.read(stablePath);
         FileStream.write(FILE_PATH, content);
         globalData = JSON.parse(content);
-        if (typeof uidCache !== 'undefined') uidCache = {};
-        replier.reply(formatAdmin("성공", "데이터 전체 롤백 성공 (메모리 반영됨)"));
+        replier.reply(formatAdmin("성공", "데이터 전체 롤백 성공"));
         return true;
     }
 
-    return false;
+    return false; // 어떤 명령어도 해당되지 않음
 }
 
 //==========섹터36==========

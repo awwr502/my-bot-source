@@ -101,7 +101,7 @@ var SYSTEM_CONFIG = {
                 "scam": { label: "작전주", volatility: 3, prob: 28, icon: "🔥" } // 작전주 특성
             },
             MANIPULATION: {
-                TARGET: "두유노모터스", // 조작 타겟 종목명
+                TARGET: "ㅇㅇ", // 조작 타겟 종목명
                 IS_UP: false,      // 조작 시 상승 여부 (true: 상승, false: 하락)
                 RATE: 0.24,        // 조작 변동 비율 (0.25 = 25%)
                 ACTIVE: false      // 조작 시스템 활성화 여부
@@ -2259,47 +2259,52 @@ if (selectWaitState[targetUid]) {
 
         /* 채팅 보너스 로직 (하이브리드 방식 적용: 실시간 저장 제거로 렉 방지) */
         if (msg.indexOf("/") !== 0) {
-            user.chatCount = (user.chatCount || 0) + 1;
-            user.chatCycleCount = (user.chatCycleCount || 0) + 1;
-            if (user.chatCycleCount > 13 || !user.chatBonusTarget) {
-                user.chatCycleCount = 1; 
-                user.chatBonusTarget = Math.floor(Math.random() * 12) + 1;
-                user.chatBonusGiven = false; 
-            }
-            if (user.chatCycleCount >= user.chatBonusTarget && !user.chatBonusGiven) {
-                var multiplier = 1.0;
-                var roomDataForChat = data.rooms[roomName];
-                if (roomDataForChat && roomDataForChat.economyBase && roomDataForChat.economyBase > 0) {
-                    var currentEco = calculateEconomy(data, roomName);
-                    var rawRatio = currentEco.total / roomDataForChat.economyBase;
-                    var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.5;
-                    multiplier = 1 + (rawRatio - 1) * damping;
-                    if (multiplier < 0.5) multiplier = 0.5;
+            /* [수정] 메뉴/은행/로또 등 입력 대기 상태일 경우 채팅 보너스 로직 건너뛰기 (숫자 입력 충돌 방지) */
+            if (menuWaitState[targetUid] || bankProcessState[targetUid] || lottoPurchaseState[targetUid] || selectWaitState[targetUid]) {
+                // 입력 대기 중이므로 보너스 카운트 증가 없이 리턴
+            } else {
+                user.chatCount = (user.chatCount || 0) + 1;
+                user.chatCycleCount = (user.chatCycleCount || 0) + 1;
+                if (user.chatCycleCount > 13 || !user.chatBonusTarget) {
+                    user.chatCycleCount = 1; 
+                    user.chatBonusTarget = Math.floor(Math.random() * 12) + 1;
+                    user.chatBonusGiven = false; 
                 }
+                if (user.chatCycleCount >= user.chatBonusTarget && !user.chatBonusGiven) {
+                    var multiplier = 1.0;
+                    var roomDataForChat = data.rooms[roomName];
+                    if (roomDataForChat && roomDataForChat.economyBase && roomDataForChat.economyBase > 0) {
+                        var currentEco = calculateEconomy(data, roomName);
+                        var rawRatio = currentEco.total / roomDataForChat.economyBase;
+                        var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.5;
+                        multiplier = 1 + (rawRatio - 1) * damping;
+                        if (multiplier < 0.5) multiplier = 0.5;
+                    }
 
-                var basePrize = Math.floor(Math.random() * 21) + 80;
-                var prize = Math.floor(basePrize * multiplier);
-                
-                var prePoint = Number(user.point);
-                
-                /* [핵심] 사채 추심 로직이 포함된 통합 상환 함수 호출 */
-                // targetUid를 인자로 넘겨 사채 계약자 식별 및 추심 진행
-                var res = processRepayment(user, prize, targetUid, roomName);
-                
-                user.point = Number(user.point) + Number(res.actualGain);
-                verifyPointTransaction(user, prePoint, Number(res.actualGain), "채팅 보너스");
+                    var basePrize = Math.floor(Math.random() * 21) + 80;
+                    var prize = Math.floor(basePrize * multiplier);
+                    
+                    var prePoint = Number(user.point);
+                    
+                    /* [핵심] 사채 추심 로직이 포함된 통합 상환 함수 호출 */
+                    // targetUid를 인자로 넘겨 사채 계약자 식별 및 추심 진행
+                    var res = processRepayment(user, prize, targetUid, roomName);
+                    
+                    user.point = Number(user.point) + Number(res.actualGain);
+                    verifyPointTransaction(user, prePoint, Number(res.actualGain), "채팅 보너스");
 
-                user.creditScore = Math.min(1000, Number(user.creditScore || 600) + 1);
-                
-                // 추심 및 상환 내역이 포함된 메시지 출력
-                var output = "🎁 채팅 보너스\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n" + fp(prize) + "P를 획득했습니다!" + (res.repayMsg ? res.repayMsg : "") + "\n━━━━━━━━━━━━━━━";
-                replier.reply(output + "\n내 잔액: " + fP(user.point) + "P");
-                
-                user.chatBonusGiven = true; 
-                
-                /* [최적화] 하이브리드 방식 적용: 고빈도 작업인 채팅 보너스는 실시간 저장을 생략함 */
-                // 실제 저장은 5분 주기 스케줄러(섹터 16)가 담당하여 I/O 부하를 제거함.
-                // safeSaveData(data); 
+                    user.creditScore = Math.min(1000, Number(user.creditScore || 600) + 1);
+                    
+                    // 추심 및 상환 내역이 포함된 메시지 출력
+                    var output = "🎁 채팅 보너스\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n" + fp(prize) + "P를 획득했습니다!" + (res.repayMsg ? res.repayMsg : "") + "\n━━━━━━━━━━━━━━━";
+                    replier.reply(output + "\n내 잔액: " + fP(user.point) + "P");
+                    
+                    user.chatBonusGiven = true; 
+                    
+                    /* [최적화] 하이브리드 방식 적용: 고빈도 작업인 채팅 보너스는 실시간 저장을 생략함 */
+                    // 실제 저장은 5분 주기 스케줄러(섹터 16)가 담당하여 I/O 부하를 제거함.
+                    // safeSaveData(data); 
+                }
             }
         }
         
@@ -2753,7 +2758,13 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
                 if (hasItem) {
                     delete bankProcessState[targetUid];
                     replier.reply(formatError(user, "중복 소유", "이미 보유 중인 아이템입니다."));
-                } else {
+                } 
+                /* [수정] 롤 판수 인증권(ID 11) 월간 구매 한도(2회) 체크 */
+                else if (item.id === 11 && (user.purchasedAuthCount || 0) >= 2) {
+                    delete bankProcessState[targetUid];
+                    replier.reply(formatError(user, "구매 한도 초과", "롤 판수 인증권은 월 최대 2회까지만 구매 가능합니다.\n(현재: " + user.purchasedAuthCount + "/2)"));
+                }
+                else {
                     // 4. 포인트 차감 및 실시간 검증
                     var preP = Number(user.point);
                     user.point -= finalPrice;

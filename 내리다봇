@@ -192,7 +192,8 @@ function getDatabase() {
                 economyBase: 0, economyDamping: 0.5, lastDailyReset: "", lastDietDate: "",
                 feverData: { active: false, endTime: 0, scheduled: [] }, isCalibrated: false,
                 loanPools: {},   
-                loanContracts: {} 
+                loanContracts: {},
+                marketOpenPrice: 0 // [신규] 시가 영구 저장을 위한 필드 추가
             };
             globalData = initialData;
             safeSaveData(initialData);
@@ -201,6 +202,11 @@ function getDatabase() {
         var content = FileStream.read(FILE_PATH);
         if (!content) throw new Error("Empty File");
         globalData = JSON.parse(content);
+        
+        /* [신규] 휘발성 전역 변수 복구: 저장된 시가 데이터를 메모리에 동기화 */
+        if (globalData.marketOpenPrice !== undefined) {
+            marketOpenPrice = globalData.marketOpenPrice;
+        }
         
         /* [수정] 방별 데이터 자동 분리 및 은행 재원(bankReserve) 필드 추가 */
         if (globalData.rooms) {
@@ -222,6 +228,10 @@ function getDatabase() {
         var stableFile = new java.io.File(BACKUP_DIR + "last_stable_backup.json");
         if (stableFile.exists()) {
             globalData = JSON.parse(FileStream.read(BACKUP_DIR + "last_stable_backup.json"));
+            /* [신규] 백업 로드 시에도 시가 데이터 동기화 */
+            if (globalData.marketOpenPrice !== undefined) {
+                marketOpenPrice = globalData.marketOpenPrice;
+            }
             return globalData;
         }
         return null;
@@ -616,7 +626,8 @@ function formatError(user, content, nextStep) {
  * @returns {Number} 계산된 신규 가격
  */
 function stock_calculateNextPrice(currentPrice) {
-    if (marketOpenPrice === 0) return currentPrice; // 시가 미설정 시 변동 없음
+    // [방어] 시가 데이터 부재 시 변동 없이 현재가 반환 (폭락 방지)
+    if (!marketOpenPrice || marketOpenPrice <= 0) return currentPrice;
 
     var cfg = SYSTEM_CONFIG.ECO.STOCK.SETTINGS;
     var growthRate = (currentPrice - marketOpenPrice) / marketOpenPrice;
@@ -641,7 +652,7 @@ function stock_calculateNextPrice(currentPrice) {
         }
     }
 
-    return Math.max(1, currentPrice + (currentPrice * change));
+    return Math.max(10, currentPrice + (currentPrice * change));
 }
 
 /**
@@ -650,13 +661,17 @@ function stock_calculateNextPrice(currentPrice) {
  * @returns {Number} 보정된 종가
  */
 function stock_applyClosingCorrection(currentPrice) {
+    // [방어] 시가 데이터 부재 시 보정 없이 현재가 반환 (나누기 0 오류 및 10원 폭락 방지)
+    if (!marketOpenPrice || marketOpenPrice <= 0) return currentPrice;
+
     var cfg = SYSTEM_CONFIG.ECO.STOCK.SETTINGS;
     var growthRate = (currentPrice - marketOpenPrice) / marketOpenPrice;
     
     if (growthRate >= cfg.CLOSING_LIMIT) {
         // 20%를 넘겼을 경우 19.1~19.8% 사이로 자연스럽게 미세 조정
         var safeRate = (cfg.CLOSING_LIMIT - 0.01) + (Math.random() * 0.008);
-        return marketOpenPrice * safeRate;
+        var correctedPrice = marketOpenPrice * safeRate;
+        return Math.max(10, Math.round(correctedPrice));
     }
     return currentPrice;
 }
@@ -1556,16 +1571,16 @@ function _runSector16Logic(data, ctx) {
         ctx.isForceBackup = true; 
     }
 
-    /* [신규] 주식 장 오픈 시가 기록 (오전 7시 0분) */
+    /* [수정] 주식 장 오픈 시가 기록 (오전 7시 0분) 및 DB 저장 */
     if (currentHour === conf.SETTINGS.OPEN_HOUR && currentMin === 0 && data.lastMarketOpenMin !== currentMin) {
         data.lastMarketOpenMin = currentMin;
-        // 시장의 대표 기준가(marketOpenPrice)를 현재 주식들의 평균값 또는 특정 지표로 기록
-        // 여기서는 시스템 설계에 따라 현재가를 시가로 고정합니다.
         if (data.stockMarket) {
             var stocks = Object.keys(data.stockMarket);
             if (stocks.length > 0) {
-                // 첫 번째 종목 혹은 시장 평균을 기준으로 시가 설정 (로직에 따라 조정 가능)
                 marketOpenPrice = data.stockMarket[stocks[0]].price; 
+                /* [핵심] 봇 재시작 대비 DB에 시가 기록 */
+                data.marketOpenPrice = marketOpenPrice;
+                ctx.isUpdated = true;
             }
         }
     }
@@ -1700,8 +1715,8 @@ function _runSector16Logic(data, ctx) {
         data.lastStockUpdateMin = currentMin; 
         try { java.lang.Thread.sleep(1000); } catch(e){}
 
-        /* [수정] 장 마감 시간(23시 0분)인 경우 종가 보정 로직 선행 실행 */
-        if (currentHour === conf.SETTINGS.CLOSE_HOUR && typeof stock_applyClosingCorrection === 'function') {
+        /* [수정] 장 마감 직전(23시 50분)에 종가 보정 로직 실행 */
+        if (currentHour === conf.SETTINGS.CLOSE_HOUR && currentMin === 50 && typeof stock_applyClosingCorrection === 'function') {
             for (var sName in data.stockMarket) {
                 data.stockMarket[sName].price = stock_applyClosingCorrection(data.stockMarket[sName].price);
             }
@@ -1709,7 +1724,7 @@ function _runSector16Logic(data, ctx) {
 
         var stockResult = updateStockPrices(data); 
         var isMarketOpen = (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR);
-        var statusText = isMarketOpen ? "🟢 장 운영 중" : "🔴 장 마감";
+        var statusText = isMarketOpen ? "🟢 장 운영 중 (07:00 ~ 23:59)" : "🔴 장 마감";
         var body = "📉 주식 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateStockList(data) || "시세 정보 없음"); 
         if (stockResult.length > 0) body += "\n\n" + stockResult.join("\n");
         body += "\n━━━━━━━━━━━━━━━\n🔗 실시간 차트 보기:\n" + DASHBOARD_URL;

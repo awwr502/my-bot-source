@@ -964,10 +964,11 @@ function processTheftResult(roomName, thiefUid, victimUid) {
 //==========섹터13==========
 
 /**
- * [경제 시스템 모듈] 통합 자동 상환 및 신용 관리 (차등 비율 버전)
+ * [경제 시스템 모듈] 통합 자동 상환 및 신용 관리 (수정된 차등 비율 버전)
  * 수정 내용: 
- * 1. 사채 직접 추심(processPrivateCollection): 수익의 80% 제한
- * 2. 은행 대환 채무(processRepayment): 수익의 100% 압류 유지
+ * 1. 일반 은행 빚 상환: 30%
+ * 2. 신용불량자/사채 강제추심: 50%
+ * 3. 은행 대환 채무(대납건): 70%
  */
 
 /* [기능 1] 신용불량자 상태 제어 */
@@ -977,7 +978,7 @@ function checkAndHandleDefaulter(user, roomName) {
         if (!user.isDefaulter) {
             user.isDefaulter = true;
             user.icon = ""; 
-            var msg = "신용 점수 500점 미만 하락\n\n1. 보유 아이콘 몰수\n2. 획득 포인트 70% 자동 상환 적용";
+            var msg = "신용 점수 500점 미만 하락\n\n1. 보유 아이콘 몰수\n2. 획득 포인트 50% 자동 상환 적용";
             try { Api.replyRoom(roomName, formatCommand("📉 신용불량자 지정", user, msg, "대출 상환을 권장합니다.")); } catch(e){}
         }
     } else {
@@ -985,7 +986,7 @@ function checkAndHandleDefaulter(user, roomName) {
     }
 }
 
-/* [기능 2] 은행 대출금 분산 상환 엔진 (보완: 데이터 무결성 및 플래그 해제) */
+/* [기능 2] 은행 대출금 분산 상환 엔진 */
 function distributeRepayment(user, amount) {
     if (!user.loan || Number(user.loan.debt) < 1) {
         if (user.loan) { user.loan.debt = 0; user.loan.items = []; user.isTransferred = false; }
@@ -1023,15 +1024,15 @@ function distributeRepayment(user, amount) {
     return { actualRepay: actualRepayed, creditGain: clearedCount * 15, clearedCount: clearedCount };
 }
 
-/* [기능 3] 사채(P2P) 자동 추심 처리 (수정: 추심 비율 80% 적용) */
+/* [기능 3] 사채(P2P) 자동 추심 처리 (수정: 추심 비율 50% 적용) */
 function processPrivateCollection(user, userUid, amount, roomName) {
     var data = getDatabase();
     if (!roomName || !data.rooms[roomName]) return { collected: 0, msg: "" };
 
     var roomData = data.rooms[roomName];
     
-    // [설정] 직접 추심 한도를 수익의 80%로 제한
-    var totalLimit = Math.floor(Number(amount) * 0.8); 
+    // [설정 수정] 직접 추심 한도를 수익의 50%로 변경
+    var totalLimit = Math.floor(Number(amount) * 0.5); 
     var remainingAmount = totalLimit; 
     
     var totalCollected = 0;
@@ -1064,13 +1065,13 @@ function processPrivateCollection(user, userUid, amount, roomName) {
     }
 
     if (totalCollected > 0) {
-        var msg = "\n\n🚨 [사채 강제 추심 안내]\n연체 사채로 인해 수익의 80%가 채권자에게 자동 귀속되었습니다." + collectionLog;
+        var msg = "\n\n🚨 [사채 강제 추심 안내]\n연체 사채로 인해 수익의 50%가 채권자에게 자동 귀속되었습니다." + collectionLog;
         return { collected: totalCollected, msg: msg };
     }
     return { collected: 0, msg: "" };
 }
 
-/* [기능 4] 통합 자동 상환 프로세스 (수정: 대환 채무 100% 적용) */
+/* [기능 4] 통합 자동 상환 프로세스 (수정: 비율 체계 전면 개편) */
 function processRepayment(user, amount, userUid, roomName) {
     var amt = Number(amount) || 0;
     var currentGain = amt;
@@ -1081,7 +1082,7 @@ function processRepayment(user, amount, userUid, roomName) {
         user.isTransferred = false;
     }
 
-    // 1. 사채 직접 추심 (80% 비율 작동)
+    // 1. 사채 직접 추심 (50% 비율 작동)
     var privateRes = processPrivateCollection(user, userUid, currentGain, roomName);
     if (privateRes.collected > 0) {
         currentGain -= privateRes.collected;
@@ -1090,15 +1091,18 @@ function processRepayment(user, amount, userUid, roomName) {
 
     // 2. 은행 대출 자동 상환
     if (currentGain > 0 && user.loan && Number(user.loan.debt) > 0) {
-        var repaymentRate = 0.5; 
+        // [기본값] 일반 유저 상환 비율 30%
+        var repaymentRate = 0.3; 
         var typeLabel = "일반 상환";
 
-        // [설정] 대환 채무(isTransferred)는 수익의 100% 압류
+        // [조건 1] 대환 채무(은행이 사채를 대신 갚아준 경우)는 70% 압류
         if (user.isTransferred === true || user.isTransferred === "true") {
-            repaymentRate = 1.0; 
-            typeLabel = "🚨 대환 채무 강제 추심";
-        } else if (Number(user.creditScore || 600) < 500) {
             repaymentRate = 0.7; 
+            typeLabel = "🚨 대환 채무 강제 추심";
+        } 
+        // [조건 2] 신용불량자(500점 미만)는 50% 압류
+        else if (Number(user.creditScore || 600) < 500) {
+            repaymentRate = 0.5; 
             typeLabel = "신용불량 제한 상환";
         }
 

@@ -36,9 +36,11 @@ var BACKUP_DIR = BASE_DIR + "backup/"; // 데이터 백업 파일이 저장되�
 // 유저 식별 시 반복문을 제거하고 메모리에서 즉시 UID를 찾기 위한 해시 테이블입니다.
 var uidCache = uidCache || {}; 
 
-/* [신규] 고정 스레드 풀 엔진 (Fixed Thread Pool) */
-// 최대 8개의 명령어를 동시에 병렬 처리하며, 그 이상의 입력은 대기열(Queue)에 쌓아 관리합니다.
-var Executor = java.util.concurrent.Executors.newFixedThreadPool(8);
+/* [수정] 고정 스레드 풀 엔진 (Memory Leak Prevention) */
+// 소스코드 재로딩 시 Executor가 중복 생성되어 앱이 멈추는 것을 방지하기 위해 싱글톤 패턴을 적용합니다.
+if (typeof Executor === 'undefined' || Executor === null) {
+    var Executor = java.util.concurrent.Executors.newFixedThreadPool(8);
+}
 
 /* 로그 저장 경로 및 디렉토리 설정 */ 
 var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt"; // 유저가 제보한 버그 내용 저장 경로
@@ -101,15 +103,15 @@ var SYSTEM_CONFIG = {
             },
             MANIPULATION: {
                 TARGET: "네이버통신", // 조작 타겟 종목명
-                IS_UP: false,      // true: 상승, false: 하락
+                IS_UP: false,       // true: 상승, false: 하락
                 RATE: 0.25,        // 변동 비율 (25%)
-                ACTIVE: true      // 조작 활성화 여부 (true 시 로직 작동)
+                ACTIVE: true       // 조작 활성화 여부 (true 시 로직 작동)
             },
             SETTINGS: {
-                MAX_COUNT: 10,     // 시장 유지 최대 종목 수
-                OPEN_HOUR: 7,      // 주식 장 시작 시간
-                CLOSE_HOUR: 23,    // 주식 장 마감 시간
-                MANI_RATE: 0.25,   // 기본 특수 이벤트 변동폭
+                MAX_COUNT: 10,      // 시장 유지 최대 종목 수
+                OPEN_HOUR: 7,       // 주식 장 시작 시간
+                CLOSE_HOUR: 23,     // 주식 장 마감 시간
+                MANI_RATE: 0.25,    // 기본 특수 이벤트 변동폭
                 DELIST_LIMIT: 0.03 // 상장폐지 기준 비율
             }
         },
@@ -1875,8 +1877,9 @@ function _runSector18Logic(data, ctx) {
 
 //==========섹터19==========
 
-/* 메인 메시지 리스너 함수 */
-function response(room, msg, sender, isGroupChat, replier, imageDB) {
+/* 메인 메시지 리스너 함수 (함수명 변경: response -> bot_logic) */
+/* 설명: 메인 로더(response)가 파일 로드 후 이 함수를 호출합니다. */
+function bot_logic(room, msg, sender, isGroupChat, replier, imageDB) {
     /* [최적화] 고정 스레드 풀 엔진 가동: 모든 처리를 비동기 작업 큐에 할당하여 반응 속도 극대화 및 씹힘 방지 */
     Executor.execute(new java.lang.Runnable({
         run: function() {

@@ -87,23 +87,24 @@ var ADMIN_CMD_LIST = [
 /* 시스템 핵심 상수 설정 */
 var SYSTEM_CONFIG = {
     ECO: {
-        ATTEND_MIN: 1000, 
-        ATTEND_MAX: 1500, 
-        GAMBLE_MIN: 500,  
-        GAMBLE_MAX: 1500, 
+        ATTEND_MIN: 1000, // 출석 체크 시 최소 지급 포인트
+        ATTEND_MAX: 1500, // 출석 체크 시 최대 지급 포인트
+        GAMBLE_MIN: 500,  // 홀짝 도박 최소 베팅금
+        GAMBLE_MAX: 1500, // 홀짝 도박 최대 베팅금
+        
         STOCK: {
-            PREFIXES: ["롯데", "엘지", "한화", "삼성", "두바이쫀득", "현대", "카카오", "네이버", "애플", "테슬라", "광어", "도다리", "두유노"], 
-            SUFFIXES: ["전자", "생명", "화학", "건설", "중공업", "바이오", "제약", "엔터", "식품", "모터스", "쿠키", "에너지", "보험", "통신", "증권"], 
+            PREFIXES: ["롯데", "엘지", "한화", "삼성", "두바이쫀득", "현대", "카카오", "네이버", "애플", "테슬라", "광어", "도다리", "두유노"], // 주식 종목명 앞글자
+            SUFFIXES: ["전자", "생명", "화학", "건설", "중공업", "바이오", "제약", "엔터", "식품", "모터스", "쿠키", "에너지", "보험", "통신", "증권"], // 주식 종목명 뒷글자
             TRAITS: {
-                "normal": { label: "일반", volatility: 1.5, prob: 44, icon: "🌱" },
-                "bluechip": { label: "우량주", volatility: 1, prob: 28, icon: "🛡️" },
-                "scam": { label: "작전주", volatility: 3, prob: 28, icon: "🔥" }
+                "normal": { label: "일반", volatility: 1.5, prob: 44, icon: "🌱" }, // 일반주 특성
+                "bluechip": { label: "우량주", volatility: 1, prob: 28, icon: "🛡️" }, // 우량주 특성
+                "scam": { label: "작전주", volatility: 3, prob: 28, icon: "🔥" } // 작전주 특성
             },
             MANIPULATION: {
-                TARGET: "네이버통신", // 조작 타겟 종목명
-                IS_UP: false,      // true: 상승, false: 하락
-                RATE: 0.25,        // 변동 비율 (25%)
-                ACTIVE: true      // 조작 활성화 여부 (true 시 로직 작동)
+                TARGET: "천연가스", // 조작 타겟 종목명
+                IS_UP: false,      // 조작 시 상승 여부 (true: 상승, false: 하락)
+                RATE: 0.25,        // 조작 변동 비율 (0.25 = 25%)
+                ACTIVE: false      // 조작 시스템 활성화 여부
             },
             SETTINGS: {
                 MAX_COUNT: 10,     // 시장 유지 최대 종목 수
@@ -492,24 +493,6 @@ var CMD_LIST = {
         { cmd: "/시스템자가복원", desc: "메모리 최적화 및 변수 초기화", func: "_adminEconomyLogic" }
     ]
 };
-
-/* [3] 레지스트리 자동 등록 실행부 (Initialization) */
-// 스크립트 로드 시 CMD_LIST의 데이터를 USER_COMMANDS 및 ADMIN_COMMANDS 객체로 자동 매핑합니다.
-(function initializeRegistry() {
-    // 유저 명령어 등록
-    for (var i = 0; i < CMD_LIST.user.length; i++) {
-        var c = CMD_LIST.user[i];
-        // 함수 이름을 실제 함수 참조로 변환하여 등록 (eval 지양, 글로벌 객체 참조 방식)
-        var executor = this[c.func];
-        registerUserCmd(c.cmd, c.desc, c.cat, executor);
-    }
-    // 관리자 명령어 등록
-    for (var j = 0; j < CMD_LIST.admin.length; j++) {
-        var a = CMD_LIST.admin[j];
-        var adminExecutor = this[a.func];
-        registerAdminCmd(a.cmd, a.desc, adminExecutor);
-    }
-})();
 
 //==========섹터7==========
 
@@ -1274,19 +1257,13 @@ function updateStockPrices(data) {
         data.pendingNewStock = false;
     }
 
-    /* (중략: updateStockPrices 함수 내부) */
-    /* [2] 조작 프리셋 및 특수 효과 로드 */
+    /* [2] 조작 프리셋 설정 로드 */
     var mani = conf.MANIPULATION;
-    var specStock = null;
-    var specFactor = 0;
+    var specStock = (mani && mani.ACTIVE) ? mani.TARGET : null;
+    var specFactor = (mani && mani.ACTIVE) ? (mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE)) : 0;
 
-    // 1순위: 섹터1 하드코딩 조작 (ACTIVE가 true일 때)
-    if (mani && mani.ACTIVE && data.stockMarket[mani.TARGET]) {
-        specStock = mani.TARGET;
-        specFactor = mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE);
-    } 
-    // 2순위: 시스템 예약 이벤트 (조작이 없을 때만)
-    else if (data.pendingSpecialEffect && isMarketOpen) {
+    // 예약된 특수 효과가 있다면 조작 설정보다 우선하거나 대체함
+    if (!specStock && data.pendingSpecialEffect && isMarketOpen) {
         specStock = data.pendingSpecialEffect.stock;
         specFactor = data.pendingSpecialEffect.factor;
     }
@@ -1299,12 +1276,15 @@ function updateStockPrices(data) {
         
         stock.lastPrice = Number(stock.price);
 
+        // 상장폐지 체크
+        if (stock.price < marketAvg * 0.25 || stock.price < ecoBaseFloor) { stock.delistTick++; } else { stock.delistTick = 0; }
+
         if (isMarketOpen) {
             if (name === specStock) { 
-                changePercent = specFactor; // 조작/이벤트값 강제 적용
+                changePercent = specFactor;
                 eventNews.push("🚨 [변동성 알림]\n종목: " + name + "\n내용: " + (specFactor > 0 ? "🚀 폭등" : "📉 폭락") + " (" + (Math.abs(specFactor * 100)).toFixed(0) + "%)");
             } else {
-                // 일반 변동 로직
+                // 추세 기반 변동
                 if (stock.trendTick <= 0) {
                     stock.trendTick = Math.floor(Math.random() * 4) + 2;
                     var p = Math.random(); stock.trend = (p < 0.35) ? "up" : (p < 0.70 ? "down" : "volatile");
@@ -1313,6 +1293,12 @@ function updateStockPrices(data) {
                 changePercent = baseRate * trait.volatility;
                 if (stock.trendTick > 0) stock.trendTick--;
             }
+            
+            // 거래량 반영
+            var traffic = data.stockTraffic[name] || { buy: 0, sell: 0 };
+            var trafficImpact = Math.max(-0.15, Math.min(0.15, ((traffic.buy - traffic.sell) / (activeUserCount * 5)) * 0.01));
+            changePercent += trafficImpact;
+        }
         
         /* [핵심 수정] Math.floor 대신 Math.round를 사용하여 미세 변동이 절사되는 문제 해결 */
         var nextPrice = stock.price * (1 + changePercent);
@@ -1566,52 +1552,41 @@ function _runSector16Logic(data, ctx) {
     }
 
     /* 2. 주식 뉴스 사전 알림 (매 9분 30초) */
-if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && 
-    currentMin % 10 === 9 && ctx.now.getSeconds() >= 30 && data.lastNewsMin !== currentMin) {
-    
-    data.lastNewsMin = currentMin;
-    var mani = conf.MANIPULATION;
-
-    // [A] 수동 조작(MANIPULATION)이 활성화된 경우 예고 알림 최우선 발송 및 데이터 예약
-    if (mani && mani.ACTIVE === true) {
-        // [수정 핵심] 섹터 15 엔진이 즉시 반영할 수 있도록 예약 데이터 세팅
-        data.pendingSpecialEffect = { 
-            stock: mani.TARGET, 
-            factor: mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE),
-            forceMani: true // 조작 모드임을 명시
-        };
-
-        var maniMsg = "📢 [시장 동향: 특보]\n━━━━━━━━━━━━━━━\n" +
-                      "잠시 후 시장에 대규모 변동이 발생합니다!\n" +
-                      "(30초 후 반영)\n\n" +
-                      "대상: " + mani.TARGET + "\n" +
-                      "예상: " + (mani.IS_UP ? "🚀 급등 조짐" : "📉 급락 주의");
+    if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && 
+        currentMin % 10 === 9 && ctx.now.getSeconds() >= 30 && data.lastNewsMin !== currentMin) {
         
-        try { Api.replyRoom(ctx.targetRoom, maniMsg); } catch(e){}
-        
-        // 조작 활성화 시 신규 상장 예약은 취소하여 충돌 방지
-        data.pendingNewStock = false; 
-    } 
-    // [B] 수동 조작이 없을 때만 기존 무작위 이벤트 체크
-    else {
-        var currentStockCount = Object.keys(data.stockMarket || {}).length;
-        if (currentStockCount < 10 && Math.random() < SYSTEM_CONFIG.PROB.STOCK_NEW_LISTING) { 
-            data.pendingNewStock = true;
-            try { Api.replyRoom(ctx.targetRoom, "📢 [시장 동향]\n━━━━━━━━━━━━━━━\n잠시 후 신규 기업이 상장됩니다!"); } catch(e){}
-        } else if (Math.random() < SYSTEM_CONFIG.PROB.STOCK_SPECIAL) {
-            var stocks = Object.keys(data.stockMarket || {});
-            if (stocks.length > 0) {
-                var target = stocks[Math.floor(Math.random() * stocks.length)];
-                var isUp = Math.random() < SYSTEM_CONFIG.PROB.STOCK_UP_CHANCE;
-                var randFactor = (Math.random() * 0.10) + 0.15; 
-                data.pendingSpecialEffect = { stock: target, factor: isUp ? randFactor : -randFactor };
-                var newsMsg = "📢 [시장 동향]\n━━━━━━━━━━━━━━━\n잠시 후 변동이 감지됩니다!\n(30초 후 반영)\n\n대상: " + target + "\n예상: " + (isUp ? "🚀 급등 조짐" : "📉 급락 주의");
-                try { Api.replyRoom(ctx.targetRoom, newsMsg); } catch(e){}
+        data.lastNewsMin = currentMin;
+        var mani = conf.MANIPULATION;
+
+        // [A] 수동 조작(MANIPULATION)이 활성화된 경우 예고 알림 최우선 발송
+        if (mani && mani.ACTIVE === true) {
+            var maniMsg = "📢 [시장 동향: 특보]\n━━━━━━━━━━━━━━━\n" +
+                          "잠시 후 시장에 대규모 변동이 발생합니다!\n" +
+                          "(30초 후 반영)\n\n" +
+                          "대상: " + mani.TARGET + "\n" +
+                          "예상: " + (mani.IS_UP ? "🚀 급등 조짐" : "📉 급락 주의");
+            try { Api.replyRoom(ctx.targetRoom, maniMsg); } catch(e){}
+        } 
+        // [B] 수동 조작이 없을 때만 기존 무작위 이벤트 체크
+        else {
+            var currentStockCount = Object.keys(data.stockMarket || {}).length;
+            if (currentStockCount < 10 && Math.random() < SYSTEM_CONFIG.PROB.STOCK_NEW_LISTING) { 
+                data.pendingNewStock = true;
+                try { Api.replyRoom(ctx.targetRoom, "📢 [시장 동향]\n━━━━━━━━━━━━━━━\n잠시 후 신규 기업이 상장됩니다!"); } catch(e){}
+            } else if (Math.random() < SYSTEM_CONFIG.PROB.STOCK_SPECIAL) {
+                var stocks = Object.keys(data.stockMarket || {});
+                if (stocks.length > 0) {
+                    var target = stocks[Math.floor(Math.random() * stocks.length)];
+                    var isUp = Math.random() < SYSTEM_CONFIG.PROB.STOCK_UP_CHANCE;
+                    var randFactor = (Math.random() * 0.10) + 0.15; 
+                    data.pendingSpecialEffect = { stock: target, factor: isUp ? randFactor : -randFactor };
+                    var newsMsg = "📢 [시장 동향]\n━━━━━━━━━━━━━━━\n잠시 후 변동이 감지됩니다!\n(30초 후 반영)\n\n대상: " + target + "\n예상: " + (isUp ? "🚀 급등 조짐" : "📉 급락 주의");
+                    try { Api.replyRoom(ctx.targetRoom, newsMsg); } catch(e){}
+                }
             }
         }
+        ctx.isUpdated = true;
     }
-    ctx.isUpdated = true;
-}
 
     /* 3. 주식 주기적 변동 처리 (매 0분) */
     if (currentHour >= 7 && currentHour <= 23 && currentMin % 10 === 0 && data.lastStockUpdateMin !== currentMin) {
@@ -1656,6 +1631,9 @@ if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE
         }
     }
 }
+
+// 엔진 가동
+runScheduler();
 
 //==========섹터17==========
 
@@ -1770,7 +1748,7 @@ function _runSector18Logic(data, ctx) {
         var pool = Number(data.lotto.dailyPool || 0) + Number(data.lotto.jackpot || 0);
         try { 
             // [수정] '당구' 오타를 'pool'로 수정하여 시스템 중단 방지
-            Api.replyRoom(ctx.targetRoom, formatAdmin("🏁 로또 판매 마감", "잠시 후 22시 추첨!\n현재 누적 상금: " + fp(pool) + "P")); 
+            Api.replyRoom(ctx.targetRoom, formatAdmin("🏁 로또 판매 마감", "잠시 후 22시 추첨!\n현재 누적 상금: " + fp(당구) + "P")); 
         } catch(e) {}
         ctx.isUpdated = true;
     }
@@ -1875,8 +1853,8 @@ function _runSector18Logic(data, ctx) {
 
 //==========섹터19==========
 
-/* 메인 메시지 리스너 함수 (로더 충돌 방지 및 중복 출력 해결을 위해 이름 변경) */
-function mainProcess(room, msg, sender, isGroupChat, replier, imageDB) {
+/* 메인 메시지 리스너 함수 */
+action=function(room, msg, sender, isGroupChat, replier, imageDB) {
     /* [최적화] 고정 스레드 풀 엔진 가동: 모든 처리를 비동기 작업 큐에 할당하여 반응 속도 극대화 및 씹힘 방지 */
     Executor.execute(new java.lang.Runnable({
         run: function() {
@@ -1945,6 +1923,7 @@ function mainProcess(room, msg, sender, isGroupChat, replier, imageDB) {
                     var content = msg.substring(6).trim();
                     if (content.length < 2) return replier.reply("내용을 상세히 적어주세요.");
                     
+                    // 위에서 이미 user를 찾았으므로 재사용
                     if(!user) return; 
 
                     var lastAct = user.lastAction;
@@ -1982,7 +1961,7 @@ function mainProcess(room, msg, sender, isGroupChat, replier, imageDB) {
                         replier.reply(formatAdmin("🔄 시스템 재가동", "결과: 락 해제 및 메모리 동기화, 시스템 정상화 완료"));
                         return;
                     }
-                }
+                 }
 
 //==========섹터20-1==========
 
@@ -2321,8 +2300,8 @@ if (selectWaitState[targetUid]) {
                 // safeSaveData(data); 
             }
         }
-
-//==========섹터22-1==========
+        
+        //==========섹터22-1==========
 
 /* [수정] 통합 업무 처리 핸들러 (1단계: 송금 및 예금) */
 if (bankProcessState && bankProcessState[targetUid]) {
@@ -3130,12 +3109,18 @@ if (msg === "/도움말") {
 
 //==========섹터26==========
 
-            } catch (e) {
-                Log.error("Thread Runtime Error: " + e);
-                if (lock.isLocked()) { try { lock.unlock(); } catch(err) { Log.error("Lock Release Error: " + err); } }
+    } catch (e) {
+        Log.error("Thread Runtime Error: " + e);
+        if (lock.isLocked()) {
+            try {
+                lock.unlock();
+            } catch(err) {
+                Log.error("Lock Release Error: " + err);
             }
         }
-    }));
+    }
+}
+}));
 }
 
 //==========섹터27==========
@@ -5096,3 +5081,43 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
 
     return false;
 }
+
+//==========섹터45==========
+
+/* [지연 실행] 명령어 레지스트리 초기화 (Initialization) */
+// 모든 로직 함수(섹터 30~44)가 메모리에 적재된 후 실행되어야 하므로 파일 맨 끝에 배치합니다.
+(function initializeRegistry() {
+    try {
+        // 1. 유저 명령어 등록
+        for (var i = 0; i < CMD_LIST.user.length; i++) {
+            var c = CMD_LIST.user[i];
+            
+            // eval을 사용하여 문자열 이름("func")을 실제 함수 객체로 변환합니다.
+            var executor = null;
+            try { executor = eval(c.func); } catch(e) {}
+
+            if (typeof executor === 'function') {
+                registerUserCmd(c.cmd, c.desc, c.cat, executor);
+            } else {
+                Log.error("❌ 명령어 등록 실패 (함수 미발견): " + c.cmd + " -> " + c.func);
+            }
+        }
+
+        // 2. 관리자 명령어 등록
+        for (var j = 0; j < CMD_LIST.admin.length; j++) {
+            var a = CMD_LIST.admin[j];
+            
+            var adminExecutor = null;
+            try { adminExecutor = eval(a.func); } catch(e) {}
+
+            if (typeof adminExecutor === 'function') {
+                registerAdminCmd(a.cmd, a.desc, adminExecutor);
+            } else {
+                Log.error("❌ 관리자 명령어 등록 실패: " + a.cmd);
+            }
+        }
+        
+    } catch(e) {
+        Log.error("Registry Init Critical Error: " + e);
+    }
+})();

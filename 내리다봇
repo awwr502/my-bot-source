@@ -1282,6 +1282,7 @@ function updateStockPrices(data) {
 
     var now = new Date();
     var currentHour = now.getHours();
+    var currentMin = now.getMinutes();
     var isMarketOpen = (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR);
     
     var totalSum = 0;
@@ -1357,9 +1358,8 @@ function updateStockPrices(data) {
             var traffic = data.stockTraffic[name] || { buy: 0, sell: 0 };
             var trafficImpact = Math.max(-0.15, Math.min(0.15, ((traffic.buy - traffic.sell) / (activeUserCount * 5)) * 0.01));
             changePercent += trafficImpact;
-        }
 
-        /* [신규 통합] 동적 저항(Dynamic Resistance) 시스템 */
+            /* [신규 통합] 동적 저항(Dynamic Resistance) 시스템 */
             // 시가가 설정되어 있고 현재가가 저항 시작점(+15%)을 넘었을 때 작동
             if (marketOpenPrice > 0) {
                 var growthRate = (stock.price - marketOpenPrice) / marketOpenPrice;
@@ -1384,7 +1384,7 @@ function updateStockPrices(data) {
                 }
             }
         }
-
+        
         /* [핵심 수정] Math.floor 대신 Math.round를 사용하여 미세 변동이 절사되는 문제 해결 */
         var nextPrice = stock.price * (1 + changePercent);
         stock.price = Math.max(10, Math.round(nextPrice)); 
@@ -1617,9 +1617,7 @@ function _runSector16Logic(data, ctx) {
                 var lender = roomData.users[c.lenderUid];
                 var borrower = roomData.users[c.borrowerUid];
 
-                // 채권자와 채무자가 해당 방에 존재하는지 확인
                 if (lender && borrower) {
-                    // 1. 은행 재원에서 대납 (재원이 부족해도 집행하여 부채 관리)
                     if (roomData.bankReserve === undefined) roomData.bankReserve = 10000;
                     roomData.bankReserve -= amountToPay;
                     
@@ -1627,17 +1625,14 @@ function _runSector16Logic(data, ctx) {
                     lender.point = preLenderPoint + amountToPay;
                     verifyPointTransaction(lender, preLenderPoint, amountToPay, "사채 은행 대납 회수 (" + c.borrowerName + ")");
 
-                    // 2. 채무자: 사채 -> 은행 빚으로 전환 및 100% 압류 플래그 부여
                     if (!borrower.loan) borrower.loan = { debt: 0, items: [] };
                     borrower.loan.debt = Number(borrower.loan.debt) + amountToPay;
                     borrower.loan.items.push(amountToPay);
-                    borrower.isTransferred = true; // 100% 강제 압류 대상 플래그
+                    borrower.isTransferred = true; 
 
-                    /* [신규 추가] 연체 페널티: 신용점수 200점 차감 및 즉시 상태 제어 */
                     borrower.creditScore = Math.max(0, (borrower.creditScore || 600) - 200);
                     checkAndHandleDefaulter(borrower, rName);
 
-                    // 3. 대환 완료 알림
                     var takeoverMsg = "🏛️ [중앙은행 대환 집행]\n━━━━━━━━━━━━━━━\n" +
                                       "👤 채무자: " + c.borrowerName + "님\n" +
                                       "🤝 채권자: " + c.lenderName + "님\n\n" +
@@ -1647,7 +1642,6 @@ function _runSector16Logic(data, ctx) {
                                       "━━━━━━━━━━━━━━━";
                     Api.replyRoom(rName, takeoverMsg);
 
-                    // 4. 기존 사채 계약 파기
                     delete roomData.loanContracts[cid];
                     ctx.isUpdated = true;
                 }

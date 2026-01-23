@@ -465,6 +465,7 @@ var CMD_LIST = {
         { cmd: "/구매", desc: "[번호] 상점 물품 구매", cat: "상점", func: "_gameShopLogic" },
         { cmd: "/가방", desc: "보유 중인 아이콘/칭호 확인", cat: "상점", func: "_handleInventoryLogic" },
         { cmd: "/장착", desc: "[번호] 보유 아이템 장착", cat: "상점", func: "_handleInventoryLogic" },
+        { cmd: "/분해", desc: "[번호] 아이콘 분해 및 포인트 회수", cat: "상점", func: "_handleInventoryLogic" },
         { cmd: "/로또정보", desc: "내 로또 번호 및 결과 확인", cat: "상점", func: "_handleLottoLogic" },
         { cmd: "/아이콘초기화", desc: "설정한 아이콘 삭제", cat: "상점", func: "_handleLottoLogic" },
         { cmd: "/은행", desc: "예금/출금/송금/대출/사채 종합 관리", cat: "경제", func: "_gameBankLogic" },
@@ -3294,51 +3295,129 @@ if (msg === "/도움말") {
 //==========섹터27==========
 
 /**
- * [독립형 함수 1] 인벤토리 로직
- * 메인 함수 바깥에 위치하여 용량 제한을 받지 않습니다.
- */
-function _handleInventoryLogic(msg, user, data, replier, roomName) {
-    if (msg === "/가방") {
-        var inv = user.inventory || [];
-        var itemList = [];
-        if (inv.length === 0) itemList.push("(보유 중인 아이콘/칭호가 없습니다)");
-        else {
-            for (var i = 0; i < inv.length; i++) {
-                var it = inv[i];
-                var activeMark = "";
-                if (it.effect === "icon" && user.icon === it.icon) activeMark = " (✅ 장착 중)";
-                else if (it.effect === "title" && user.title === it.title) activeMark = " (✅ 장착 중)";
-                itemList.push((i + 1) + ". " + it.icon + " " + it.name + activeMark);
-            }
-        }
-        var consumables = "\n[내 소모품 정보]\n🛡️ 강등 방어권: " + (user.tierGuard || 0) + "개\n🔂 추가 승급권: " + (user.purchasedPromotionAttempts || 0) + "회";
-        replier.reply(formatCommand("🎒 내 가방", user, "[아이템 보관함]\n" + itemList.join("\n") + "\n" + consumables + "\n\n(장착: [/장착 번호])", "원하는 번호를 입력하여 장착하세요."));
-        return true;
-    }
+ * [독립형 함수 1] 인벤토리 로직
+ * 기능: 보유 아이템 확인, 장착, 분해 처리
+ */
+function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
+    // 1. 가방 조회
+    if (msg === "/가방") {
+        var inv = user.inventory || [];
+        var itemList = [];
+        if (inv.length === 0) itemList.push("(보유 중인 아이콘/칭호가 없습니다)");
+        else {
+            for (var i = 0; i < inv.length; i++) {
+                var it = inv[i];
+                var activeMark = "";
+                if (it.effect === "icon" && user.icon === it.icon) activeMark = " (✅ 장착 중)";
+                else if (it.effect === "title" && user.title === it.title) activeMark = " (✅ 장착 중)";
+                itemList.push((i + 1) + ". " + it.icon + " " + it.name + activeMark);
+            }
+        }
+        var consumables = "\n[내 소모품 정보]\n🛡️ 강등 방어권: " + (user.tierGuard || 0) + "개\n🔂 추가 승급권: " + (user.purchasedPromotionAttempts || 0) + "회";
+        
+        var content = "[아이템 보관함]\n" + itemList.join("\n") + "\n" + consumables + "\n\n(장착: [/장착 번호]) (분해: [/분해 번호])";
+        replier.reply(formatCommand("🎒 내 가방", user, content, "원하는 번호를 입력하여 장착하세요."));
+        return true;
+    }
 
-    if (msg.indexOf("/장착 ") === 0) {
-        var parts = msg.trim().split(/\s+/);
-        if (parts.length < 2) {
+    // 2. 아이템 장착
+    if (msg.indexOf("/장착 ") === 0) {
+        var parts = msg.trim().split(/\s+/);
+        if (parts.length < 2) {
             replier.reply(formatError(user, "형식 오류", "/장착 [번호]"));
             return true;
         }
-        var idx = parseInt(parts[1]);
-        var inv = user.inventory || [];
-        if (isNaN(idx) || idx < 1 || idx > inv.length) {
+        var idx = parseInt(parts[1]);
+        var inv = user.inventory || [];
+        if (isNaN(idx) || idx < 1 || idx > inv.length) {
             replier.reply(formatError(user, "번호 오류", "가방에 표시된 번호를 입력해주세요."));
             return true;
         }
-        var selected = inv[idx - 1];
-        if (selected.effect === "icon") {
-            user.icon = selected.icon;
-            replier.reply(formatCommand("✨ 아이콘 장착", user, "[" + selected.icon + "] 아이콘으로 변경되었습니다.", "내 정보: [/내정보]"));
-        } else if (selected.effect === "title") {
-            user.title = selected.title || "";
-            replier.reply(formatCommand("🎖️ 칭호 장착", user, "[" + (selected.title || selected.name) + "] 칭호로 변경되었습니다.", "내 정보: [/내정보]"));
-        }
-        safeSaveData(data);
+        var selected = inv[idx - 1];
+        if (selected.effect === "icon") {
+            user.icon = selected.icon;
+            replier.reply(formatCommand("✨ 아이콘 장착", user, "[" + selected.icon + "] 아이콘으로 변경되었습니다.", "내 정보: [/내정보]"));
+        } else if (selected.effect === "title") {
+            user.title = selected.title || "";
+            replier.reply(formatCommand("🎖️ 칭호 장착", user, "[" + (selected.title || selected.name) + "] 칭호로 변경되었습니다.", "내 정보: [/내정보]"));
+        }
+        safeSaveData(data);
         return true;
-    }
+    }
+
+    // 3. 아이콘 분해 로직 (다중 선택 지원 및 ecobase 기반 환급)
+    if (msg.indexOf("/분해 ") === 0) {
+        var inv = user.inventory || [];
+        if (inv.length === 0) {
+            replier.reply(formatError(user, "분해 불가", "분해할 아이템이 가방에 없습니다."));
+            return true;
+        }
+
+        // 숫자만 추출 (다중 선택 지원)
+        var numbers = msg.match(/\d+/g);
+        if (!numbers) {
+            replier.reply(formatError(user, "입력 오류", "/분해 [번호] 또는 /분해 [번호] [번호] ..."));
+            return true;
+        }
+
+        // 중복 제거 및 유효 범위 필터링
+        var targetIndices = [];
+        numbers.forEach(function(n) {
+            var idx = parseInt(n) - 1;
+            if (idx >= 0 && idx < inv.length && targetIndices.indexOf(idx) === -1) {
+                targetIndices.push(idx);
+            }
+        });
+
+        if (targetIndices.length === 0) {
+            replier.reply(formatError(user, "번호 오류", "가방에 있는 정확한 번호를 입력해주세요."));
+            return true;
+        }
+
+        // 랜덤박스(ID 12)의 현재 가격 조회 (ecobase 적용됨)
+        var boxItem = null;
+        for (var i = 0; i < SHOP_ITEMS.length; i++) {
+            if (SHOP_ITEMS[i].id === 12) { boxItem = SHOP_ITEMS[i]; break; }
+        }
+        
+        if (!boxItem) {
+            replier.reply(formatError(user, "시스템 오류", "랜덤박스 데이터를 찾을 수 없습니다."));
+            return true;
+        }
+
+        var boxCurrentPrice = getItemPrice(boxItem, user, roomName);
+        var refundPerIcon = Math.floor(boxCurrentPrice * 0.20); // 20% 회수
+        var totalRefund = refundPerIcon * targetIndices.length;
+
+        // 분해 진행 (장착 중인 아이콘/칭호는 초기화)
+        var disassembledNames = [];
+        // 인덱스가 뒤틀리지 않도록 내림차순 정렬 후 삭제
+        targetIndices.sort(function(a, b) { return b - a; });
+
+        targetIndices.forEach(function(idx) {
+            var item = inv[idx];
+            disassembledNames.push(item.icon + " " + item.name);
+            
+            // 장착 중인 상태 해제
+            if (item.effect === "icon" && user.icon === item.icon) user.icon = "";
+            if (item.effect === "title" && user.title === item.title) user.title = "";
+            
+            inv.splice(idx, 1);
+        });
+
+        // 포인트 지급 및 상환 엔진 연동
+        var res = processRepayment(user, totalRefund, targetUid, roomName);
+        util_updatePoint(user, null, Number(res.actualGain), "아이템 분해 회수");
+
+        var resultMsg = "아이템 " + targetIndices.length + "개를 분해했습니다.\n\n" +
+                        "[분해 목록]\n" + disassembledNames.join(", ") + "\n\n" +
+                        "💰 회수 포인트: " + fp(totalRefund) + "P (박스가의 20%)\n" +
+                        res.repayMsg;
+
+        replier.reply(formatCommand("♻️ 아이콘 분해 완료", user, resultMsg, "내 잔액: " + fp(user.point) + "P"));
+        safeSaveData(data);
+        return true;
+    }
 }
 
 //==========섹터28==========

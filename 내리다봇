@@ -82,8 +82,8 @@ var ADMIN_CMD_LIST = [
     "22. /유저복원 [닉네임] (부분복구)", "23. /제보목록 (버그확인)", "24. /오류로그 (로직검증)", 
     "25. /제보초기화", "26. /오류초기화", "27. /포인트지급 [닉네임] [수량]", 
     "28. /물가조정 [기준값|초기화]", "29. /관리자해제 [닉네임]", "30. /관리자목록", 
-    "31. /물가완충 [0.0~1.0]", "32. /재원수정 [금액] (은행금고수정)" , "33. /경제정보(통합지표확인)",
-    "34. /시장자산복구 (주가복구)"
+    "31. /물가완충 [0.0~1.0]", "32. /재원수정 [금액] (은행금고수정)", "33. /경제정보(통합지표확인)",
+    "34. /시장자산복구 (주가복구)", "35. /종목추가 [이름] [가격]", "36. /종목수정 [기존] [신규] [가격]"
 ];
 
 /* 시스템 핵심 상수 설정 */
@@ -481,6 +481,8 @@ var CMD_LIST = {
     admin: [
         { cmd: "/봇구동", desc: "[온|오프] 시스템 제어", func: "_adminSystemLogic" },
         { cmd: "/시장자산복구", desc: "유저 평단가 기반 주가 긴급 복구", func: "_adminEconomyLogic" },
+        { cmd: "/종목추가", desc: "[이름] [가격] 신규 상장", func: "_adminEconomyLogic" },
+        { cmd: "/종목수정", desc: "[기존] [새이름] [가격] 수정", func: "_adminEconomyLogic" },
         { cmd: "/경제정보", desc: "은행 재원 및 경제 지표 확인", func: "_adminEconomyLogic" },
         { cmd: "/재원수정", desc: "[금액] 은행 금고 자본 조정", func: "_adminEconomyLogic" },
         { cmd: "/데이터교정", desc: "은행 재원 및 유저 데이터 동기화", func: "_adminEconomyLogic" },
@@ -4035,7 +4037,91 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [2] 유저 보유 자산 기반 시장 재건 (주가 10원 사태 복구) */
+   /* [2] 특정 종목 신규 상장/부활 명령어 */
+    // 사용법: /종목추가 [종목명] [가격]
+    if (msg.indexOf("/종목추가 ") === 0) {
+        var parts = msg.split(" ");
+        if (parts.length < 3) {
+            replier.reply(formatAdmin("오류", "형식: /종목추가 [종목명] [가격]"));
+            return true;
+        }
+        var name = parts[1];
+        var price = parseInt(parts[2].replace(/,/g, ""));
+        if (isNaN(price)) {
+            replier.reply(formatAdmin("오류", "가격은 숫자로 입력해주세요."));
+            return true;
+        }
+
+        // 시장 데이터 생성 (기존 유저 데이터와 이름이 같으면 즉시 부활)
+        data.stockMarket[name] = {
+            price: price,
+            lastPrice: price,
+            type: assignStockType(), // 섹터 14/15 함수 호출
+            delistTick: 0,
+            delistLimit: 5,
+            trend: "none",
+            trendTick: 0
+        };
+
+        safeSaveData(data);
+        replier.reply(formatAdmin("📈 종목 추가 완료", "[" + name + "] 종목이 " + fp(price) + "P로 상장되었습니다."));
+        return true;
+    }
+
+        /* [관리자] 특정 종목 이름 및 가격 수정 */
+    // 사용법: /종목수정 [기존이름] [새이름] [새가격]
+    if (msg.indexOf("/종목수정 ") === 0) {
+        var parts = msg.split(" ");
+        if (parts.length < 4) {
+            replier.reply(formatAdmin("오류", "형식: /종목수정 [기존이름] [새이름] [새가격]"));
+            return true;
+        }
+        var oldName = parts[1];
+        var newName = parts[2];
+        var newPrice = parseInt(parts[3].replace(/,/g, ""));
+
+        if (!data.stockMarket[oldName]) {
+            replier.reply(formatAdmin("오류", "[" + oldName + "] 종목을 찾을 수 없습니다."));
+            return true;
+        }
+
+        // 1. 시장 데이터 업데이트
+        var stockData = data.stockMarket[oldName];
+        stockData.price = newPrice;
+        stockData.lastPrice = newPrice;
+        
+        if (oldName !== newName) {
+            data.stockMarket[newName] = stockData;
+            delete data.stockMarket[oldName];
+            
+            // 2. 유저 보유 데이터 이전 (이름 변경 시 필수)
+            var fixCount = 0;
+            for (var r in data.rooms) {
+                var users = data.rooms[r].users;
+                for (var uid in users) {
+                    var u = users[uid];
+                    if (u.stockHoldings && u.stockHoldings[oldName] !== undefined) {
+                        u.stockHoldings[newName] = u.stockHoldings[oldName];
+                        delete u.stockHoldings[oldName];
+                        if (u.stockAvg && u.stockAvg[oldName] !== undefined) {
+                            u.stockAvg[newName] = u.stockAvg[oldName];
+                            delete u.stockAvg[oldName];
+                        }
+                        fixCount++;
+                    }
+                }
+            }
+        }
+
+        safeSaveData(data);
+        var res = "✅ 수정 완료: " + oldName + " ➔ " + newName + "\n💰 가격: " + fp(newPrice) + "P";
+        if (oldName !== newName) res += "\n👥 유저 데이터 이전: " + fixCount + "명";
+        
+        replier.reply(formatAdmin("주식 시장 개입", res));
+        return true;
+    }
+
+    /* [3] 유저 보유 자산 기반 시장 재건 (주가 10원 사태 복구) */
     if (msg === "/시장자산복구") {
         var roomData = data.rooms[roomName];
         if (!roomData) return true;
@@ -4078,7 +4164,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [3] 경제 지표 상세 조회 */
+    /* [4] 경제 지표 상세 조회 */
     if (msg === "/경제정보") {
         var eco = calculateEconomy(data, roomName);
         var rData = data.rooms[roomName];
@@ -4105,7 +4191,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [4] 데이터 교정 및 무결성 검사 */
+    /* [5] 데이터 교정 및 무결성 검사 */
     if (msg.trim() === "/데이터교정") {
         var fixCount = 0;
         var refundCount = 0;
@@ -4157,7 +4243,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [5] 물가 조정 (Base 설정) */
+    /* [6] 물가 조정 (Base 설정) */
     if (msg.indexOf("/물가조정") === 0) {
         var args = msg.split(" ");
         var currentEco = calculateEconomy(data, roomName); 
@@ -4170,7 +4256,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [6] 물가 완충 비율 설정 */
+    /* [7] 물가 완충 비율 설정 */
     if (msg.indexOf("/물가완충") === 0) {
         var val = parseFloat(msg.split(" ")[1]);
         if (isNaN(val) || val < 0.0 || val > 1.0) { replier.reply(formatAdmin("오류", "0.0 ~ 1.0 사이의 소수를 입력하세요.")); return true; }
@@ -4180,7 +4266,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [7] 포인트 지급 */
+    /* [8] 포인트 지급 */
     if (msg.indexOf("/포인트지급 ") === 0) {
         var parts = msg.trim().split(/\s+/);
         if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/포인트지급 [닉네임] [금액]")); return true; }
@@ -4198,7 +4284,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [8] 포인트 차감 */
+    /* [9] 포인트 차감 */
     if (msg.indexOf("/포인트차감 ") === 0) {
         var parts = msg.trim().split(/\s+/);
         if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/포인트차감 [닉네임] [금액]")); return true; }
@@ -4216,7 +4302,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [9] 전체 포인트 지급 */
+    /* [10] 전체 포인트 지급 */
     if (msg.indexOf("/전체포인트지급 ") === 0) {
         var amt = parseInt(msg.split(" ")[1]);
         if (isNaN(amt)) return true;
@@ -4232,7 +4318,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [10] 포인트 뿌리기 (원본 타이머 및 경제 배율 로직 완벽 복구) */
+    /* [11] 포인트 뿌리기 (원본 타이머 및 경제 배율 로직 완벽 복구) */
     if (msg === "/뿌리기") {
         if (sprinkleData.active) {
             replier.reply(formatAdmin("오류", "이미 뿌리기가 진행 중입니다."));
@@ -4288,7 +4374,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [11] 시스템 초기화 세트 (로또, 승급횟수, 시즌) */
+    /* [12] 시스템 초기화 세트 (로또, 승급횟수, 시즌) */
     if (msg === "/로또데이터초기화") {
         data.lotto = { round: (data.lotto.round || 0) + 1, entries: {}, dailyPool: 0, jackpot: 0, lastWinNums: [] };
         safeSaveData(data);
@@ -4315,7 +4401,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [12] 시스템 복원 세트 */
+    /* [13] 시스템 복원 세트 */
     if (msg.trim() === "/시스템자가복원") {
         // 1. 휘발성 대기 상태값 일괄 초기화
         lottoPurchaseState = {};

@@ -93,6 +93,12 @@ var SYSTEM_CONFIG = {
         GAMBLE_MIN: 500,  // 홀짝 도박 최소 베팅금
         GAMBLE_MAX: 1500, // 홀짝 도박 최대 베팅금
         
+        /* [신규] 중앙은행 지급준비제도 설정 */
+        BANK: {
+            RESERVE_RATIO: 0.20, // 지급준비율 (20%). 예금의 20%는 대출 불가(뱅크런 대비)
+            INITIAL_RESERVE: 10000 // 은행 초기 가용 재원 기본값
+        },
+        
         STOCK: {
             PREFIXES: ["롯데", "엘지", "한화", "삼성", "두바이쫀득", "현대", "카카오", "네이버", "애플", "테슬라", "광어", "도다리", "두유노"], // 주식 종목명 앞글자
             SUFFIXES: ["전자", "생명", "화학", "건설", "중공업", "바이오", "제약", "엔터", "식품", "모터스", "쿠키", "에너지", "보험", "통신", "증권"], // 주식 종목명 뒷글자
@@ -203,9 +209,9 @@ function getDatabase() {
                 if (!targetRoom.loanPools) targetRoom.loanPools = {};
                 if (!targetRoom.loanContracts) targetRoom.loanContracts = {};
                 
-                /* [신규] 중앙은행 재원 변수 누락 시 0으로 초기화 */
+                /* [수정] 중앙은행 재원 변수 누락 시 섹터 1의 설정값(INITIAL_RESERVE)으로 초기화 */
                 if (targetRoom.bankReserve === undefined) {
-                    targetRoom.bankReserve = 0; 
+                    targetRoom.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE; 
                 }
             }
         }
@@ -537,9 +543,9 @@ function util_updatePoint(user, roomData, delta, reason) {
     // [중앙은행 시스템] 포인트가 차감되는 경우(delta < 0) 자동으로 은행 재원에 합산
     if (delta < 0) {
         if (roomData) {
-            // 재원 데이터가 없는 경우 3,000P로 초기 자본금 설정
+            // [수정] 재원 데이터가 없는 경우 섹터 1의 설정값(INITIAL_RESERVE)으로 초기화
             if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
-                roomData.bankReserve = 3000;
+                roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
             }
             // 유저가 잃은 포인트의 절대값을 은행 재원에 입금
             roomData.bankReserve += Math.abs(delta);
@@ -2410,7 +2416,7 @@ if (selectWaitState[targetUid]) {
             }
         }
         
-        //==========섹터22-1==========
+//==========섹터22-1==========
 
 /* [수정] 통합 업무 처리 핸들러 (1단계: 송금 및 예금) */
 if (bankProcessState && bankProcessState[targetUid]) {
@@ -2464,7 +2470,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
             }
         }
 
-        /* [기능 2] 예금 처리 */
+        /* [기능 2] 예금 처리 (지급준비제도 반영: 예금액 재원 편입) */
         if (state.type === 'deposit') {
             var amt = parseInt(msg);
             if (isNaN(amt) || amt <= 0) {
@@ -2475,9 +2481,16 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 var preP = Number(user.point);
                 user.point -= amt;
                 user.bank = (user.bank || 0) + amt;
+
+                /* [핵심] 유저가 예금한 금액을 중앙은행 가용 재원(bankReserve)에 즉시 합산 */
+                if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
+                    roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
+                }
+                roomData.bankReserve += amt;
+
                 verifyPointTransaction(user, preP, -amt, "은행 예금");
 
-                replier.reply(formatCommand("💰 예금 완료", user, fp(amt) + "P를 통장에 입금했습니다.", "내 잔액: " + fp(user.point) + "P"));
+                replier.reply(formatCommand("💰 예금 완료", user, fp(amt) + "P를 통장에 입금했습니다.\n(중앙은행 가용 재원으로 편입됨)", "내 잔액: " + fp(user.point) + "P"));
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
@@ -2492,8 +2505,8 @@ if (bankProcessState && bankProcessState[targetUid]) {
     var state = bankProcessState[targetUid];
     var roomData = data.rooms[roomName]; // 재원 관리를 위해 roomData 참조
 
-    // 중앙은행 재원 초기화 (10,000P 시작)
-    if (roomData.bankReserve === undefined) roomData.bankReserve = 10000;
+    // 중앙은행 재원 초기화 (섹터 1의 설정값 사용)
+    if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
 
     // 가드 로직: 시간 초과 및 취소 처리
     if (Date.now() - state.time > 30000) {
@@ -2504,17 +2517,24 @@ if (bankProcessState && bankProcessState[targetUid]) {
         replier.reply(formatCommand("🚫 은행 업무 취소", user, "요청하신 업무가 취소되었습니다."));
     } 
     else {
-        /* [기능 3] 출금 처리 (withdraw) */
+        /* [기능 3] 출금 처리 (지급준비제도 반영: 금고 실재고 확인) */
         if (state.type === 'withdraw') {
             var amt = parseInt(msg.replace(/,/g, ""));
             if (isNaN(amt) || amt <= 0) {
                 replier.reply(formatError(user, "금액 오류", "출금할 숫자를 정확히 입력하세요."));
             } else if (user.bank < amt) {
                 replier.reply(formatError(user, "잔고 부족", "통장 잔고보다 많은 금액은 출금할 수 없습니다."));
+            } else if (roomData.bankReserve < amt) {
+                /* [신규] 뱅크런 방지: 은행 실자산이 부족할 경우 출금 제한 */
+                replier.reply(formatError(user, "은행 지급 불능", "죄송합니다. 현재 은행의 현금 유동성(실재고)이 부족하여 출금이 일시 제한됩니다.\n대출금 회수 및 수수료 적립 시까지 기다려주세요.\n\n🏦 현재 은행 금고: " + fp(roomData.bankReserve) + "P"));
             } else {
                 var preP = Number(user.point);
                 user.bank -= amt;
                 user.point += amt;
+                
+                /* [핵심] 출금 시 중앙은행 금고에서 포인트 유출 */
+                roomData.bankReserve -= amt;
+                
                 verifyPointTransaction(user, preP, amt, "은행 출금");
 
                 replier.reply(formatCommand("🏧 출금 완료", user, fp(amt) + "P를 현금으로 출금했습니다.", "보유 포인트: " + fp(user.point) + "P"));
@@ -2523,23 +2543,38 @@ if (bankProcessState && bankProcessState[targetUid]) {
             }
         }
 
-        /* [기능 4] 은행 대출 실행 (loan) - 중앙은행 재원 제한 적용 */
+        /* [기능 4] 은행 대출 실행 (loan) - 지급준비율 제어 적용 */
         if (state.type === 'loan') {
             var amt = parseInt(msg.replace(/,/g, ""));
             var cr = getCreditInfo(user.creditScore);
-            var conf = SYSTEM_CONFIG.ECO.PRIVATE_LOAN;
+            var bConf = SYSTEM_CONFIG.ECO.BANK;
+            var lConf = SYSTEM_CONFIG.ECO.PRIVATE_LOAN;
+
+            /* [핵심] 지급준비제도 기반 가용 대출 자산 계산 */
+            // 1. 방 전체 예금 총액 합산
+            var totalDeposits = 0;
+            for (var id in roomData.users) { totalDeposits += (roomData.users[id].bank || 0); }
+            
+            // 2. 법정 지급준비금 계산 (예금 총액 * 준비율 20%)
+            var requiredReserve = Math.floor(totalDeposits * bConf.RESERVE_RATIO);
+            // 3. 실제 대출 가능액 (현재 금고 - 준비금)
+            var lendableAmount = roomData.bankReserve - requiredReserve;
 
             if (isNaN(amt) || amt <= 0) {
                 replier.reply(formatError(user, "금액 오류", "대출받을 숫자를 입력하세요."));
             } 
-            // 1. 은행 가용 재원 체크 (핵심 보완)
-            else if (amt > roomData.bankReserve) {
-                replier.reply(formatError(user, "은행 재고 부족", "현재 은행에 빌려줄 수 있는 자금이 부족합니다.\n\n🏦 가용 재원: " + fp(roomData.bankReserve) + "P"));
+            // 4. 은행 가용 재원 체크 (지급준비율 반영 버전)
+            else if (amt > lendableAmount) {
+                var reserveInfo = "현재 은행의 대출 가능 한도를 초과했습니다.\n(지급준비율 " + (bConf.RESERVE_RATIO * 100) + "% 준수 중)\n\n" +
+                                  "🏦 현재 금고: " + fp(roomData.bankReserve) + "P\n" +
+                                  "🛡️ 법정 준비금: " + fp(requiredReserve) + "P\n" +
+                                  "💰 실제 대출 가능액: " + fp(Math.max(0, lendableAmount)) + "P";
+                replier.reply(formatError(user, "은행 자금 동결", reserveInfo));
             }
             // 2. 일일 대출 횟수 제한 체크
-            else if ((user.dailyLoanCount || 0) >= conf.DAILY_LIMIT) {
+            else if ((user.dailyLoanCount || 0) >= lConf.DAILY_LIMIT) {
                 delete bankProcessState[targetUid];
-                replier.reply(formatError(user, "대출 제한", "대출은 하루에 최대 " + conf.DAILY_LIMIT + "회까지만 가능합니다."));
+                replier.reply(formatError(user, "대출 제한", "대출은 하루에 최대 " + lConf.DAILY_LIMIT + "회까지만 가능합니다."));
             } 
             // 3. 신용 한도 체크
             else if (amt > cr.limit) {
@@ -2567,7 +2602,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 // [중요] 은행 재원에서 대출금 차감
                 roomData.bankReserve -= amt;
 
-                replier.reply(formatCommand("🏦 대출 승인", user, fp(amt) + "P 입금 완료\n(상환 예정액: " + fp(total) + "P)\n\n🏦 남은 은행 재원: " + fp(roomData.bankReserve) + "P", "보유 포인트: " + fp(user.point) + "P"));
+                replier.reply(formatCommand("🏦 대출 승인", user, fp(amt) + "P 입금 완료\n(상환 예정액: " + fp(total) + "P)\n\n🏛️ 남은 가용 재원: " + fp(roomData.bankReserve - requiredReserve) + "P", "보유 포인트: " + fp(user.point) + "P"));
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
@@ -2583,7 +2618,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
             } else {
                 var preP = Number(user.point);
                 var res = distributeRepayment(user, amt);
-                user.point = Number(user.point) - Number(res.actualRepay); // actualGain 대신 actualRepay 사용이 정확
+                user.point = Number(user.point) - Number(res.actualRepay); 
                 verifyPointTransaction(user, preP, -res.actualRepay, "대출 상환");
 
                 // [중요] 상환된 원금은 은행 재원으로 다시 복구 (재원 순환)

@@ -1,9 +1,9 @@
 //==========섹터1==========
 
 /* [신규] 명령어 자동 등록 시스템 (Command Registry) */
-// [수정] 리로드 시 기존 명령어 레지스트리가 초기화되지 않도록 보호 (|| {} 추가)
-var USER_COMMANDS = USER_COMMANDS || {}; 
-var ADMIN_COMMANDS = ADMIN_COMMANDS || {}; 
+// 모든 유저/관리자 명령어를 객체 형태로 관리하여 자동화된 도움말 및 분배 시스템을 지원합니다.
+var USER_COMMANDS = {}; // 유저용 명령어를 저장하는 객체
+var ADMIN_COMMANDS = {}; // 관리자용 명령어를 저장하는 객체
 
 /**
  * @param {String} cmd - 명령어 이름 (예: "/출석")
@@ -25,50 +25,49 @@ function registerAdminCmd(cmd, desc, func) {
 }
 
 /* 파일 및 데이터 동기화 객체 */
-var Lock = java.util.concurrent.locks.ReentrantLock; 
-// [수정] 락 객체 재생성 방지
-var lock = lock || new Lock(); 
-var SD_PATH = android.os.Environment.getExternalStorageDirectory().getAbsolutePath(); 
-var BASE_DIR = SD_PATH + "/kakaobot/data/"; 
-var FILE_PATH = BASE_DIR + "attendance.json"; 
-var BACKUP_DIR = BASE_DIR + "backup/"; 
+var Lock = java.util.concurrent.locks.ReentrantLock; // 파일 쓰기 시 충돌 방지를 위한 재진입 락 객체
+var lock = new Lock(); // 실제 락 인스턴스 생성
+var SD_PATH = android.os.Environment.getExternalStorageDirectory().getAbsolutePath(); // 기기의 외부 저장소 절대 경로 추출
+var BASE_DIR = SD_PATH + "/kakaobot/data/"; // 봇 데이터가 저장될 기본 디렉토리 경로
+var FILE_PATH = BASE_DIR + "attendance.json"; // 메인 데이터베이스(JSON) 파일 경로
+var BACKUP_DIR = BASE_DIR + "backup/"; // 데이터 백업 파일이 저장되는 디렉토리 경로
 
 /* [최적화] 전역 UID 캐시 시스템 (Deep Optimization 핵심) */
+// 유저 식별 시 반복문을 제거하고 메모리에서 즉시 UID를 찾기 위한 해시 테이블입니다.
 var uidCache = uidCache || {}; 
 
 /* [신규] 고정 스레드 풀 엔진 (Fixed Thread Pool) */
-// [수정] 스레드 풀 중복 생성 방지 (메모리 누수 방지 핵심)
-var Executor = Executor || java.util.concurrent.Executors.newFixedThreadPool(8);
+// 최대 8개의 명령어를 동시에 병렬 처리하며, 그 이상의 입력은 대기열(Queue)에 쌓아 관리합니다.
+var Executor = java.util.concurrent.Executors.newFixedThreadPool(8);
 
 /* 로그 저장 경로 및 디렉토리 설정 */ 
-var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt"; 
-var ERROR_LOG_PATH = BASE_DIR + "logs/error_log.txt"; 
-var logDir = new java.io.File(BASE_DIR + "logs/"); 
-if (!logDir.exists()) logDir.mkdirs(); 
-var dir = new java.io.File(BACKUP_DIR); 
-if (!dir.exists()) dir.mkdirs(); 
+var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt"; // 유저가 제보한 버그 내용 저장 경로
+var ERROR_LOG_PATH = BASE_DIR + "logs/error_log.txt"; // 시스템 로직 에러 로그 파일 경로
+var logDir = new java.io.File(BASE_DIR + "logs/"); // 로그 디렉토리 객체 생성
+if (!logDir.exists()) logDir.mkdirs(); // 로그 폴더가 없으면 생성
+var dir = new java.io.File(BACKUP_DIR); // 백업 디렉토리 객체 생성
+if (!dir.exists()) dir.mkdirs(); // 백업 폴더가 없으면 생성
 
 /* 전역 상태 변수 (휘발성 변수: 앱 재구동 시 초기화됨) */ 
-// [수정] 모든 상태 변수에 '||' 연산자를 적용하여 리로드 시 데이터 증발 방지
-var globalData = globalData || null; 
-var menuWaitState = menuWaitState || {}; // 메인 메뉴 선택 대기 상태 유지
-var lottoPurchaseState = lottoPurchaseState || {}; 
-var sprinkleData = sprinkleData || { active: false, winners: [] }; 
-var activeThefts = activeThefts || {}; 
-var duelData = duelData || {}; 
-var selectWaitState = selectWaitState || {}; 
-var bankProcessState = bankProcessState || {}; 
+var globalData = null; // 메모리에 로드된 전체 유저 및 시스템 데이터
+var menuWaitState = {}; // 메인 메뉴(/도움말, /은행 등) 선택 대기 상태
+var lottoPurchaseState = {}; // 로또 번호 입력 대기 상태
+var sprinkleData = { active: false, winners: [] }; // 포인트 뿌리기 이벤트 상태
+var activeThefts = {}; // 현재 진행 중인 도둑질 시도 데이터
+var duelData = {}; // 유저 간 결투 신청 데이터
+var selectWaitState = {}; // 닉네임 중복 시 선택 대기 상태
+var bankProcessState = {}; // 은행 세부 업무(송금, 예금 등) 진행 상태
 
 /* 사채 및 광산 시스템 전용 상태 변수 */
-var loanRegisterState = loanRegisterState || {}; 
-var loanContractWaitState = loanContractWaitState || {}; 
-var miningState = miningState || {}; 
+var loanRegisterState = {}; // 사채 매물 등록 절차 상태
+var loanContractWaitState = {}; // 사채 대출 계약 승낙 대기 상태
+var miningState = {}; // 광산 채굴 중인 유저의 작업 상태
 
 /* 홀짝 피버타임 전역 변수 */ 
-var feverData = feverData || { active: false, endTime: 0, scheduled: [] }; 
+var feverData = { active: false, endTime: 0, scheduled: [] }; // 피버타임 활성 여부 및 스케줄
 
 /* 관리자 UID 기반 인증 */ 
-var adminUIDs = ["fixed-uuid-관리자1", "fixed-uuid-관리자2"]; 
+var adminUIDs = ["fixed-uuid-관리자1", "fixed-uuid-관리자2"]; // 고유 ID를 통한 관리자 권한 목록
 
 /* 관리자 명령어 목록 */ 
 var ADMIN_CMD_LIST = [ 
@@ -86,86 +85,84 @@ var ADMIN_CMD_LIST = [
 ];
 
 /* 시스템 핵심 상수 설정 */
-// 설정값(상수)은 수정 즉시 반영을 위해 보호 로직 제외 (|| 연산자 미사용)
 var SYSTEM_CONFIG = {
     ECO: {
         ATTEND_MIN: 1000, 
         ATTEND_MAX: 1500, 
         GAMBLE_MIN: 500,  
         GAMBLE_MAX: 1500, 
-        
         STOCK: {
-            PREFIXES: ["롯데", "엘지", "한화", "삼성", "두바이쫀득", "현대", "카카오", "네이버", "애플", "테슬라", "광어", "도다리", "두유노", "천연"], 
-            SUFFIXES: ["전자", "생명", "화학", "건설", "중공업", "바이오", "제약", "엔터", "식품", "모터스", "쿠키", "에너지", "보험", "통신", "증권", "가스"], 
+            PREFIXES: ["롯데", "엘지", "한화", "삼성", "두바이쫀득", "현대", "카카오", "네이버", "애플", "테슬라", "광어", "도다리", "두유노"], 
+            SUFFIXES: ["전자", "생명", "화학", "건설", "중공업", "바이오", "제약", "엔터", "식품", "모터스", "쿠키", "에너지", "보험", "통신", "증권"], 
             TRAITS: {
-                "normal": { label: "일반", volatility: 1.5, prob: 44, icon: "🌱" }, 
-                "bluechip": { label: "우량주", volatility: 1, prob: 28, icon: "🛡️" }, 
-                "scam": { label: "작전주", volatility: 3, prob: 28, icon: "🔥" } 
+                "normal": { label: "일반", volatility: 1.5, prob: 44, icon: "🌱" },
+                "bluechip": { label: "우량주", volatility: 1, prob: 28, icon: "🛡️" },
+                "scam": { label: "작전주", volatility: 3, prob: 28, icon: "🔥" }
             },
             MANIPULATION: {
-                TARGET: "ㅇㅇ", 
-                IS_UP: false,      
-                RATE: 0.24,        
-                ACTIVE: false      
+                TARGET: "네이버통신", // 조작 타겟 종목명
+                IS_UP: false,      // true: 상승, false: 하락
+                RATE: 0.25,        // 변동 비율 (25%)
+                ACTIVE: true      // 조작 활성화 여부 (true 시 로직 작동)
             },
             SETTINGS: {
-                MAX_COUNT: 10,      
-                OPEN_HOUR: 7,       
-                CLOSE_HOUR: 23,     
-                MANI_RATE: 0.25,    
-                DELIST_LIMIT: 0.03 
+                MAX_COUNT: 10,     // 시장 유지 최대 종목 수
+                OPEN_HOUR: 7,      // 주식 장 시작 시간
+                CLOSE_HOUR: 23,    // 주식 장 마감 시간
+                MANI_RATE: 0.25,   // 기본 특수 이벤트 변동폭
+                DELIST_LIMIT: 0.03 // 상장폐지 기준 비율
             }
         },
         MINE: {
-            BASE_PER_MIN: 3, 
-            COPPER_PROB: 0.05, 
-            GOLD_PROB: 0.03,   
-            DIA_PROB: 0.002,   
-            COPPER_MULT: 1.5,  
-            GOLD_MULT: 2.0,    
-            DIA_MULT: 10.0     
+            BASE_PER_MIN: 3, // 광산 분당 기본 채굴 수익
+            COPPER_PROB: 0.05, // 구리 발견 확률
+            GOLD_PROB: 0.03,   // 금 발견 확률
+            DIA_PROB: 0.002,   // 다이아몬드 발견 확률
+            COPPER_MULT: 1.5,  // 구리 발견 시 수익 배율
+            GOLD_MULT: 2.0,    // 금 발견 시 수익 배율
+            DIA_MULT: 10.0     // 다이아 발견 시 수익 배율
         },
         PRIVATE_LOAN: {
-            MIN_AMOUNT: 1000,        
-            MAX_RATE: 15,            
-            COLLECTION_LIMIT: 24,    
-            INTEREST_PERIOD: 3,      
-            MIN_BORROW: 1000,        
-            DAILY_LIMIT: 1           
+            MIN_AMOUNT: 1000,       // 사채 등록 최소 금액
+            MAX_RATE: 15,           // 사채 법정 최고 이율 (%)
+            COLLECTION_LIMIT: 24,   // 추심 시작 연체 시간 (시간)
+            INTEREST_PERIOD: 3,     // 이자 계산 주기 (시간)
+            MIN_BORROW: 1000,       // 최소 대출 단위
+            DAILY_LIMIT: 1          // 일일 은행 대출 횟수 제한
         },
         CREDIT: { 
-            SCORES: [900, 800, 700, 600, 500], 
-            LIMITS: [30000, 20000, 15000, 10000, 8000, 3000], 
-            RATES: [1.03, 1.05, 1.13, 1.17, 1.20, 1.35], 
-            LABELS: ["1등급", "2등급", "3등급", "4등급", "5등급", "신용불량자"], 
-            ICONS: ["👑", "💎", "🥇", "🥈", "🥉", "🚫"] 
+            SCORES: [900, 800, 700, 600, 500], // 등급별 요구 신용 점수
+            LIMITS: [30000, 20000, 15000, 10000, 8000, 3000], // 등급별 대출 한도
+            RATES: [1.03, 1.05, 1.13, 1.17, 1.20, 1.35], // 등급별 대출 이율
+            LABELS: ["1등급", "2등급", "3등급", "4등급", "5등급", "신용불량자"], // 등급 명칭
+            ICONS: ["👑", "💎", "🥇", "🥈", "🥉", "🚫"] // 등급별 아이콘
         }
     },
 
     /* [신규] 도배 방지 및 타임아웃 설정 */
     SPAM: {
-        LIMIT_COUNT: 5,        
-        LIMIT_WINDOW: 2000,    
-        TIMEOUT_MS: 300000     
+        LIMIT_COUNT: 5,        // 짧은 시간 내 허용할 최대 채팅 수 (5회 초과 시 차단)
+        LIMIT_WINDOW: 2000,    // 도배 판정 기준 시간 (3000ms = 3초)
+        TIMEOUT_MS: 300000     // 도배 시 이용 제한 시간 (600,000ms = 10분)
     },
 
     PROB: {
-        ODD_EVEN_WIN: 0.47,        
-        ODD_EVEN_FEVER: 0.52,      
-        STOCK_NEW_LISTING: 0.5,    
-        STOCK_SPECIAL: 0.5,        
-        STOCK_UP_CHANCE: 0.45        
+        ODD_EVEN_WIN: 0.47,        // 홀짝 기본 승률
+        ODD_EVEN_FEVER: 0.52,      // 피버타임 홀짝 승률
+        STOCK_NEW_LISTING: 0.5,    // 신규 상장 발생 확률
+        STOCK_SPECIAL: 0.5,        // 주식 특수 이벤트 발생 확률
+        STOCK_UP_CHANCE: 0.45       // 특수 이벤트 시 상승 확률
     },
     
     MSG: {
         PREFIX: {
             INFO: "ℹ️", ERROR: "🚫", ADMIN: "⚙️", SUCCESS: "✅", 
             WARN: "⚠️", GAMBLE_WIN: "🎊", GAMBLE_LOSE: "💀", LOAN: "🚬", MINE: "⛏️", TIMEOUT: "🔇"
-        }, 
-        ERR_FORM: "형식이 올바르지 않습니다.", 
-        ERR_MONEY: "포인트가 부족합니다.", 
-        ERR_USER: "대상을 찾을 수 없습니다.", 
-        ERR_TIMEOUT: "도배로 인해 이용이 일시 제한되었습니다." 
+        }, // 각 메시지 타입별 접두사 아이콘 설정
+        ERR_FORM: "형식이 올바르지 않습니다.", // 입력 형식 오류 메시지
+        ERR_MONEY: "포인트가 부족합니다.", // 자금 부족 메시지
+        ERR_USER: "대상을 찾을 수 없습니다.", // 대상 유저 부재 메시지
+        ERR_TIMEOUT: "도배로 인해 이용이 일시 제한되었습니다." // 타임아웃 유저 알림 메시지
     }
 };
 
@@ -340,7 +337,7 @@ function safeSaveData(data, isForceBackup) {
 /* 관리자 및 시스템 설정 */
 var FIXED_ADMINS = ["95 남 광어"]; // 여기에 본인의 정확한 닉네임을 입력하세요
 var TIERS = ["아이언", "브론즈", "실버", "골드", "플레티넘", "에메랄드", "다이아몬드", "마스터", "그랜드마스터", "챌린저"];
-var ALLOWED_ROOMS = ["내리다", "테스트", "베릭방"]; 
+var ALLOWED_ROOMS = ["내리다", "테스트"]; 
 
 //==========섹터5==========
 
@@ -492,16 +489,32 @@ var CMD_LIST = {
         { cmd: "/로또데이터초기화", desc: "로또 시스템 리셋", func: "_adminEconomyLogic" },
         { cmd: "/전체복원", desc: "데이터 롤백 (안전 지점)", func: "_adminEconomyLogic" },
         { cmd: "/유저복원", desc: "[닉네임] 부분 복구", func: "_adminUserManageLogic" },
-        { cmd: "/시스템자가복원", desc: "메모리 최적화 및 변수 초기화", func: "_adminEconomyLogic" },
-        { cmd: "/리로드", desc: "깃허브 연동 자동 업데이트", func: "_adminEconomyLogic" }
+        { cmd: "/시스템자가복원", desc: "메모리 최적화 및 변수 초기화", func: "_adminEconomyLogic" }
     ]
 };
 
+/* [3] 레지스트리 자동 등록 실행부 (Initialization) */
+// 스크립트 로드 시 CMD_LIST의 데이터를 USER_COMMANDS 및 ADMIN_COMMANDS 객체로 자동 매핑합니다.
+(function initializeRegistry() {
+    // 유저 명령어 등록
+    for (var i = 0; i < CMD_LIST.user.length; i++) {
+        var c = CMD_LIST.user[i];
+        // 함수 이름을 실제 함수 참조로 변환하여 등록 (eval 지양, 글로벌 객체 참조 방식)
+        var executor = this[c.func];
+        registerUserCmd(c.cmd, c.desc, c.cat, executor);
+    }
+    // 관리자 명령어 등록
+    for (var j = 0; j < CMD_LIST.admin.length; j++) {
+        var a = CMD_LIST.admin[j];
+        var adminExecutor = this[a.func];
+        registerAdminCmd(a.cmd, a.desc, adminExecutor);
+    }
+})();
+
 //==========섹터7==========
 
-/* 전역 상태 변수들 (섹터1과 중복 방지 및 상태 유지 처리) */ 
-// [수정] 리로드 시 뿌리기 데이터가 초기화되지 않도록 보호
-var sprayData = sprayData || { 
+/* 전역 상태 변수들 (섹터1과 중복 방지 처리) */ 
+var sprayData = { 
     totalPoint: 0, 
     remainingPoint: 0, 
     maxWinners: 0, 
@@ -511,10 +524,9 @@ var sprayData = sprayData || {
     timer: null 
 };
 
-/* 섹터1에 없는 변수만 신규 선언하되, 기존 값 유지 */ 
-// [수정] 선택 대기 및 은행 업무 상태 유지 (중요)
-var selectWaitState = selectWaitState || {}; 
-var bankProcessState = bankProcessState || {};
+/* 섹터1에 없는 변수만 신규 선언 */ 
+var selectWaitState = {}; 
+var bankProcessState = {};
 
 /* [수정] 섹터1에서 이미 선언된 변수들은 중복 선언 방지를 위해 주석 처리하거나 기존 객체 사용 */ 
 // var duelData = {}; 
@@ -1262,13 +1274,19 @@ function updateStockPrices(data) {
         data.pendingNewStock = false;
     }
 
-    /* [2] 조작 프리셋 설정 로드 */
+    /* (중략: updateStockPrices 함수 내부) */
+    /* [2] 조작 프리셋 및 특수 효과 로드 */
     var mani = conf.MANIPULATION;
-    var specStock = (mani && mani.ACTIVE) ? mani.TARGET : null;
-    var specFactor = (mani && mani.ACTIVE) ? (mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE)) : 0;
+    var specStock = null;
+    var specFactor = 0;
 
-    // 예약된 특수 효과가 있다면 조작 설정보다 우선하거나 대체함
-    if (!specStock && data.pendingSpecialEffect && isMarketOpen) {
+    // 1순위: 섹터1 하드코딩 조작 (ACTIVE가 true일 때)
+    if (mani && mani.ACTIVE && data.stockMarket[mani.TARGET]) {
+        specStock = mani.TARGET;
+        specFactor = mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE);
+    } 
+    // 2순위: 시스템 예약 이벤트 (조작이 없을 때만)
+    else if (data.pendingSpecialEffect && isMarketOpen) {
         specStock = data.pendingSpecialEffect.stock;
         specFactor = data.pendingSpecialEffect.factor;
     }
@@ -1281,15 +1299,12 @@ function updateStockPrices(data) {
         
         stock.lastPrice = Number(stock.price);
 
-        // 상장폐지 체크
-        if (stock.price < marketAvg * 0.25 || stock.price < ecoBaseFloor) { stock.delistTick++; } else { stock.delistTick = 0; }
-
         if (isMarketOpen) {
             if (name === specStock) { 
-                changePercent = specFactor;
+                changePercent = specFactor; // 조작/이벤트값 강제 적용
                 eventNews.push("🚨 [변동성 알림]\n종목: " + name + "\n내용: " + (specFactor > 0 ? "🚀 폭등" : "📉 폭락") + " (" + (Math.abs(specFactor * 100)).toFixed(0) + "%)");
             } else {
-                // 추세 기반 변동
+                // 일반 변동 로직
                 if (stock.trendTick <= 0) {
                     stock.trendTick = Math.floor(Math.random() * 4) + 2;
                     var p = Math.random(); stock.trend = (p < 0.35) ? "up" : (p < 0.70 ? "down" : "volatile");
@@ -1298,12 +1313,6 @@ function updateStockPrices(data) {
                 changePercent = baseRate * trait.volatility;
                 if (stock.trendTick > 0) stock.trendTick--;
             }
-            
-            // 거래량 반영
-            var traffic = data.stockTraffic[name] || { buy: 0, sell: 0 };
-            var trafficImpact = Math.max(-0.15, Math.min(0.15, ((traffic.buy - traffic.sell) / (activeUserCount * 5)) * 0.01));
-            changePercent += trafficImpact;
-        }
         
         /* [핵심 수정] Math.floor 대신 Math.round를 사용하여 미세 변동이 절사되는 문제 해결 */
         var nextPrice = stock.price * (1 + changePercent);
@@ -1557,42 +1566,52 @@ function _runSector16Logic(data, ctx) {
     }
 
     /* 2. 주식 뉴스 사전 알림 (매 9분 30초) */
-    if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && 
-        currentMin % 10 === 9 && ctx.now.getSeconds() >= 30 && data.lastNewsMin !== currentMin) {
-        
-        data.lastNewsMin = currentMin;
-        var mani = conf.MANIPULATION;
+if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && 
+    currentMin % 10 === 9 && ctx.now.getSeconds() >= 30 && data.lastNewsMin !== currentMin) {
+    
+    data.lastNewsMin = currentMin;
+    var mani = conf.MANIPULATION;
 
-        // [수정] 조작 활성화 시 기존 신규상장 예약도 강제 취소
+    // [A] 수동 조작(MANIPULATION)이 활성화된 경우 예고 알림 최우선 발송 및 데이터 예약
     if (mani && mani.ACTIVE === true) {
-        data.pendingNewStock = false; // 상장 예약 초기화
+        // [수정 핵심] 섹터 15 엔진이 즉시 반영할 수 있도록 예약 데이터 세팅
+        data.pendingSpecialEffect = { 
+            stock: mani.TARGET, 
+            factor: mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE),
+            forceMani: true // 조작 모드임을 명시
+        };
+
         var maniMsg = "📢 [시장 동향: 특보]\n━━━━━━━━━━━━━━━\n" +
                       "잠시 후 시장에 대규모 변동이 발생합니다!\n" +
                       "(30초 후 반영)\n\n" +
                       "대상: " + mani.TARGET + "\n" +
                       "예상: " + (mani.IS_UP ? "🚀 급등 조짐" : "📉 급락 주의");
+        
         try { Api.replyRoom(ctx.targetRoom, maniMsg); } catch(e){}
+        
+        // 조작 활성화 시 신규 상장 예약은 취소하여 충돌 방지
+        data.pendingNewStock = false; 
     } 
-        // [B] 수동 조작이 없을 때만 기존 무작위 이벤트 체크
-        else {
-            var currentStockCount = Object.keys(data.stockMarket || {}).length;
-            if (currentStockCount < 10 && Math.random() < SYSTEM_CONFIG.PROB.STOCK_NEW_LISTING) { 
-                data.pendingNewStock = true;
-                try { Api.replyRoom(ctx.targetRoom, "📢 [시장 동향]\n━━━━━━━━━━━━━━━\n잠시 후 신규 기업이 상장됩니다!"); } catch(e){}
-            } else if (Math.random() < SYSTEM_CONFIG.PROB.STOCK_SPECIAL) {
-                var stocks = Object.keys(data.stockMarket || {});
-                if (stocks.length > 0) {
-                    var target = stocks[Math.floor(Math.random() * stocks.length)];
-                    var isUp = Math.random() < SYSTEM_CONFIG.PROB.STOCK_UP_CHANCE;
-                    var randFactor = (Math.random() * 0.10) + 0.15; 
-                    data.pendingSpecialEffect = { stock: target, factor: isUp ? randFactor : -randFactor };
-                    var newsMsg = "📢 [시장 동향]\n━━━━━━━━━━━━━━━\n잠시 후 변동이 감지됩니다!\n(30초 후 반영)\n\n대상: " + target + "\n예상: " + (isUp ? "🚀 급등 조짐" : "📉 급락 주의");
-                    try { Api.replyRoom(ctx.targetRoom, newsMsg); } catch(e){}
-                }
+    // [B] 수동 조작이 없을 때만 기존 무작위 이벤트 체크
+    else {
+        var currentStockCount = Object.keys(data.stockMarket || {}).length;
+        if (currentStockCount < 10 && Math.random() < SYSTEM_CONFIG.PROB.STOCK_NEW_LISTING) { 
+            data.pendingNewStock = true;
+            try { Api.replyRoom(ctx.targetRoom, "📢 [시장 동향]\n━━━━━━━━━━━━━━━\n잠시 후 신규 기업이 상장됩니다!"); } catch(e){}
+        } else if (Math.random() < SYSTEM_CONFIG.PROB.STOCK_SPECIAL) {
+            var stocks = Object.keys(data.stockMarket || {});
+            if (stocks.length > 0) {
+                var target = stocks[Math.floor(Math.random() * stocks.length)];
+                var isUp = Math.random() < SYSTEM_CONFIG.PROB.STOCK_UP_CHANCE;
+                var randFactor = (Math.random() * 0.10) + 0.15; 
+                data.pendingSpecialEffect = { stock: target, factor: isUp ? randFactor : -randFactor };
+                var newsMsg = "📢 [시장 동향]\n━━━━━━━━━━━━━━━\n잠시 후 변동이 감지됩니다!\n(30초 후 반영)\n\n대상: " + target + "\n예상: " + (isUp ? "🚀 급등 조짐" : "📉 급락 주의");
+                try { Api.replyRoom(ctx.targetRoom, newsMsg); } catch(e){}
             }
         }
-        ctx.isUpdated = true;
     }
+    ctx.isUpdated = true;
+}
 
     /* 3. 주식 주기적 변동 처리 (매 0분) */
     if (currentHour >= 7 && currentHour <= 23 && currentMin % 10 === 0 && data.lastStockUpdateMin !== currentMin) {
@@ -1637,9 +1656,6 @@ function _runSector16Logic(data, ctx) {
         }
     }
 }
-
-// 엔진 가동
-runScheduler();
 
 //==========섹터17==========
 
@@ -1754,7 +1770,7 @@ function _runSector18Logic(data, ctx) {
         var pool = Number(data.lotto.dailyPool || 0) + Number(data.lotto.jackpot || 0);
         try { 
             // [수정] '당구' 오타를 'pool'로 수정하여 시스템 중단 방지
-            Api.replyRoom(ctx.targetRoom, formatAdmin("🏁 로또 판매 마감", "잠시 후 22시 추첨!\n현재 누적 상금: " + fp(당구) + "P")); 
+            Api.replyRoom(ctx.targetRoom, formatAdmin("🏁 로또 판매 마감", "잠시 후 22시 추첨!\n현재 누적 상금: " + fp(pool) + "P")); 
         } catch(e) {}
         ctx.isUpdated = true;
     }
@@ -1859,27 +1875,14 @@ function _runSector18Logic(data, ctx) {
 
 //==========섹터19==========
 
-/* 초기화 상태 플래그 */
-var isRegistryInitialized = false;
-
 /* 메인 메시지 리스너 함수 */
-function response_sub(room, msg, sender, isGroupChat, replier, imageDB) {
-    try {
-        /* [경량화] 레지스트리 초기화 안전장치 */
-        if (!isRegistryInitialized) {
+function response(room, msg, sender, isGroupChat, replier, imageDB) {
+    /* [최적화] 고정 스레드 풀 엔진 가동: 모든 처리를 비동기 작업 큐에 할당하여 반응 속도 극대화 및 씹힘 방지 */
+    Executor.execute(new java.lang.Runnable({
+        run: function() {
             try {
-                /* [긴급 수정] 레지스트리 초기화 안전장치 */
-                if (!isRegistryInitialized) {
-                    if (typeof initializeRegistry === 'function') {
-                        initializeRegistry();
-                        isRegistryInitialized = true;
-                    } else {
-                        Log.error("초기화 함수(initializeRegistry)를 찾을 수 없습니다.");
-                    }
-                }
-
                 var roomName = room.trim();
-                var cleanSender = String(sender).trim();
+                var cleanSender = String(sender).trim(); 
                 
                 if (ALLOWED_ROOMS.indexOf(roomName) === -1 || cleanSender === "오픈채팅봇") return;
 
@@ -1996,15 +1999,17 @@ var currentImgHash = null;
 try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) { currentImgHash = null; }
 
 var targetUid = null;
-/* [수정] 방 이름을 포함한 유니크 키 생성으로 방별 상태 격리 보장 */
 var cacheKey = roomName + "_" + cleanSender + (currentImgHash ? "_" + currentImgHash : "");
 
+// 1. 캐시에서 먼저 찾기
 if (uidCache[cacheKey] && roomData.users[uidCache[cacheKey]]) {
     targetUid = uidCache[cacheKey];
 } else {
+    // 2. 루프 탐색 (최초 1회 실행)
     for (var id in roomData.users) {
         var u = roomData.users[id];
         if (!u) continue;
+        
         if (currentImgHash && u.imageHash === currentImgHash) {
             targetUid = id;
             if (u.name !== cleanSender) {
@@ -2014,6 +2019,7 @@ if (uidCache[cacheKey] && roomData.users[uidCache[cacheKey]]) {
             }
             break;
         }
+        
         if (u.name === cleanSender) { 
             targetUid = id; 
             if (currentImgHash) u.imageHash = currentImgHash; 
@@ -2023,7 +2029,7 @@ if (uidCache[cacheKey] && roomData.users[uidCache[cacheKey]]) {
     if (targetUid) uidCache[cacheKey] = targetUid;
 }
 
-/* 신규 유저 등록 */
+/* 신규 유저 등록 및 환영 메시지 (도배 방지 시스템 변수 통합) */
 if (!targetUid) {
     targetUid = generateUUID();
     roomData.users[targetUid] = { 
@@ -2032,16 +2038,23 @@ if (!targetUid) {
         inventory: [], tierGuard: 0,
         imageHash: currentImgHash, chatCount: 0, dailyGambleCount: 0,
         bank: 0, jailReleaseTime: 0, stockHoldings: {}, stockAvg: {}, 
-        dailyPromotionAttempts: 1, purchasedPromotionAttempts: 0,
-        gameAuthCount: 0, purchasedAuthCount: 0, // 기본값 0으로 설정
-        chatLog: [], timeoutEndTime: 0 
+        dailyPromotionAttempts: 1, purchasedPromotionAttempts: 0, lastBonusTriggeredCount: -1,
+        /* [신규] 게임 판수 인증 시스템 변수 */
+        gameAuthCount: 0,      // 현재 인증 완료 횟수
+        purchasedAuthCount: 0, // 이번 시즌 인증권 구매 횟수
+        /* [신규] 도배 방지 및 타임아웃 데이터 */
+        chatLog: [],           // 채팅 발송 시각 기록 배열
+        timeoutEndTime: 0      // 타임아웃 종료 시각 (0이면 정상 상태)
     };
+    
     uidCache[cacheKey] = targetUid;
     
     var welcomeMsg = "🎊 [" + cleanSender + "]님 환영합니다!\n━━━━━━━━━━━━━━━\n" +
-                     "🎁 입장 축하 보너스: 1,000P 지급!\n" + 
+                     "🎁 입장 축하 보너스: " + fP(1000) + "P 지급!\n" + 
+                     "🕹️ 미니게임 및 출석체크 기능 제공\n" +
                      "💳 신용 등급: 4등급 (600점) 부여\n\n" + 
                      "📖 이용 전 반드시 '/도움말'을 확인해주세요!";
+                     
     replier.reply(welcomeMsg); 
     safeSaveData(data);
 }
@@ -2050,13 +2063,13 @@ if (!targetUid) {
 
 var user = roomData.users[targetUid];
 
-/* [핵심 수정] 기존 유저 데이터 강제 보정 로직 */
+/* [수정] 데이터 구조 보정 및 초기화 */
 if (!user.inventory) user.inventory = [];
 if (user.tierGuard === undefined) user.tierGuard = 0;
-/* 판수 인증 데이터가 없거나 3인 경우 2로 강제 리셋 (요청 사항 반영) */
 if (user.gameAuthCount === undefined) user.gameAuthCount = 0;
-if (user.purchasedAuthCount === undefined || user.purchasedAuthCount > 2) user.purchasedAuthCount = 0;
+if (user.purchasedAuthCount === undefined) user.purchasedAuthCount = 0;
 
+/* [핵심] 강제 추심 플래그 초기화 및 보정 */
 if (user.isTransferred === undefined) user.isTransferred = false;
 
 /* [기능] 기존 아이콘 및 칭호 가방 자동 마이그레이션 */
@@ -2266,65 +2279,51 @@ if (selectWaitState[targetUid]) {
 
         /* 채팅 보너스 로직 (하이브리드 방식 적용: 실시간 저장 제거로 렉 방지) */
         if (msg.indexOf("/") !== 0) {
-            
-            /* [수정] 1. 입력 대기 상태 체크 */
-            var isWaitState = (menuWaitState && menuWaitState[targetUid]) || 
-                              (bankProcessState && bankProcessState[targetUid]) || 
-                              (lottoPurchaseState && lottoPurchaseState[targetUid]) || 
-                              (selectWaitState && selectWaitState[targetUid]);
-
-            /* [수정] 2. 순수 숫자 입력 체크 (메뉴 선택용 숫자일 경우 보너스 제외) */
-            var cleanMsg = msg.trim();
-            // 숫자로만 이루어져 있고 길이가 5자리 미만이면 메뉴 선택으로 간주
-            var isNumberInput = !isNaN(Number(cleanMsg)) && cleanMsg.length < 5;
-
-            /* 대기 상태이거나, 메시지가 숫자라면 채팅 보너스 지급 안 함 */
-            if (isWaitState || isNumberInput) {
-                // 패스 (아무것도 하지 않음)
-            } else {
-                user.chatCount = (user.chatCount || 0) + 1;
-                user.chatCycleCount = (user.chatCycleCount || 0) + 1;
-                if (user.chatCycleCount > 13 || !user.chatBonusTarget) {
-                    user.chatCycleCount = 1; 
-                    user.chatBonusTarget = Math.floor(Math.random() * 12) + 1;
-                    user.chatBonusGiven = false; 
+            user.chatCount = (user.chatCount || 0) + 1;
+            user.chatCycleCount = (user.chatCycleCount || 0) + 1;
+            if (user.chatCycleCount > 13 || !user.chatBonusTarget) {
+                user.chatCycleCount = 1; 
+                user.chatBonusTarget = Math.floor(Math.random() * 12) + 1;
+                user.chatBonusGiven = false; 
+            }
+            if (user.chatCycleCount >= user.chatBonusTarget && !user.chatBonusGiven) {
+                var multiplier = 1.0;
+                var roomDataForChat = data.rooms[roomName];
+                if (roomDataForChat && roomDataForChat.economyBase && roomDataForChat.economyBase > 0) {
+                    var currentEco = calculateEconomy(data, roomName);
+                    var rawRatio = currentEco.total / roomDataForChat.economyBase;
+                    var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.5;
+                    multiplier = 1 + (rawRatio - 1) * damping;
+                    if (multiplier < 0.5) multiplier = 0.5;
                 }
-                if (user.chatCycleCount >= user.chatBonusTarget && !user.chatBonusGiven) {
-                    var multiplier = 1.0;
-                    var roomDataForChat = data.rooms[roomName];
-                    if (roomDataForChat && roomDataForChat.economyBase && roomDataForChat.economyBase > 0) {
-                        var currentEco = calculateEconomy(data, roomName);
-                        var rawRatio = currentEco.total / roomDataForChat.economyBase;
-                        var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.5;
-                        multiplier = 1 + (rawRatio - 1) * damping;
-                        if (multiplier < 0.5) multiplier = 0.5;
-                    }
 
-                    var basePrize = Math.floor(Math.random() * 21) + 80;
-                    var prize = Math.floor(basePrize * multiplier);
-                    
-                    var prePoint = Number(user.point);
-                    
-                    /* [핵심] 사채 추심 로직이 포함된 통합 상환 함수 호출 */
-                    var res = processRepayment(user, prize, targetUid, roomName);
-                    
-                    user.point = Number(user.point) + Number(res.actualGain);
-                    verifyPointTransaction(user, prePoint, Number(res.actualGain), "채팅 보너스");
+                var basePrize = Math.floor(Math.random() * 21) + 80;
+                var prize = Math.floor(basePrize * multiplier);
+                
+                var prePoint = Number(user.point);
+                
+                /* [핵심] 사채 추심 로직이 포함된 통합 상환 함수 호출 */
+                // targetUid를 인자로 넘겨 사채 계약자 식별 및 추심 진행
+                var res = processRepayment(user, prize, targetUid, roomName);
+                
+                user.point = Number(user.point) + Number(res.actualGain);
+                verifyPointTransaction(user, prePoint, Number(res.actualGain), "채팅 보너스");
 
-                    user.creditScore = Math.min(1000, Number(user.creditScore || 600) + 1);
-                    
-                    var output = "🎁 채팅 보너스\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n" + fp(prize) + "P를 획득했습니다!" + (res.repayMsg ? res.repayMsg : "") + "\n━━━━━━━━━━━━━━━";
-                    replier.reply(output + "\n내 잔액: " + fP(user.point) + "P");
-                    
-                    user.chatBonusGiven = true; 
-                    
-                    /* [최적화] 실시간 저장 생략 (스케줄러 저장 위임) */
-                    // safeSaveData(data); 
-                }
+                user.creditScore = Math.min(1000, Number(user.creditScore || 600) + 1);
+                
+                // 추심 및 상환 내역이 포함된 메시지 출력
+                var output = "🎁 채팅 보너스\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n" + fp(prize) + "P를 획득했습니다!" + (res.repayMsg ? res.repayMsg : "") + "\n━━━━━━━━━━━━━━━";
+                replier.reply(output + "\n내 잔액: " + fP(user.point) + "P");
+                
+                user.chatBonusGiven = true; 
+                
+                /* [최적화] 하이브리드 방식 적용: 고빈도 작업인 채팅 보너스는 실시간 저장을 생략함 */
+                // 실제 저장은 5분 주기 스케줄러(섹터 16)가 담당하여 I/O 부하를 제거함.
+                // safeSaveData(data); 
             }
         }
-        
-        //==========섹터22-1==========
+
+//==========섹터22-1==========
 
 /* [수정] 통합 업무 처리 핸들러 (1단계: 송금 및 예금) */
 if (bankProcessState && bankProcessState[targetUid]) {
@@ -2774,13 +2773,7 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
                 if (hasItem) {
                     delete bankProcessState[targetUid];
                     replier.reply(formatError(user, "중복 소유", "이미 보유 중인 아이템입니다."));
-                } 
-                /* [수정] 롤 판수 인증권(ID 11) 월간 구매 한도(2회) 체크 */
-                else if (item.id === 11 && (user.purchasedAuthCount || 0) >= 2) {
-                    delete bankProcessState[targetUid];
-                    replier.reply(formatError(user, "구매 한도 초과", "롤 판수 인증권은 월 최대 2회까지만 구매 가능합니다.\n(현재: " + user.purchasedAuthCount + "/2)"));
-                }
-                else {
+                } else {
                     // 4. 포인트 차감 및 실시간 검증
                     var preP = Number(user.point);
                     user.point -= finalPrice;
@@ -2850,6 +2843,7 @@ if (menuWaitState && menuWaitState[targetUid]) {
                 }
                 else {
                     bankProcessState[targetUid] = { type: 'loan', time: Date.now() };
+                    /* [수정] 대출 진행창에 중앙은행 가용 재원 표시 추가 */
                     var loanMsg = "희망 대출금을 입력해주세요.\n" +
                                   "내 한도: " + fp(cr.limit) + "P (이율: " + ((cr.rate-1)*100).toFixed(0) + "%)\n" +
                                   "🏦 은행 가용 재원: " + fp(roomData.bankReserve) + "P";
@@ -2875,12 +2869,8 @@ if (menuWaitState && menuWaitState[targetUid]) {
                               "4. 📥 사채 회수 (등록 매물 회수)\n" +
                               "5. 👥 내 채무자 현황 (직접 수거 가능)";
                 replier.reply(formatCommand("🚬 사채 시장 업무 선택", user, p2pMenu, "원하시는 번호를 입력하세요."));
-                // return을 생략하여 다음 섹터들로 흐름이 이어지게 유지
-             }
-             /* 잘못된 숫자 입력 시 NaN 방지 및 무응답 방어로직 */
-             else {
-                // 숫자가 아닌 값이 들어오거나 메뉴 범위를 벗어나면 상태 유지 혹은 안내
-             }
+                return;  
+           }
         }
     }
 }
@@ -2888,89 +2878,74 @@ if (menuWaitState && menuWaitState[targetUid]) {
 //==========섹터23-2==========
 
 /* [2단계] 사채 시장 서브 메뉴 선택 처리 (독립형) */
-if (menuWaitState && menuWaitState[targetUid] && menuWaitState[targetUid].type === 'p2p_loan_menu') {
+if (menuWaitState && menuWaitState[targetUid]) {
     var state = menuWaitState[targetUid];
-    var roomData = data.rooms[roomName];
     var choice = msg.trim();
-    var processed = true; // 기본적으로 처리 완료로 간주하고 하단에서 상태 삭제
 
-    if (choice === "1") {
-        bankProcessState[targetUid] = { type: 'p2p_reg_input', time: Date.now() };
-        replier.reply(formatCommand("💰 사채 매물 등록", user, "등록할 [금액]과 [이율]을 입력하세요.\n(예: 10000 5)", "취소: [취소]"));
-    } 
-    else if (choice === "2") {
-        var pools = Object.keys(roomData.loanPools || {});
-        if (pools.length === 0) { 
-            replier.reply(formatSimple("📋 사채 시장", "현재 이 방에 등록된 매물이 없습니다.", "메뉴를 다시 호출해주세요."));
-        } else {
-            var list = [];
-            var tempPools = [];
-            for(var i=0; i<pools.length; i++) {
-                var p = roomData.loanPools[pools[i]];
-                list.push((i+1) + ". [" + p.lenderName + "] 잔여: " + fp(p.remainingAmount) + "P (이자 " + p.rate + "%/3h)");
-                tempPools.push(pools[i]);
+    if (state.type === 'p2p_loan_menu') {
+        if (choice === "1") {
+            bankProcessState[targetUid] = { type: 'p2p_reg_input', time: Date.now() };
+            replier.reply(formatCommand("💰 사채 매물 등록", user, "등록할 [금액]과 [이율]을 입력하세요.\n(예: 10000 5)", "취소: [취소]"));
+        } 
+        else if (choice === "2") {
+            var pools = Object.keys(roomData.loanPools || {});
+            if (pools.length === 0) { 
+                replier.reply(formatSimple("📋 사채 시장", "현재 이 방에 등록된 매물이 없습니다.", null));
+            } else {
+                var list = [];
+                var tempPools = [];
+                for(var i=0; i<pools.length; i++) {
+                    var p = roomData.loanPools[pools[i]];
+                    list.push((i+1) + ". [" + p.lenderName + "] 잔여: " + fp(p.remainingAmount) + "P (이자 " + p.rate + "%/3h)");
+                    tempPools.push(pools[i]);
+                }
+                menuWaitState[targetUid] = { type: 'p2p_select_pool', time: Date.now(), extra: { pools: tempPools } };
+                return replier.reply(formatCommand("📋 사채 매물 목록", user, list.join("\n"), "빌리고 싶은 매물 번호를 입력하세요."));
             }
-            menuWaitState[targetUid] = { type: 'p2p_select_pool', time: Date.now(), extra: { pools: tempPools } };
-            replier.reply(formatCommand("📋 사채 매물 목록", user, list.join("\n"), "빌리고 싶은 매물 번호를 입력하세요."));
-            return; // 상태가 'p2p_select_pool'로 변경되었으므로 하단 삭제 로직 방지
         }
-    }
-    else if (choice === "3") {
-        var myContracts = [];
-        if (roomData.loanContracts) {
-            for(var id in roomData.loanContracts) {
-                if(roomData.loanContracts[id].borrowerUid === targetUid) {
-                    myContracts.push({ id: id, data: roomData.loanContracts[id] });
+        else if (choice === "3") {
+            var myContracts = [];
+            if (roomData.loanContracts) {
+                for(var id in roomData.loanContracts) {
+                    if(roomData.loanContracts[id].borrowerUid === targetUid) myContracts.push({ id: id, data: roomData.loanContracts[id] });
                 }
             }
-        }
-        if (myContracts.length === 0) {
-            replier.reply(formatError(user, "내역 없음", "현재 이 방에서 빌려 쓰고 있는 사채가 없습니다."));
-        } else {
+            if (myContracts.length === 0) return replier.reply(formatError(user, "내역 없음", "현재 이 방에서 빌려 쓰고 있는 사채가 없습니다."));
+            
             var list = [];
             for(var i=0; i<myContracts.length; i++) {
                 var c = myContracts[i].data;
                 list.push((i+1) + ". [" + c.lenderName + "] 채무액: " + fp(c.currentDebt) + "P (이율 " + c.rate + "%)");
             }
             menuWaitState[targetUid] = { type: 'p2p_select_repay', time: Date.now(), extra: { contracts: myContracts.map(x => x.id) } };
-            replier.reply(formatCommand("📉 사채 상환 선택", user, list.join("\n"), "갚을 사채의 번호를 선택하세요."));
-            return; // 상태 변경을 위해 return
+            return replier.reply(formatCommand("📉 사채 상환 선택", user, list.join("\n"), "갚을 사채의 번호를 선택하세요."));
         }
-    }
-    else if (choice === "4") {
-        var myPools = [];
-        if (roomData.loanPools) {
-            for(var id in roomData.loanPools) {
-                if(roomData.loanPools[id].lenderUid === targetUid) {
-                    myPools.push({ id: id, data: roomData.loanPools[id] });
+        else if (choice === "4") {
+            var myPools = [];
+            if (roomData.loanPools) {
+                for(var id in roomData.loanPools) {
+                    if(roomData.loanPools[id].lenderUid === targetUid) myPools.push({ id: id, data: roomData.loanPools[id] });
                 }
             }
-        }
-        if (myPools.length === 0) {
-            replier.reply(formatError(user, "내역 없음", "이 방에 올려둔 사채 풀이 없습니다."));
-        } else {
+            if (myPools.length === 0) return replier.reply(formatError(user, "내역 없음", "이 방에 올려둔 사채 풀이 없습니다."));
+
             var list = [];
             for(var i=0; i<myPools.length; i++) {
                 var p = myPools[i].data;
-                list.push((i+1) + ". 잔여: " + fp(p.remainingAmount) + "P (이율 " + p.rate + "%/3h)");
+                list.push((i+1) + ". 잔여: " + (p.remainingAmount) + "P (이율 " + p.rate + "%/3h)");
             }
             menuWaitState[targetUid] = { type: 'p2p_select_withdraw', time: Date.now(), extra: { pools: myPools.map(x => x.id) } };
-            replier.reply(formatCommand("📥 사채 풀 회수", user, list.join("\n"), "회수할 사채 풀 번호를 선택하세요."));
-            return; // 상태 변경을 위해 return
+            return replier.reply(formatCommand("📥 사채 풀 회수", user, list.join("\n"), "회수할 사채 풀 번호를 선택하세요."));
         }
-    }
-    else if (choice === "5") {
-        var myDebtors = [];
-        if (roomData.loanContracts) {
-            for(var id in roomData.loanContracts) {
-                if(roomData.loanContracts[id].lenderUid === targetUid) {
-                    myDebtors.push({ id: id, data: roomData.loanContracts[id] });
+        else if (choice === "5") {
+            var myDebtors = [];
+            if (roomData.loanContracts) {
+                for(var id in roomData.loanContracts) {
+                    if(roomData.loanContracts[id].lenderUid === targetUid) myDebtors.push({ id: id, data: roomData.loanContracts[id] });
                 }
             }
-        }
-        if (myDebtors.length === 0) {
-            replier.reply(formatSimple("👥 내 채무자 현황", "현재 돈을 빌려 간 유저가 없습니다.", null));
-        } else {
+            if (myDebtors.length === 0) return replier.reply(formatSimple("👥 내 채무자 현황", "현재 돈을 빌려 간 유저가 없습니다.", null));
+
             var list = [];
             var tempContracts = [];
             for(var i=0; i<myDebtors.length; i++) {
@@ -2981,17 +2956,10 @@ if (menuWaitState && menuWaitState[targetUid] && menuWaitState[targetUid].type =
             }
             menuWaitState[targetUid] = { type: 'p2p_select_collect', time: Date.now(), extra: { contracts: tempContracts } };
             replier.reply(formatCommand("👥 내 채무자 명단", user, list.join("\n"), "강제 수거를 원하시면 유저 번호를 입력하세요."));
-            return; // 상태 변경을 위해 return
+            return;
         }
+        delete menuWaitState[targetUid]; return;
     }
-    /* [NaN 방어 및 무응답 방지] 1~5 이외의 입력 처리 */
-    else {
-        replier.reply(formatError(user, "번호 오류", "1~5 사이의 메뉴 번호를 정확히 입력해주세요."));
-        processed = true; // 잘못된 입력이므로 상태를 해제하여 다음 명령어를 받을 수 있게 함
-    }
-
-    if (processed) delete menuWaitState[targetUid];
-    return; // 사채 서브메뉴 로직 종료
 }
 
 //==========섹터23-3==========
@@ -2999,73 +2967,57 @@ if (menuWaitState && menuWaitState[targetUid] && menuWaitState[targetUid].type =
 /* [3단계] 사채 목록 선택 처리 (독립형) */
 if (menuWaitState && menuWaitState[targetUid]) {
     var state = menuWaitState[targetUid];
-    var roomData = data.rooms[roomName];
     var choice = msg.trim();
-    
-    // 처리 대상이 되는 state.type 목록 정의
-    var p2pSelectTypes = ['p2p_select_pool', 'p2p_select_repay', 'p2p_select_withdraw', 'p2p_select_collect'];
 
-    if (p2pSelectTypes.indexOf(state.type) !== -1) {
+    if (state.type === 'p2p_select_pool') {
         var idx = parseInt(choice) - 1;
-        var isValid = false;
-        var errorMsg = "목록에 있는 번호를 입력해주세요.";
+        var poolId = state.extra.pools[idx];
+        if (!poolId) return replier.reply(formatError(user, "번호 오류"));
+        
+        bankProcessState[targetUid] = { type: 'p2p_borrow_amt', time: Date.now(), extra: { poolId: poolId } };
+        replier.reply(formatCommand("💰 사채 금액 설정", user, "선택 매물: [" + roomData.loanPools[poolId].lenderName + "]\n잔여 금액: " + fp(roomData.loanPools[poolId].remainingAmount) + "P\n\n빌릴 금액을 입력하세요.", "취소: [취소]"));
+        delete menuWaitState[targetUid]; return;
+    }
 
-        // 1. 매물 선택 처리 (Borrow)
-        if (state.type === 'p2p_select_pool') {
-            var poolId = (state.extra && state.extra.pools) ? state.extra.pools[idx] : null;
-            if (poolId && roomData.loanPools[poolId]) {
-                bankProcessState[targetUid] = { type: 'p2p_borrow_amt', time: Date.now(), extra: { poolId: poolId } };
-                replier.reply(formatCommand("💰 사채 금액 설정", user, "선택 매물: [" + roomData.loanPools[poolId].lenderName + "]\n잔여 금액: " + fp(roomData.loanPools[poolId].remainingAmount) + "P\n\n빌릴 금액을 입력하세요.", "취소: [취소]"));
-                isValid = true;
-            }
-        }
+    else if (state.type === 'p2p_select_repay') {
+        var idx = parseInt(choice) - 1;
+        var contractId = state.extra.contracts[idx];
+        if (!contractId) return replier.reply(formatError(user, "번호 오류"));
 
-        // 2. 내 사채 상환 선택 처리 (Repay)
-        else if (state.type === 'p2p_select_repay') {
-            var contractId = (state.extra && state.extra.contracts) ? state.extra.contracts[idx] : null;
-            if (contractId && roomData.loanContracts[contractId]) {
-                var contract = roomData.loanContracts[contractId];
-                bankProcessState[targetUid] = { type: 'p2p_repay_amt', time: Date.now(), extra: { contractId: contractId } };
-                replier.reply(formatCommand("📉 사채 상환액 입력", user, 
-                    "선택 계약: [" + contract.lenderName + "]\n" +
-                    "갚아야 할 돈: " + fp(contract.currentDebt) + "P\n" +
-                    "💰 보유 포인트: " + fp(user.point) + "P\n\n" +
-                    "갚을 금액을 입력하세요.", 
-                    "취소: [취소]"
-                ));
-                isValid = true;
-            }
-        }
+        bankProcessState[targetUid] = { type: 'p2p_repay_amt', time: Date.now(), extra: { contractId: contractId } };
+        
+        /* [수정] 상환 입력창에 현재 보유 포인트 표시 추가 */
+        var currentDebt = roomData.loanContracts[contractId].currentDebt;
+        var lenderName = roomData.loanContracts[contractId].lenderName;
+        
+        replier.reply(formatCommand("📉 사채 상환액 입력", user, 
+            "선택 계약: [" + lenderName + "]\n" +
+            "갚아야 할 돈: " + fp(currentDebt) + "P\n" +
+            "💰 보유 포인트: " + fp(user.point) + "P\n\n" +
+            "갚을 금액을 입력하세요.", 
+            "취소: [취소]"
+        ));
+        delete menuWaitState[targetUid]; return;
+    }
 
-        // 3. 등록 매물 회수 선택 처리 (Withdraw)
-        else if (state.type === 'p2p_select_withdraw') {
-            var poolId = (state.extra && state.extra.pools) ? state.extra.pools[idx] : null;
-            if (poolId && roomData.loanPools[poolId]) {
-                bankProcessState[targetUid] = { type: 'p2p_withdraw_amt', time: Date.now(), extra: { poolId: poolId, max: roomData.loanPools[poolId].remainingAmount } };
-                replier.reply(formatCommand("📥 회수 금액 입력", user, "현재 풀 잔액: " + fp(roomData.loanPools[poolId].remainingAmount) + "P\n\n회수할 금액을 입력하거나 [전액]을 입력하세요.", "취소: [취소]"));
-                isValid = true;
-            }
-        }
+    else if (state.type === 'p2p_select_withdraw') {
+        var idx = parseInt(choice) - 1;
+        var poolId = state.extra.pools[idx];
+        if (!poolId) return replier.reply(formatError(user, "번호 오류"));
 
-        // 4. 채무자 자산 수거 선택 처리 (Collect)
-        else if (state.type === 'p2p_select_collect') {
-            var contractId = (state.extra && state.extra.contracts) ? state.extra.contracts[idx] : null;
-            if (contractId && roomData.loanContracts[contractId]) {
-                bankProcessState[targetUid] = { type: 'p2p_collect_manual', time: Date.now(), extra: { contractId: contractId } };
-                replier.reply(formatCommand("🚬 사채 강제 수거 확인", user, "[" + roomData.loanContracts[contractId].borrowerName + "]님의 지갑에서 자산을 수거하시겠습니까?\n\n진행하시려면 아무 메시지나 입력해주세요.", "취소: [취소]"));
-                isValid = true;
-            }
-        }
+        bankProcessState[targetUid] = { type: 'p2p_withdraw_amt', time: Date.now(), extra: { poolId: poolId, max: roomData.loanPools[poolId].remainingAmount } };
+        replier.reply(formatCommand("📥 회수 금액 입력", user, "현재 풀 잔액: " + fp(roomData.loanPools[poolId].remainingAmount) + "P\n\n회수할 금액을 입력하거나 [전액]을 입력하세요.", "취소: [취소]"));
+        delete menuWaitState[targetUid]; return;
+    }
 
-        // 결과 처리
-        if (isValid) {
-            delete menuWaitState[targetUid]; // 다음 단계로 넘어갔으므로 메뉴 대기 해제
-        } else {
-            // 숫자가 아니거나 범위를 벗어난 경우 무응답 방지용 에러 알림
-            replier.reply(formatError(user, "번호 오류", errorMsg));
-            delete menuWaitState[targetUid]; // 잘못된 입력 시 상태를 초기화하여 봇이 꼬이지 않게 함
-        }
-        return; // 해당 섹터 로직 종료
+    else if (state.type === 'p2p_select_collect') {
+        var idx = parseInt(choice) - 1;
+        var contractId = state.extra.contracts[idx];
+        if (!contractId) return replier.reply(formatError(user, "번호 오류"));
+
+        bankProcessState[targetUid] = { type: 'p2p_collect_manual', time: Date.now(), extra: { contractId: contractId } };
+        replier.reply(formatCommand("🚬 사채 강제 수거 확인", user, "[" + roomData.loanContracts[contractId].borrowerName + "]님의 지갑에서 자산을 수거하시겠습니까?\n\n진행하시려면 아무 메시지나 입력해주세요.", "취소: [취소]"));
+        delete menuWaitState[targetUid]; return;
     }
 }
 
@@ -3075,50 +3027,44 @@ if (menuWaitState && menuWaitState[targetUid]) {
 if (menuWaitState && menuWaitState[targetUid]) {
     var state = menuWaitState[targetUid];
     var choice = msg.trim();
-    var processed = false;
 
-    // 1. 상점 카테고리 선택 처리
     if (state.type === 'shop_category') {
         var catId = parseInt(choice);
-        
-        // [NaN 방어] 숫자가 아니거나 존재하지 않는 카테고리인 경우
         if (isNaN(catId) || !SHOP_CATEGORIES[catId]) {
-            replier.reply(formatError(user, "번호 오류", "올바른 카테고리 번호를 선택해주세요."));
-            processed = true; // 상태 해제를 위해 true 설정
-        } else {
-            // 선택된 카테고리에 해당하는 아이템만 필터링
-            var filteredItems = [];
-            for (var i = 0; i < SHOP_ITEMS.length; i++) {
-                if (SHOP_ITEMS[i].cat === catId) filteredItems.push(SHOP_ITEMS[i]);
-            }
-
-            if (filteredItems.length === 0) {
-                replier.reply(formatSimple("🛒 상점 알림", "해당 카테고리에 준비된 물품이 없습니다.", "다른 번호를 선택하세요."));
-                processed = true;
-            } else {
-                var list = [];
-                for (var j = 0; j < filteredItems.length; j++) {
-                    var item = filteredItems[j];
-                    var currentPrice = getItemPrice(item, user, roomName); 
-                    list.push((j + 1) + ". " + item.icon + " " + item.name + " : " + fp(currentPrice) + "P");
-                }
-
-                // 구매 대기 상태(shop_buy)로 전이 및 필터링된 리스트 전달
-                bankProcessState[targetUid] = { 
-                    type: 'shop_buy', 
-                    time: Date.now(), 
-                    extra: { items: filteredItems } 
-                };
-                replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[catId], user, list.join("\n"), "구매할 물품의 번호를 입력하세요."));
-                processed = true;
-            }
+            return replier.reply(formatError(user, "번호 오류", "올바른 카테고리 번호를 선택해주세요."));
         }
+
+        // 선택된 카테고리에 해당하는 아이템만 필터링
+        var filteredItems = [];
+        for (var i = 0; i < SHOP_ITEMS.length; i++) {
+            if (SHOP_ITEMS[i].cat === catId) filteredItems.push(SHOP_ITEMS[i]);
+        }
+
+        if (filteredItems.length === 0) {
+            return replier.reply(formatSimple("🛒 상점 알림", "해당 카테고리에 준비된 물품이 없습니다.", "다른 번호를 선택하세요."));
+        }
+
+        var list = [];
+        for (var j = 0; j < filteredItems.length; j++) {
+            var item = filteredItems[j];
+            var currentPrice = getItemPrice(item, user, roomName); 
+            list.push((j + 1) + ". " + item.icon + " " + item.name + " : " + fp(currentPrice) + "P");
+        }
+
+        // 구매 대기 상태로 전이 (필터링된 리스트 전달)
+        bankProcessState[targetUid] = { 
+            type: 'shop_buy', 
+            time: Date.now(), 
+            extra: { items: filteredItems } 
+        };
+
+        delete menuWaitState[targetUid];
+        return replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[catId], user, list.join("\n"), "구매할 물품의 번호를 입력하세요."));
     }
 
-    // 2. 도움말 상세 메뉴 선택 처리
+    /* 도움말 메뉴 처리 */
     else if (state.type === 'help') {
-        var helpBody = ""; 
-        var next = "";
+        var helpBody = ""; var next = "";
         var targetCat = "";
         
         if (choice === "1") { targetCat = "조회"; next = "내 정보 확인: [/내정보]"; }
@@ -3127,39 +3073,28 @@ if (menuWaitState && menuWaitState[targetUid]) {
         else if (choice === "4") { targetCat = "경제"; next = "은행 및 사채 메뉴: [/은행]"; }
         else if (choice === "5") { targetCat = "주식"; next = "시세 확인: [/주식]"; }
         else if (choice === "6") { targetCat = "광산"; next = "채굴 시작: [/광산시작]"; }
-        else if (choice === "7" && isAdmin(sender, data)) {
-            var adminList = [];
+        
+        if (targetCat !== "") {
+            var list = [];
+            for(var i=0; i<CMD_LIST.user.length; i++) {
+                var c = CMD_LIST.user[i];
+                if(c.cat === targetCat) list.push("• " + c.cmd + ": " + c.desc);
+            }
+            helpBody = list.join("\n");
+        } else if (choice === "7" && isAdmin(sender, data)) {
+            var list = [];
             for(var i=0; i<CMD_LIST.admin.length; i++) {
                 var c = CMD_LIST.admin[i];
-                adminList.push((i+1) + ". " + c.cmd + " " + c.desc);
+                list.push((i+1) + ". " + c.cmd + " " + c.desc);
             }
-            helpBody = "⚙️ [관리자 전용 명령어]\n" + adminList.join("\n"); 
+            helpBody = "⚙️ [관리자 전용 명령어]\n" + list.join("\n"); 
             next = "관리자 권한으로 신중히 사용하세요.";
         }
         
-        if (targetCat !== "") {
-            var userList = [];
-            for(var i=0; i<CMD_LIST.user.length; i++) {
-                var c = CMD_LIST.user[i];
-                if(c.cat === targetCat) userList.push("• " + c.cmd + ": " + c.desc);
-            }
-            helpBody = userList.join("\n");
-        }
-
         if (helpBody !== "") { 
-            replier.reply(formatCommand("📖 상세 도움말", null, helpBody, next)); 
-            processed = true;
-        } else {
-            // 잘못된 번호 입력 시 무응답 방어
-            replier.reply(formatError(user, "번호 오류", "도움말 메뉴에 있는 번호를 입력해주세요."));
-            processed = true;
+            delete menuWaitState[targetUid]; 
+            return replier.reply(formatCommand("📖 상세 도움말", null, helpBody, next)); 
         }
-    }
-
-    // 모든 처리가 완료되었거나 잘못된 입력인 경우 상태 해제 (무응답 방지 핵심)
-    if (processed) {
-        delete menuWaitState[targetUid];
-        return;
     }
 }
 
@@ -3167,8 +3102,8 @@ if (menuWaitState && menuWaitState[targetUid]) {
 if (msg === "/도움말") {
     menuWaitState[targetUid] = { type: 'help', time: Date.now() };
     var menu = "1. 👤 조회 및 정보\n2. 🎮 게임 및 활동\n3. 🛒 상점 및 아이템\n4. 🏦 은행 및 사채\n5. 📈 주식 투자\n6. ⛏️ 광산 채굴 (방치형)\n";
-    if (isAdmin(sender, data, targetUid)) menu += "7. ⚙️ 관리자 기능\n";
-    replier.reply(formatCommand("📖 내리다봇 도움말", null, "원하시는 메뉴 번호를 입력하세요.\n\n" + menu, "입력 대기: 30초"));
+    if (isAdmin(sender, data)) menu += "7. ⚙️ 관리자 기능\n";
+    replier.reply(formatCommand("📖 카카오봇 도움말", null, "원하시는 메뉴 번호를 입력하세요.\n\n" + menu, "입력 대기: 30초"));
     return;
 }
 
@@ -3197,8 +3132,17 @@ if (msg === "/도움말") {
 //==========섹터26==========
 
     } catch (e) {
-        Log.error("Runtime Error: " + e);
+        Log.error("Thread Runtime Error: " + e);
+        if (lock.isLocked()) {
+            try {
+                lock.unlock();
+            } catch(err) {
+                Log.error("Lock Release Error: " + err);
+            }
+        }
     }
+}
+}));
 }
 
 //==========섹터27==========
@@ -4206,48 +4150,6 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [신규 기능] 깃허브 연동 자동 업데이트 시스템 */
-    if (msg === "/리로드") {
-        // 1. 여기에 본인의 깃허브 RAW 주소를 넣으세요. (반드시 Raw 주소여야 합니다!)
-        var GITHUB_RAW_URL = "https://raw.githubusercontent.com/awwr502/my-bot-source/refs/heads/main/%EB%82%B4%EB%A6%AC%EB%8B%A4%EB%B4%87"; 
-        
-        // 2. [주의] 현재 봇이 구동 중인 실제 스크립트 파일 경로를 정확히 입력하세요.
-        // 예: "sdcard/kakaobot/Bots/내리다봇/script.js"
-        // 'data/source.js'는 보통 데이터 파일 경로이므로 실행 파일이 아닐 수 있습니다.
-        var SCRIPT_PATH = "sdcard/kakaobot/data/source.js"; 
-
-        try {
-            // 깃허브에서 코드 긁어오기
-            var newCode = org.jsoup.Jsoup.connect(GITHUB_RAW_URL)
-                .ignoreContentType(true)
-                .timeout(5000) // 5초 대기
-                .execute()
-                .body();
-
-            if (!newCode || newCode.length < 100) {
-                replier.reply(formatAdmin("업데이트 실패", "깃허브에서 코드를 불러오지 못했습니다."));
-                return true;
-            }
-
-            // 기존 파일 백업 (혹시 모르니 .bak 파일로 저장)
-            var oldCode = FileStream.read(SCRIPT_PATH);
-            FileStream.write(SCRIPT_PATH + ".bak", oldCode);
-
-            // 새 코드 덮어쓰기
-            FileStream.write(SCRIPT_PATH, newCode);
-
-            replier.reply(formatAdmin("업데이트 성공", "깃허브 최신 코드를 적용했습니다.\n봇을 리로드합니다..."));
-            
-            // 3. 봇 강제 리로드 (컴파일)
-            Api.reload(); 
-            
-        } catch (e) {
-            replier.reply(formatAdmin("업데이트 오류", "사유: " + e));
-            Log.error("Github Update Error: " + e);
-        }
-        return true;
-    }
-
     /* 전체 복원 */
     if (msg.trim() === "/전체복원") {
         var stablePath = BACKUP_DIR + "last_stable_backup.json";
@@ -4363,22 +4265,25 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
 
 //==========섹터38==========
 
+/**
+ * [게임 하위 모듈 2] 정보 및 랭킹 조회 (부채 통합 표시 및 예외 처리 강화)
+ * 기능: 내정보, 신용등급, 대출한도, 명예의전당, 순위, 유저정보
+ * 설명: 조회 시 은행 대출뿐만 아니라 사채 및 연체 현황을 통합하여 출력하며, 입력 오류를 검증합니다.
+ */
 function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
 
     /* [기능 3] 내 정보 조회 */
     if (msg === "/내정보") {
         var cr = getCreditInfo(user.creditScore);
-        /* [수정] 2회로 고정 표기 및 데이터 연동 확인 */
-        var authCount = (user.gameAuthCount || 0);
-        var authInfo = "🎮 게임 인증: " + authCount + "/2 (월간)";
+        var authInfo = "🎮 게임 인증: " + (user.gameAuthCount || 0) + "/3 (시즌)";
         
         var infoBody = authInfo + "\n" +
-                        "💰 보유 포인트: " + fp(user.point) + "P\n" +
-                        "🏦 은행 예금: " + fp(user.bank) + "P\n" +
-                        "💳 신용 등급: " + cr.label + " (" + user.creditScore + "점)\n" +
-                        "🏅 현재 티어: " + (TIERS[user.tier] || "아이언") + "\n" +
-                        "📅 누적 출석: " + (user.totalAttendance || 0) + "일";
+                       "💰 보유 포인트: " + fp(user.point) + "P\n" +
+                       "🏦 은행 예금: " + fp(user.bank) + "P\n" +
+                       "💳 신용 등급: " + cr.label + " (" + user.creditScore + "점)\n" +
+                       "🏅 현재 티어: " + (TIERS[user.tier] || "아이언") + "\n" +
+                       "📅 누적 출석: " + (user.totalAttendance || 0) + "일";
         
         // --- 부채 통합 계산 및 표시 로직 ---
         var bankDebt = (user.loan && user.loan.debt) ? Math.floor(Number(user.loan.debt)) : 0;
@@ -4499,10 +4404,10 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             }
 
             var info = "💰 포인트: " + fp(targetUser.point) + "P\n" +
-                        "🏦 예금: " + fp(targetUser.bank) + "P\n" +
-                        "💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n" +
-                        "🏅 티어: " + (TIERS[targetUser.tier] || "아이언") + "\n" +
-                        "📅 출석: " + (targetUser.totalAttendance || 0) + "일";
+                       "🏦 예금: " + fp(targetUser.bank) + "P\n" +
+                       "💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n" +
+                       "🏅 티어: " + (TIERS[targetUser.tier] || "아이언") + "\n" +
+                       "📅 출석: " + (targetUser.totalAttendance || 0) + "일";
             
             var bDebt = (targetUser.loan && targetUser.loan.debt) ? Math.floor(Number(targetUser.loan.debt)) : 0;
             if (bDebt > 0) info += "\n🏦 미상환 대출: " + fp(bDebt) + "P";
@@ -5082,15 +4987,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var count = parseInt(parts[2]);
         var holdings = (user.stockHoldings && user.stockHoldings[sName]) ? Number(user.stockHoldings[sName]) : 0;
 
-        /* [수정] 방어 로직 강화: NaN 체크 추가 */
-        if (isNaN(count) || count <= 0) { 
-            replier.reply(formatError(user, "수량 오류", "정확한 숫자를 입력하세요.")); 
-            return true; 
-        }
-        if (holdings < count) { 
-            replier.reply(formatError(user, "수량 부족", "보유 수량을 확인해주세요.")); 
-            return true; 
-        }
+        if (holdings < count || count <= 0) { replier.reply(formatError(user, "수량 부족", "보유 수량을 확인해주세요.")); return true; }
         
         var stock = data.stockMarket[sName];
         var sellPrice = stock ? Math.floor(Number(stock.price)) : 0;
@@ -5206,46 +5103,3 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
 
     return false;
 }
-
-//==========섹터45==========
-
-/* [지연 실행] 명령어 레지스트리 초기화 (Initialization) */
-// [수정] IIFE를 제거하고 일반 함수로 선언하여 섹터 19에서 안전하게 호출하도록 변경
-function initializeRegistry() {
-    try {
-        // 1. 유저 명령어 등록
-        for (var i = 0; i < CMD_LIST.user.length; i++) {
-            var c = CMD_LIST.user[i];
-            
-            // eval을 사용하여 문자열 이름("func")을 실제 함수 객체로 변환합니다.
-            var executor = null;
-            try { executor = eval(c.func); } catch(e) {}
-
-            if (typeof executor === 'function') {
-                registerUserCmd(c.cmd, c.desc, c.cat, executor);
-            } else {
-                Log.error("❌ 명령어 등록 실패 (함수 미발견): " + c.cmd + " -> " + c.func);
-            }
-        }
-
-        // 2. 관리자 명령어 등록
-        for (var j = 0; j < CMD_LIST.admin.length; j++) {
-            var a = CMD_LIST.admin[j];
-            
-            var adminExecutor = null;
-            try { adminExecutor = eval(a.func); } catch(e) {}
-
-            if (typeof adminExecutor === 'function') {
-                registerAdminCmd(a.cmd, a.desc, adminExecutor);
-            } else {
-                Log.error("❌ 관리자 명령어 등록 실패: " + a.cmd);
-            }
-        }
-        
-    } catch(e) {
-        Log.error("Registry Init Critical Error: " + e);
-    }
-}
-
-/* [안전 장치] 스크립트 로드 시 1회 자동 실행 시도 (혹시 모르니) */
-initializeRegistry();

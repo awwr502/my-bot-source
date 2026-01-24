@@ -376,6 +376,11 @@ function endTracking(user, isSuccess, resultMsg) {
  */
 function safeSaveData(data, isForceBackup) {
     if (!data) return;
+
+    /* [Gemini 요청 사항] 경마 데이터 영속성 통합 */
+    // 저장 전 메모리의 최신 경마 데이터를 DB 객체에 동기화하여 리로드 시에도 유지되도록 합니다.
+    data.racing = racingData;
+
     globalData = data; // 메모리 데이터 즉시 동기화 (응답 속도 최우선)
 
     // [방어형 로직] 무거운 직렬화 및 무결성 검증은 메인 스레드에서 먼저 수행
@@ -638,25 +643,65 @@ var sprayData = {
 var selectWaitState = {}; 
 var bankProcessState = {};
 
-/* [핵심] 지능형 포인트 통합 처리 및 은행 재원 연동 함수 (v5.8 블랙박스 저널링 완벽 대응) */
+/**
+ * [Gemini 요청 사항] 통합 순자산 계산 엔진 (칭호 및 Ecobase 표준)
+ * 기능: 유저의 모든 자산(현금, 예금, 주식, 채권)에서 모든 부채를 차감하여 실질 자산을 산출합니다.
+ */
+function util_calculateNetWorth(user, roomData) {
+    if (!user) return 0;
+
+    // 1. 가용 현금 자산 (지갑 + 통장)
+    var liquidAssets = Number(user.point || 0) + Number(user.bank || 0);
+
+    // 2. 투자 자산 (보유 주식액: 평단가 기준)
+    var stockAssets = 0;
+    if (user.stockHoldings && user.stockAvg) {
+        for (var sName in user.stockHoldings) {
+            var count = Number(user.stockHoldings[sName] || 0);
+            var avg = Number(user.stockAvg[sName] || 0);
+            if (!isNaN(count) && !isNaN(avg)) stockAssets += (count * avg);
+        }
+    }
+
+    // 3. 채무 및 채권 계산 (사채 시장 연동)
+    var bankDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
+    var sacheDebt = 0;   // 내가 빌린 돈 (부채)
+    var sacheClaims = 0; // 내가 빌려준 돈 (채권/자산)
+
+    if (roomData && roomData.loanContracts) {
+        for (var cid in roomData.loanContracts) {
+            var c = roomData.loanContracts[cid];
+            // 부채 합산 (채무자 식별)
+            if (c.borrowerUid === user.uid || (user.name && c.borrowerName === user.name)) {
+                sacheDebt += Number(c.currentDebt);
+            }
+            // 채권 합산 (채권자 식별)
+            if (c.lenderUid === user.uid || (user.name && c.lenderName === user.name)) {
+                sacheClaims += Number(c.currentDebt);
+            }
+        }
+    }
+
+    // [최종 공식]: 순자산 = (가용자산 + 주식자산 + 미수채권) - (은행대출 + 사채부채)
+    var netWorth = (liquidAssets + stockAssets + sacheClaims) - (bankDebt + sacheDebt);
+    return Math.floor(netWorth);
+}
+
+/* [핵심] 지능형 포인트 통합 처리 및 순자산 기반 칭호 엔진 (v5.8 저널링 대응) */
 function util_updatePoint(user, roomData, delta, reason, roomName) {
     if (!user || isNaN(delta) || delta === 0) return;
     
     var prePoint = Number(user.point || 0);
-    var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급"];
-    var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매: ", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부"];
+    var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급", "결투 승리 보상", "뿌리기 줍기", "경마 당첨금"];
+    var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매: ", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부", "경마 배팅", "배팅 취소 수수료"];
 
-    var brDelta = 0; // [v5.8] 블랙박스 기록을 위한 은행 재원 변동폭 추적 변수
+    var brDelta = 0; 
 
     if (roomData) {
         if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
         if (delta > 0) {
-            // 은행이 유저에게 돈을 주는 경우 (금고 감소)
-            if (bankOutputReasons.some(function(r){ return reason.indexOf(r) !== -1; })) {
-                brDelta = -delta;
-            }
+            if (bankOutputReasons.some(function(r){ return reason.indexOf(r) !== -1; })) brDelta = -delta;
         } else {
-            // 유저가 은행에 돈을 내는 경우 (금고 증가)
             if (bankInputReasons.some(function(r){ return reason.indexOf(r) !== -1; }) || reason.indexOf("벌금") !== -1 || reason.indexOf("상환") !== -1) {
                 brDelta = Math.abs(delta);
             }
@@ -666,8 +711,9 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
 
     user.point = prePoint + delta;
 
-    /* [최적화] 자산가 칭호 실시간 판별 엔진 */
-    var totalAssets = Number(user.point) + Number(user.bank || 0);
+    /* [Gemini 요청 사항] 실질 순자산 기반 자산가 칭호 실시간 판별 엔진 */
+    var totalNetWorth = util_calculateNetWorth(user, roomData);
+    
     var assetTitles = [
         { name: "대부호", limit: 1000000 },
         { name: "부호", limit: 500000 },
@@ -679,9 +725,9 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     var suitableTitle = "";
     var requiredLimit = 0;
 
-    // 1. 현재 자산에 맞는 적정 칭호 찾기
+    // 1. 현재 실질 순자산에 맞는 적정 칭호 찾기
     for (var i = 0; i < assetTitles.length; i++) {
-        if (totalAssets >= assetTitles[i].limit) {
+        if (totalNetWorth >= assetTitles[i].limit) {
             suitableTitle = assetTitles[i].name;
             requiredLimit = assetTitles[i].limit;
             break;
@@ -692,30 +738,28 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     var isAssetTitle = assetTitles.some(function(t){ return t.name === currentTitle; });
 
     if (currentTitle !== suitableTitle) {
-        // [v5.8] 파라미터로 전달된 roomName을 우선적으로 사용하여 알림 발송
         var targetRoom = roomName || (roomData && roomData.roomName ? roomData.roomName : "내리다");
 
-        // A. 새로운 상위 칭호 획득
-        if (suitableTitle !== "" && (currentTitle === "" || totalAssets >= requiredLimit)) {
+        // A. 새로운 상위 칭호 획득 (순자산 기준)
+        if (suitableTitle !== "" && (currentTitle === "" || totalNetWorth >= requiredLimit)) {
             if (!user.inventory) user.inventory = [];
             if (!user.inventory.some(function(it){ return it.title === suitableTitle; })) {
                 user.inventory.push({ id: 700 + i, name: "[" + suitableTitle + "] 칭호", icon: "💰", effect: "title", title: suitableTitle });
             }
             user.title = suitableTitle;
-            var winMsg = "[🎖️ 신규 칭호 획득]\n━━━━━━━━━━━━━━━\n" + user.name + "님\n\n축하합니다! 총 자산이 " + fp(totalAssets) + "P를 돌파하여 [" + suitableTitle + "] 칭호를 획득했습니다!\n\n✨ 상태: [" + suitableTitle + "] 칭호 자동 장착 완료\n💼 보관: 가방에 영구 저장되었습니다.\n━━━━━━━━━━━━━━━\n⚠️ 자산 기준 미달 시 칭호가 자동 해제됩니다.";
+            var winMsg = "[🎖️ 신규 칭호 획득]\n━━━━━━━━━━━━━━━\n" + (user.name || "유저") + "님\n\n축하합니다! 실질 순자산이 " + fp(totalNetWorth) + "P를 돌파하여 [" + suitableTitle + "] 칭호를 획득했습니다!\n\n✨ 상태: [" + suitableTitle + "] 칭호 자동 장착 완료\n💼 보관: 가방에 영구 저장되었습니다.\n━━━━━━━━━━━━━━━\n⚠️ 순자산(현금+주식+채권-부채) 기준 미달 시 자동 해제됩니다.";
             try { Api.replyRoom(targetRoom, winMsg); } catch(e){}
         } 
         // B. 자격 미달로 인한 칭호 소멸 또는 강등
-        else if (isAssetTitle && (suitableTitle === "" || totalAssets < assetTitles.find(function(t){return t.name === currentTitle}).limit)) {
+        else if (isAssetTitle && (suitableTitle === "" || totalNetWorth < assetTitles.find(function(t){return t.name === currentTitle}).limit)) {
             var oldTitle = currentTitle;
-            user.title = suitableTitle; // 다음 단계 칭호로 강등되거나 공백 처리
-            var loseMsg = "📉 [칭호 자격 상실]\n━━━━━━━━━━━━━━━\n" + user.name + "님\n총 자산이 기준치 미만으로 하락하여 [" + oldTitle + "] 칭호가 해제되었습니다.";
+            user.title = suitableTitle; 
+            var loseMsg = "📉 [칭호 자격 상실]\n━━━━━━━━━━━━━━━\n" + (user.name || "유저") + "님\n실질 순자산이 기준치 미만으로 하락하여 [" + oldTitle + "] 칭호가 해제되었습니다.";
             if (suitableTitle !== "") loseMsg += "\n(현재 자산에 맞는 [" + suitableTitle + "] 칭호로 교체되었습니다.)";
             try { Api.replyRoom(targetRoom, loseMsg); } catch(e){}
         }
     }
 
-    // [v5.8 핵심] 이제 verifyPointTransaction에 roomName과 brDelta를 전달하여 실시간 저널링을 가동합니다.
     if (typeof verifyPointTransaction === 'function') {
         verifyPointTransaction(user, prePoint, delta, reason, roomName, brDelta);
     }
@@ -809,12 +853,17 @@ function stock_applyClosingCorrection(currentPrice) {
 
 //==========섹터8==========
 
-/* 경제 지표 계산 함수 (순자산 기준: 은행 대출 + 유저 사채 모두 차감) */
+/**
+ * [Gemini 요청 사항] 경제 지표 계산 함수 (실질 순자산 기준 일원화)
+ * 기능: 섹터 7의 util_calculateNetWorth를 호출하여 국가 전체 자산을 집계합니다.
+ * 반영: 유저의 채권(빌려준 돈)을 자산으로 정식 포함하여 통계 누락을 방지함.
+ */
 function calculateEconomy(data, roomName) {
     var totalAssets = 0;
     var userCount = 0;
     if (!data || !data.rooms) return { total: 0, count: 0, average: 0 };
 
+    // 특정 방만 스캔할지, 전체 방을 스캔할지 결정
     var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
     
     for (var i = 0; i < roomsToScan.length; i++) {
@@ -822,44 +871,25 @@ function calculateEconomy(data, roomName) {
         var roomData = data.rooms[r];
         if (!roomData) continue;
 
-        /* [추가] 해당 방의 모든 사채 계약 데이터를 취합하여 유저별 부채 맵 생성 */
-        var sacheDebts = {};
-        if (roomData.loanContracts) {
-            for (var cid in roomData.loanContracts) {
-                var c = roomData.loanContracts[cid];
-                // 각 채무자(borrowerUid)의 현재 채무액을 합산
-                sacheDebts[c.borrowerUid] = (sacheDebts[c.borrowerUid] || 0) + Number(c.currentDebt);
-            }
-        }
-
         for (var uid in roomData.users) {
             var u = roomData.users[uid];
             if (!u) continue;
 
-            var stockVal = 0;
-            if (u.stockHoldings && u.stockAvg) {
-                for (var sName in u.stockHoldings) {
-                    var c = Number(u.stockHoldings[sName] || 0);
-                    var a = Number(u.stockAvg[sName] || 0);
-                    if (!isNaN(c) && !isNaN(a)) stockVal += (c * a);
-                }
+            /* [핵심] 섹터 7의 통합 계산 엔진 호출 */
+            // 각 유저의 (현금 + 예금 + 주식 + 채권) - (부채)를 계산합니다.
+            var userNetWorth = 0;
+            if (typeof util_calculateNetWorth === 'function') {
+                userNetWorth = util_calculateNetWorth(u, roomData);
+            } else {
+                // 예외 처리: 함수가 없을 경우 기본 포인트 기반 (안전장치)
+                userNetWorth = Number(u.point || 0) + Number(u.bank || 0);
             }
-            var p = Number(u.point || 0);
-            var b = Number(u.bank || 0);
-            
-            /* [수정] 대출금(은행) 및 사채(유저) 부채 통합 계산 */
-            var bankDebt = (u.loan && u.loan.debt) ? Number(u.loan.debt) : 0;
-            var sacheDebt = sacheDebts[uid] || 0; // 해당 유저의 사채 총액
-            var totalDebt = bankDebt + sacheDebt;
 
-            if (!isNaN(p) && !isNaN(b)) {
-                /* [수정] 순자산 = (지갑 + 통장 + 주식) - (은행 대출 + 사채 빚) */
-                var netWorth = p + b + stockVal - totalDebt;
-                totalAssets += netWorth;
-                userCount++;
-            }
+            totalAssets += userNetWorth;
+            userCount++;
         }
     }
+
     return {
         total: totalAssets,
         count: userCount,
@@ -869,18 +899,20 @@ function calculateEconomy(data, roomName) {
 
 //==========섹터9==========
 
-/* 아이템 가격 계산 함수 */
+/**
+ * [시스템] 아이템 가격 계산 함수
+ * 기능: 국가 경제 지표(Ecobase) 배율을 적용하여 실시간 상점가를 산출합니다.
+ */
 function getItemPrice(item, user, roomName) {
     var data = getDatabase();
     var multiplier = 1.0;
     var roomData = data.rooms[roomName];
 
     if (roomData && roomData.economyBase && roomData.economyBase > 0) {
+        // [연동] 섹터 8의 통합 경제 지표를 호출 (이미 채권/부채가 반영된 수치)
         var currentEco = calculateEconomy(data, roomName);
-        // 물가 배율 공식: $multiplier = 1 + (rawRatio - 1) \times damping$
         var rawRatio = currentEco.total / roomData.economyBase;
         
-        /* [수정] 완충 비율(damping) 적용 */
         var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.5;
         multiplier = 1 + (rawRatio - 1) * damping;
         
@@ -889,6 +921,7 @@ function getItemPrice(item, user, roomName) {
 
     var basePrice = Math.floor(Number(item.price) * multiplier);
 
+    // 승급권(id:6)은 구매 횟수에 따른 할증 로직 유지
     if (item.id === 6) { 
         var boughtCount = Number(user.purchasedPromotionAttempts || 0);
         return basePrice + (boughtCount * 50);
@@ -896,7 +929,11 @@ function getItemPrice(item, user, roomName) {
     return basePrice;
 }
 
-/* 경제 부양 지원금 체크 함수 (사채 빚 포함 순자산 기준 및 순환 경제 연동) */
+/**
+ * [Gemini 요청 사항] 경제 부양 지원금 체크 함수 (실질 순자산 기준 일원화)
+ * 기능: 섹터 7의 통합 엔진을 사용하여 '부자 연체자'를 걸러내고 공정한 복지를 실현합니다.
+ * 반영: 유저의 채권(빌려준 돈)이 많으면 지원 대상에서 제외됩니다.
+ */
 function checkEconomicStimulus(user, roomName, isManual) {
     if ((user.totalAttendance || 0) < 2) return;
     
@@ -910,31 +947,16 @@ function checkEconomicStimulus(user, roomName, isManual) {
     var avgAsset = eco.average;
     var roomData = data.rooms[roomName];
 
-    /* 1. 유저의 총 기초 자산 합산 */
-    var myStockVal = 0;
-    if (user.stockHoldings && user.stockAvg) {
-        for (var sName in user.stockHoldings) {
-            myStockVal += (Number(user.stockAvg[sName] || 0) * Number(user.stockHoldings[sName] || 0));
-        }
+    /* [수정] 수동 자산/부채 계산 로직을 섹터 7 통합 엔진 호출로 대체 */
+    // 이 한 줄로 (지갑 + 통장 + 주식 + 빌려준돈) - (은행빚 + 사채빚)이 모두 계산됩니다.
+    var myNetWorth = 0;
+    if (typeof util_calculateNetWorth === 'function') {
+        myNetWorth = util_calculateNetWorth(user, roomData);
+    } else {
+        myNetWorth = Number(user.point || 0) + Number(user.bank || 0);
     }
-    var totalAssets = Number(user.point || 0) + Number(user.bank || 0) + myStockVal;
 
-    /* 2. 유저의 모든 부채(은행 대출 + 사채) 합산 */
-    var bankDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
-    var sacheDebt = 0;
-    if (roomData && roomData.loanContracts) {
-        for (var cid in roomData.loanContracts) {
-            var c = roomData.loanContracts[cid];
-            if (c.borrowerUid === user.uid || c.borrowerName === user.name) {
-                sacheDebt += Number(c.currentDebt);
-            }
-        }
-    }
-    var totalDebt = bankDebt + sacheDebt;
-
-    /* 3. 실질 순자산(Net Worth) 판정 */
-    // 실질 자산 공식: $myNetWorth = totalAssets - totalDebt$
-    var myNetWorth = totalAssets - totalDebt;
+    // 지급 기준선: 평균 순자산의 40% 미만일 때
     var targetLine = Math.floor(avgAsset * 0.4);
     
     if (myNetWorth < targetLine) {
@@ -952,13 +974,11 @@ function checkEconomicStimulus(user, roomName, isManual) {
         
         if (giveAmount < 100) return;
 
-        /* [핵심 수정] 중앙은행 연동 및 통합 포인트 처리 */
-        // 직접 할당(user.point += giveAmount) 대신 util_updatePoint를 호출하여 금고 잔액을 차감함
+        /* [연동] 중앙은행 금고 차감 및 포인트 지급 */
         util_updatePoint(user, roomData, giveAmount, "민생지원금 지급", roomName);
         
         user.dailyStimulusCount = currentCount + 1;
 
-        /* 경제 부양 지원금 체크 함수 - 현재 잔액 표시 추가 */
         var msg = "\n경제 활성화를 위한 민생지원금이 지급되었습니다.\n" +
                   "💰 지원금 지급: +" + fp(giveAmount) + "P";
 
@@ -5131,22 +5151,23 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [기능 3] 내 정보 조회 */
+    /* [기능 3] 내 정보 조회 (Gemini 요청: 실질 순자산 상세 표시 반영) */
     if (msg === "/내정보") {
         var cr = getCreditInfo(user.creditScore);
-        /* [수정] 게임 인증 횟수 표시 한도 변경 (3 -> 2) */
         var authInfo = "🎮 게임 인증: " + (user.gameAuthCount || 0) + "/2 (시즌)";
         
-        var infoBody = authInfo + "\n" +
-                       "💰 보유 포인트: " + fp(user.point) + "P\n" +
-                       "🏦 은행 예금: " + fp(user.bank) + "P\n" +
-                       "💳 신용 등급: " + cr.label + " (" + user.creditScore + "점)\n" +
-                       "🏅 현재 티어: " + (TIERS[user.tier] || "아이언") + "\n" +
-                       "📅 누적 출석: " + (user.totalAttendance || 0) + "일";
-        
-        // --- 부채 통합 계산 및 표시 로직 ---
+        // 1. 주식 자산 별도 계산 (UI 출력용)
+        var stockVal = 0;
+        if (user.stockHoldings && user.stockAvg) {
+            for (var sName in user.stockHoldings) {
+                stockVal += (Number(user.stockHoldings[sName] || 0) * Number(user.stockAvg[sName] || 0));
+            }
+        }
+
+        // 2. 부채 및 채권(빌려준 돈) 상세 계산
         var bankDebt = (user.loan && user.loan.debt) ? Math.floor(Number(user.loan.debt)) : 0;
         var sacheDebt = 0;
+        var sacheClaims = 0; // 채권
         var overdueSache = 0;
 
         if (roomData && roomData.loanContracts) {
@@ -5156,22 +5177,37 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
                     sacheDebt += Math.floor(c.currentDebt);
                     if (c.status === 'overdue') overdueSache += Math.floor(c.currentDebt);
                 }
+                if (c.lenderUid === targetUid) {
+                    sacheClaims += Math.floor(c.currentDebt);
+                }
             }
         }
 
-        // 1. 은행 대출금 표시 (대환 채무 여부 포함)
+        // 3. 섹터 7 통합 엔진을 통한 최종 순자산 확정
+        var totalNetWorth = util_calculateNetWorth(user, roomData);
+
+        var infoBody = authInfo + "\n" +
+                       "💰 보유 포인트: " + fp(user.point) + "P\n" +
+                       "🏦 은행 예금: " + fp(user.bank) + "P\n" +
+                       "📈 주식 자산: " + fp(stockVal) + "P\n" +
+                       (sacheClaims > 0 ? "🤝 미수 채권: " + fp(sacheClaims) + "P\n" : "") +
+                       "💳 신용 등급: " + cr.label + " (" + user.creditScore + "점)\n" +
+                       "🏅 현재 티어: " + (TIERS[user.tier] || "아이언") + "\n" +
+                       "📅 누적 출석: " + (user.totalAttendance || 0) + "일";
+        
         if (bankDebt > 0) {
             var transferTag = user.isTransferred ? " (🚨대환 채무: 70% 강제상환)" : "";
             infoBody += "\n🏦 미상환 대출: " + fp(bankDebt) + "P" + transferTag;
         }
 
-        // 2. 사채 현황 표시 (연체 정보 포함)
         if (sacheDebt > 0) {
             infoBody += "\n🚬 미상환 사채: " + fp(sacheDebt) + "P";
-            if (overdueSache > 0) {
-                infoBody += "\n🚨 사채 연체: " + fp(overdueSache) + "P (50% 자동상환)";
-            }
+            if (overdueSache > 0) infoBody += "\n🚨 사채 연체: " + fp(overdueSache) + "P (50% 자동상환)";
         }
+
+        infoBody += "\n━━━━━━━━━━━━━━━\n" +
+                    "💎 실질 순자산: " + fp(totalNetWorth) + "P\n" +
+                    "✨ 등급: [" + (user.title || "일반") + "]";
 
         var totalPromotion = Number(user.dailyPromotionAttempts || 0) + Number(user.purchasedPromotionAttempts || 0);
         infoBody += "\n🔂 승급 기회: " + totalPromotion + "회";
@@ -5180,40 +5216,33 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [수정] 유물 도감 조회 (UI 레이아웃 변경 및 안내 문구 자동 연동) */
+    /* [수정] 유물 도감 조회 (기존 유지) */
     if (msg === "/유물도감") {
         var pieces = Number(user.artifactPieces || 0);
         var conf = SYSTEM_CONFIG.ECO.MINE;
         var goal = conf.ARTIFACT_GOAL || 10;
-        
-        // 가이드 문구에 들어갈 확률 계산 (0.001 -> 0.1%)
         var chancePercent = (conf.ARTIFACT_CHANCE * 100).toFixed(2).replace(/\.?0+$/, "") + "%";
-        
         var rewardStatus = (pieces >= goal) ? "🎖️ 칭호: [도굴왕] (획득 완료!)" : "🎖️ 칭호: [도굴왕] (진행 중...)";
-        
-        // 요청하신 깔끔한 UI 형태로 변경 (진행바 및 % 제거)
-        var content = pieces >= goal ? "" : "\n"; // 상단 여백 조절
+        var content = pieces >= goal ? "" : "\n"; 
         content += "✨ 유물 조각 (Fragment)\n" +
                    "🧩 보유: " + pieces + " / " + goal + " 개\n\n" +
                    "🎁 수집 달성 보상\n" +
                    rewardStatus;
-        
         var guide = "광산에서 " + chancePercent + " 확률로 조각이 발견됩니다. " + goal + "개를 모으면 자동으로 칭호가 부여됩니다.";
         replier.reply(formatCommand("🏺 유물 도감 (Artifacts)", user, content, guide));
         return true;
     }
 
-    /* [기능 4] 신용 등급 및 대출 한도 조회 */
+    /* [기능 4] 신용 등급 및 대출 한도 조회 (기존 유지) */
     if (msg === "/신용등급" || msg === "/대출한도") {
         var cr = getCreditInfo(user.creditScore);
         var table = getCreditLimitTable(); 
         var myCredit = "\n[내 신용 상태]\n점수: " + user.creditScore + "점\n등급: " + cr.label + "\n대출 가능 한도: " + fp(cr.limit) + "P";
-        
         replier.reply(formatCommand("💳 신용 등급 및 한도", user, table + "\n" + myCredit, "은행 이용: [/은행]"));
         return true;
     }
 
-    /* [기능 5] 명예의 전당 (챌린저 조회) */
+    /* [기능 5] 명예의 전당 (챌린저 조회) (기존 유지) */
     if (msg === "/명예의전당") {
         var challengers = [];
         var roomUsers = roomData.users;
@@ -5229,61 +5258,58 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [기능 7] 자산 순위 (지갑 + 예금 합산) */
+    /* [기능 7] 자산 순위 (지갑 + 예금 합산 -> 순자산 합산으로 기준 변경) */
     if (msg === "/출석순위") {
         var users = [];
         var roomUsers = roomData.users;
         for (var id in roomUsers) {
             var u = roomUsers[id];
-            var totalAssets = Number(u.point || 0) + Number(u.bank || 0);
-            if (totalAssets >= 1) users.push({ data: u, total: totalAssets });
+            // 랭킹 산정도 실질 순자산 기준으로 변경하여 일관성 확보
+            var netWorth = util_calculateNetWorth(u, roomData);
+            if (netWorth >= 1) users.push({ data: u, total: netWorth });
         }
-        
         users.sort(function(a, b) { return b.total - a.total; });
-        
         var rankList = [];
         for (var i = 0; i < Math.min(10, users.length); i++) {
             rankList.push((i + 1) + ". " + getDisplayName(users[i].data) + " (" + fp(users[i].total) + "P)");
         }
-        
         var rankMsg = (rankList.length > 0 ? rankList.join("\n") : "순위 데이터가 없습니다.");
-        replier.reply(formatSimple("자산 랭킹 (지갑+예금)", rankMsg, "내 정보: [/내정보]"));
+        replier.reply(formatSimple("자산 랭킹 (실질 순자산 기준)", rankMsg, "내 정보: [/내정보]"));
         return true;
     }
 
-    /* [기능 8] 타 유저 정보 조회 (수정: 입력 예외 처리 추가) */
+    /* [기능 8] 타 유저 정보 조회 (Gemini 요청: 실질 순자산 표시 반영) */
     if (msg.indexOf("/유저정보") === 0) {
         var tn = msg.substring(5).trim(); 
-        
         if (tn === "") {
             replier.reply(formatError(user, "입력 오류", "조회할 유저의 닉네임을 입력하세요.\n(예: /유저정보 홍길동)"));
             return true;
         }
-        
         var found = findUserByName(roomData, tn);
-        
         if (found.length === 0) { 
             replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); 
             return true; 
         }
-        
         if (found.length === 1) {
             var targetUser = found[0].data;
             var targetIdInside = found[0].id;
             var cr = getCreditInfo(targetUser.creditScore);
             
+            // 타인 조회 시에도 순자산 및 채권 계산
             var sDebt = 0;
+            var sClaims = 0;
             if (roomData.loanContracts) {
                 for (var cid in roomData.loanContracts) {
                     var c = roomData.loanContracts[cid];
-                    if (c.borrowerUid === targetIdInside) {
-                        sDebt += Math.floor(c.currentDebt);
-                    }
+                    if (c.borrowerUid === targetIdInside) sDebt += Math.floor(c.currentDebt);
+                    if (c.lenderUid === targetIdInside) sClaims += Math.floor(c.currentDebt);
                 }
             }
+            var tNetWorth = util_calculateNetWorth(targetUser, roomData);
 
             var info = "💰 포인트: " + fp(targetUser.point) + "P\n" +
                        "🏦 예금: " + fp(targetUser.bank) + "P\n" +
+                       (sClaims > 0 ? "🤝 미수 채권: " + fp(sClaims) + "P\n" : "") +
                        "💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n" +
                        "🏅 티어: " + (TIERS[targetUser.tier] || "아이언") + "\n" +
                        "📅 출석: " + (targetUser.totalAttendance || 0) + "일";
@@ -5291,6 +5317,10 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             var bDebt = (targetUser.loan && targetUser.loan.debt) ? Math.floor(Number(targetUser.loan.debt)) : 0;
             if (bDebt > 0) info += "\n🏦 미상환 대출: " + fp(bDebt) + "P";
             if (sDebt > 0) info += "\n🚬 미상환 사채: " + fp(sDebt) + "P";
+            
+            info += "\n━━━━━━━━━━━━━━━\n" +
+                    "💎 실질 순자산: " + fp(tNetWorth) + "P\n" +
+                    "✨ 등급: [" + (targetUser.title || "일반") + "]";
 
             replier.reply(formatCommand("🔍 유저 상세 정보", targetUser, info, null));
         } else {

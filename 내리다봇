@@ -3482,16 +3482,19 @@ if (msg === "/도움말") {
 /**
  * [독립형 함수 1] 인벤토리 로직
  * 기능: 보유 아이템 확인, 장착, 분해 처리
- * 수정: 아이콘/칭호 카테고리별 ID 오름차순 자동 정렬 기능 추가
+ * 수정: 카테고리 분리, ID 기반 오름차순 정렬, 상세 분해 결과 메시지 복구
  */
 function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
     // 1. 가방 조회 (분류 및 자동 정렬 적용)
     if (msg === "/가방") {
         var inv = user.inventory || [];
         
-        // [Gemini 요청 사항] ID 기준 오름차순 정렬 (낮은 순서가 위로)
+        // ID 기준 오름차순 정렬 (ID가 없으면 9999로 처리)
         inv.sort(function(a, b) {
-            return (a.id || 0) - (b.id || 0);
+            var idA = Number(a.id) || 9999;
+            var idB = Number(b.id) || 9999;
+            if (idA !== idB) return idA - idB;
+            return (a.name || "").localeCompare(b.name || "");
         });
 
         var iconEntries = [];
@@ -3503,34 +3506,24 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             for (var i = 0; i < inv.length; i++) {
                 var it = inv[i];
                 var activeMark = "";
-                var entry = (i + 1) + ". " + it.icon + " " + it.name;
                 
-                // 장착 여부 확인
-                if (it.effect === "icon" && user.icon === it.icon) {
-                    activeMark = " (✅ 장착 중)";
-                } else if (it.effect === "title" && user.title === it.title) {
-                    activeMark = " (✅ 장착 중)";
-                }
+                if (it.effect === "icon" && user.icon === it.icon) activeMark = " (✅ 장착 중)";
+                else if (it.effect === "title" && user.title === it.title) activeMark = " (✅ 장착 중)";
+                
+                var entry = (i + 1) + ". " + it.icon + " " + it.name + activeMark;
 
-                // 카테고리별 분류 (이미 정렬된 상태)
-                if (it.effect === "icon") {
-                    iconEntries.push(entry + activeMark);
-                } else if (it.effect === "title") {
-                    titleEntries.push(entry + activeMark);
-                }
+                if (it.effect === "icon") iconEntries.push(entry);
+                else if (it.effect === "title") titleEntries.push(entry);
             }
         }
 
-        // 출력용 문자열 조립
         var invDisplay = "[아이템 보관함]\n";
-        
         invDisplay += "🖼️ 아이콘 목록 (등급순)\n";
         invDisplay += (iconEntries.length > 0 ? iconEntries.join("\n") : "- 없음") + "\n\n";
         
         invDisplay += "🎖️ 칭호 목록 (등급순)\n";
         invDisplay += (titleEntries.length > 0 ? titleEntries.join("\n") : "- 없음");
 
-        // 소모품 정보 (조각 및 이용권 포함)
         var consumables = "\n\n[내 소모품 정보]\n" +
                           "🛡️ 강등 방어권: " + (user.tierGuard || 0) + "개\n" +
                           "🔂 추가 승급권: " + (user.purchasedPromotionAttempts || 0) + "회\n" +
@@ -3542,7 +3535,7 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 2. 아이템 장착 (신용불량자 제한 유지)
+    // 2. 아이템 장착 (신용불량자 제한 및 인덱스 정합성 유지)
     if (msg.indexOf("/장착 ") === 0) {
         if (Number(user.creditScore || 600) < 500) {
             replier.reply(formatError(user, "장착 불가", "현재 신용불량자 상태이므로 아이콘 및 칭호 변경이 불가능합니다. 신용을 먼저 회복하세요."));
@@ -3555,7 +3548,6 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 정렬된 순서에 맞게 인덱스 참조
         var idx = parseInt(parts[1]);
         var inv = user.inventory || [];
         if (isNaN(idx) || idx < 1 || idx > inv.length) {
@@ -3575,19 +3567,13 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 3. 아이콘 분해 로직 (조각 지급 시스템 유지)
+    // 3. 아이콘 분해 로직 (상세 결과 메시지 복구 완료)
     if (msg.indexOf("/분해 ") === 0) {
         var inv = user.inventory || [];
-        if (inv.length === 0) {
-            replier.reply(formatError(user, "분해 불가", "분해할 아이템이 가방에 없습니다."));
-            return true;
-        }
+        if (inv.length === 0) return replier.reply(formatError(user, "분해 불가", "분해할 아이템이 없습니다."));
 
         var numbers = msg.match(/\d+/g);
-        if (!numbers) {
-            replier.reply(formatError(user, "입력 오류", "/분해 [번호] 또는 /분해 [번호] [번호] ..."));
-            return true;
-        }
+        if (!numbers) return replier.reply(formatError(user, "입력 오류", "/분해 [번호]"));
 
         var targetIndices = [];
         numbers.forEach(function(n) {
@@ -3597,10 +3583,7 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             }
         });
 
-        if (targetIndices.length === 0) {
-            replier.reply(formatError(user, "번호 오류", "가방에 있는 정확한 번호를 입력해주세요."));
-            return true;
-        }
+        if (targetIndices.length === 0) return replier.reply(formatError(user, "번호 오류", "정확한 번호를 입력하세요."));
 
         var disassembledNames = [];
         var earnedFragments = targetIndices.length;
@@ -3610,10 +3593,8 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
         targetIndices.forEach(function(idx) {
             var item = inv[idx];
             disassembledNames.push(item.icon + " " + item.name);
-            
             if (item.effect === "icon" && user.icon === item.icon) user.icon = "";
             if (item.effect === "title" && user.title === item.title) user.title = "";
-            
             inv.splice(idx, 1);
         });
 
@@ -3626,6 +3607,7 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             earnedTickets++;
         }
 
+        // [복구] 상세 결과 메시지 로직
         var resultMsg = "아이템 " + targetIndices.length + "개를 분해했습니다.\n\n" +
                         "[분해 목록]\n" + disassembledNames.join(", ") + "\n\n" +
                         "🧩 획득 조각: +" + earnedFragments + " 개\n" +

@@ -70,7 +70,7 @@ var feverData = { active: false, endTime: 0, scheduled: [] }; // 피버타임 �
 /* 관리자 UID 기반 인증 */ 
 var adminUIDs = ["fixed-uuid-관리자1", "fixed-uuid-관리자2"]; // 고유 ID를 통한 관리자 권한 목록
 
-/* 관리자 명령어 목록 (수정됨: 37번 재원충전 추가) */ 
+/* 관리자 명령어 목록 (수정됨: 38번 신용조정 추가) */ 
 var ADMIN_CMD_LIST = [ 
     "1. /봇구동 [온|오프]", "2. /유저데이터 [닉네임]", "3. /데이터교정 (로직동기화)", 
     "4. /데이터이전 [구닉 > 신닉]", "5. /닉네임기록 [닉네임]", "6. /출석초기화 [닉네임]", 
@@ -84,7 +84,7 @@ var ADMIN_CMD_LIST = [
     "28. /물가조정 [기준값|초기화]", "29. /관리자해제 [닉네임]", "30. /관리자목록", 
     "31. /물가완충 [0.0~1.0]", "32. /재원수정 [금액] (은행금고수정)", "33. /경제정보(통합지표확인)",
     "34. /시장자산복구 (주가복구)", "35. /종목추가 [이름] [가격]", "36. /종목수정 [기존] [신규] [가격]",
-    "37. /재원충전 [금액]"
+    "37. /재원충전 [금액]", "38. /신용조정 [닉네임] [점수]"
 ];
 
 /* 시스템 핵심 상수 설정 */
@@ -446,12 +446,12 @@ function generateAdminHelp() {
     return "⚙️ [관리자 전용 명령어]\n" + list.join("\n");
 }
 
-/* [2] 명령어 리스트 데이터 (수정됨: /유물도감 및 /재원충전 추가) */
+/* [2] 명령어 리스트 데이터 (수정됨: /신용조정 추가) */
 var CMD_LIST = {
     user: [
         { cmd: "/출석", desc: "매일 포인트 획득", cat: "조회", func: "_gameShopLogic" },
         { cmd: "/내정보", desc: "내 스탯 확인", cat: "조회", func: "_gameInfoLogic" },
-        { cmd: "/유물도감", desc: "유물 조각 수집 현황 확인", cat: "조회", func: "_gameInfoLogic" }, // [신규] 유물 시스템 명령어
+        { cmd: "/유물도감", desc: "유물 조각 수집 현황 확인", cat: "조회", func: "_gameInfoLogic" }, 
         { cmd: "/신용등급", desc: "신용 점수와 등급 확인", cat: "조회", func: "_gameInfoLogic" },
         { cmd: "/출석순위", desc: "포인트 랭킹 확인", cat: "조회", func: "_gameInfoLogic" },
         { cmd: "/유저정보", desc: "[닉네임] 상세정보 보기", cat: "조회", func: "_gameInfoLogic" },
@@ -518,7 +518,8 @@ var CMD_LIST = {
         { cmd: "/전체복원", desc: "데이터 롤백 (안전 지점)", func: "_adminEconomyLogic" },
         { cmd: "/유저복원", desc: "[닉네임] 부분 복구", func: "_adminUserManageLogic" },
         { cmd: "/시스템자가복원", desc: "메모리 최적화 및 변수 초기화", func: "_adminEconomyLogic" },
-        { cmd: "/재원충전", desc: "[금액] 은행 금고 자본 긴급 수혈", func: "_adminEconomyLogic" } // [신규] 은행 재원 충전 명령어
+        { cmd: "/재원충전", desc: "[금액] 은행 금고 자본 긴급 수혈", func: "_adminEconomyLogic" },
+        { cmd: "/신용조정", desc: "[닉네임] [점수] 신용점수 직접 가감", func: "_adminUserManageLogic" } // [신규] 신용 점수 조정 명령어
     ]
 };
 
@@ -546,12 +547,11 @@ var bankProcessState = {};
 // var menuWaitState = {};
 
 /**
- * [핵심] 지능형 포인트 통합 처리 및 은행 재원 연동 함수 (v5.1 폐쇄형 순환 경제 적용)
- * 설명: 출석, 매도, 채굴 등 보상은 은행 금고에서 지출하고, 매수, 도박 패배 등은 금고로 환수합니다.
+ * [핵심] 지능형 포인트 통합 처리 및 은행 재원 연동 함수 (v5.2 기부 시스템 추가)
  * @param {Object} user - 유저 객체
- * @param {Object} roomData - 해당 방 데이터 객체 (재원 적립/차감용)
- * @param {Number} delta - 변동할 포인트 (양수면 지급, 음수면 차감/소멸)
- * @param {String} reason - 포인트 변동 사유 (로그용 및 판별용)
+ * @param {Object} roomData - 해당 방 데이터 객체
+ * @param {Number} delta - 변동할 포인트
+ * @param {String} reason - 포인트 변동 사유
  */
 function util_updatePoint(user, roomData, delta, reason) {
     if (!user || isNaN(delta) || delta === 0) return;
@@ -559,18 +559,15 @@ function util_updatePoint(user, roomData, delta, reason) {
     var prePoint = Number(user.point || 0);
     
     // [중앙은행 순환 경제 필터링 설정]
-    // 1. 은행 금고에서 지출되는 사유 (유저가 벌 때)
     var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급"];
-    // 2. 은행 금고로 입금되는 사유 (유저가 쓸 때)
-    var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매: ", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공"];
+    // [수정] "은행 기부" 사유를 입고 리스트에 추가
+    var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매: ", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부"];
 
     if (roomData) {
-        // 재원 데이터가 없는 경우 초기화
         if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
             roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
         }
 
-        // [폐쇄형 로직 A] 유저가 이득을 볼 때 -> 은행 재고 차감
         if (delta > 0) {
             var isOutput = false;
             for (var i = 0; i < bankOutputReasons.length; i++) {
@@ -578,23 +575,19 @@ function util_updatePoint(user, roomData, delta, reason) {
             }
             if (isOutput) roomData.bankReserve -= delta;
         } 
-        // [폐쇄형 로직 B] 유저가 손실을 볼 때 -> 은행 재고 가산
         else {
             var isInput = false;
             for (var j = 0; j < bankInputReasons.length; j++) {
                 if (reason.indexOf(bankInputReasons[j]) !== -1) { isInput = true; break; }
             }
-            // 벌금, 압류 등 특수 사유 포함
             if (isInput || reason.indexOf("벌금") !== -1 || reason.indexOf("상환") !== -1) {
                 roomData.bankReserve += Math.abs(delta);
             }
         }
     }
 
-    // 유저 지갑에 변동 내역 적용
     user.point = prePoint + delta;
     
-    // 포인트 변동 검증 및 보안 엔진 호출
     if (typeof verifyPointTransaction === 'function') {
         verifyPointTransaction(user, prePoint, delta, reason);
     }
@@ -650,54 +643,35 @@ function formatError(user, content, nextStep) {
 }
 
 /**
- * [신규] 주식 가격 변동 엔진 (동적 저항 및 종가 제한 적용)
- * @param {Number} currentPrice - 현재 주식 가격
- * @returns {Number} 계산된 신규 가격
+ * [신규] 주식 가격 변동 엔진
  */
 function stock_calculateNextPrice(currentPrice) {
-    // [방어] 시가 데이터 부재 시 변동 없이 현재가 반환 (폭락 방지)
     if (!marketOpenPrice || marketOpenPrice <= 0) return currentPrice;
-
     var cfg = SYSTEM_CONFIG.ECO.STOCK.SETTINGS;
     var growthRate = (currentPrice - marketOpenPrice) / marketOpenPrice;
-    
-    // 1. 기본 랜덤 변동치 (-1.2% ~ +1.2%)
     var change = (Math.random() * 2.4 - 1.2) / 100;
-
-    // 2. 동적 저항 시스템 (Invisible Resistance)
     if (growthRate > cfg.RESISTANCE_START) {
         var now = new Date();
         var elapsed = (now.getHours() - cfg.OPEN_HOUR) * 60 + now.getMinutes();
         var total = (cfg.CLOSE_HOUR - cfg.OPEN_HOUR) * 60;
         var timeWeight = Math.min(Math.max(elapsed / total, 0), 1.0); 
-
-        // 15% 초과 시 중력(Gravity) 발생: 시간에 비례하여 강해짐
         var resistance = (growthRate - cfg.RESISTANCE_START) * cfg.GRAVITY * (1 + timeWeight);
         change -= resistance;
-
-        // 20% 근접 시 상승 시도 80% 확률로 억제
         if (growthRate >= (cfg.CLOSING_LIMIT - 0.01) && change > 0) {
             if (Math.random() < 0.8) change = -Math.abs(change) * 0.5;
         }
     }
-
     return Math.max(10, currentPrice + (currentPrice * change));
 }
 
 /**
  * [신규] 장 마감 보정 로직
- * @param {Number} currentPrice - 현재가
- * @returns {Number} 보정된 종가
  */
 function stock_applyClosingCorrection(currentPrice) {
-    // [방어] 시가 데이터 부재 시 보정 없이 현재가 반환 (나누기 0 오류 및 10원 폭락 방지)
     if (!marketOpenPrice || marketOpenPrice <= 0) return currentPrice;
-
     var cfg = SYSTEM_CONFIG.ECO.STOCK.SETTINGS;
     var growthRate = (currentPrice - marketOpenPrice) / marketOpenPrice;
-    
     if (growthRate >= cfg.CLOSING_LIMIT) {
-        // 20%를 넘겼을 경우 19.1~19.8% 사이로 자연스럽게 미세 조정
         var safeRate = (cfg.CLOSING_LIMIT - 0.01) + (Math.random() * 0.008);
         var correctedPrice = marketOpenPrice * safeRate;
         return Math.max(10, Math.round(correctedPrice));
@@ -1605,14 +1579,13 @@ function _runSector16Logic(data, ctx) {
         ctx.isForceBackup = true; 
     }
 
-    /* [수정] 주식 장 오픈 시가 기록 (오전 7시 0분) 및 DB 저장 */
+    /* [수정] 주식 장 오픈 시가 기록 및 DB 저장 */
     if (currentHour === conf.SETTINGS.OPEN_HOUR && currentMin === 0 && data.lastMarketOpenMin !== currentMin) {
         data.lastMarketOpenMin = currentMin;
         if (data.stockMarket) {
             var stocks = Object.keys(data.stockMarket);
             if (stocks.length > 0) {
                 marketOpenPrice = data.stockMarket[stocks[0]].price; 
-                /* [핵심] 봇 재시작 대비 DB에 시가 기록 */
                 data.marketOpenPrice = marketOpenPrice;
                 ctx.isUpdated = true;
             }
@@ -1624,27 +1597,30 @@ function _runSector16Logic(data, ctx) {
         var roomData = data.rooms[rName];
         if (!roomData.loanContracts) roomData.loanContracts = {};
 
-        // [최적화] 중앙은행 잔고 모니터링 (히스테리시스 적용 버전)
+        // [최적화] 중앙은행 잔고 모니터링 (히스테리시스 적용)
         if (roomData.bankReserve !== undefined) {
             var reserve = roomData.bankReserve;
             if (!roomData.lastBankAlert) roomData.lastBankAlert = "normal";
 
-            // A. 국가 재난 단계 (1만P 미만 발령 / 1.5만P 초과 시 해제 준비)
+            // A. 국가 재난 단계 (1만P 미만)
             if (reserve < 10000 && roomData.lastBankAlert !== "disaster") {
                 roomData.lastBankAlert = "disaster";
-                Api.replyRoom(rName, "🚨 [국가 경제 재난 선포]\n━━━━━━━━━━━━━━━\n중앙은행 금고 자산이 1만P 아래로 추락했습니다.\n보상 지급 불능 상태입니다. 긴급 수혈이 필요합니다.\n\n🏦 현재 금고: " + fp(reserve) + "P");
+                var disasterMsg = "🚨 [국가 경제 재난 선포] 🚨\n━━━━━━━━━━━━━━━\n현 시각부로 국가 경제 재난 상태를 선포합니다.\n중앙은행 금고 자산이 임계치(1만P) 아래로 급락하여 모든 보상 및 출금이 정지될 위험이 큽니다.\n\n🏦 현재 금고: " + fp(reserve) + "P\n⚠️ 조치: 관리자의 즉각적인 재원 수혈이 필요합니다.";
+                Api.replyRoom(rName, disasterMsg);
                 ctx.isUpdated = true;
             }
-            // B. 국가 마비 경보 단계 (10만P 미만 발령 / 11만P 초과 시 해제)
+            // B. 국가 마비 경보 단계 (10만P 미만)
             else if (reserve < 100000 && reserve >= 10000 && roomData.lastBankAlert === "normal") {
                 roomData.lastBankAlert = "warning";
-                Api.replyRoom(rName, "⚠️ [국가 경제 마비 예비 경보]\n━━━━━━━━━━━━━━━\n금고 잔액이 10만P 미만입니다.\n유동성 확보를 위해 경제 활동 참여를 권고합니다.\n\n🏦 현재 금고: " + fp(reserve) + "P");
+                var warningMsg = "⚠️ [국가 경제 마비 예비 경보]\n━━━━━━━━━━━━━━━\n중앙은행 금고 잔액이 10만P 미만으로 하락했습니다.\n지속적인 보상 유지를 위해 경제 활동 활성화 또는 재원 보충이 권고됩니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
+                Api.replyRoom(rName, warningMsg);
                 ctx.isUpdated = true;
             }
-            // C. 경제 정상화 (11만P 이상 확실히 복구 시 해제 - 도배 방지 핵심)
+            // C. 경제 정상화 (완충 구간 11만P 적용으로 도배 방지)
             else if (reserve >= 110000 && (roomData.lastBankAlert === "warning" || roomData.lastBankAlert === "disaster")) {
                 roomData.lastBankAlert = "normal";
-                Api.replyRoom(rName, "✅ [국가 경제 정상화 알림]\n━━━━━━━━━━━━━━━\n금고가 다시 안정권(11만P 이상)에 진입했습니다.\n모든 경제 로직이 정상화되었습니다.\n\n🏦 현재 금고: " + fp(reserve) + "P");
+                var normalMsg = "✅ [국가 경제 정상화 알림]\n━━━━━━━━━━━━━━━\n재원 수혈 및 유동성 확보를 통해 금고가 다시 안정권(11만P 이상)에 진입했습니다.\n중단되었던 각종 경제 로직이 정상화되었습니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
+                Api.replyRoom(rName, normalMsg);
                 ctx.isUpdated = true;
             }
         }
@@ -1691,7 +1667,7 @@ function _runSector16Logic(data, ctx) {
                 } catch(e) {}
             }
 
-            // B. 은행 대환 전환 단계 (수정: 36시간 경과 시)
+            // B. 은행 대환 전환 단계 (수정: 36시간 경과 시 및 신용점수 -50점)
             else if (duration > bankTakeoverLimit) {
                 var amountToPay = Number(c.currentDebt);
                 var lender = roomData.users[c.lenderUid];
@@ -1710,14 +1686,14 @@ function _runSector16Logic(data, ctx) {
                     borrower.loan.items.push(amountToPay);
                     borrower.isTransferred = true; 
 
-                    borrower.creditScore = Math.max(0, (borrower.creditScore || 600) - 200);
+                    // [수정] 신용점수 하락폭 -50점으로 조정
+                    borrower.creditScore = Math.max(0, (borrower.creditScore || 600) - 50);
                     checkAndHandleDefaulter(borrower, rName);
 
                     var takeoverMsg = "🏛️ [중앙은행 대환 집행]\n━━━━━━━━━━━━━━━\n" +
-                                      "👤 채무자: " + c.borrowerName + "님\n" +
-                                      "🤝 채권자: " + c.lenderName + "님\n\n" +
+                                      "👤 대상: " + c.borrowerName + "님\n\n" +
                                       "내용: 사채 연체 36시간 경과로 인해 은행이 " + fp(amountToPay) + "P를 대납 처리하였습니다.\n\n" +
-                                      "⚠️ [페널티]: 신용점수 -200점 강등\n" +
+                                      "⚠️ [페널티]: 신용점수 -50점 강등\n" +
                                       "⚠️ 해당 채무는 [은행 대환 대출]로 전환되었으며, 완납 시까지 모든 수익의 70%가 강제 상환됩니다.\n" +
                                       "━━━━━━━━━━━━━━━";
                     Api.replyRoom(rName, takeoverMsg);
@@ -2493,7 +2469,7 @@ if (selectWaitState[targetUid]) {
         
 //==========섹터22-1==========
 
-/* [수정] 통합 업무 처리 핸들러 (1단계: 송금 및 예금) */
+/* [수정] 통합 업무 처리 핸들러 (1단계: 송금, 예금 및 기부) */
 if (bankProcessState && bankProcessState[targetUid]) {
     var state = bankProcessState[targetUid];
 
@@ -2505,13 +2481,13 @@ if (bankProcessState && bankProcessState[targetUid]) {
         replier.reply(formatCommand("🚫 업무 취소", user, "요청하신 업무가 취소되었습니다."));
     } 
     else {
-        /* [기능 1] 송금 처리 (수정: 중복 상환 버그 해결) */
+        /* [기능 1] 송금 처리 */
         if (state.type === 'transfer') {
             var ps = msg.split(" ");
             if (ps.length < 2) {
                 replier.reply(formatError(user, "입력 오류", "형식: [닉네임] [금액]"));
             } else {
-                var am = parseInt(ps.pop()); 
+                var am = parseInt(ps.pop().replace(/,/g, "")); 
                 var tn = ps.join(" ").trim(); 
                 var found = findUserByName(roomData, tn);
 
@@ -2531,9 +2507,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                     user.point -= am;
                     verifyPointTransaction(user, preSender, -am, "송금 보냄");
 
-                    /* [버그 수정] 중복 호출 제거 및 단일 상환 로직 적용 */
                     var res = processRepayment(rc, am, found[0].id, roomName);
-                    
                     var preRc = Number(rc.point);
                     rc.point = Number(rc.point) + Number(res.actualGain);
                     verifyPointTransaction(rc, preRc, Number(res.actualGain), "송금 받음");
@@ -2545,9 +2519,9 @@ if (bankProcessState && bankProcessState[targetUid]) {
             }
         }
 
-        /* [기능 2] 예금 처리 (지급준비제도 반영: 예금액 재원 편입) */
-        if (state.type === 'deposit') {
-            var amt = parseInt(msg);
+        /* [기능 2] 예금 처리 */
+        else if (state.type === 'deposit') {
+            var amt = parseInt(msg.replace(/,/g, ""));
             if (isNaN(amt) || amt <= 0) {
                 replier.reply(formatError(user, "금액 오류", "예금할 숫자를 입력하세요."));
             } else if (user.point < amt) {
@@ -2557,7 +2531,6 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 user.point -= amt;
                 user.bank = (user.bank || 0) + amt;
 
-                /* [핵심] 유저가 예금한 금액을 중앙은행 가용 재원(bankReserve)에 즉시 합산 */
                 if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
                     roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
                 }
@@ -2566,6 +2539,30 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 verifyPointTransaction(user, preP, -amt, "은행 예금");
 
                 replier.reply(formatCommand("💰 예금 완료", user, fp(amt) + "P를 통장에 입금했습니다.\n(중앙은행 가용 재원으로 편입됨)", "내 잔액: " + fp(user.point) + "P"));
+                delete bankProcessState[targetUid];
+                safeSaveData(data);
+            }
+        }
+
+        /* [신규 기능] 기부 처리 (v5.2) */
+        else if (state.type === 'donate') {
+            var amt = parseInt(msg.replace(/,/g, ""));
+            if (isNaN(amt) || amt <= 0) {
+                replier.reply(formatError(user, "금액 오류", "기부할 금액을 숫자로 정확히 입력하세요."));
+            } else if (user.point < amt) {
+                replier.reply(formatError(user, "잔액 부족", "보유하신 포인트보다 많은 금액은 기부할 수 없습니다."));
+            } else {
+                /* [중앙은행 연동] 기부금 입고 */
+                // util_updatePoint에 "은행 기부" 사유를 전달하여 금고(bankReserve)가 늘어나게 함
+                util_updatePoint(user, roomData, -amt, "은행 기부");
+
+                var thanksMsg = "중앙은행에 " + fp(amt) + "P를 기부하셨습니다.\n" +
+                                "보내주신 소중한 자산은 국가 경제 위기 극복과 \n" +
+                                "전체 유저 복지 향상을 위해 귀하게 사용됩니다.\n" +
+                                "따뜻한 마음에 진심으로 감사드립니다!\n\n" +
+                                "🏦 [국고 입고]: 기부금이 중앙은행 재원으로 귀속됨";
+
+                replier.reply(formatCommand("🎁 기부 완료", user, thanksMsg, "(현재 잔액: " + fp(user.point) + "P)"));
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
@@ -3023,7 +3020,7 @@ if (menuWaitState && menuWaitState[targetUid]) {
     else {
         var choice = msg.trim();
         
-        /* [1단계] 은행 메인 메뉴 선택 처리 */
+        /* [1단계] 은행 메인 메뉴 선택 처리 (v5.2 기부 선택 추가) */
         if (state.type === 'bank_menu') {
              if (choice === "1") { 
                 bankProcessState[targetUid] = { type: 'deposit', time: Date.now() };
@@ -3045,7 +3042,6 @@ if (menuWaitState && menuWaitState[targetUid]) {
                 }
                 else {
                     bankProcessState[targetUid] = { type: 'loan', time: Date.now() };
-                    /* [수정] 대출 진행창에 중앙은행 가용 재원 표시 추가 */
                     var loanMsg = "희망 대출금을 입력해주세요.\n" +
                                   "내 한도: " + fp(cr.limit) + "P (이율: " + ((cr.rate-1)*100).toFixed(0) + "%)\n" +
                                   "🏦 은행 가용 재원: " + fp(roomData.bankReserve) + "P";
@@ -3072,7 +3068,13 @@ if (menuWaitState && menuWaitState[targetUid]) {
                               "5. 👥 내 채무자 현황 (직접 수거 가능)";
                 replier.reply(formatCommand("🚬 사채 시장 업무 선택", user, p2pMenu, "원하시는 번호를 입력하세요."));
                 return;  
-           }
+             }
+             /* [신규] 7번 기부 메뉴 처리 */
+             else if (choice === "7") {
+                bankProcessState[targetUid] = { type: 'donate', time: Date.now() };
+                replier.reply(formatCommand("🎁 기부 진행", user, "기부할 금액을 입력해주세요.\n(보유: " + fP(user.point) + "P)", "취소: [취소]"));
+                delete menuWaitState[targetUid];
+             }
         }
     }
 }
@@ -4000,7 +4002,7 @@ function _adminLogLogic(msg, user, data, replier) {
 
 /**
  * [관리자 하위 모듈 3] 유저 데이터 관리
- * 기능: 유저 조회, 수정, 삭제, 복원, 데이터 이전, 닉네임 기록
+ * 기능: 유저 조회, 수정, 삭제, 복원, 데이터 이전, 닉네임 기록, 신용 조정
  */
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
@@ -4028,6 +4030,45 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         var logMsg = [];
         for(var i=0; i<history.length; i++) logMsg.push((i+1) + ". " + history[i].old + " (" + history[i].date + ")");
         replier.reply(formatAdmin("📋 닉네임 변경 이력", "현재: " + found[0].data.name + "\n\n[과거 기록]\n" + logMsg.join("\n")));
+        return true;
+    }
+
+    /* [신규] 신용 점수 직접 조정 (v5.2) */
+    if (msg.indexOf("/신용조정 ") === 0) {
+        var ps = msg.split(" ");
+        if (ps.length < 3) {
+            replier.reply(formatAdmin("오류", "형식: /신용조정 [닉네임] [점수]\n예) /신용조정 홍길동 -50"));
+            return true;
+        }
+        var scoreChange = parseInt(ps.pop());
+        var targetName = ps.slice(1).join(" ").trim();
+        var roomData = data.rooms[roomName];
+        var found = findUserByName(roomData, targetName);
+
+        if (isNaN(scoreChange)) { replier.reply(formatAdmin("오류", "조정할 점수를 숫자로 입력하세요.")); return true; }
+        if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
+        if (found.length > 1) { 
+            handleUserSelection(replier, targetUid, found, "admin_credit_edit", { score: scoreChange }, user); 
+            return true; 
+        }
+
+        var targetUser = found[0].data;
+        var oldScore = Number(targetUser.creditScore || 600);
+        // 점수 제한: 0 ~ 1000점
+        targetUser.creditScore = Math.min(1000, Math.max(0, oldScore + scoreChange));
+        
+        // 신용 등급 변화에 따른 상태 제어 (신불자 등)
+        if (typeof checkAndHandleDefaulter === 'function') {
+            checkAndHandleDefaulter(targetUser, roomName);
+        }
+
+        safeSaveData(data);
+        var crInfo = getCreditInfo(targetUser.creditScore);
+        var resText = "대상: " + getDisplayName(targetUser) + "님\n" +
+                      "변동: " + (scoreChange > 0 ? "+" : "") + scoreChange + "점\n" +
+                      "현재: " + targetUser.creditScore + "점 (" + crInfo.label + ")";
+        
+        replier.reply(formatAdmin("⚙️ 신용 점수 조정 완료", resText));
         return true;
     }
 
@@ -4179,7 +4220,7 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         }
         
         if(restored) { safeSaveData(data); replier.reply(formatAdmin("완료", "특정 유저 데이터 복구 완료")); }
-        else replier.reply(formatAdmin("실패", "백업본에 해당 유저가 없습니다."));
+        else replier.reply(formatAdmin("실패", "백업 본에 해당 유저가 없습니다."));
         return true;
     }
 
@@ -4654,13 +4695,13 @@ function _handleGameLogic(msg, user, data, replier, roomName, targetUid, sender)
 /**
  * [게임 하위 모듈 1] 은행 및 사채 관리
  * 기능: 은행 메뉴 호출, 대출금 직접 상환
- * 설명: util_updatePoint를 적용하여 상환된 금액이 즉시 은행 재고로 환수되도록 연동했습니다.
+ * 설명: 메뉴 UI에 기부 항목을 추가하고, 상환 시 중앙은행 재고로 환수되도록 연동함.
  */
 function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
     if (!roomData) return false;
 
-    /* [기능 1] 은행 시스템 진입 */
+    /* [기능 1] 은행 시스템 진입 (v5.2 기부 메뉴 추가) */
     if (msg === "/은행") {
         menuWaitState[targetUid] = { type: 'bank_menu', time: Date.now() };
         var bankMenu = "1. 💰 예금 (포인트 ➔ 은행)\n" +
@@ -4668,20 +4709,20 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
                        "3. 💸 송금 (타인에게 이체)\n" +
                        "4. 🏦 대출 (신용등급별)\n" +
                        "5. 📉 상환 (대출금 갚기)\n" +
-                       "6. " + (SYSTEM_CONFIG.MSG.PREFIX.LOAN || "🚬") + " 사채 시장 (P2P 대출)";
+                       "6. " + (SYSTEM_CONFIG.MSG.PREFIX.LOAN || "🚬") + " 사채 시장 (P2P 대출)\n" +
+                       "7. 🎁 기부 (국고 후원)"; // [신규] 기부 항목 추가
         
         var myPoint = Number(user.point || 0);
         var myBank = Number(user.bank || 0);
-        var myDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
         
         var content = bankMenu + "\n\n" +
                "🏦 은행 잔고 : " + fp(roomData.bankReserve) + "P\n\n" +
                "보유: " + fp(myPoint) + "P / 예금: " + fp(myBank) + "P\n" +
                "(번호를 선택해주세요)";
 
- // formatCommand를 호출하여 최종 메시지 조립
- replier.reply(formatCommand("🏦 은행 업무 선택", user, content, "입력 대기: 30초"));
- return true;
+        // formatCommand를 호출하여 최종 메시지 조립
+        replier.reply(formatCommand("🏦 은행 업무 선택", user, content, "입력 대기: 30초"));
+        return true;
     }
 
     /* [기능 2] 대출금 상환 (직접 명령어) */
@@ -4708,11 +4749,10 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
         }
         
         // 분산 상환 로직 호출 (섹터 13 정의)
-        // 상환 시 원금 상환액과 신용도 상승치 등을 계산해옵니다.
         var res = distributeRepayment(user, amt);
         
         /* [중앙은행 연동] 통합 포인트 함수 사용 */
-        // 유저 포인트 차감과 동시에 차감된 금액(res.actualRepay)이 bankReserve에 자동 입금됩니다.
+        // 유저 포인트 차감과 동시에 차감된 금액(res.actualRepay)이 bankReserve에 자동 입금됨.
         util_updatePoint(user, roomData, -Number(res.actualRepay), "대출 상환");
         
         var remainingDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;

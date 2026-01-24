@@ -921,8 +921,8 @@ function getItemPrice(item, user, roomName) {
 
     var basePrice = Math.floor(Number(item.price) * multiplier);
 
-    // 승급권(id:6)은 구매 횟수에 따른 할증 로직 유지
-    if (item.id === 6) { 
+    // 승급권(id:8)은 구매 횟수에 따른 할증 로직 유지
+    if (item.id === 8) { 
         var boughtCount = Number(user.purchasedPromotionAttempts || 0);
         return basePrice + (boughtCount * 50);
     }
@@ -3236,7 +3236,7 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
         replier.reply(formatCommand("🚫 상점 구매 취소", user, "아이템 구매를 취소했습니다."));
     }
     else {
-        /* [기능 11] 상점 아이템 구매 처리 핸들러 (하이재킹 방지) */
+        /* [기능 11] 상점 아이템 구매 처리 핸들러 */
         var idx = parseInt(msg) - 1;
         var filteredItems = (state.extra && state.extra.items) ? state.extra.items : [];
 
@@ -3245,59 +3245,103 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
             replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 입력해주세요."));
         } else {
             var item = filteredItems[idx];
-            var finalPrice = getItemPrice(item, user, roomName);
+            
+            /* [수정] 복수 구매 가능 여부 판별 (소모성 아이템 추출) */
+            // 가방(인벤토리)에서 수량으로 누적되는 소모품 효과들
+            var stackableEffects = ["promotion", "tierGuard", "credit"];
+            var isStackable = stackableEffects.indexOf(item.effect) !== -1;
 
-            /* [Gemini 요청 사항] 랜덤박스 이용권 우선 차감 판별 */
-            var isUsingTicket = (item.effect === "randomBox" && (user.boxTickets || 0) > 0);
-
-            // 2. 자산 보유 확인 (이용권이 없을 때만 포인트 체크)
-            if (!isUsingTicket && Number(user.point) < finalPrice) {
-                delete bankProcessState[targetUid];
-                replier.reply(formatError(user, "포인트 부족", fp(finalPrice) + "P가 필요합니다."));
+            if (isStackable) {
+                // 수량 입력 상태(shop_quantity)로 전환
+                bankProcessState[targetUid] = {
+                    type: 'shop_quantity',
+                    time: Date.now(),
+                    extra: { item: item }
+                };
+                replier.reply(formatCommand("🔢 수량 입력", user, "구매하실 [" + item.name + "]의 수량을 숫자로 입력해주세요.", "취소: [취소]"));
             } else {
-                // 3. 아이콘/칭호 중복 소유 체크 (가방 확인)
-                var hasItem = false;
-                if (item.effect === "icon" || item.effect === "title") {
-                    var inv = user.inventory || [];
-                    for (var i = 0; i < inv.length; i++) {
-                        if (inv[i].id === item.id) {
-                            hasItem = true;
-                            break;
+                // 단권 구매 로직 (아이콘, 랜덤박스, 로또 등)
+                var finalPrice = getItemPrice(item, user, roomName);
+                var isUsingTicket = (item.effect === "randomBox" && (user.boxTickets || 0) > 0);
+
+                // 2. 자산 보유 확인
+                if (!isUsingTicket && Number(user.point) < finalPrice) {
+                    delete bankProcessState[targetUid];
+                    replier.reply(formatError(user, "포인트 부족", fp(finalPrice) + "P가 필요합니다."));
+                } else {
+                    // 3. 중복 소유 체크 (아이콘/칭호 전용)
+                    var hasItem = false;
+                    if (item.effect === "icon" || item.effect === "title") {
+                        var inv = user.inventory || [];
+                        for (var i = 0; i < inv.length; i++) {
+                            if (inv[i].id === item.id) { hasItem = true; break; }
                         }
                     }
-                }
 
-                if (hasItem) {
-                    delete bankProcessState[targetUid];
-                    replier.reply(formatError(user, "중복 소유", "이미 보유 중인 아이템입니다."));
-                } else {
-                    /* [수정] 게임 인증권 구매 한도 검증 (2회 제한 반영) */
-                    if (item.effect === "gameAuth" && (user.purchasedAuthCount || 0) >= 2) {
+                    if (hasItem) {
                         delete bankProcessState[targetUid];
-                        return replier.reply(formatError(user, "구매 한도 초과", "인증권은 시즌당 최대 2회까지만 구매 가능합니다."));
-                    }
-
-                    // 4. 포인트 차감 및 실시간 검증 (이용권 사용 시 포인트 차감 건너뜀)
-                    if (!isUsingTicket) {
-                        var preP = Number(user.point);
-                        user.point -= finalPrice;
-                        verifyPointTransaction(user, preP, -finalPrice, "상점 구매: " + item.name, roomName, isUsingTicket ? 0 : finalPrice);
-                    }
-
-                    // 5. 상태 초기화 후 아이템 효과 실행
-                    delete bankProcessState[targetUid];
-
-                    if (typeof _handleShopEffect === 'function') {
-                        // [수정] 이용권 사용 여부(isUsingTicket)를 인자로 추가 전달하여 처리 엔진에 알림
-                        _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket);
+                        replier.reply(formatError(user, "중복 소유", "이미 보유 중인 아이템입니다."));
                     } else {
-                        replier.reply(formatError(user, "시스템 오류", "아이템 처리 엔진이 로드되지 않았습니다."));
-                        Log.error("_handleShopEffect 함수를 찾을 수 없습니다.");
-                    }
+                        // [수정] 게임 인증권 시즌 한도 체크
+                        if (item.effect === "gameAuth" && (user.purchasedAuthCount || 0) >= 2) {
+                            delete bankProcessState[targetUid];
+                            return replier.reply(formatError(user, "구매 한도 초과", "인증권은 시즌당 최대 2회까지만 구매 가능합니다."));
+                        }
 
-                    // 모든 업무 처리 후 데이터 저장
-                    safeSaveData(data);
+                        // 4. 포인트 차감 및 실시간 검증
+                        if (!isUsingTicket) {
+                            var preP = Number(user.point);
+                            user.point -= finalPrice;
+                            verifyPointTransaction(user, preP, -finalPrice, "상점 구매: " + item.name, roomName, finalPrice);
+                        }
+
+                        // 5. 상태 초기화 후 단권(qty:1) 효과 실행
+                        delete bankProcessState[targetUid];
+                        if (typeof _handleShopEffect === 'function') {
+                            _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket, 1);
+                        }
+                        safeSaveData(data);
+                    }
                 }
+            }
+        }
+    }
+}
+
+/* [신규 추가] 복수 수량 입력 처리 핸들러 */
+else if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUid].type === 'shop_quantity') {
+    var state = bankProcessState[targetUid];
+    var item = state.extra.item;
+
+    if (Date.now() - state.time > 30000) {
+        delete bankProcessState[targetUid];
+    } else if (msg === "취소") {
+        delete bankProcessState[targetUid];
+        replier.reply(formatCommand("🚫 구매 취소", user, "아이템 구매를 취소했습니다."));
+    } else {
+        // 숫자만 추출
+        var qty = parseInt(msg.replace(/[^0-9]/g, ""));
+        if (isNaN(qty) || qty <= 0) {
+            replier.reply(formatError(user, "입력 오류", "구매할 수량을 숫자로 정확히 입력해주세요."));
+        } else {
+            // 단가 계산 및 총액 산출
+            var unitPrice = getItemPrice(item, user, roomName);
+            var totalPrice = unitPrice * qty;
+
+            if (Number(user.point) < totalPrice) {
+                replier.reply(formatError(user, "포인트 부족", "총 " + fp(totalPrice) + "P가 필요합니다. (보유: " + fp(user.point) + "P)"));
+            } else {
+                // 포인트 차감 및 검증
+                var preP = Number(user.point);
+                user.point -= totalPrice;
+                verifyPointTransaction(user, preP, -totalPrice, "상점 구매: " + item.name + " x" + qty, roomName, totalPrice);
+                
+                // 효과 엔진 호출 (수량 인자 전달)
+                delete bankProcessState[targetUid];
+                if (typeof _handleShopEffect === 'function') {
+                    _handleShopEffect(item, user, roomName, replier, data, targetUid, totalPrice, false, qty);
+                }
+                safeSaveData(data);
             }
         }
     }
@@ -4068,33 +4112,34 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
     }
 }
 
-//==========섹터30==========
-
 /**
  * [전역 독립 함수] 상점 아이템 효과 처리 엔진
  * 기능: 구매한 아이템의 효과 발동 및 중앙은행 재원 정산
- * 수정: 이용권 선차감, 영구 기록 기반 중복 체크, 분해 조각 보상 시스템 적용
+ * 수정: 복수 구매 수량(quantity) 파라미터 추가 및 소모품 합산 로직 반영
  */
-function _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket) {
+function _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket, quantity) {
     var roomData = data.rooms[roomName];
     if (!roomData) return;
+    
+    // 수량이 전달되지 않은 경우 기본값 1 설정
+    var qty = (quantity !== undefined && quantity !== null) ? quantity : 1;
 
     // 중앙은행 재원 초기화 (기본 10,000P)
     if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
         roomData.bankReserve = 10000;
     }
     
-    /* [1. 자산 정산] 이용권을 사용하지 않은 경우에만 구매 대금을 은행으로 귀속 */
+    /* [1. 자산 정산] 이용권을 사용하지 않은 경우에만 구매 대금(총액)을 은행으로 귀속 */
     if (!isUsingTicket) {
         roomData.bankReserve += finalPrice;
     } else {
-        // 이용권 사용 시 유저 데이터에서 이용권 1매 차감
+        // 이용권 사용 시 유저 데이터에서 이용권 1매 차감 (이용권은 단권 구매만 가능)
         user.boxTickets = Math.max(0, (user.boxTickets || 0) - 1);
     }
 
     /* [핵심] 아이템 효과별 실행 로직 */
     
-    // 1. 랜덤 아이콘 박스 처리 (개편 버전)
+    // 1. 랜덤 아이콘 박스 처리 (개편 버전 - 단권 처리)
     if (item.effect === "randomBox") {
         var rand = Math.random();
         var cumulative = 0;
@@ -4117,7 +4162,6 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         var resGrade = RANDOM_BOX_CONFIG.PROBS[resultIdx];
         var winIcon = resGrade.items[Math.floor(Math.random() * resGrade.items.length)];
         
-        /* [Gemini 요청 사항] 영구 획득 기록(collectedIcons) 기반 중복 체크 */
         if (!user.collectedIcons) user.collectedIcons = [];
         var isDuplicate = (user.collectedIcons.indexOf(winIcon) !== -1);
 
@@ -4126,23 +4170,18 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
                       "결과: [" + winIcon + "]\n\n" + mData.desc;
 
         if (isDuplicate) {
-            /* [2. 중복 보상 개편] 포인트 환급 삭제 -> 분해 조각 1개 지급 */
             user.boxFragments = (user.boxFragments || 0) + 1;
-            
             var ticketConverted = false;
-            // 조각 5개 모일 시 이용권으로 자동 변환
             if (user.boxFragments >= 5) {
                 user.boxFragments -= 5;
                 user.boxTickets = (user.boxTickets || 0) + 1;
                 ticketConverted = true;
             }
-            
             content += "\n\n⚠️ 중복 아이콘 당첨!\n(과거에 획득한 기록이 있습니다)\n\n🧩 보상: 분해 조각 +1개 지급\n📊 현재 조각: " + user.boxFragments + " / 5 개";
             if (ticketConverted) {
                 content += "\n🎫 축하합니다! 조각이 모두 모여 랜덤박스 이용권 1매가 지급되었습니다!";
             }
         } else {
-            // 신규 획득 시 가방 추가 및 영구 기록 저장
             user.inventory.push({ id: 900 + resultIdx, name: resGrade.grade.split(" ")[0] + " 아이콘", icon: winIcon, effect: "icon", title: "" });
             user.collectedIcons.push(winIcon);
         }
@@ -4151,35 +4190,40 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         replier.reply(formatCommand(mData.title, user, content, mData.guide + "\n" + footer));
     } 
     
-    // 2. 게임 판수 인증권 처리
+    // 2. 게임 판수 인증권 처리 (단권 처리)
     else if (item.effect === "gameAuth") {
         user.gameAuthCount = (user.gameAuthCount || 0) + 1;
         user.purchasedAuthCount = (user.purchasedAuthCount || 0) + 1;
         replier.reply(formatCommand("🎫 인증권 사용 완료", user, "게임 판수 인증이 기록되었습니다.\n현재 인증 횟수: " + user.gameAuthCount + "/2", "시즌당 구매: " + user.purchasedAuthCount + "/2"));
     } 
     
-    // 3. 로또 구매 대기 처리
+    // 3. 로또 구매 대기 처리 (단권 처리)
     else if (item.effect === "lotto") {
         lottoPurchaseState[targetUid] = { time: Date.now(), price: finalPrice };
         replier.reply(formatCommand("🎫 로또 번호 입력", user, "1~15 사이의 숫자 3개를 입력해주세요.\n(예: 1 5 10)", "취소: [취소]"));
     } 
     
-    // 4. 승급 기회 / 방어권 / 아이콘 / 신용점수 회복
+    // 4. 소모성 아이템 처리 (수량 qty 반영)
     else if (item.effect === "promotion") {
-        user.purchasedPromotionAttempts = (user.purchasedPromotionAttempts || 0) + 1;
-        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 성공!", "남은 승급 기회: " + (user.dailyPromotionAttempts + user.purchasedPromotionAttempts)));
+        // [수정] 승급 기회 구매 수량 합산
+        user.purchasedPromotionAttempts = (user.purchasedPromotionAttempts || 0) + qty;
+        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " x" + qty + " 구매 성공!", "남은 승급 기회: " + (user.dailyPromotionAttempts + user.purchasedPromotionAttempts)));
     } else if (item.effect === "tierGuard") {
-        user.tierGuard = (user.tierGuard || 0) + 1;
-        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 성공!", "보유 방어권: " + user.tierGuard + "개"));
+        // [수정] 강등 방어권 수량 합산
+        user.tierGuard = (user.tierGuard || 0) + qty;
+        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " x" + qty + " 구매 성공!", "보유 방어권: " + user.tierGuard + "개"));
     } else if (item.effect === "icon" || item.effect === "title") {
+        // 아이콘 및 칭호는 단권 처리
         user.inventory.push({ id: item.id, name: item.name, icon: item.icon, effect: item.effect, title: item.title || "" });
         if (item.effect === "icon") user.icon = item.icon;
         if (item.effect === "title") user.title = item.title;
         replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 및 장착 성공!", "장착 변경: [/가방]"));
     } else if (item.effect === "credit") {
-        user.creditScore = Math.min(1000, (user.creditScore || 600) + (item.value || 50));
+        // [수정] 신용 점수 회복 수량 반영
+        var totalRestore = (item.value || 50) * qty;
+        user.creditScore = Math.min(1000, (user.creditScore || 600) + totalRestore);
         checkAndHandleDefaulter(user, roomName);
-        replier.reply(formatCommand("🛒 구매 완료", user, "신용 점수가 회복되었습니다.", "현재 점수: " + user.creditScore));
+        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " x" + qty + " 사용 성공!", "현재 점수: " + user.creditScore));
     }
 
     safeSaveData(data);

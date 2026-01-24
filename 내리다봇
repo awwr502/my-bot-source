@@ -55,10 +55,28 @@ var loanContractWaitState = {};
 var miningState = {}; 
 var feverData = { active: false, endTime: 0, scheduled: [] };
 
-/* 관리자 UID 기반 인증 */ 
-var adminUIDs = ["fixed-uuid-관리자1", "fixed-uuid-관리자2"]; // 고유 ID를 통한 관리자 권한 목록
+/* [신규] 경마 시스템 전역 상태 데이터 */
+var racingData = {
+    round: 1,           // 현재 진행 회차
+    horses: [           // 출전마 정보 (가중치 기반 승률 계산용)
+        { id: 1, name: "내리다질주", weight: 1.0, icon: "☁️ 보통" },
+        { id: 2, name: "쾌속광어", weight: 1.0, icon: "☁️ 보통" },
+        { id: 3, name: "자산가행진", weight: 1.0, icon: "☁️ 보통" },
+        { id: 4, name: "파산회피", weight: 1.0, icon: "☁️ 보통" },
+        { id: 5, name: "로또직행", weight: 1.0, icon: "☁️ 보통" }
+    ],
+    bets: {},           // 유저별 배팅 데이터 (UID를 키로 사용)
+    totalPool: 0,       // 현재 회차 총 배팅 포인트 합계
+    carryOver: 0,       // 우승자 없을 시 다음 회차로 누적되는 이월금 (Jackpot)
+    isOperating: false,  // 운영 시간(09~24시) 여부 플래그
+    isDeadlineNotified: false, // 49분 59초 마감 공지 발송 여부
+    isResultProcessed: false   // 00분 결과 정산 완료 여부
+};
 
-/* 관리자 명령어 목록 (수정됨: 38번 신용조정 추가) */ 
+/* 관리자 UID 기반 인증 */ 
+var adminUIDs = ["fixed-uuid-관리자1", "fixed-uuid-관리자2"]; 
+
+/* 관리자 명령어 목록 */ 
 var ADMIN_CMD_LIST = [ 
     "1. /봇구동 [온|오프]", "2. /유저데이터 [닉네임]", "3. /데이터교정 (로직동기화)", 
     "4. /데이터이전 [구닉 > 신닉]", "5. /닉네임기록 [닉네임]", "6. /출석초기화 [닉네임]", 
@@ -78,95 +96,106 @@ var ADMIN_CMD_LIST = [
 /* 시스템 핵심 상수 설정 */
 var SYSTEM_CONFIG = {
     ECO: {
-        ATTEND_MIN: 1000, // 출석 체크 시 최소 지급 포인트
-        ATTEND_MAX: 1500, // 출석 체크 시 최대 지급 포인트
-        GAMBLE_MIN: 300,  // 홀짝 도박 최소 베팅금
-        GAMBLE_MAX: 2000, // 홀짝 도박 최대 베팅금
+        /* [기초 경제 설정] */
+        ATTEND_MIN: 1000, // [출석 최소 지급]: 출석 체크 시 무작위로 지급되는 포인트의 하한선
+        ATTEND_MAX: 1500, // [출석 최대 지급]: 출석 체크 시 무작위로 지급되는 포인트의 상한선
+        GAMBLE_MIN: 300,  // [홀짝 최소 베팅]: 홀짝 게임 진행 시 입력 가능한 최소 포인트 단위
+        GAMBLE_MAX: 2000, // [홀짝 최대 베팅]: 홀짝 게임의 1회당 최대 베팅 한도 (사행성 조절)
         
         /* [신규] 중앙은행 지급준비제도 설정 */
         BANK: {
-            RESERVE_RATIO: 0.20, // 지급준비율 (20%). 예금의 20%는 대출 불가(뱅크런 대비)
-            INITIAL_RESERVE: 10000 // 은행 초기 가용 재원 기본값
+            RESERVE_RATIO: 0.20, // [지급준비율]: 은행 총 예금액 중 대출해줄 수 없는 최소 현금 보유 비중 (20%)
+            INITIAL_RESERVE: 10000 // [초기 재원]: 데이터 초기화 시 은행 금고에 기본으로 들어있는 포인트
+        },
+
+        /* [신규] 경마 시스템 비즈니스 상수 */
+        RACING: {
+            MIN_BET: 1000,       // [경마 최소 배팅]: `/배팅` 명령어 사용 시 최소 금액
+            MAX_BET: 30000,      // [경마 최대 배팅]: `/배팅` 명령어 사용 시 1회 최대 한도
+            TAX_RATE: 0.1,       // [국고 수수료]: 당첨금 정산 전 전체 판돈에서 떼어가는 수수료 (10%)
+            CANCEL_FEE: 0.1,     // [취소 위약금]: 배팅 취소 시 원금에서 차감되는 수수료 (10%)
+            WINLESS_BANK_RATE: 0.3, // [당첨자 없을 시 국고행]: 우승자 부재 시 판돈의 30%를 은행 금고로 환수
+            WINLESS_JACKPOT_RATE: 0.7, // [당첨자 없을 시 이월]: 우승자 부재 시 판돈의 70%를 다음 회차로 이월
+            OPEN_HOUR: 9,        // [개장 시간]: 매일 오전 9시에 첫 경기 배팅 시작
+            CLOSE_HOUR: 23       // [폐장 시간]: 오후 11시 59분에 마지막 경기 결과 발표 후 종료
         },
         
         STOCK: {
-            PREFIXES: ["롯데", "엘지", "한화", "삼성", "두바이쫀득", "현대", "카카오", "네이버", "애플", "테슬라", "광어", "도다리", "두유노"], // 주식 종목명 앞글자
-            SUFFIXES: ["전자", "생명", "화학", "건설", "중공업", "바이오", "제약", "엔터", "식품", "모터스", "쿠키", "에너지", "보험", "통신", "증권"], // 주식 종목명 뒷글자
-            TRAITS: {
-                "normal": { label: "일반", volatility: 1.5, prob: 44, icon: "🌱" }, // 일반주 특성
-                "bluechip": { label: "우량주", volatility: 1, prob: 28, icon: "🛡️" }, // 우량주 특성
-                "scam": { label: "작전주", volatility: 2, prob: 28, icon: "🔥" } // 작전주 특성
+            PREFIXES: ["롯데", "엘지", "한화", "삼성", "두바이쫀득", "현대", "카카오", "네이버", "애플", "테슬라", "광어", "도다리", "두유노"], 
+            SUFFIXES: ["전자", "생명", "화학", "건설", "중공업", "바이오", "제약", "엔터", "식품", "모터스", "쿠키", "에너지", "보험", "통신", "증권"], 
+            TRAITS: { // [종목 특성]: 각 주식 타입별 변동성 및 생성 확률 정의
+                "normal": { label: "일반", volatility: 1.5, prob: 44, icon: "🌱" }, 
+                "bluechip": { label: "우량주", volatility: 1, prob: 28, icon: "🛡️" }, 
+                "scam": { label: "작전주", volatility: 2, prob: 28, icon: "🔥" } 
             },
-            MANIPULATION: {
-                TARGET: "애플모터스", // 조작 타겟 종목명
-                IS_UP: true,      // 조작 시 상승 여부 (true: 상승, false: 하락)
-                RATE: 0.25,        // 조작 변동 비율 (0.25 = 25%)
-                ACTIVE: false       // 조작 시스템 활성화 여부
+            MANIPULATION: { // [주가 조작 프리셋]: 관리자가 특정 종목의 시세를 강제로 제어할 때 참조
+                TARGET: "애플모터스", // 조작 대상 종목명
+                IS_UP: true,       // 상승(true) 또는 하락(false) 여부
+                RATE: 0.25,        // 조작 시 변동률 (0.25 = 25%)
+                ACTIVE: false      // 조작 시스템 활성화 상태 (평소엔 false)
             },
-            SETTINGS: {
-                MAX_COUNT: 10,     // 시장 유지 최대 종목 수
-                OPEN_HOUR: 7,      // 주식 장 시작 시간
+            SETTINGS: { // [주식 시장 세부 설정]
+                MAX_COUNT: 10,     // 시장에 동시 상장 가능한 최대 종목 수
+                OPEN_HOUR: 7,      // 주식 장 개장 시간
                 CLOSE_HOUR: 23,    // 주식 장 마감 시간
-                MANI_RATE: 0.25,   // 기본 특수 이벤트 변동폭
-                DELIST_LIMIT: 0.03, // 상장폐지 기준 비율
-                CLOSING_LIMIT: 1.20, // [신규] 종가 제한 상한선 (+20%)
-                RESISTANCE_START: 1.15, // [신규] 저항 구간 시작점 (+15%)
-                GRAVITY: 0.05      // [신규] 가격 억제 중력 계수
+                MANI_RATE: 0.25,   // 기본 특수 이벤트(폭등/폭락) 변동폭
+                DELIST_LIMIT: 0.03, // [상폐 기준]: 시장 평균가 대비 해당 비율 이하로 떨어지면 상장폐지 검토
+                CLOSING_LIMIT: 1.20, // [종가 제한]: 당일 시가 대비 최대 상승폭 (+20%)
+                RESISTANCE_START: 1.15, // [저항 시작]: 가격이 시가 대비 15% 상승 시 하락 압력 발생
+                GRAVITY: 0.05      // [중력 계수]: 저항 구간에서 가격을 아래로 끌어내리는 힘의 세기
             }
         },
-        MINE: {
-            BASE_PER_MIN: 3, // 광산 분당 기본 채굴 수익
-            COPPER_PROB: 0.05, // 구리 발견 확률
-            GOLD_PROB: 0.03,   // 금 발견 확률
-            DIA_PROB: 0.005,   // 다이아몬드 발견 확률
+        MINE: { // [광산 채굴 설정]
+            BASE_PER_MIN: 3, // 분당 획득하는 기본 채굴 포인트 (물가 배율 적용 전)
+            COPPER_PROB: 0.05, // 구리 발견 확률 (5%)
+            GOLD_PROB: 0.03,   // 금 발견 확률 (3%)
+            DIA_PROB: 0.005,   // 다이아몬드 발견 확률 (0.5%)
             COPPER_MULT: 1.5,  // 구리 발견 시 수익 배율
             GOLD_MULT: 2.0,    // 금 발견 시 수익 배율
-            DIA_MULT: 10.0,    // 다이아 발견 시 수익 배율
-            /* [신규] 유물 시스템 설정 */
-            ARTIFACT_CHANCE: 0.001, // 유물 조각 발견 확률 (0.05%)
-            ARTIFACT_GOAL: 10         // [도굴왕] 칭호 획득을 위한 필요 조각 수
+            DIA_MULT: 10.0,    // 다이아몬드 발견 시 수익 배율
+            ARTIFACT_CHANCE: 0.001, // [유물 조각]: 매 분마다 유물을 찾을 확률 (0.1%)
+            ARTIFACT_GOAL: 10  // [도굴왕 칭호]: 유물 조각을 이 갯수만큼 모으면 자동 부여
         },
-        PRIVATE_LOAN: {
-            MIN_AMOUNT: 1000,       // 사채 등록 최소 금액
-            MAX_RATE: 15,           // 사채 법정 최고 이율 (%)
-            COLLECTION_LIMIT: 24,   // 추심 시작 연체 시간 (시간)
-            INTEREST_PERIOD: 3,     // 이자 계산 주기 (시간)
-            MIN_BORROW: 1000,       // 최소 대출 단위
-            DAILY_LIMIT: 1          // 일일 은행 대출 횟수 제한
+        PRIVATE_LOAN: { // [사채(P2P) 시장 설정]
+            MIN_AMOUNT: 1000,       // 사채 매물 등록 시 최소 단위
+            MAX_RATE: 15,           // 법정 최고 이율 (3시간당 최대 15%)
+            COLLECTION_LIMIT: 24,   // [추심 시작]: 대출 후 24시간 경과 시 수익 압류(50%) 시작
+            INTEREST_PERIOD: 3,     // 이자가 복리로 계산되어 붙는 주기 (3시간)
+            MIN_BORROW: 1000,       // 유저가 사채를 빌릴 때 최소 단위
+            DAILY_LIMIT: 1          // 은행 대출 일일 이용 제한 횟수
         },
-        CREDIT: { 
-            SCORES: [900, 800, 700, 600, 500], // 등급별 요구 신용 점수
-            LIMITS: [30000, 20000, 15000, 10000, 8000, 3000], // 등급별 대출 한도
-            RATES: [1.03, 1.05, 1.13, 1.17, 1.20, 1.35], // 등급별 대출 이율
-            LABELS: ["1등급", "2등급", "3등급", "4등급", "5등급", "신용불량자"], // 등급 명칭
-            ICONS: ["👑", "💎", "🥇", "🥈", "🥉", "🚫"] // 등급별 아이콘
+        CREDIT: { // [은행 신용 등급 체계]
+            SCORES: [900, 800, 700, 600, 500], // 각 등급을 나누는 기준 점수
+            LIMITS: [30000, 20000, 15000, 10000, 8000, 3000], // 등급별 대출 가능 한도
+            RATES: [1.03, 1.05, 1.13, 1.17, 1.20, 1.35], // 등급별 대환 이율 (원금 대비 상환액)
+            LABELS: ["1등급", "2등급", "3등급", "4등급", "5등급", "신용불량자"], 
+            ICONS: ["👑", "💎", "🥇", "🥈", "🥉", "🚫"] 
         }
     },
 
-    /* [신규] 도배 방지 및 타임아웃 설정 */
-    SPAM: {
-        LIMIT_COUNT: 5,        // 짧은 시간 내 허용할 최대 채팅 수 (5회 초과 시 차단)
-        LIMIT_WINDOW: 3000,    // 도배 판정 기준 시간 (3000ms = 3초)
-        TIMEOUT_MS: 300000     // 도배 시 이용 제한 시간 (600,000ms = 10분)
+    SPAM: { // [도배 방지 엔진 설정]
+        LIMIT_COUNT: 5,        // 제한 시간 내 허용되는 최대 메시지 수
+        LIMIT_WINDOW: 3000,    // 도배 판정 시간 범위 (3000ms = 3초)
+        TIMEOUT_MS: 300000     // 도배 적발 시 봇 이용이 제한되는 시간 (5분)
     },
 
-    PROB: {
-        ODD_EVEN_WIN: 0.47,        // 홀짝 기본 승률
-        ODD_EVEN_FEVER: 0.52,      // 피버타임 홀짝 승률
-        STOCK_NEW_LISTING: 0.5,    // 신규 상장 발생 확률
-        STOCK_SPECIAL: 0.5,        // 주식 특수 이벤트 발생 확률
-        STOCK_UP_CHANCE: 0.45       // 특수 이벤트 시 상승 확률
+    PROB: { // [핵심 게임 확률 엔진]
+        ODD_EVEN_WIN: 0.47,        // 홀짝 기본 승률 (47%)
+        ODD_EVEN_FEVER: 0.52,      // 피버타임 시 홀짝 승률 (52%)
+        STOCK_NEW_LISTING: 0.5,    // 매 변동 타임마다 신규 종목이 상장될 확률 (50%)
+        STOCK_SPECIAL: 0.5,        // 특정 종목에 특수 이벤트(폭등/폭락)가 발생할 확률 (50%)
+        STOCK_UP_CHANCE: 0.45      // 특수 이벤트 발생 시 '상승'일 확률 (45%, 하락이 조금 더 높음)
     },
     
-    MSG: {
+    MSG: { // [시스템 메시지 설정]
         PREFIX: {
             INFO: "ℹ️", ERROR: "🚫", ADMIN: "⚙️", SUCCESS: "✅", 
             WARN: "⚠️", GAMBLE_WIN: "🎊", GAMBLE_LOSE: "💀", LOAN: "🚬", MINE: "⛏️", TIMEOUT: "🔇"
-        }, // 각 메시지 타입별 접두사 아이콘 설정
-        ERR_FORM: "형식이 올바르지 않습니다.", // 입력 형식 오류 메시지
-        ERR_MONEY: "포인트가 부족합니다.", // 자금 부족 메시지
-        ERR_USER: "대상을 찾을 수 없습니다.", // 대상 유저 부재 메시지
-        ERR_TIMEOUT: "도배로 인해 이용이 일시 제한되었습니다." // 타임아웃 유저 알림 메시지
+        }, 
+        ERR_FORM: "형식이 올바르지 않습니다.", 
+        ERR_MONEY: "포인트가 부족합니다.", 
+        ERR_USER: "대상을 찾을 수 없습니다.", 
+        ERR_TIMEOUT: "도배로 인해 이용이 일시 제한되었습니다." 
     }
 };
 
@@ -487,7 +516,7 @@ function generateAdminHelp() {
     return "⚙️ [관리자 전용 명령어]\n" + list.join("\n");
 }
 
-/* [2] 명령어 리스트 데이터 (수정됨: 결투 응답 명령어 수락/거절/취소 완벽 추가) */
+/* [2] 명령어 리스트 데이터 (수정됨: 결투 응답 및 경마 명령어 통합 추가) */
 var CMD_LIST = {
     user: [
         { cmd: "/출석", desc: "매일 포인트 획득", cat: "조회", func: "_gameShopLogic" },
@@ -497,12 +526,15 @@ var CMD_LIST = {
         { cmd: "/유저정보", desc: "[닉네임] 상세정보 보기", cat: "조회", func: "_gameInfoLogic" },
         { cmd: "/명예의전당", desc: "챌린저 명단 확인", cat: "조회", func: "_gameInfoLogic" },
         { cmd: "/버그제보", desc: "[내용] 오류 및 버그 신고", cat: "조회", func: "response" }, 
+        { cmd: "/경마", desc: "현재 출전마 정보 및 배당 확인", cat: "조회", func: "_gameInfoLogic" }, // [신규 경마 조회]
         { cmd: "/홀짝", desc: "[홀|짝] [포인트] 도박", cat: "게임", func: "_gameActionLogic" },
         { cmd: "/승급", desc: "티어 승급 도전", cat: "게임", func: "_gameActionLogic" },
+        { cmd: "/배팅", desc: "[말번호] [포인트] 경마 참여", cat: "게임", func: "_gameActionLogic" }, // [신규 경마 배팅]
+        { cmd: "배팅취소", desc: "현재 회차 배팅 철회 (수수료 10%)", cat: "게임", func: "_gameActionLogic" }, // [신규 경마 취소]
         { cmd: "/결투", desc: "[닉네임] [포인트] 신청", cat: "게임", func: "_gameActionLogic" },
         { cmd: "수락", desc: "결투 신청 승낙", cat: "게임", func: "_gameActionLogic" },
         { cmd: "거절", desc: "결투 신청 거절", cat: "게임", func: "_gameActionLogic" },
-        { cmd: "취소", desc: "결투 신청 철회", cat: "게임", func: "_gameActionLogic" }, // [신규 추가]
+        { cmd: "취소", desc: "결투 신청 철회", cat: "게임", func: "_gameActionLogic" },
         { cmd: "/도둑질", desc: "[닉네임] 포인트 탈취 시도", cat: "게임", func: "_gameActionLogic" },
         { cmd: "잡았다요놈", desc: "도둑질 방어 (1분 이내)", cat: "게임", func: "_gameActionLogic" },
         { cmd: "줍기", desc: "바닥에 떨어진 포인트 획득", cat: "게임", func: "_gameActionLogic" },
@@ -1704,12 +1736,14 @@ function _sendToDashboard(data, ctx) {
 
 //==========섹터16-2==========
 
-/* 독립 로직 함수: 사채 및 시스템 관리 비즈니스 로직 */
+/* 독립 로직 함수: 사채 및 시스템 관리 + 경마 스케줄러 통합 엔진 */
 function _runSector16Logic(data, ctx) {
     var nowTs = ctx.now.getTime();
     var currentHour = ctx.now.getHours();
     var currentMin = ctx.now.getMinutes();
+    var currentSec = ctx.now.getSeconds();
     var conf = SYSTEM_CONFIG.ECO.STOCK;
+    var rConf = SYSTEM_CONFIG.ECO.RACING; // 섹터1에서 설정한 경마 상수 참조
 
     var DASHBOARD_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQWUH4iH7iLI2ZAR1MC3OERD4I2LcJVX23waSW7MLhjgGwjr6hTXKSNiAD048B9K4dtr8OosHqbTsrb/pubchart?oid=121239500&format=interactive";
 
@@ -1733,37 +1767,32 @@ function _runSector16Logic(data, ctx) {
         }
     }
 
-    /* 1. 방별 유저 간 사채 시스템 및 경제 감시 엔진 */
+    /* 1. 방별 유저 간 사채 시스템 및 경제 감시 엔진 (무결성 유지) */
     for (var rName in data.rooms) {
         var roomData = data.rooms[rName];
         if (!roomData.loanContracts) roomData.loanContracts = {};
 
-        // [최적화] 중앙은행 잔고 모니터링 (히스테리시스 적용)
         if (roomData.bankReserve !== undefined) {
             var reserve = roomData.bankReserve;
             if (!roomData.lastBankAlert) roomData.lastBankAlert = "normal";
 
-            /* [Gemini 요청 사항] 국가 경제 임계치 동적 설정 (ecobase 적용 및 해제 기준 2배 변경) */
-            var roomBase = roomData.economyBase || 1000000; // 기준값 없을 시 100만P 기본값 사용
-            var warningLimit = Math.floor(roomBase * 0.1);  // 경보: ecobase의 10%
-            var disasterLimit = Math.floor(roomBase * 0.01); // 재난: ecobase의 1%
-            var normalLimit = warningLimit * 2;             // 해제: 경보 기준의 2배 (ecobase의 20%)
+            var roomBase = roomData.economyBase || 1000000;
+            var warningLimit = Math.floor(roomBase * 0.1);
+            var disasterLimit = Math.floor(roomBase * 0.01);
+            var normalLimit = warningLimit * 2;
 
-            // A. 국가 재난 단계
             if (reserve < disasterLimit && roomData.lastBankAlert !== "disaster") {
                 roomData.lastBankAlert = "disaster";
                 var disasterMsg = "🚨 [국가 경제 재난 선포] 🚨\n━━━━━━━━━━━━━━━\n현 시각부로 국가 경제 재난 상태를 선포합니다.\n중앙은행 금고 자산이 임계치(" + fp(disasterLimit) + "P) 아래로 급락하여 모든 보상 및 출금이 정지될 위험이 큽니다.\n\n🏦 현재 금고: " + fp(reserve) + "P\n⚠️ 조치: 관리자의 즉각적인 재원 수혈이 필요합니다.";
                 Api.replyRoom(rName, disasterMsg);
                 ctx.isUpdated = true;
             }
-            // B. 국가 마비 경보 단계
             else if (reserve < warningLimit && reserve >= disasterLimit && roomData.lastBankAlert === "normal") {
                 roomData.lastBankAlert = "warning";
                 var warningMsg = "⚠️ [국가 경제 마비 예비 경보]\n━━━━━━━━━━━━━━━\n중앙은행 금고 잔액이 " + fp(warningLimit) + "P 미만으로 하락했습니다.\n지속적인 보상 유지를 위해 경제 활동 활성화 또는 재원 보충이 권고됩니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
                 Api.replyRoom(rName, warningMsg);
                 ctx.isUpdated = true;
             }
-            // C. 경제 정상화 (경보 기준의 2배 이상 확보 시)
             else if (reserve >= normalLimit && (roomData.lastBankAlert === "warning" || roomData.lastBankAlert === "disaster")) {
                 roomData.lastBankAlert = "normal";
                 var normalMsg = "✅ [국가 경제 정상화 알림]\n━━━━━━━━━━━━━━━\n재원 수혈 및 유동성 확보를 통해 금고가 다시 안정권(" + fp(normalLimit) + "P 이상)에 진입했습니다.\n중단되었던 각종 경제 로직이 정상화되었습니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
@@ -1799,12 +1828,10 @@ function _runSector16Logic(data, ctx) {
                 } catch(e) {}
             }
 
-            /* [핵심] 사채 연체 단계별 집행 로직 (수정: 대환 기준 36시간) */
             var duration = nowTs - c.startTime;
-            var overdueLimit = 24 * 60 * 60 * 1000; // 24시간 (수익 압류 시작)
-            var bankTakeoverLimit = 36 * 60 * 60 * 1000; // 36시간 (은행 대납 및 대환)
+            var overdueLimit = 24 * 60 * 60 * 1000;
+            var bankTakeoverLimit = 36 * 60 * 60 * 1000;
 
-            // A. 강제 추심 단계 (24시간 경과 시)
             if (c.status === 'active' && duration > overdueLimit && duration <= bankTakeoverLimit) {
                 c.status = 'overdue'; 
                 ctx.isUpdated = true;
@@ -1813,8 +1840,6 @@ function _runSector16Logic(data, ctx) {
                     Api.replyRoom(rName, collectionMsg);
                 } catch(e) {}
             }
-
-            // B. 은행 대환 전환 단계 (수정: 36시간 경과 시 및 신용점수 -50점)
             else if (duration > bankTakeoverLimit) {
                 var amountToPay = Number(c.currentDebt);
                 var lender = roomData.users[c.lenderUid];
@@ -1823,27 +1848,17 @@ function _runSector16Logic(data, ctx) {
                 if (lender && borrower) {
                     if (roomData.bankReserve === undefined) roomData.bankReserve = 10000;
                     roomData.bankReserve -= amountToPay;
-                    
                     var preLenderPoint = Number(lender.point);
                     lender.point = preLenderPoint + amountToPay;
                     verifyPointTransaction(lender, preLenderPoint, amountToPay, "사채 은행 대납 회수 (" + c.borrowerName + ")");
-
                     if (!borrower.loan) borrower.loan = { debt: 0, items: [] };
                     borrower.loan.debt = Number(borrower.loan.debt) + amountToPay;
                     borrower.loan.items.push(amountToPay);
                     borrower.isTransferred = true; 
-
                     borrower.creditScore = Math.max(0, (borrower.creditScore || 600) - 50);
                     checkAndHandleDefaulter(borrower, rName);
-
-                    var takeoverMsg = "🏛️ [중앙은행 대환 집행]\n━━━━━━━━━━━━━━━\n" +
-                                      "👤 대상: " + c.borrowerName + "님\n\n" +
-                                      "내용: 사채 연체 36시간 경과로 인해 은행이 " + fp(amountToPay) + "P를 대납 처리하였습니다.\n\n" +
-                                      "⚠️ [페널티]: 신용점수 -50점 강등\n" +
-                                      "⚠️ 해당 채무는 [은행 대환 대출]로 전환되었으며, 완납 시까지 모든 수익의 70%가 강제 상환됩니다.\n" +
-                                      "━━━━━━━━━━━━━━━";
+                    var takeoverMsg = "🏛️ [중앙은행 대환 집행]\n━━━━━━━━━━━━━━━\n👤 대상: " + c.borrowerName + "님\n\n내용: 사채 연체 36시간 경과로 인해 은행이 " + fp(amountToPay) + "P를 대납 처리하였습니다.\n\n⚠️ [페널티]: 신용점수 -50점 강등\n⚠️ 해당 채무는 [은행 대환 대출]로 전환되었으며, 완납 시까지 모든 수익의 70%가 강제 상환됩니다.\n━━━━━━━━━━━━━━━";
                     Api.replyRoom(rName, takeoverMsg);
-
                     delete roomData.loanContracts[cid];
                     ctx.isUpdated = true;
                 }
@@ -1851,19 +1866,12 @@ function _runSector16Logic(data, ctx) {
         }
     }
 
-    /* 2. 주식 주기적 변동 처리 (매 0분) */
-    /* [수정] 사전 알림 로직을 제거하고, 변동 판정 로직을 이 구간으로 통합함 */
+    /* 2. 주식 주기적 변동 처리 (무결성 유지) */
     if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && currentMin % 10 === 0 && data.lastStockUpdateMin !== currentMin) {
         data.lastStockUpdateMin = currentMin; 
-        
-        // [로직 통합] 변동 직전 확률 판정 수행 (메시지 예고 없이 즉시 적용)
         var mani = conf.MANIPULATION;
         if (mani && mani.ACTIVE === true) {
-            data.pendingSpecialEffect = { 
-                stock: mani.TARGET, 
-                factor: mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE),
-                forceMani: true 
-            };
+            data.pendingSpecialEffect = { stock: mani.TARGET, factor: mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE), forceMani: true };
         } else {
             var currentStockCount = Object.keys(data.stockMarket || {}).length;
             if (currentStockCount < 10 && Math.random() < SYSTEM_CONFIG.PROB.STOCK_NEW_LISTING) { 
@@ -1878,15 +1886,10 @@ function _runSector16Logic(data, ctx) {
                 }
             }
         }
-
         try { java.lang.Thread.sleep(1000); } catch(e){}
-
         if (currentHour === conf.SETTINGS.CLOSE_HOUR && currentMin === 50 && typeof stock_applyClosingCorrection === 'function') {
-            for (var sName in data.stockMarket) {
-                data.stockMarket[sName].price = stock_applyClosingCorrection(data.stockMarket[sName].price);
-            }
+            for (var sName in data.stockMarket) { data.stockMarket[sName].price = stock_applyClosingCorrection(data.stockMarket[sName].price); }
         }
-
         var stockResult = updateStockPrices(data); 
         var isMarketOpen = (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR);
         var statusText = isMarketOpen ? "🟢 장 운영 중 (07:00 ~ 23:59)" : "🔴 장 마감";
@@ -1897,12 +1900,91 @@ function _runSector16Logic(data, ctx) {
         ctx.isUpdated = true;
     }
 
-    /* 3. 홀짝 피버타임 체크 */
+    /* [Gemini 요청 사항] 3. 경마 시스템 통합 스케줄러 (09:00 ~ 00:00) */
+    
+    // A. 개장 알림 (09:00:00) - 결과발표 없이 배팅가능 안내만
+    if (currentHour === rConf.OPEN_HOUR && currentMin === 0 && currentSec === 0) {
+        racingData.isOperating = true;
+        var startMsg = "🏇 [내리다 경마장 개장 알림]\n━━━━━━━━━━━━━━━\n지금부터 제 " + racingData.round + "회차 경마 배팅이 가능합니다!\n\n🕒 배팅 시간: 매시 00분 ~ 49분 59초\n🏁 결과 발표: 매시 00분 00초\n🚫 운영 종료: 23:59 (00:00 최종 결과)\n━━━━━━━━━━━━━━━\n💡 현황 확인: [/경마] 입력";
+        Api.replyRoom(ctx.targetRoom, startMsg);
+    }
+
+    // B. 배팅 마감 알림 (매시 49:59)
+    if (racingData.isOperating && currentMin === 49 && currentSec === 59 && !racingData.isDeadlineNotified) {
+        racingData.isDeadlineNotified = true;
+        var deadlineMsg = "📢 [경마 배팅 마감 알림]\n━━━━━━━━━━━━━━━\n제 " + racingData.round + "회차 배팅이 종료되었습니다!\n\n🏦 최종 집계 포인트: " + fp(racingData.totalPool) + "P\n🏁 우승마 판독 및 정산 진행 중...\n━━━━━━━━━━━━━━━\n🏇 잠시 후 정각(00분)에 결과가 발표됩니다!";
+        Api.replyRoom(ctx.targetRoom, deadlineMsg);
+    }
+
+    // C. 결과 발표 및 새 라운드 시작 (매시 00:00:00)
+    if ((racingData.isOperating || currentHour === 0) && currentMin === 0 && currentSec === 0 && !racingData.isResultProcessed) {
+        racingData.isResultProcessed = true;
+        
+        // 1. 우승마 선출 (가중치 기반)
+        var totalW = 0; racingData.horses.forEach(function(h){ totalW += h.weight; });
+        var rVal = Math.random() * totalW; var accum = 0; var winner = racingData.horses[0];
+        for(var i=0; i<racingData.horses.length; i++){ accum += racingData.horses[i].weight; if(rVal < accum){ winner = racingData.horses[i]; break; } }
+
+        // 2. 당첨금 및 국고 수수료(10%) 계산
+        var tax = Math.floor(racingData.totalPool * rConf.TAX_RATE);
+        var distributePool = racingData.totalPool - tax + racingData.carryOver;
+        var winPool = 0; var winnerUids = [];
+        for(var uid in racingData.bets){ if(racingData.bets[uid].horseId === winner.id){ winPool += racingData.bets[uid].amount; winnerUids.push(uid); } }
+
+        // 3. 국고 입고 및 결과 메시지 구성
+        var mainRoom = data.rooms[ctx.targetRoom];
+        if(mainRoom) mainRoom.bankReserve = (mainRoom.bankReserve || 0) + tax;
+
+        var resultHeader = "🏁 [제 " + racingData.round + "회 경마 결과 및 새 경기 안내]\n━━━━━━━━━━━━━━━\n[🏆 지난 경기 결과]\n\"마지막 직선 주로에서 " + winner.id + "번 " + winner.name + "가 골인!\"\n\n🥇 우승마: [" + winner.id + "번 " + winner.name + "]\n";
+        var resultBody = "";
+        
+        if(winnerUids.length > 0) {
+            var rate = (distributePool / winPool).toFixed(1);
+            resultBody += "💰 최종 배당률: x" + rate + "\n🏛️ 국고 수수료(10%): " + fp(tax) + "P 입고\n\n[🎖️ 주요 당첨자]";
+            winnerUids.forEach(function(uId){
+                var b = racingData.bets[uId]; var u = null;
+                for(var r in data.rooms){ if(data.rooms[r].users[uId]){ u = data.rooms[r].users[uId]; break; } }
+                if(u){
+                    var share = b.amount / winPool; var prize = Math.floor(share * distributePool);
+                    // 강제 상환 엔진 연동
+                    var res = processRepayment(u, prize, uId, ctx.targetRoom);
+                    u.point += res.actualGain; resultBody += "\n• " + b.name + " (+" + fp(res.actualGain) + "P)";
+                }
+            });
+            racingData.carryOver = 0; // 당첨자 발생 시 이월금 초기화
+        } else {
+            // [Gemini 요청 사항] 우승자 없을 시 30% 국고 / 70% 이월
+            var toBank = Math.floor(distributePool * rConf.WINLESS_BANK_RATE);
+            var toJackpot = distributePool - toBank;
+            if(mainRoom) mainRoom.bankReserve += toBank;
+            racingData.carryOver = toJackpot;
+            resultBody += "💀 당첨 유저 없음\n💰 이월금(70%): " + fp(toJackpot) + "P\n🏛️ 국고 귀속(30%): " + fp(toBank) + "P";
+        }
+
+        // 24시 정각 처리 (마지막 결과 발표 후 폐장)
+        var isClosing = (currentHour === 0);
+        if (isClosing) {
+            racingData.isOperating = false;
+            resultBody += "\n━━━━━━━━━━━━━━━\n💤 금일 경마 운영이 종료되었습니다.\n다음 경기는 내일 오전 09:00에 시작됩니다.";
+        } else {
+            resultBody += "\n━━━━━━━━━━━━━━━\n✨ [제 " + (racingData.round + 1) + "회 경기 시작] ✨\n지금부터 다음 경기 배팅이 가능합니다.";
+        }
+
+        Api.replyRoom(ctx.targetRoom, resultHeader + resultBody);
+
+        // 4. 리셋 및 컨디션 재설정
+        racingData.round++; racingData.bets = {}; racingData.totalPool = 0;
+        racingData.isDeadlineNotified = false; racingData.isResultProcessed = false;
+        var conds = [{l:"🚀 최상",w:1.5},{l:"☀️ 양호",w:1.2},{l:"☁️ 보통",w:1.0},{l:"💧 부진",w:0.7}];
+        racingData.horses.forEach(function(h){ var c=conds[Math.floor(Math.random()*conds.length)]; h.icon=c.l; h.weight=c.w; });
+        ctx.isUpdated = true;
+    }
+
+    /* 4. 홀짝 피버타임 및 결투 체크 (기존 로직 유지) */
     if (!data.feverData) data.feverData = { active: false, endTime: 0, scheduled: [] };
     var timeKey = (currentHour < 10 ? "0"+currentHour : currentHour) + ":" + (currentMin < 10 ? "0"+currentMin : currentMin);
     if (data.feverData.scheduled.indexOf(timeKey) !== -1 && !data.feverData.active) {
-        data.feverData.active = true;
-        data.feverData.endTime = nowTs + (5 * 60 * 1000);
+        data.feverData.active = true; data.feverData.endTime = nowTs + (5 * 60 * 1000);
         data.feverData.scheduled.splice(data.feverData.scheduled.indexOf(timeKey), 1);
         try { Api.replyRoom(ctx.targetRoom, "🔥 홀짝 피버타임 시작\n━━━━━━━━━━━━━━━\n지금부터 5분간 홀짝 승률이 상승합니다!"); } catch(e){}
         ctx.isUpdated = true;
@@ -1913,7 +1995,6 @@ function _runSector16Logic(data, ctx) {
         ctx.isUpdated = true;
     }
 
-    /* 4. 결투 만료 체크 */
     for (var dKey in duelData) {
         var d = duelData[dKey];
         if (nowTs > d.expire) {
@@ -4989,11 +5070,44 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
 
 /**
  * [게임 하위 모듈 2] 정보 및 랭킹 조회 (부채 통합 표시 및 예외 처리 강화)
- * 기능: 내정보, 유물도감, 신용등급, 대출한도, 명예의전당, 순위, 유저정보
+ * 기능: 내정보, 유물도감, 신용등급, 대출한도, 명예의전당, 순위, 유저정보, 경마조회
  * 설명: 조회 시 은행 대출뿐만 아니라 사채 및 연체 현황을 통합하여 출력하며, 입력 오류를 검증합니다.
  */
 function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
+
+    /* [Gemini 요청 사항] 경마 정보 실시간 브리핑 기능 통합 */
+    if (msg === "/경마") {
+        if (!racingData.isOperating) {
+            replier.reply(formatSimple("🏇 경마장 휴장 안내", "현재 경마 운영 시간이 아닙니다.\n(운영시간: 09:00 ~ 23:59)", "오전 9시 정각에 개장합니다."));
+            return true;
+        }
+
+        // 각 말별 실시간 배팅액 집계 로직
+        var hList = racingData.horses.map(function(h) {
+            var horseBetSum = 0;
+            for (var uid in racingData.bets) {
+                if (racingData.bets[uid].horseId === h.id) horseBetSum += Number(racingData.bets[uid].amount);
+            }
+            return h.id + ". " + h.name + " [" + h.icon + "]\n   └ 현 배팅액: " + fp(horseBetSum) + "P";
+        }).join("\n");
+
+        // 마감까지 남은 시간 정밀 계산 (매시 50분 기준)
+        var now = new Date();
+        var remainMin = 49 - now.getMinutes();
+        var remainSec = 59 - now.getSeconds();
+        if (remainMin < 0) { remainMin = 0; remainSec = 0; } // 정산 시간 예외처리
+
+        var totalPrizePool = racingData.totalPool + racingData.carryOver;
+        var racingBody = "제 " + racingData.round + "회차 경기 배팅 진행 중\n\n" +
+                         "[🏇 출전마 라인업]\n" + hList + "\n\n" +
+                         "💰 현재 총 배당금: " + fp(totalPrizePool) + "P\n" +
+                         (racingData.carryOver > 0 ? "✨ 이월 적립금: " + fp(racingData.carryOver) + "P 포함\n" : "") +
+                         "🕒 배팅 마감: " + remainMin + "분 " + remainSec + "초 남음";
+
+        replier.reply(formatCommand("🏇 내리다 중앙 경마장", user, racingBody, "배팅: [/배팅 번호 금액]"));
+        return true;
+    }
 
     /* [기능 3] 내 정보 조회 */
     if (msg === "/내정보") {
@@ -5196,9 +5310,9 @@ function _gameActionLogic(msg, user, data, replier, roomName, targetUid) {
 //==========섹터40==========
 
 /**
- * [게임 하위 모듈 3-1] 액션 및 도박 게임 (홀짝 & 승급)
+ * [게임 하위 모듈 3-1] 액션 및 도박 게임 (홀짝 & 승급 & 경마 액션)
  * 설명: 독립된 함수로 구성하여 컴파일 오류를 방지하고 유지보수성을 높였습니다.
- * 수정 사항: 중앙은행 폐쇄형 경제 연동 및 성취 기반 칭호(꾼~도박의신) 반영
+ * 수정 사항: 중앙은행 폐쇄형 경제 연동, 경마 배팅(/배팅) 및 취소(배팅취소) 로직 통합
  */
 function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
@@ -5209,7 +5323,122 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
     }
 
-    /* [기능 9] 홀짝 도박 */
+    var rConf = SYSTEM_CONFIG.ECO.RACING; // 경마 설정 참조
+
+    /* [Gemini 요청 사항] 1. 경마 배팅 액션 (/배팅 [번호] [금액]) */
+    if (msg.indexOf("/배팅 ") === 0) {
+        if (!racingData.isOperating) {
+            replier.reply(formatError(user, "경마장 휴장", "현재 운영 시간이 아닙니다. (09:00 ~ 23:59)"));
+            return true;
+        }
+
+        var nowMin = new Date().getMinutes();
+        if (nowMin >= 50) {
+            replier.reply(formatError(user, "배팅 마감", "현재 경기 정산 중입니다. 정각(00분) 이후 배팅하세요."));
+            return true;
+        }
+
+        if (user.mining && user.mining.active) {
+            replier.reply(formatError(user, "작업 중", "광산 채굴 중에는 배팅이 불가능합니다."));
+            return true;
+        }
+
+        var ps = msg.split(" ");
+        if (ps.length < 3) { replier.reply(formatError(user, "형식 오류", "/배팅 [말번호] [금액]")); return true; }
+        
+        var hId = parseInt(ps[1]);
+        var betAmt = parseInt(ps[2].replace(/,/g, ""));
+
+        // 유효성 검사 (마리 수 가변 대응)
+        if (isNaN(hId) || hId < 1 || hId > racingData.horses.length) {
+            replier.reply(formatError(user, "번호 오류", "1~" + racingData.horses.length + "번 사이의 말을 선택하세요."));
+            return true;
+        }
+
+        // [Gemini 요청 사항] Eco-base 기반 동적 한도 계산
+        var multiplier = 1.0;
+        if (roomData.economyBase && roomData.economyBase > 0) {
+            var eco = calculateEconomy(data, roomName);
+            var rawRatio = eco.total / roomData.economyBase;
+            var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.5;
+            multiplier = 1 + (rawRatio - 1) * damping;
+            if (multiplier < 0.5) multiplier = 0.5;
+        }
+
+        var minLimit = Math.floor(rConf.MIN_BET * multiplier);
+        var maxLimit = Math.floor(rConf.MAX_BET * multiplier);
+
+        if (isNaN(betAmt) || betAmt < minLimit) {
+            replier.reply(formatError(user, "금액 미달", "현재 최소 배팅금은 " + fp(minLimit) + "P 입니다."));
+            return true;
+        }
+        if (betAmt > maxLimit) {
+            replier.reply(formatError(user, "한도 초과", "현재 최대 배팅금은 " + fp(maxLimit) + "P 입니다."));
+            return true;
+        }
+        if (Number(user.point) < betAmt) {
+            replier.reply(formatError(user, "포인트 부족", "보유 포인트가 부족합니다."));
+            return true;
+        }
+
+        if (racingData.bets[targetUid]) {
+            replier.reply(formatError(user, "중복 배팅 불가", "이미 배팅하셨습니다. 수정을 원하시면 [배팅취소] 후 다시 시도하세요."));
+            return true;
+        }
+
+        // 배팅 실행 및 중앙은행 금고 입고
+        util_updatePoint(user, roomData, -betAmt, "경마 배팅", roomName);
+        
+        var selectedHorse = racingData.horses[hId - 1];
+        racingData.bets[targetUid] = { 
+            uid: targetUid, 
+            horseId: hId, 
+            amount: betAmt, 
+            name: user.name 
+        };
+        racingData.totalPool += betAmt;
+
+        replier.reply(formatCommand("✅ [경마 배팅 완료]", user, "🏇 선택: " + selectedHorse.id + "번 " + selectedHorse.name + "\n💰 금액: " + fp(betAmt) + "P 배팅 성공!", "내 잔액: " + fp(user.point) + "P"));
+        safeSaveData(data);
+        return true;
+    }
+
+    /* [Gemini 요청 사항] 2. 경마 배팅 취소 (배팅취소) */
+    if (msg === "배팅취소") {
+        if (!racingData.isOperating) return false;
+        
+        var nowMin = new Date().getMinutes();
+        if (nowMin >= 50) {
+            replier.reply(formatError(user, "취소 불가", "정산이 시작되어 배팅을 취소할 수 없습니다."));
+            return true;
+        }
+
+        var myBet = racingData.bets[targetUid];
+        if (!myBet) {
+            replier.reply(formatError(user, "내역 없음", "이번 회차에 배팅한 기록이 없습니다."));
+            return true;
+        }
+
+        // [Gemini 요청 사항] 취소 수수료 10% 적용
+        var fee = Math.floor(myBet.amount * rConf.CANCEL_FEE);
+        var refund = myBet.amount - fee;
+
+        // 환불 처리 (수수료는 금고에 남음)
+        util_updatePoint(user, roomData, refund, "경마 배팅 취소", roomName);
+        
+        racingData.totalPool -= myBet.amount;
+        delete racingData.bets[targetUid];
+
+        var cancelMsg = "경마 배팅을 철회했습니다.\n\n💰 원래 배팅금: " + fp(myBet.amount) + "P\n" +
+                         "⚖️ 취소 수수료(10%): -" + fp(fee) + "P\n" +
+                         "🎁 최종 환불액: " + fp(refund) + "P";
+        
+        replier.reply(formatCommand("🚫 배팅 취소 완료", user, cancelMsg, "내 잔액: " + fp(user.point) + "P"));
+        safeSaveData(data);
+        return true;
+    }
+
+    /* [기존 로직 유지] 홀짝 도박 */
     if (msg.indexOf("/홀짝 ") === 0) {
         startTracking(user, "홀짝 게임");
         try {
@@ -5242,14 +5471,13 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 if (multiplier < 0.5) multiplier = 0.5;
             }
 
-            var minBet = Math.floor((SYSTEM_CONFIG.ECO.GAMBLE_MIN || 20) * multiplier);
-            var maxBet = Math.floor((SYSTEM_CONFIG.ECO.GAMBLE_MAX || 1000) * multiplier);
+            var minBet = Math.floor((SYSTEM_CONFIG.ECO.GAMBLE_MIN || 300) * multiplier);
+            var maxBet = Math.floor((SYSTEM_CONFIG.ECO.GAMBLE_MAX || 2000) * multiplier);
 
             if (isNaN(bet) || bet < minBet) { replier.reply(formatError(user, "금액 오류", "최소 " + fp(minBet) + "P 이상 베팅해야 합니다.")); return true; }
             if (bet > maxBet) { replier.reply(formatError(user, "배팅 상한액 초과", "배팅 금액은 최대 " + fp(maxBet) + "P까지 가능합니다.")); return true; }
             if (Number(user.point) < bet) { replier.reply(formatError(user, "포인트 부족", "베팅할 포인트가 부족합니다.")); return true; }
 
-            /* [신규] 은행 파산 보호 로직 */
             var expectedPayout = Math.floor(bet * 0.9);
             if (roomData.bankReserve < expectedPayout) {
                 replier.reply(formatError(user, "은행 자금 부족", "죄송합니다. 현재 은행 금고의 현금 부족으로 도박판을 열 수 없습니다.\n🏦 현재 금고: " + fp(roomData.bankReserve) + "P"));
@@ -5268,7 +5496,6 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 checkAndHandleDefaulter(user, roomName);
             }
 
-            /* [신규] 누적 통계 데이터 업데이트 */
             if (user.totalGambleCount === undefined) user.totalGambleCount = 0;
             if (user.totalGambleWins === undefined) user.totalGambleWins = 0;
             user.totalGambleCount++;
@@ -5276,18 +5503,15 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             if (isWin) {
                 user.totalGambleWins++;
                 var res = processRepayment(user, expectedPayout, targetUid, roomName);
-                var actualGain = Number(res.actualGain);
-                util_updatePoint(user, roomData, actualGain, "홀짝 적중", roomName);
-
+                util_updatePoint(user, roomData, Number(res.actualGain), "홀짝 적중", roomName);
                 var winPrefix = isFeverActive ? "🔥 [피버] " : "🎊 ";
-                replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, "결과: [" + result + "]\n축하합니다! " + fp(actualGain) + "P를 획득했습니다." + res.repayMsg, "현재 잔액: " + fP(user.point) + "P"));
+                replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, "결과: [" + result + "]\n축하합니다! " + fp(Number(res.actualGain)) + "P를 획득했습니다." + res.repayMsg, "현재 잔액: " + fP(user.point) + "P"));
             } else {
                 util_updatePoint(user, roomData, -bet, "홀짝 미적중", roomName);
                 var losePrefix = isFeverActive ? "🔥 [피버] " : "💀 ";
                 replier.reply(formatCommand(losePrefix + "홀짝 미적중", user, "결과: [" + result + "]\n아쉽지만 " + fp(bet) + "P를 잃었습니다.", "현재 잔액: " + fP(user.point) + "P"));
             }
 
-            /* [신규] 홀짝 성취 칭호 체크 로직 */
             var winRate = (user.totalGambleWins / user.totalGambleCount) * 100;
             var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
 
@@ -5305,7 +5529,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         } catch(e) { endTracking(user, false, "CRASH: " + e); replier.reply("🚫 시스템 오류가 발생했습니다."); return true; }
     }
 
-    /* [기능 10] 티어 승급 (기존 로직 유지) */
+    /* [기존 로직 유지] 티어 승급 */
     if (msg === "/승급") {
         var totalAttempts = Number(user.dailyPromotionAttempts || 0) + Number(user.purchasedPromotionAttempts || 0);
         if (totalAttempts <= 0) { replier.reply(formatError(user, "기회 없음", "상점에서 승급권을 구매하세요.")); return true; }
@@ -5315,7 +5539,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         if (Number(user.dailyPromotionAttempts) > 0) { user.dailyPromotionAttempts--; usedDaily = true; }
         else { user.purchasedPromotionAttempts--; }
 
-        var prob = TIER_PROBS[user.tier] || { up: 50, down: 10 };
+        var prob = TIER_PROBS[user.tier] || { up: 50, stay: 40, down: 10 };
         var rand = Math.random() * 100;
         var isSundayFever = (new Date().getDay() === 0);
         if (isSundayFever) rand -= 5; 
@@ -5906,10 +6130,11 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
 (function initializeRegistry() {
     try {
         // 1. 유저 명령어 등록
+        // 섹터 6의 CMD_LIST.user에 추가된 경마 관련 명령어들을 자동으로 순회하며 등록합니다.
         for (var i = 0; i < CMD_LIST.user.length; i++) {
             var c = CMD_LIST.user[i];
             
-            // eval을 사용하여 문자열 이름("func")을 실제 함수 객체로 변환합니다.
+            // eval을 사용하여 문자열 이름(예: "_gameActionLogic")을 실제 함수 객체로 변환합니다.
             var executor = null;
             try { executor = eval(c.func); } catch(e) {}
 
@@ -5933,6 +6158,9 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
                 Log.error("❌ 관리자 명령어 등록 실패: " + a.cmd);
             }
         }
+        
+        // [Gemini 알림] 경마 시스템 로드 확인 로그 (디버깅용)
+        Log.info("🐎 [Racing System] 경마 엔진 및 관련 명령어 로드 완료.");
         
     } catch(e) {
         Log.error("Registry Init Critical Error: " + e);

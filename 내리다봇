@@ -540,57 +540,76 @@ var sprayData = {
 var selectWaitState = {}; 
 var bankProcessState = {};
 
-/* [수정] 섹터1에서 이미 선언된 변수들은 중복 선언 방지를 위해 주석 처리하거나 기존 객체 사용 */ 
-// var duelData = {}; 
-// var lottoPurchaseState = {}; 
-// var activeThefts = {}; 
-// var menuWaitState = {};
-
-/**
- * [핵심] 지능형 포인트 통합 처리 및 은행 재원 연동 함수 (v5.2 기부 시스템 추가)
- * @param {Object} user - 유저 객체
- * @param {Object} roomData - 해당 방 데이터 객체
- * @param {Number} delta - 변동할 포인트
- * @param {String} reason - 포인트 변동 사유
- */
+/* [핵심] 지능형 포인트 통합 처리 및 은행 재원 연동 함수 (v5.6 자산가 칭호 완벽 대응) */
 function util_updatePoint(user, roomData, delta, reason) {
     if (!user || isNaN(delta) || delta === 0) return;
     
     var prePoint = Number(user.point || 0);
-    
-    // [중앙은행 순환 경제 필터링 설정]
     var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급"];
-    // [수정] "은행 기부" 사유를 입고 리스트에 추가
     var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매: ", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부"];
 
     if (roomData) {
-        if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
-            roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
-        }
-
+        if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
         if (delta > 0) {
-            var isOutput = false;
-            for (var i = 0; i < bankOutputReasons.length; i++) {
-                if (reason.indexOf(bankOutputReasons[i]) !== -1) { isOutput = true; break; }
-            }
-            if (isOutput) roomData.bankReserve -= delta;
-        } 
-        else {
-            var isInput = false;
-            for (var j = 0; j < bankInputReasons.length; j++) {
-                if (reason.indexOf(bankInputReasons[j]) !== -1) { isInput = true; break; }
-            }
-            if (isInput || reason.indexOf("벌금") !== -1 || reason.indexOf("상환") !== -1) {
+            if (bankOutputReasons.some(function(r){ return reason.indexOf(r) !== -1; })) roomData.bankReserve -= delta;
+        } else {
+            if (bankInputReasons.some(function(r){ return reason.indexOf(r) !== -1; }) || reason.indexOf("벌금") !== -1 || reason.indexOf("상환") !== -1) {
                 roomData.bankReserve += Math.abs(delta);
             }
         }
     }
 
     user.point = prePoint + delta;
-    
-    if (typeof verifyPointTransaction === 'function') {
-        verifyPointTransaction(user, prePoint, delta, reason);
+
+    /* [최적화] 자산가 칭호 실시간 판별 엔진 */
+    var totalAssets = Number(user.point) + Number(user.bank || 0);
+    var assetTitles = [
+        { name: "대부호", limit: 1000000 },
+        { name: "부호", limit: 500000 },
+        { name: "거상", limit: 300000 },
+        { name: "재벌", limit: 100000 }
+    ];
+
+    var currentTitle = user.title || "";
+    var suitableTitle = "";
+    var requiredLimit = 0;
+
+    // 1. 현재 자산에 맞는 적정 칭호 찾기
+    for (var i = 0; i < assetTitles.length; i++) {
+        if (totalAssets >= assetTitles[i].limit) {
+            suitableTitle = assetTitles[i].name;
+            requiredLimit = assetTitles[i].limit;
+            break;
+        }
     }
+
+    // 2. 칭호 변경 감지 (상승 또는 하락)
+    var isAssetTitle = assetTitles.some(function(t){ return t.name === currentTitle; });
+
+    if (currentTitle !== suitableTitle) {
+        var targetRoom = (roomData && roomData.roomName) ? roomData.roomName : "내리다";
+
+        // A. 새로운 상위 칭호 획득
+        if (suitableTitle !== "" && (currentTitle === "" || totalAssets >= requiredLimit)) {
+            if (!user.inventory) user.inventory = [];
+            if (!user.inventory.some(function(it){ return it.title === suitableTitle; })) {
+                user.inventory.push({ id: 700 + i, name: "[" + suitableTitle + "] 칭호", icon: "💰", effect: "title", title: suitableTitle });
+            }
+            user.title = suitableTitle;
+            var winMsg = "[🎖️ 신규 칭호 획득]\n━━━━━━━━━━━━━━━\n*" + user.name + "*님\n\n축하합니다! 총 자산이 *" + fp(totalAssets) + "P*를 돌파하여 *[" + suitableTitle + "]* 칭호를 획득했습니다!\n\n✨ *상태:* [" + suitableTitle + "] 칭호 자동 장착 완료\n💼 *보관:* 가방에 영구 저장되었습니다.\n━━━━━━━━━━━━━━━\n⚠️ 자산 기준 미달 시 칭호가 자동 해제됩니다.";
+            try { Api.replyRoom(targetRoom, winMsg); } catch(e){}
+        } 
+        // B. 자격 미달로 인한 칭호 소멸 또는 강등
+        else if (isAssetTitle && (suitableTitle === "" || totalAssets < assetTitles.find(function(t){return t.name === currentTitle}).limit)) {
+            var oldTitle = currentTitle;
+            user.title = suitableTitle; // 다음 단계 칭호로 강등되거나 공백 처리
+            var loseMsg = "📉 [칭호 자격 상실]\n━━━━━━━━━━━━━━━\n*" + user.name + "*님\n총 자산이 기준치 미만으로 하락하여 *[" + oldTitle + "]* 칭호가 해제되었습니다.";
+            if (suitableTitle !== "") loseMsg += "\n(현재 자산에 맞는 [" + suitableTitle + "] 칭호로 교체되었습니다.)";
+            try { Api.replyRoom(targetRoom, loseMsg); } catch(e){}
+        }
+    }
+
+    if (typeof verifyPointTransaction === 'function') verifyPointTransaction(user, prePoint, delta, reason);
 }
 
 /* [신규] 포인트 단위 쉼표 포맷팅 함수 (안전 모드) */
@@ -962,6 +981,55 @@ function getSimpleDate() { var d = new Date(); return d.getFullYear() + "-" + ("
 function getSimpleSeason() { var d = new Date(); return d.getFullYear().toString().slice(-2) + "-" + (d.getMonth() + 1) + "시즌"; }
 function generateUUID() { return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) { var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8); return v.toString(16); }); }
 
+/**
+ * [신규] 성취 기반 칭호 자동 부여 및 알림 통합 함수 (v5.5)
+ * @param {Object} user - 유저 객체
+ * @param {Object} replier - 응답 객체
+ * @param {String} titleName - 부여할 칭호 이름
+ * @param {Number} titleId - 칭호 고유 ID (인벤토리 관리용)
+ * @param {String} icon - 칭호 아이콘
+ * @param {String} condDesc - 달성 조건 문구 (예: "도박 횟수 100회")
+ * @param {String} guideText - 하단 가이드 멘트
+ */
+function util_checkAndAwardTitle(user, replier, titleName, titleId, icon, condDesc, guideText) {
+    if (!user.inventory) user.inventory = [];
+    
+    // 1. 중복 획득 방지 (이미 가방에 동일한 칭호가 있으면 종료)
+    var hasTitle = false;
+    for (var i = 0; i < user.inventory.length; i++) {
+        if (user.inventory[i].title === titleName) {
+            hasTitle = true;
+            break;
+        }
+    }
+    if (hasTitle) return false;
+
+    // 2. 가방(인벤토리)에 칭호 아이템 추가
+    user.inventory.push({ 
+        id: titleId, 
+        name: "[" + titleName + "] 칭호", 
+        icon: icon, 
+        effect: "title", 
+        title: titleName 
+    });
+
+    // 3. 칭호 즉시 자동 장착
+    user.title = titleName;
+
+    // 4. 요청된 포맷의 칭호 획득 알림 발송
+    var msg = "[🎖️ 신규 칭호 획득]\n" +
+              "━━━━━━━━━━━━━━━\n" +
+              "*" + (user.name || "유저") + "*님\n\n" +
+              condDesc + "를 달성하여 *[" + titleName + "]* 칭호를 획득했습니다!\n\n" +
+              "✨ *상태:* [" + titleName + "] 칭호 자동 장착 완료\n" +
+              "💼 *보관:* 가방에 영구 저장되었습니다.\n" +
+              "━━━━━━━━━━━━━━━\n" +
+              "💡 " + guideText;
+
+    replier.reply(msg);
+    return true;
+}
+
 //==========섹터12==========
 
 /* 경찰 출동 결과 처리 함수 */
@@ -1002,11 +1070,11 @@ function processPoliceResult(roomName, thiefUid, victimUid) {
     
     /* [수정] 물가/완충 멘트 삭제 완료 */
     var msg = "🚨 [경찰 출동]\n대상: " + getDisplayName(thief) + "\n내용: 도둑질 현행범 체포\n패널티: -" + fp(actualPenalty) + "P / 감옥 1시간\n내 잔액: " + fp(thief.point) + "P";
-Api.replyRoom(roomName, formatAdmin("🚓 체포 완료", msg));
+    Api.replyRoom(roomName, formatAdmin("🚓 체포 완료", msg));
     safeSaveData(data);
 }
 
-/* 도둑질 성공 결과 처리 함수 (검증 적용) */
+/* 도둑질 성공 결과 처리 함수 (검증 및 칭호 부여 적용) */
 function processTheftResult(roomName, thiefUid, victimUid) {
     var data = getDatabase();
     if (!data) return;
@@ -1036,6 +1104,20 @@ function processTheftResult(roomName, thiefUid, victimUid) {
     var tPre = Number(thief.point);
     thief.point = Number(thief.point) + Number(res.actualGain);
     verifyPointTransaction(thief, tPre, Number(res.actualGain), "도둑질 성공");
+    
+    /* [신규] 도둑질 누적 통계 및 칭호 체크 */
+    if (thief.totalTheftSuccess === undefined) thief.totalTheftSuccess = 0;
+    thief.totalTheftSuccess++;
+
+    // 칭호 부여 로직 (섹터 11의 util_checkAndAwardTitle 사용)
+    var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
+    if (thief.totalTheftSuccess >= 50) {
+        util_checkAndAwardTitle(thief, replierStub, "괴도", 1203, "👤", "도둑질 성공 50회", "흔적도 없이 사라지는 전설의 도둑이 되었습니다.");
+    } else if (thief.totalTheftSuccess >= 30) {
+        util_checkAndAwardTitle(thief, replierStub, "대도", 1202, "👺", "도둑질 성공 30회", "50회 성공 시 전설의 [괴도]가 됩니다.");
+    } else if (thief.totalTheftSuccess >= 10) {
+        util_checkAndAwardTitle(thief, replierStub, "좀도둑", 1201, "🧤", "도둑질 성공 10회", "30회 성공 시 [대도]에 도전하세요!");
+    }
     
     delete activeThefts[victimUid]; 
     
@@ -2171,7 +2253,7 @@ if (uidCache[cacheKey] && roomData.users[uidCache[cacheKey]]) {
     if (targetUid) uidCache[cacheKey] = targetUid;
 }
 
-/* 신규 유저 등록 및 환영 메시지 (도배 방지 시스템 변수 통합) */
+/* 신규 유저 등록 및 환영 메시지 (도배 방지 시스템 변수 통합 및 칭호 통계 필드 추가) */
 if (!targetUid) {
     targetUid = generateUUID();
     roomData.users[targetUid] = { 
@@ -2188,7 +2270,13 @@ if (!targetUid) {
         chatLog: [],           // 채팅 발송 시각 기록 배열
         timeoutEndTime: 0,     // 타임아웃 종료 시각 (0이면 정상 상태)
         /* [신규] 유물 시스템 데이터 초기화 */
-        artifactPieces: 0      // 보유 중인 유물 조각 수
+        artifactPieces: 0,     // 보유 중인 유물 조각 수
+        /* [신규] 칭호 시스템용 누적 통계 데이터 */
+        totalGambleCount: 0,   // 홀짝 총 판수
+        totalGambleWins: 0,    // 홀짝 총 승리수
+        totalTheftSuccess: 0,  // 도둑질 총 성공 횟수
+        totalInvestAmount: 0,  // 주식 총 누적 매수액
+        totalMiningTime: 0     // 광산 총 누적 채굴 시간(분)
     };
     
     uidCache[cacheKey] = targetUid;
@@ -3533,9 +3621,9 @@ function _handleLottoLogic(msg, user, data, replier, roomName, targetUid) {
 //==========섹터29==========
 
 /**
- * [독립형] 방치형 광산 시스템 로직 구현부
+ * [독립형] 방치형 광산 시스템 로직 구현부 (누적 시간 및 성취 칭호 통합 버전)
  * 설명: 섹터 46(구 섹터 27 호출부)에서 호출되며, 광산 시작/정보/종료 및 보상 정산 로직을 수행합니다.
- * 수정 사항: 중앙은행 폐쇄형 경제 연동 (수익 지급 시 금고에서 차감)
+ * 수정 사항: 중앙은행 폐쇄형 경제 연동 및 누적 시간 칭호(두더지~채굴의신) 반영
  */
 function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName]; 
@@ -3566,7 +3654,7 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 2. 광산 정보
+    // 2. 광산 정보 (누적 채굴 시간 표시 추가)
     if (msg === "/광산정보") {
         if (!user.mining || !user.mining.active) {
             replier.reply(formatError(user, "상태 오류", "현재 광산에서 작업 중이 아닙니다."));
@@ -3574,6 +3662,7 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         }
 
         var durationMin = Math.floor((Date.now() - user.mining.startTime) / 60000);
+        var totalMin = (user.totalMiningTime || 0) + durationMin;
         
         var multiplier = 1.0;
         if (roomData.economyBase && roomData.economyBase > 0) {
@@ -3595,11 +3684,16 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         var basePrice = SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN; 
         var estimatedEarn = Math.floor(durationMin * basePrice * multiplier);
 
-        replier.reply(formatCommand("⛏️ 광산 진행 현황", user, "\n채굴 진행: " + durationMin + "분째...\n예상 기본수익: +" + fp(estimatedEarn) + "P\n\n✨ 광물 발견 수익은 종료 시 합산됩니다.", "종료 및 정산은 [/광산종료]"));
+        var infoBody = "\n채굴 진행: " + durationMin + "분째...\n" +
+                       "📈 누적 채굴: " + fp(totalMin) + "분 경과\n" +
+                       "예상 기본수익: +" + fp(estimatedEarn) + "P\n\n" +
+                       "✨ 광물 발견 수익은 종료 시 합산됩니다.";
+
+        replier.reply(formatCommand("⛏️ 광산 진행 현황", user, infoBody, "종료 및 정산은 [/광산종료]"));
         return true;
     }
 
-    // 3. 광산 종료
+    // 3. 광산 종료 (누적 시간 및 칭호 부여 로직 통합)
     if (msg === "/광산종료") {
         if (!user.mining || !user.mining.active) {
             replier.reply(formatError(user, "상태 오류", "현재 작업 중이지 않습니다."));
@@ -3650,7 +3744,6 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
             var rand = Math.random();
             var minIncome = basePrice * multiplier;
 
-            // 광물 계산
             if (rand < conf.DIA_PROB) { 
                 diaCount++; 
                 totalEarn += (minIncome * conf.DIA_MULT); 
@@ -3664,7 +3757,6 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
                 totalEarn += minIncome; 
             }
 
-            // [신규] 유물 조각 계산 (0.05%)
             if (Math.random() < (conf.ARTIFACT_CHANCE || 0.0005)) {
                 artifactFound++;
             }
@@ -3674,11 +3766,21 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         var borrowerUid = targetUid || user.uid; 
         var res = processRepayment(user, totalEarn, borrowerUid, roomName); 
         
-        /* [핵심 수정] 중앙은행 순환 경제 연동 */
-        // util_updatePoint 호출 시 roomData를 전달하여 금고(bankReserve)에서 수익금이 차감되도록 함
         util_updatePoint(user, roomData, Number(res.actualGain), "광산 채굴");
 
-        // 유물 데이터 누적 및 칭호 체크
+        // [신규] 누적 시간 업데이트
+        if (user.totalMiningTime === undefined) user.totalMiningTime = 0;
+        user.totalMiningTime += durationMin;
+
+        // [신규] 광산 누적 시간 칭호 체크
+        if (user.totalMiningTime >= 7000) {
+            util_checkAndAwardTitle(user, replier, "채굴의신", 2903, "⛏️", "누적 채굴 7,000분", "유물 도감도 함께 확인해보세요! [/유물도감]");
+        } else if (user.totalMiningTime >= 5000) {
+            util_checkAndAwardTitle(user, replier, "석공", 2902, "⛏️", "누적 채굴 5,000분", "7,000분 달성 시 [채굴의신]을 획득합니다.");
+        } else if (user.totalMiningTime >= 1000) {
+            util_checkAndAwardTitle(user, replier, "두더지", 2901, "⛏️", "누적 채굴 1,000분", "5,000분 달성 시 [석공]에 도전하세요!");
+        }
+
         user.artifactPieces = (user.artifactPieces || 0) + artifactFound;
         var goal = conf.ARTIFACT_GOAL || 10;
         var titleAwarded = false;
@@ -3692,18 +3794,19 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
             if (!hasTombTitle) {
                 user.inventory.push({ id: 888, name: "[도굴왕] 칭호", icon: "🏺", effect: "title", title: "도굴왕" });
                 titleAwarded = true;
+                user.title = "도굴왕"; // 도굴왕도 자동 장착 적용
             }
         }
 
         user.mining.active = false;
         
         var repayInfo = res.repayMsg ? "\n\n" + res.repayMsg : "";
+
         var resultBody = "\n⛏️ 채굴 시간: " + durationMin + "분\n" +
                          "🟫 구리 " + copperCount + "회 🗂️ 황금 " + goldCount + "회\n" +
                          "💎 다이아 " + diaCount + "회\n\n" +
                          "💰 채굴 수익: " + fp(totalEarn) + "P" + repayInfo;
 
-        // 조각 발견 시 추가 멘트
         if (artifactFound > 0) {
             resultBody += "\n\n✨ [특별 발견] ✨\n━━━━━━━━━━━━━━━\n" +
                            "먼지 쌓인 흙더미 속에서 \n" +
@@ -3711,10 +3814,9 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
                            "🧩 유물 조각 획득 (+" + artifactFound + ")\n" +
                            "(현재 보유: " + user.artifactPieces + " / " + goal + " 개)";
         }
-                         
+                                 
         replier.reply(formatCommand("⛏️ 채굴 결과", user, resultBody, "내 잔액: " + fP(user.point) + "P"));
 
-        // 유물 수집 완료 축하 메시지 (칭호 최초 획득 시)
         if (titleAwarded) {
             var celebMsg = "드디어 " + goal + "개의 유물 조각을 모두 모았습니다.\n\n" +
                            "흩어져 있던 조각들이 하나로 합쳐지며 \n" +
@@ -3722,7 +3824,7 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
                            "당신의 온몸을 감쌉니다...\n\n" +
                            "🎁 수집 보상 완료\n" +
                            "🎖️ 칭호 획득: [도굴왕]";
-            replier.reply(formatCommand("🏺 [전설의 완성: 도굴왕]", user, celebMsg, "[/가방] 메뉴에서 장착 가능합니다!"));
+            replier.reply(formatCommand("🏺 [전설의 완성: 도굴왕]", user, celebMsg, "칭호가 자동 장착되었습니다."));
         }
 
         safeSaveData(data);
@@ -4978,7 +5080,7 @@ function _gameActionLogic(msg, user, data, replier, roomName, targetUid) {
 /**
  * [게임 하위 모듈 3-1] 액션 및 도박 게임 (홀짝 & 승급)
  * 설명: 독립된 함수로 구성하여 컴파일 오류를 방지하고 유지보수성을 높였습니다.
- * 수정 사항: 중앙은행 폐쇄형 경제 연동 및 파산 보호 로직 적용
+ * 수정 사항: 중앙은행 폐쇄형 경제 연동 및 성취 기반 칭호(꾼~도박의신) 반영
  */
 function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
@@ -5030,7 +5132,6 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             if (Number(user.point) < bet) { replier.reply(formatError(user, "포인트 부족", "베팅할 포인트가 부족합니다.")); return true; }
 
             /* [신규] 은행 파산 보호 로직 */
-            // 은행 금고에 유저가 승리했을 때 줄 수 있는 배당금이 있는지 체크
             var expectedPayout = Math.floor(bet * 0.9);
             if (roomData.bankReserve < expectedPayout) {
                 replier.reply(formatError(user, "은행 자금 부족", "죄송합니다. 현재 은행 금고의 현금 부족으로 도박판을 열 수 없습니다.\n🏦 현재 금고: " + fp(roomData.bankReserve) + "P"));
@@ -5049,29 +5150,44 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 checkAndHandleDefaulter(user, roomName);
             }
 
-            if (pick === result) {
+            /* [신규] 누적 통계 데이터 업데이트 */
+            if (user.totalGambleCount === undefined) user.totalGambleCount = 0;
+            if (user.totalGambleWins === undefined) user.totalGambleWins = 0;
+            user.totalGambleCount++;
+
+            if (isWin) {
+                user.totalGambleWins++;
                 var res = processRepayment(user, expectedPayout, targetUid, roomName);
                 var actualGain = Number(res.actualGain);
-                
-                /* [핵심 수정] 중앙은행 연동: 당첨금을 금고에서 지급 */
                 util_updatePoint(user, roomData, actualGain, "홀짝 적중");
 
                 var winPrefix = isFeverActive ? "🔥 [피버] " : "🎊 ";
                 replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, "결과: [" + result + "]\n축하합니다! " + fp(actualGain) + "P를 획득했습니다." + res.repayMsg, "현재 잔액: " + fP(user.point) + "P"));
             } else {
-                /* [핵심 수정] 중앙은행 연동: 잃은 베팅금을 금고로 회수 */
                 util_updatePoint(user, roomData, -bet, "홀짝 미적중");
-
                 var losePrefix = isFeverActive ? "🔥 [피버] " : "💀 ";
                 replier.reply(formatCommand(losePrefix + "홀짝 미적중", user, "결과: [" + result + "]\n아쉽지만 " + fp(bet) + "P를 잃었습니다.", "현재 잔액: " + fP(user.point) + "P"));
             }
+
+            /* [신규] 홀짝 성취 칭호 체크 로직 */
+            var winRate = (user.totalGambleWins / user.totalGambleCount) * 100;
+            var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
+
+            if (user.totalGambleCount >= 500) {
+                util_checkAndAwardTitle(user, replierStub, "도박의신", 4003, "🎲", "도박 횟수 500회", "운과 실력을 모두 겸비한 도박의 신이 되었습니다.");
+            } else if (user.totalGambleCount >= 100 && winRate >= 60) {
+                util_checkAndAwardTitle(user, replierStub, "타짜", 4002, "🎴", "총 승률 60% 이상", "도박판의 흐름을 지배하는 타짜로 인정받았습니다.");
+            } else if (user.totalGambleCount >= 100) {
+                util_checkAndAwardTitle(user, replierStub, "꾼", 4001, "🃏", "도박 횟수 100회", "승률 60% 달성 시 [타짜]에 도전하세요!");
+            }
+
             safeSaveData(data);
             endTracking(user, true, "완료");
             return true;
         } catch(e) { endTracking(user, false, "CRASH: " + e); replier.reply("🚫 시스템 오류가 발생했습니다."); return true; }
     }
 
-    /* [기능 10] 티어 승급 (변경 없음) */
+    /* [기능 10] 티어 승급 (기존 로직 유지) */
     if (msg === "/승급") {
         var totalAttempts = Number(user.dailyPromotionAttempts || 0) + Number(user.purchasedPromotionAttempts || 0);
         if (totalAttempts <= 0) { replier.reply(formatError(user, "기회 없음", "상점에서 승급권을 구매하세요.")); return true; }
@@ -5377,7 +5493,7 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
 //==========섹터43==========
 
 /**
- * [게임 하위 모듈 4] 주식 투자 관리
+ * [게임 하위 모듈 4] 주식 투자 관리 (성취 기반 칭호 통합 버전)
  * 기능: 주식 시세 조회, 내 주식 확인, 매수, 매도
  * 설명: 폐쇄형 순환 경제 연동 - 매수금은 금고 입고, 매도금은 금고 지출
  */
@@ -5456,7 +5572,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 3. 주식 매수 (금고 입고 연동)
+    // 3. 주식 매수 (금고 입고 및 투자 칭호 연동)
     if (msg.indexOf("/매수 ") === 0) {
         if (user.mining && user.mining.active) { replier.reply(formatError(user, "작업 중", "광산에서 채굴 중에는 주식 거래를 할 수 없습니다.")); return true; }
         var currentHour = new Date().getHours();
@@ -5472,8 +5588,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var totalPrice = Math.floor(Number(stock.price) * count);
         if (Number(user.point) < totalPrice) { replier.reply(formatError(user, "포인트 부족", "필요: " + fp(totalPrice) + "P")); return true; }
         
-        /* [핵심 수정] 중앙은행 연동: 매수 대금을 금고에 입고 */
-        // util_updatePoint에서 "주식 매수" 사유를 감지하여 roomData.bankReserve를 증가시킴
+        /* [핵심] 중앙은행 연동: 매수 대금을 금고에 입고 */
         util_updatePoint(user, roomData, -totalPrice, "주식 매수");
 
         if (!user.stockHoldings) user.stockHoldings = {};
@@ -5483,6 +5598,19 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         
         user.stockAvg[sName] = Math.floor(((curAvg * curCount) + totalPrice) / (curCount + count));
         user.stockHoldings[sName] = curCount + count;
+
+        /* [신규] 누적 투자 데이터 업데이트 및 칭호 체크 */
+        if (user.totalInvestAmount === undefined) user.totalInvestAmount = 0;
+        user.totalInvestAmount += totalPrice;
+
+        var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
+        if (user.totalInvestAmount >= 7000000) {
+            util_checkAndAwardTitle(user, replierStub, "투자의신", 4303, "📈", "누적 투자액 7,000,000P", "차트를 지배하여 투자의신에 도달했습니다!");
+        } else if (user.totalInvestAmount >= 3000000) {
+            util_checkAndAwardTitle(user, replierStub, "큰손", 4302, "📉", "누적 투자액 3,000,000P", "차트를 지배하여 [투자의신]에 도달하세요!");
+        } else if (user.totalInvestAmount >= 1000000) {
+            util_checkAndAwardTitle(user, replierStub, "개미", 4301, "🐜", "누적 투자액 1,000,000P", "시장을 배우는 단계입니다. [큰손]을 향해 나아가세요!");
+        }
         
         if (!data.stockTraffic) data.stockTraffic = {};
         if (!data.stockTraffic[sName]) data.stockTraffic[sName] = { buy: 0, sell: 0 };
@@ -5514,10 +5642,9 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var fee = Math.floor(totalSell * 0.05); 
         var finalPrice = totalSell - fee; 
 
-        /* [핵심 수정] 은행 파산 보호 (뱅크런 방지) */
-        // 은행 금고에 유저에게 줄 매도 대금이 있는지 확인
+        /* [핵심] 은행 파산 보호 (뱅크런 방지) */
         if (roomData.bankReserve < finalPrice) {
-            replier.reply(formatError(user, "거래 일시 중단", "죄송합니다. 현재 중앙은행의 현금 유동성 부족으로 주식 매도 대금 지급이 불가능합니다.\n다른 유저들의 매수나 예금이 발생할 때까지 기다려주세요.\n\n🏦 현재 은행 금고: " + fp(roomData.bankReserve) + "P"));
+            replier.reply(formatError(user, "거래 일시 중단", "죄송합니다. 현재 중앙은행의 현금 유동성 부족으로 주식 매도 대금 지급이 불가능합니다.\n\n🏦 현재 은행 금고: " + fp(roomData.bankReserve) + "P"));
             return true;
         }
 
@@ -5535,8 +5662,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         
         var res = processRepayment(user, finalPrice, targetUid, roomName); 
         
-        /* [핵심 수정] 중앙은행 연동: 매도 대금을 금고에서 차감 지급 */
-        // util_updatePoint에서 "주식 매도" 사유를 감지하여 roomData.bankReserve를 감소시킴
+        /* [핵심] 중앙은행 연동: 매도 대금을 금고에서 차감 지급 */
         util_updatePoint(user, roomData, Number(res.actualGain), "주식 매도");
         
         if (!data.stockTraffic) data.stockTraffic = {};

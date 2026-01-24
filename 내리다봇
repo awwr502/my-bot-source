@@ -545,27 +545,48 @@ var bankProcessState = {};
 // var menuWaitState = {};
 
 /**
- * [핵심] 포인트 통합 처리 및 은행 재원 자동 연동 함수
- * 설명: 유저의 포인트를 증감시키며, 차감(소멸)되는 포인트는 자동으로 은행 재원에 적립합니다.
+ * [핵심] 지능형 포인트 통합 처리 및 은행 재원 연동 함수 (v5.1 폐쇄형 순환 경제 적용)
+ * 설명: 출석, 매도, 채굴 등 보상은 은행 금고에서 지출하고, 매수, 도박 패배 등은 금고로 환수합니다.
  * @param {Object} user - 유저 객체
- * @param {Object} roomData - 해당 방 데이터 객체 (재원 적립용)
+ * @param {Object} roomData - 해당 방 데이터 객체 (재원 적립/차감용)
  * @param {Number} delta - 변동할 포인트 (양수면 지급, 음수면 차감/소멸)
- * @param {String} reason - 포인트 변동 사유 (로그용)
+ * @param {String} reason - 포인트 변동 사유 (로그용 및 판별용)
  */
 function util_updatePoint(user, roomData, delta, reason) {
     if (!user || isNaN(delta) || delta === 0) return;
     
     var prePoint = Number(user.point || 0);
     
-    // [중앙은행 시스템] 포인트가 차감되는 경우(delta < 0) 자동으로 은행 재원에 합산
-    if (delta < 0) {
-        if (roomData) {
-            // [수정] 재원 데이터가 없는 경우 섹터 1의 설정값(INITIAL_RESERVE)으로 초기화
-            if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
-                roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
+    // [중앙은행 순환 경제 필터링 설정]
+    // 1. 은행 금고에서 지출되는 사유 (유저가 벌 때)
+    var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급"];
+    // 2. 은행 금고로 입금되는 사유 (유저가 쓸 때)
+    var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매: ", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공"];
+
+    if (roomData) {
+        // 재원 데이터가 없는 경우 초기화
+        if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
+            roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
+        }
+
+        // [폐쇄형 로직 A] 유저가 이득을 볼 때 -> 은행 재고 차감
+        if (delta > 0) {
+            var isOutput = false;
+            for (var i = 0; i < bankOutputReasons.length; i++) {
+                if (reason.indexOf(bankOutputReasons[i]) !== -1) { isOutput = true; break; }
             }
-            // 유저가 잃은 포인트의 절대값을 은행 재원에 입금
-            roomData.bankReserve += Math.abs(delta);
+            if (isOutput) roomData.bankReserve -= delta;
+        } 
+        // [폐쇄형 로직 B] 유저가 손실을 볼 때 -> 은행 재고 가산
+        else {
+            var isInput = false;
+            for (var j = 0; j < bankInputReasons.length; j++) {
+                if (reason.indexOf(bankInputReasons[j]) !== -1) { isInput = true; break; }
+            }
+            // 벌금, 압류 등 특수 사유 포함
+            if (isInput || reason.indexOf("벌금") !== -1 || reason.indexOf("상환") !== -1) {
+                roomData.bankReserve += Math.abs(delta);
+            }
         }
     }
 
@@ -753,6 +774,7 @@ function getItemPrice(item, user, roomName) {
 
     if (roomData && roomData.economyBase && roomData.economyBase > 0) {
         var currentEco = calculateEconomy(data, roomName);
+        // 물가 배율 공식: $multiplier = 1 + (rawRatio - 1) \times damping$
         var rawRatio = currentEco.total / roomData.economyBase;
         
         /* [수정] 완충 비율(damping) 적용 */
@@ -771,7 +793,7 @@ function getItemPrice(item, user, roomName) {
     return basePrice;
 }
 
-/* 경제 부양 지원금 체크 함수 (사채 빚 포함 순자산 기준 및 출력 형식 수정) */
+/* 경제 부양 지원금 체크 함수 (사채 빚 포함 순자산 기준 및 순환 경제 연동) */
 function checkEconomicStimulus(user, roomName, isManual) {
     if ((user.totalAttendance || 0) < 2) return;
     
@@ -808,6 +830,7 @@ function checkEconomicStimulus(user, roomName, isManual) {
     var totalDebt = bankDebt + sacheDebt;
 
     /* 3. 실질 순자산(Net Worth) 판정 */
+    // 실질 자산 공식: $myNetWorth = totalAssets - totalDebt$
     var myNetWorth = totalAssets - totalDebt;
     var targetLine = Math.floor(avgAsset * 0.4);
     
@@ -826,14 +849,17 @@ function checkEconomicStimulus(user, roomName, isManual) {
         
         if (giveAmount < 100) return;
 
-        user.point = Number(user.point) + giveAmount;
+        /* [핵심 수정] 중앙은행 연동 및 통합 포인트 처리 */
+        // 직접 할당(user.point += giveAmount) 대신 util_updatePoint를 호출하여 금고 잔액을 차감함
+        util_updatePoint(user, roomData, giveAmount, "민생지원금 지급");
+        
         user.dailyStimulusCount = currentCount + 1;
 
         /* 경제 부양 지원금 체크 함수 - 현재 잔액 표시 추가 */
-var msg = "\n경제 활성화를 위한 민생지원금이 지급되었습니다.\n" +
-          "💰 지원금 지급: +" + fp(giveAmount) + "P";
+        var msg = "\n경제 활성화를 위한 민생지원금이 지급되었습니다.\n" +
+                  "💰 지원금 지급: +" + fp(giveAmount) + "P";
 
-Api.replyRoom(roomName, formatCommand("🎁 민생지원금 안내", user, msg, "내 잔액: " + fP(user.point) + "P"));
+        Api.replyRoom(roomName, formatCommand("🎁 민생지원금 안내", user, msg, "내 잔액: " + fP(user.point) + "P"));
         safeSaveData(data);
     }
 }
@@ -3482,7 +3508,7 @@ function _handleLottoLogic(msg, user, data, replier, roomName, targetUid) {
 /**
  * [독립형] 방치형 광산 시스템 로직 구현부
  * 설명: 섹터 46(구 섹터 27 호출부)에서 호출되며, 광산 시작/정보/종료 및 보상 정산 로직을 수행합니다.
- * 수정 사항: 유물 조각 발견 확률(0.05%) 및 [도굴왕] 칭호 자동 지급 로직 추가
+ * 수정 사항: 중앙은행 폐쇄형 경제 연동 (수익 지급 시 금고에서 차감)
  */
 function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName]; 
@@ -3621,9 +3647,9 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         var borrowerUid = targetUid || user.uid; 
         var res = processRepayment(user, totalEarn, borrowerUid, roomName); 
         
-        var prePoint = Number(user.point);
-        user.point = Number(user.point) + Number(res.actualGain);
-        verifyPointTransaction(user, prePoint, Number(res.actualGain), "광산 채굴 최종정산");
+        /* [핵심 수정] 중앙은행 순환 경제 연동 */
+        // util_updatePoint 호출 시 roomData를 전달하여 금고(bankReserve)에서 수익금이 차감되도록 함
+        util_updatePoint(user, roomData, Number(res.actualGain), "광산 채굴");
 
         // 유물 데이터 누적 및 칭호 체크
         user.artifactPieces = (user.artifactPieces || 0) + artifactFound;
@@ -4901,6 +4927,7 @@ function _gameActionLogic(msg, user, data, replier, roomName, targetUid) {
 /**
  * [게임 하위 모듈 3-1] 액션 및 도박 게임 (홀짝 & 승급)
  * 설명: 독립된 함수로 구성하여 컴파일 오류를 방지하고 유지보수성을 높였습니다.
+ * 수정 사항: 중앙은행 폐쇄형 경제 연동 및 파산 보호 로직 적용
  */
 function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
@@ -4908,7 +4935,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
 
     // 중앙은행 재원 시스템 초기화
     if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
-        roomData.bankReserve = 10000;
+        roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
     }
 
     /* [기능 9] 홀짝 도박 */
@@ -4930,7 +4957,6 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             var pick = ps[1];
             var bet = parseInt(ps[2].replace(/,/g, ""));
             
-            // [원본 복구] 입력 검증 로직
             if (pick !== "홀" && pick !== "짝") { 
                 replier.reply(formatError(user, "입력 오류", "홀 또는 짝만 선택 가능합니다.")); 
                 return true; 
@@ -4951,15 +4977,20 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             if (isNaN(bet) || bet < minBet) { replier.reply(formatError(user, "금액 오류", "최소 " + fp(minBet) + "P 이상 베팅해야 합니다.")); return true; }
             if (bet > maxBet) { replier.reply(formatError(user, "배팅 상한액 초과", "배팅 금액은 최대 " + fp(maxBet) + "P까지 가능합니다.")); return true; }
             if (Number(user.point) < bet) { replier.reply(formatError(user, "포인트 부족", "베팅할 포인트가 부족합니다.")); return true; }
+
+            /* [신규] 은행 파산 보호 로직 */
+            // 은행 금고에 유저가 승리했을 때 줄 수 있는 배당금이 있는지 체크
+            var expectedPayout = Math.floor(bet * 0.9);
+            if (roomData.bankReserve < expectedPayout) {
+                replier.reply(formatError(user, "은행 자금 부족", "죄송합니다. 현재 은행 금고의 현금 부족으로 도박판을 열 수 없습니다.\n🏦 현재 금고: " + fp(roomData.bankReserve) + "P"));
+                return true;
+            }
             
-            // [원본 복구] prePoint 선언
-            var prePoint = Number(user.point);
             var isFeverActive = (data.feverData && data.feverData.active === true);
             var winProb = isFeverActive ? SYSTEM_CONFIG.PROB.ODD_EVEN_FEVER : SYSTEM_CONFIG.PROB.ODD_EVEN_WIN;
             var isWin = Math.random() < winProb; 
             var result = isWin ? pick : (pick === "홀" ? "짝" : "홀");
             
-            // [원본 복구] 신용도 페널티 원본 로직
             user.dailyGambleCount = (user.dailyGambleCount || 0) + 1;
             var creditPenalty = (user.dailyGambleCount > 10) ? 1 : 0;
             if (creditPenalty > 0) {
@@ -4968,21 +4999,17 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             }
 
             if (pick === result) {
-                var payout = Math.floor(bet * 0.9);
-                var commission = bet - payout;
-                var res = processRepayment(user, payout);
+                var res = processRepayment(user, expectedPayout, targetUid, roomName);
                 var actualGain = Number(res.actualGain);
                 
-                // [원본 복구] 수동 적립 및 포인트 처리
-                util_updatePoint(user, null, actualGain, "홀짝 적중");
-                roomData.bankReserve = (Number(roomData.bankReserve) || 0) + commission;
+                /* [핵심 수정] 중앙은행 연동: 당첨금을 금고에서 지급 */
+                util_updatePoint(user, roomData, actualGain, "홀짝 적중");
 
                 var winPrefix = isFeverActive ? "🔥 [피버] " : "🎊 ";
                 replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, "결과: [" + result + "]\n축하합니다! " + fp(actualGain) + "P를 획득했습니다." + res.repayMsg, "현재 잔액: " + fP(user.point) + "P"));
             } else {
-                // [원본 복구] 수동 적립 및 포인트 처리
-                util_updatePoint(user, null, -bet, "홀짝 미적중");
-                roomData.bankReserve = (Number(roomData.bankReserve) || 0) + bet;
+                /* [핵심 수정] 중앙은행 연동: 잃은 베팅금을 금고로 회수 */
+                util_updatePoint(user, roomData, -bet, "홀짝 미적중");
 
                 var losePrefix = isFeverActive ? "🔥 [피버] " : "💀 ";
                 replier.reply(formatCommand(losePrefix + "홀짝 미적중", user, "결과: [" + result + "]\n아쉽지만 " + fp(bet) + "P를 잃었습니다.", "현재 잔액: " + fP(user.point) + "P"));
@@ -4993,7 +5020,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         } catch(e) { endTracking(user, false, "CRASH: " + e); replier.reply("🚫 시스템 오류가 발생했습니다."); return true; }
     }
 
-    /* [기능 10] 티어 승급 */
+    /* [기능 10] 티어 승급 (변경 없음) */
     if (msg === "/승급") {
         var totalAttempts = Number(user.dailyPromotionAttempts || 0) + Number(user.purchasedPromotionAttempts || 0);
         if (totalAttempts <= 0) { replier.reply(formatError(user, "기회 없음", "상점에서 승급권을 구매하세요.")); return true; }
@@ -5301,14 +5328,16 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
 /**
  * [게임 하위 모듈 4] 주식 투자 관리
  * 기능: 주식 시세 조회, 내 주식 확인, 매수, 매도
- * 설명: 출력 텍스트를 원본과 동일하게 유지하며, 매도 수수료는 은행 재원에 적립됩니다.
+ * 설명: 폐쇄형 순환 경제 연동 - 매수금은 금고 입고, 매도금은 금고 지출
  */
 function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
     if (!roomData) return false;
 
     // 중앙은행 재원 초기화 (안전장치)
-    if (roomData.bankReserve === undefined || roomData.bankReserve === null) roomData.bankReserve = 10000;
+    if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
+        roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
+    }
 
     /* [기능 13] 주식 거래 */
 
@@ -5319,7 +5348,6 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var statusText = isMarketOpen ? "🟢 장 운영 중 (07:00 ~ 23:59)" : "🔴 장 마감 (00:00~06:59)";
         var stockList = generateStockList(data); 
         
-        // [원본 텍스트 유지]
         replier.reply("📈 실시간 주식 시세\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (stockList || "상장된 종목이 없습니다.") + "\n━━━━━━━━━━━━━━━\n💡 [가이드]: 매수: [/매수 종목명 수량]");
         return true;
     }
@@ -5328,7 +5356,6 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
     if (msg === "/내주식") {
         var holdings = user.stockHoldings || {};
         var keys = Object.keys(holdings);
-        // [원본 텍스트 유지]
         var title = "📊 " + getDisplayName(user) + "의 주식 상황";
 
         if (keys.length === 0) {
@@ -5361,7 +5388,6 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
             var signIcon = profit > 0 ? "🔺" : (profit < 0 ? "🔹" : "➖");
             var nameDisplay = isDelisted ? "⚠️(상폐) " + sName : sName;
             
-            // [원본 텍스트 유지] 줄바꿈 및 공백 주의
             list.push("• " + nameDisplay + " " + count + "주\n" +
                       "  수익: " + fp(Math.floor(profit)) + "P (" + signIcon + profitRate + "%)\n" +
                       "  평단: " + fp(avgPrice) + "P ➔ 현재: " + fp(curPrice) + "P");
@@ -5371,7 +5397,6 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var totalRate = totalPurchase > 0 ? ((totalProfit / totalPurchase) * 100).toFixed(1) : "0.0";
         var totalSignIcon = totalProfit > 0 ? "🔺" : (totalProfit < 0 ? "🔹" : "➖");
 
-        // [원본 텍스트 유지]
         var summary = "💎 총 평가금액: " + fp(Math.floor(totalEvaluation)) + "P\n" +
                       "📊 총 수익률: " + fp(Math.floor(totalProfit)) + "P (" + totalSignIcon + totalRate + "%)\n" +
                       "💰 보유 포인트: " + fp(Math.floor(user.point)) + "P";
@@ -5380,11 +5405,11 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 3. 주식 매수
+    // 3. 주식 매수 (금고 입고 연동)
     if (msg.indexOf("/매수 ") === 0) {
         if (user.mining && user.mining.active) { replier.reply(formatError(user, "작업 중", "광산에서 채굴 중에는 주식 거래를 할 수 없습니다.")); return true; }
         var currentHour = new Date().getHours();
-        if (currentHour < 7) { replier.reply(formatError(user, "주식 시장 마감\n\n현재는 주식 장외 시간입니다.\n(운영시간: 07:00 ~ 00:00)", "시세 확인: [/주식]")); return true; }
+        if (currentHour < 7) { replier.reply(formatError(user, "주식 시장 마감", "현재는 주식 장외 시간입니다.\n(운영시간: 07:00 ~ 23:59)")); return true; }
 
         var parts = msg.split(" ");
         if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/매수 [종목명] [수량]")); return true; }
@@ -5396,8 +5421,9 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var totalPrice = Math.floor(Number(stock.price) * count);
         if (Number(user.point) < totalPrice) { replier.reply(formatError(user, "포인트 부족", "필요: " + fp(totalPrice) + "P")); return true; }
         
-        // 포인트 차감 (통합 함수 사용, 주식은 개인이 사오는 것이므로 은행 적립은 null 처리)
-        util_updatePoint(user, null, -totalPrice, "주식 매수(" + sName + ")");
+        /* [핵심 수정] 중앙은행 연동: 매수 대금을 금고에 입고 */
+        // util_updatePoint에서 "주식 매수" 사유를 감지하여 roomData.bankReserve를 증가시킴
+        util_updatePoint(user, roomData, -totalPrice, "주식 매수");
 
         if (!user.stockHoldings) user.stockHoldings = {};
         if (!user.stockAvg) user.stockAvg = {};
@@ -5411,17 +5437,16 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         if (!data.stockTraffic[sName]) data.stockTraffic[sName] = { buy: 0, sell: 0 };
         data.stockTraffic[sName].buy += count;
         
-        // [원본 텍스트 유지]
         replier.reply(formatCommand("📈 주식 매수 완료", user, "종목: " + sName + "\n수량: " + count + "주\n매수가: " + fp(stock.price) + "P (총 " + fp(totalPrice) + "P)", "내 잔액: " + fp(user.point) + "P"));
         safeSaveData(data);
         return true;
     }
 
-    // 4. 주식 매도
+    // 4. 주식 매도 (금고 지출 연동 및 뱅크런 방지)
     if (msg.indexOf("/매도 ") === 0) {
         if (user.mining && user.mining.active) { replier.reply(formatError(user, "작업 중", "광산에서 채굴 중에는 주식 거래를 할 수 없습니다.")); return true; }
         var currentHour = new Date().getHours();
-        if (currentHour < 7) { replier.reply(formatError(user, "주식 시장 마감\n\n현재는 주식 장외 시간입니다.\n(운영시간: 07:00 ~ 00:00)", "시세 확인: [/주식]")); return true; }
+        if (currentHour < 7) { replier.reply(formatError(user, "주식 시장 마감", "현재는 주식 장외 시간입니다.")); return true; }
 
         var parts = msg.split(" ");
         if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/매도 [종목명] [수량]")); return true; }
@@ -5434,17 +5459,20 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         
         var stock = data.stockMarket[sName];
         var sellPrice = stock ? Math.floor(Number(stock.price)) : 0;
-        var totalSell = sellPrice * count; // 판매 총액 (시장가)
-        
-        var fee = Math.floor(totalSell * 0.05); // 수수료 5%
-        roomData.bankReserve = (Number(roomData.bankReserve) || 0) + fee;
-        
-        var finalPrice = totalSell - fee; // 실제 입금액
-        var avgPrice = (user.stockAvg && user.stockAvg[sName]) ? Number(user.stockAvg[sName]) : sellPrice; 
-        var purchaseVal = Math.floor(avgPrice * count); // 매수 원금
+        var totalSell = sellPrice * count; 
+        var fee = Math.floor(totalSell * 0.05); 
+        var finalPrice = totalSell - fee; 
 
-        /* [수정] 수익률 계산 기준 변경: finalPrice 대신 totalSell 사용 */
-        var profit = totalSell - purchaseVal; // /내주식과 동일하게 시장가 기준으로 수익 계산
+        /* [핵심 수정] 은행 파산 보호 (뱅크런 방지) */
+        // 은행 금고에 유저에게 줄 매도 대금이 있는지 확인
+        if (roomData.bankReserve < finalPrice) {
+            replier.reply(formatError(user, "거래 일시 중단", "죄송합니다. 현재 중앙은행의 현금 유동성 부족으로 주식 매도 대금 지급이 불가능합니다.\n다른 유저들의 매수나 예금이 발생할 때까지 기다려주세요.\n\n🏦 현재 은행 금고: " + fp(roomData.bankReserve) + "P"));
+            return true;
+        }
+
+        var avgPrice = (user.stockAvg && user.stockAvg[sName]) ? Number(user.stockAvg[sName]) : sellPrice; 
+        var purchaseVal = Math.floor(avgPrice * count); 
+        var profit = totalSell - purchaseVal; 
         var profitRate = purchaseVal > 0 ? ((profit / purchaseVal) * 100).toFixed(1) : "0.0";
         var signIcon = (profit > 0) ? "🔺" : (profit < 0 ? "🔹" : "➖");
 
@@ -5455,7 +5483,10 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         }
         
         var res = processRepayment(user, finalPrice, targetUid, roomName); 
-        util_updatePoint(user, null, Number(res.actualGain), "주식 매도(" + sName + ")");
+        
+        /* [핵심 수정] 중앙은행 연동: 매도 대금을 금고에서 차감 지급 */
+        // util_updatePoint에서 "주식 매도" 사유를 감지하여 roomData.bankReserve를 감소시킴
+        util_updatePoint(user, roomData, Number(res.actualGain), "주식 매도");
         
         if (!data.stockTraffic) data.stockTraffic = {};
         if (!data.stockTraffic[sName]) data.stockTraffic[sName] = { buy: 0, sell: 0 };
@@ -5483,11 +5514,16 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
 /**
  * [게임 하위 모듈 5] 상점 및 기타 활동
  * 기능: 상점 메뉴 호출, 출석 체크
- * 설명: 독립 함수로 분리되었으며, 출석 보상 및 상환 로직이 중앙은행과 동기화됩니다.
+ * 설명: 폐쇄형 순환 경제 연동 - 출석 보상을 중앙은행 금고에서 지급합니다.
  */
 function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
     if (!roomData) return false;
+
+    // 중앙은행 재원 초기화 (안전장치)
+    if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
+        roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
+    }
 
     /* [기능 14] 상점 메뉴 호출 */
     if (msg === "/상점") {
@@ -5504,13 +5540,13 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
     /* [기능 2] 출석 체크 (중앙은행 연동) */
     if (msg === "/출석") {
         var today = getSimpleDate();
-        // 중복 출석 체크
+        // 1. 중복 출석 체크
         if (user.lastDate === today) { 
             replier.reply(formatError(user, "이미 출석 완료", "출석은 하루에 한 번만 가능합니다.")); 
             return true; 
         }
         
-        // 물가 연동 배율 계산 (원본 로직 유지)
+        // 2. 물가 연동 배율 계산
         var multiplier = 1.0;
         if (roomData.economyBase && roomData.economyBase > 0) {
             var eco = calculateEconomy(data, roomName);
@@ -5520,24 +5556,38 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
             if (multiplier < 0.5) multiplier = 0.5;
         }
 
-        // 랜덤 보상 계산 (200P ~ 300P 사이)
+        // 3. 랜덤 보상 계산 (200P ~ 300P 사이)
         var minR = SYSTEM_CONFIG.ECO.ATTEND_MIN || 200;
         var maxR = SYSTEM_CONFIG.ECO.ATTEND_MAX || 300;
         var baseReward = Math.floor(Math.random() * (maxR - minR + 1)) + minR; 
         var reward = Math.floor(baseReward * multiplier);
 
-        /* [핵심 수정] 출석 보상 지급 전 통합 상환 엔진 호출 (대환 채무 100% 압류 연동) */
-        var res = processRepayment(user, reward, targetUid, roomName);
-        
-        // 2. [포인트 지급] 통합 함수 사용 (은행 재원 차감 없음 - 출석은 신규 통화 발행)
-        util_updatePoint(user, null, Number(res.actualGain), "출석 보상");
+        /* [핵심 수정] 은행 파산 보호 로직 */
+        // 은행 금고에 출석 보상을 지급할 수 있는 현금이 있는지 확인
+        if (roomData.bankReserve < reward) {
+            var errorMsg = "죄송합니다. 현재 중앙은행의 재고가 부족하여 출석 보상을 지급할 수 없습니다.\n" +
+                           "경제 활동(주식 매수, 상점 이용 등)을 통해 국고가 충전될 때까지 기다려주세요.\n\n" +
+                           "🏦 현재 금고: " + fp(roomData.bankReserve) + "P";
+            replier.reply(formatError(user, "국고 고갈", errorMsg));
+            return true;
+        }
 
-        // 3. 유저 상태 데이터 업데이트
+        /* [핵심 수정] 출석 보상 지급 전 통합 상환 엔진 호출 */
+        var res = processRepayment(user, reward, targetUid, roomName);
+        
+        /* [핵심 수정] 중앙은행 연동: 보상금을 금고에서 차감 지급 */
+        // util_updatePoint 호출 시 roomData를 전달하여 "출석 보상" 사유로 금고 잔액 차감
+        util_updatePoint(user, roomData, Number(res.actualGain), "출석 보상");
+
+        // 4. 유저 상태 데이터 업데이트
         user.lastDate = today; 
         user.totalAttendance = (user.totalAttendance || 0) + 1;
-        user.creditScore = Math.min(1000, (user.creditScore || 600) + 2); // 신용도 상승
+        user.creditScore = Math.min(1000, (user.creditScore || 600) + 2); 
         
-        replier.reply(formatCommand("✅ 일일 출석 완료", user, fp(reward) + "P가 지급되었습니다! (신용 +2)" + (res.repayMsg || ""), "내 잔액: " + fp(user.point) + "P"));
+        var content = fp(reward) + "P가 지급되었습니다! (신용 +2)" + (res.repayMsg || "") + "\n" +
+                      "🏦 [은행 지급]: 국고 재원에서 연금이 지급되었습니다.";
+
+        replier.reply(formatCommand("✅ 일일 출석 완료", user, content, "내 잔액: " + fp(user.point) + "P"));
         
         safeSaveData(data); 
         return true;

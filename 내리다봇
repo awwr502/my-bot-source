@@ -863,9 +863,8 @@ function getCreditLimitTable() {
     var list = [];
     for(var i=0; i<conf.SCORES.length; i++) {
         var ratePct = Math.round((conf.RATES[i] - 1) * 100);
-        list.push(conf.ICONS[i] + " " + conf.LABELS[i] + " (" + conf.SCORES[i] + "점~): " + fp(conf.LIMITS[i]) + "P (이율 " + ratePct + "%)");
+        list.push(conf.ICONS[i] + " " + conf.LABELS[i] + " (" + conf.SCORES[i] + "점~): " + fp(conf.LIMITS[Conf[i]]) + "P (이율 " + ratePct + "%)");
     }
-    // [수정 부분] 하드코딩된 "대출 불가"를 삭제하고 설정된 금액(LIMITS[5])을 출력
     var lastIdx = conf.SCORES.length;
     var lastRate = Math.round((conf.RATES[lastIdx] - 1) * 100);
     list.push(conf.ICONS[lastIdx] + " " + conf.LABELS[lastIdx] + " (<" + conf.SCORES[lastIdx-1] + "): " + fp(conf.LIMITS[lastIdx]) + "P (이율 " + lastRate + "%)");
@@ -873,27 +872,32 @@ function getCreditLimitTable() {
     return list.join("\n");
 }
 
-/* 닉네임 표시 생성 함수 */
+/* 닉네임 표시 생성 함수 (수정: 신용불량자 칭호 우선순위 및 중복 방지) */
 function getDisplayName(user) {
     if (!user) return "알 수 없음";
     var userIcon = user.icon || "";
-    var currentSeason = getSimpleSeason();
-    /* [수정] 챌린저(티어9)일 경우 즉시 아이콘 표시되도록 조건 간소화 */
     var tierIcon = (user.tier === 9 ? "🏆" : ""); 
     var credit = getCreditInfo(user.creditScore || 600);
-    var titleStr = (user.title && user.title.length > 0) ? "[" + user.title + "] " : (credit.label === "신용불량자" ? "[신용불량자] " : "");
+    
+    var titleStr = "";
+    
+    // [Gemini 요청 사항 반영]
+    // 1순위: 신용불량자일 경우 무조건 [신용불량자] 표시
+    if (credit.label === "신용불량자") {
+        titleStr = "[신용불량자] ";
+    } 
+    // 2순위: 일반 상태일 때만 장착 중인 칭호 표시
+    else if (user.title && user.title.length > 0) {
+        titleStr = "[" + user.title + "] ";
+    }
+    
     return titleStr + tierIcon + userIcon + (user.name || "알 수 없음");
 }
 
 /* [수정] 관리자 여부 확인 함수 (FIXED_ADMINS 체크 추가) */
 function isAdmin(sender, data, uid) {
-    // 1. 소스코드 상단 고정 닉네임 인증 (가장 강력함)
     if (FIXED_ADMINS.indexOf(String(sender).trim()) !== -1) return true;
-
-    // 2. UID 기반 고정 관리자 인증
     if (adminUIDs.indexOf(uid) !== -1) return true;
-
-    // 3. DB 내부 관리자 목록 인증 (부관리자 등)
     var name = String(sender).trim();
     if (data && data.admins && data.admins.indexOf(name) !== -1) return true;
 
@@ -2263,7 +2267,8 @@ if (!targetUid) {
         totalGambleWins: 0,    // 홀짝 총 승리수
         totalTheftSuccess: 0,  // 도둑질 총 성공 횟수
         totalInvestAmount: 0,  // 주식 총 누적 매수액
-        totalMiningTime: 0     // 광산 총 누적 채굴 시간(분)
+        totalMiningTime: 0,    // 광산 총 누적 채굴 시간(분)
+        totalDonation: 0       // [신규 추가] 누적 기부 금액 기록 필드
     };
     
     uidCache[cacheKey] = targetUid;
@@ -2619,7 +2624,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
             }
         }
 
-        /* [신규 기능] 기부 처리 (v5.2) */
+        /* [수정] 기부 처리 (누적 기부 칭호 시스템 연동) */
         else if (state.type === 'donate') {
             var amt = parseInt(msg.replace(/,/g, ""));
             if (isNaN(amt) || amt <= 0) {
@@ -2627,15 +2632,32 @@ if (bankProcessState && bankProcessState[targetUid]) {
             } else if (user.point < amt) {
                 replier.reply(formatError(user, "잔액 부족", "보유하신 포인트보다 많은 금액은 기부할 수 없습니다."));
             } else {
-                /* [중앙은행 연동] 기부금 입고 */
-                // util_updatePoint에 "은행 기부" 사유를 전달하여 금고(bankReserve)가 늘어나게 함
+                /* 1. 중앙은행 연동 기부금 처리 */
                 util_updatePoint(user, roomData, -amt, "은행 기부");
+                
+                /* 2. 누적 기부 금액 합산 */
+                user.totalDonation = (user.totalDonation || 0) + amt;
+
+                /* 3. 기부 칭호 체크 로직 (Gemini 요청 사항: 4단계) */
+                var donation = user.totalDonation;
+                var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
+
+                if (donation >= 1000000) {
+                    util_checkAndAwardTitle(user, replierStub, "기부의왕", 5004, "👑", "누적 기부 1,000,000P", "국가 경제의 진정한 수호자로 등극하셨습니다.");
+                } else if (donation >= 500000) {
+                    util_checkAndAwardTitle(user, replierStub, "자선가", 5003, "✨", "누적 기부 500,000P", "1,000,000P 달성 시 기부의왕 칭호를 획득합니다.");
+                } else if (donation >= 300000) {
+                    util_checkAndAwardTitle(user, replierStub, "기부천사", 5002, "👼", "누적 기부 300,000P", "500,000P 달성 시 자선가 칭호를 획득합니다.");
+                } else if (donation >= 100000) {
+                    util_checkAndAwardTitle(user, replierStub, "선한손길", 5001, "🌱", "누적 기부 100,000P", "300,000P 달성 시 기부천사 칭호를 획득합니다.");
+                }
 
                 var thanksMsg = "중앙은행에 " + fp(amt) + "P를 기부하셨습니다.\n" +
                                 "보내주신 소중한 자산은 국가 경제 위기 극복과 \n" +
                                 "전체 유저 복지 향상을 위해 귀하게 사용됩니다.\n" +
                                 "따뜻한 마음에 진심으로 감사드립니다!\n\n" +
-                                "🏦 [국고 입고]: 기부금이 중앙은행 재원으로 귀속됨";
+                                "🏦 [국고 입고]: 기부금이 중앙은행 재원으로 귀속됨\n" +
+                                "📊 누적 기부액: " + fp(donation) + "P";
 
                 replier.reply(formatCommand("🎁 기부 완료", user, thanksMsg, "(현재 잔액: " + fp(user.point) + "P)"));
                 delete bankProcessState[targetUid];
@@ -3429,6 +3451,7 @@ if (msg === "/도움말") {
 /**
  * [독립형 함수 1] 인벤토리 로직
  * 기능: 보유 아이템 확인, 장착, 분해 처리
+ * 수정: 신용불량자 장착 제한 로직 추가 및 별표 제거
  */
 function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
     // 1. 가방 조회
@@ -3452,8 +3475,14 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 2. 아이템 장착
+    // 2. 아이템 장착 (신용불량자 제한 추가)
     if (msg.indexOf("/장착 ") === 0) {
+        // [Gemini 요청 사항] 신용불량자 상태 체크
+        if (Number(user.creditScore || 600) < 500) {
+            replier.reply(formatError(user, "장착 불가", "현재 신용불량자 상태이므로 아이콘 및 칭호 변경이 불가능합니다. 신용을 먼저 회복하세요."));
+            return true;
+        }
+
         var parts = msg.trim().split(/\s+/);
         if (parts.length < 2) {
             replier.reply(formatError(user, "형식 오류", "/장착 [번호]"));
@@ -3485,14 +3514,12 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 숫자만 추출 (다중 선택 지원)
         var numbers = msg.match(/\d+/g);
         if (!numbers) {
             replier.reply(formatError(user, "입력 오류", "/분해 [번호] 또는 /분해 [번호] [번호] ..."));
             return true;
         }
 
-        // 중복 제거 및 유효 범위 필터링
         var targetIndices = [];
         numbers.forEach(function(n) {
             var idx = parseInt(n) - 1;
@@ -3506,7 +3533,6 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 랜덤박스(ID 12)의 현재 가격 조회 (ecobase 적용됨)
         var boxItem = null;
         for (var i = 0; i < SHOP_ITEMS.length; i++) {
             if (SHOP_ITEMS[i].id === 12) { boxItem = SHOP_ITEMS[i]; break; }
@@ -3518,26 +3544,22 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
         }
 
         var boxCurrentPrice = getItemPrice(boxItem, user, roomName);
-        var refundPerIcon = Math.floor(boxCurrentPrice * 0.20); // 20% 회수
+        var refundPerIcon = Math.floor(boxCurrentPrice * 0.20); 
         var totalRefund = refundPerIcon * targetIndices.length;
 
-        // 분해 진행 (장착 중인 아이콘/칭호는 초기화)
         var disassembledNames = [];
-        // 인덱스가 뒤틀리지 않도록 내림차순 정렬 후 삭제
         targetIndices.sort(function(a, b) { return b - a; });
 
         targetIndices.forEach(function(idx) {
             var item = inv[idx];
             disassembledNames.push(item.icon + " " + item.name);
             
-            // 장착 중인 상태 해제
             if (item.effect === "icon" && user.icon === item.icon) user.icon = "";
             if (item.effect === "title" && user.title === item.title) user.title = "";
             
             inv.splice(idx, 1);
         });
 
-        // 포인트 지급 및 상환 엔진 연동
         var res = processRepayment(user, totalRefund, targetUid, roomName);
         util_updatePoint(user, null, Number(res.actualGain), "아이템 분해 회수");
 

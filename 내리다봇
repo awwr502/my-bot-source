@@ -55,22 +55,26 @@ var loanContractWaitState = {};
 var miningState = {}; 
 var feverData = { active: false, endTime: 0, scheduled: [] };
 
-/* [신규] 경마 시스템 전역 상태 데이터 */
+/* [Gemini 요청 사항] 경마 시스템 실시간 상태 및 상수 설명 통합 */
 var racingData = {
-    round: 1,           // 현재 진행 회차
-    horses: [           // 출전마 정보 (가중치 기반 승률 계산용)
-        { id: 1, name: "내리다질주", weight: 1.0, icon: "☁️ 보통" },
-        { id: 2, name: "쾌속광어", weight: 1.0, icon: "☁️ 보통" },
-        { id: 3, name: "자산가행진", weight: 1.0, icon: "☁️ 보통" },
-        { id: 4, name: "파산회피", weight: 1.0, icon: "☁️ 보통" },
-        { id: 5, name: "로또직행", weight: 1.0, icon: "☁️ 보통" }
+    round: 1,           // [회차]: 경마의 진행 차수를 기록 (봇 재시작 시 1로 초기화됨)
+    horses: [           // [출전마 정보]: 각 말의 고유 ID, 이름, 우승 가중치(weight), 상태 아이콘 저장
+        { id: 1, name: "어마어마", weight: 1.0, icon: "☁️ 보통" },
+        { id: 2, name: "어서말을해", weight: 1.0, icon: "☁️ 보통" },
+        { id: 3, name: "마의웨이", weight: 1.0, icon: "☁️ 보통" },
+        { id: 4, name: "핵탄두", weight: 1.0, icon: "☁️ 보통" },
+        { id: 5, name: "돌격앞으", weight: 1.0, icon: "☁️ 보통" }
     ],
-    bets: {},           // 유저별 배팅 데이터 (UID를 키로 사용)
-    totalPool: 0,       // 현재 회차 총 배팅 포인트 합계
-    carryOver: 0,       // 우승자 없을 시 다음 회차로 누적되는 이월금 (Jackpot)
-    isOperating: false,  // 운영 시간(09~24시) 여부 플래그
-    isDeadlineNotified: false, // 49분 59초 마감 공지 발송 여부
-    isResultProcessed: false   // 00분 결과 정산 완료 여부
+    bets: {},           // [배팅 기록]: { UID: {horseId, amount, name} } 형식으로 현재 회차 배팅 정보를 저장
+    totalPool: 0,       // [당기 누적금]: 이번 회차에 유저들이 배팅한 순수 포인트 합계
+    carryOver: 0,       // [이월금/Jackpot]: 이전 회차에서 당첨자가 없어 넘어온 포인트 (70% 비율 적용액)
+    // [운영 플래그]: 봇 로드 시 현재 시간을 즉시 판별하여 09:00~23:59 사이면 자동으로 가동 상태(true)로 설정
+    isOperating: (function() {
+        var h = new Date().getHours();
+        return h >= 9 && h <= 23; 
+    })(),
+    isDeadlineNotified: false, // [알림 제어]: 49분 59초 마감 공지가 중복 발송되는 것을 방지하는 스위치
+    isResultProcessed: false   // [정산 제어]: 정각(00분) 결과 정산 로직이 중복 실행되는 것을 방지하는 스위치
 };
 
 /* 관리자 UID 기반 인증 */ 
@@ -108,16 +112,16 @@ var SYSTEM_CONFIG = {
             INITIAL_RESERVE: 10000 // [초기 재원]: 데이터 초기화 시 은행 금고에 기본으로 들어있는 포인트
         },
 
-        /* [신규] 경마 시스템 비즈니스 상수 */
+        /* [신규] 경마 시스템 세부 설정 상술 */
         RACING: {
-            MIN_BET: 1000,       // [경마 최소 배팅]: `/배팅` 명령어 사용 시 최소 금액
-            MAX_BET: 30000,      // [경마 최대 배팅]: `/배팅` 명령어 사용 시 1회 최대 한도
-            TAX_RATE: 0.1,       // [국고 수수료]: 당첨금 정산 전 전체 판돈에서 떼어가는 수수료 (10%)
-            CANCEL_FEE: 0.1,     // [취소 위약금]: 배팅 취소 시 원금에서 차감되는 수수료 (10%)
-            WINLESS_BANK_RATE: 0.3, // [당첨자 없을 시 국고행]: 우승자 부재 시 판돈의 30%를 은행 금고로 환수
-            WINLESS_JACKPOT_RATE: 0.7, // [당첨자 없을 시 이월]: 우승자 부재 시 판돈의 70%를 다음 회차로 이월
-            OPEN_HOUR: 9,        // [개장 시간]: 매일 오전 9시에 첫 경기 배팅 시작
-            CLOSE_HOUR: 23       // [폐장 시간]: 오후 11시 59분에 마지막 경기 결과 발표 후 종료
+            MIN_BET: 1000,       // [최소 배팅액]: 경마 참여를 위한 최소 포인트
+            MAX_BET: 30000,      // [최대 배팅액]: 한 회차에 걸 수 있는 최대 포인트 상한선
+            TAX_RATE: 0.1,       // [기본 수수료]: 당첨금 정산 전 전체 판돈에서 국고로 환수되는 비율 (10%)
+            CANCEL_FEE: 0.1,     // [취소 위약금]: 배팅 취소 시 원금에서 차감되어 국고로 귀속되는 수수료 (10%)
+            WINLESS_BANK_RATE: 0.3,   // [무승자 국고행]: 우승자 없을 시 판돈의 30%를 은행 금고로 즉시 회수
+            WINLESS_JACKPOT_RATE: 0.7, // [무승자 이월액]: 우승자 없을 시 판돈의 70%를 다음 회차 carryOver로 누적
+            OPEN_HOUR: 9,        // 경마장 자동 개장 시각 (오전 9시)
+            CLOSE_HOUR: 23       // 경마장 마지막 배팅 마감 시각 (오후 11시 59분)
         },
         
         STOCK: {
@@ -240,7 +244,7 @@ function recoverFromJournal(data) {
     }
 }
 
-/* 데이터베이스 로드 함수 (복구 로직 통합) */
+/* 데이터베이스 로드 함수 (복구 로직 및 경마 데이터 동기화 통합) */
 function getDatabase() {
     if (globalData !== null) return globalData; 
     try {
@@ -251,6 +255,8 @@ function getDatabase() {
             initialData = {
                 rooms: {}, admins: ["관리자"], botActive: true,
                 lotto: { round: 1, entries: {}, dailyPool: 0, jackpot: 0, lastWinNums: [] },
+                /* [신규] 경마 데이터 초기 구조 등록 */
+                racing: { round: 1, bets: {}, totalPool: 0, carryOver: 0, lastWinner: null },
                 nickHistory: {}, adminLogs: [], stockMarket: {}, stockTraffic: {},
                 economyBase: 0, economyDamping: 0.5, lastDailyReset: "", lastDietDate: "",
                 feverData: { active: false, endTime: 0, scheduled: [] }, isCalibrated: false,
@@ -268,6 +274,18 @@ function getDatabase() {
         globalData = initialData;
         
         if (globalData.marketOpenPrice !== undefined) marketOpenPrice = globalData.marketOpenPrice;
+
+        /* [Gemini 요청 사항] 경마 데이터 영속성(Persistence) 연동 */
+        // 파일에 저장된 경마 정보가 있으면 메모리 객체(racingData)에 동기화
+        if (globalData.racing) {
+            for (var key in globalData.racing) {
+                // bets, round, carryOver 등 파일의 최신 값을 메모리로 복사
+                racingData[key] = globalData.racing[key];
+            }
+        } else {
+            // 파일에 경마 항목이 없으면 섹터 1의 기본값을 DB 구조에 삽입
+            globalData.racing = racingData;
+        }
         
         if (globalData.rooms) {
             for (var r in globalData.rooms) {
@@ -286,6 +304,10 @@ function getDatabase() {
         if (stableFile.exists()) {
             globalData = JSON.parse(FileStream.read(BACKUP_DIR + "last_stable_backup.json"));
             if (globalData.marketOpenPrice !== undefined) marketOpenPrice = globalData.marketOpenPrice;
+            
+            // 백업 로드 시에도 경마 데이터 동기화
+            if (globalData.racing) racingData = globalData.racing;
+            
             return globalData;
         }
         return null;

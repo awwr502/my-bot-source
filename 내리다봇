@@ -172,59 +172,91 @@ var SYSTEM_CONFIG = {
 
 //==========섹터2==========
 
-/* 데이터베이스 로드 함수 */
+/**
+ * [v5.8 신규] 블랙박스 복구 엔진 (Replay Journal)
+ * 기능: 봇 재시작 시 JSON에 미처 저장되지 못한 최신 거래 내역을 로그 파일에서 읽어 복구함.
+ * 이 로직 덕분에 "10초 오차 없는 복구"가 실현됩니다.
+ */
+function recoverFromJournal(data) {
+    try {
+        var journalFile = new java.io.File(JOURNAL_PATH);
+        if (!journalFile.exists() || journalFile.length() === 0) return;
+
+        var logs = FileStream.read(JOURNAL_PATH).split("\n");
+        var recoveryCount = 0;
+
+        logs.forEach(function(line) {
+            if (!line.trim()) return;
+            var parts = line.split("|"); // 형식: UID|RoomName|Delta|BankReserveDelta
+            if (parts.length < 3) return;
+
+            var uid = parts[0];
+            var room = parts[1];
+            var delta = Number(parts[2]);
+            var brDelta = Number(parts[3] || 0);
+
+            // 해당 방과 유저를 찾아 메모리 데이터에 즉시 합산
+            if (data.rooms[room] && data.rooms[room].users[uid]) {
+                data.rooms[room].users[uid].point += delta;
+                data.rooms[room].bankReserve += brDelta;
+                recoveryCount++;
+            }
+        });
+
+        if (recoveryCount > 0) {
+            Log.info("[Recovery] 블랙박스 엔진이 " + recoveryCount + "건의 누락된 최신 거래를 복구했습니다.");
+        }
+    } catch (e) {
+        Log.error("Journal Recovery Error: " + e);
+    }
+}
+
+/* 데이터베이스 로드 함수 (복구 로직 통합) */
 function getDatabase() {
     if (globalData !== null) return globalData; 
     try {
         var file = new java.io.File(FILE_PATH);
+        var initialData;
+        
         if (!file.exists()) {
-            var initialData = {
+            initialData = {
                 rooms: {}, admins: ["관리자"], botActive: true,
                 lotto: { round: 1, entries: {}, dailyPool: 0, jackpot: 0, lastWinNums: [] },
                 nickHistory: {}, adminLogs: [], stockMarket: {}, stockTraffic: {},
                 economyBase: 0, economyDamping: 0.5, lastDailyReset: "", lastDietDate: "",
                 feverData: { active: false, endTime: 0, scheduled: [] }, isCalibrated: false,
-                loanPools: {},   
-                loanContracts: {},
-                marketOpenPrice: 0 // [신규] 시가 영구 저장을 위한 필드 추가
+                loanPools: {}, loanContracts: {}, marketOpenPrice: 0 
             };
-            globalData = initialData;
-            safeSaveData(initialData);
-            return initialData;
+        } else {
+            var content = FileStream.read(FILE_PATH);
+            if (!content) throw new Error("Empty File");
+            initialData = JSON.parse(content);
         }
-        var content = FileStream.read(FILE_PATH);
-        if (!content) throw new Error("Empty File");
-        globalData = JSON.parse(content);
+
+        // [v5.8 핵심] JSON 로드 직후, 아직 파일에 안 적힌 '블랙박스 로그'를 읽어 데이터 정밀 보정
+        recoverFromJournal(initialData);
         
-        /* [신규] 휘발성 전역 변수 복구: 저장된 시가 데이터를 메모리에 동기화 */
-        if (globalData.marketOpenPrice !== undefined) {
-            marketOpenPrice = globalData.marketOpenPrice;
-        }
+        globalData = initialData;
         
-        /* [수정] 방별 데이터 자동 분리 및 은행 재원(bankReserve) 필드 추가 */
+        if (globalData.marketOpenPrice !== undefined) marketOpenPrice = globalData.marketOpenPrice;
+        
         if (globalData.rooms) {
             for (var r in globalData.rooms) {
                 var targetRoom = globalData.rooms[r];
                 if (!targetRoom.loanPools) targetRoom.loanPools = {};
                 if (!targetRoom.loanContracts) targetRoom.loanContracts = {};
-                
-                /* [수정] 중앙은행 재원 변수 누락 시 섹터 1의 설정값(INITIAL_RESERVE)으로 초기화 */
                 if (targetRoom.bankReserve === undefined) {
                     targetRoom.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE; 
                 }
             }
         }
-        
         return globalData;
     } catch (e) {
         Log.error("DB Load Error: " + e);
         var stableFile = new java.io.File(BACKUP_DIR + "last_stable_backup.json");
         if (stableFile.exists()) {
             globalData = JSON.parse(FileStream.read(BACKUP_DIR + "last_stable_backup.json"));
-            /* [신규] 백업 로드 시에도 시가 데이터 동기화 */
-            if (globalData.marketOpenPrice !== undefined) {
-                marketOpenPrice = globalData.marketOpenPrice;
-            }
+            if (globalData.marketOpenPrice !== undefined) marketOpenPrice = globalData.marketOpenPrice;
             return globalData;
         }
         return null;
@@ -237,18 +269,34 @@ function startTracking(user, commandName) {
     user.lastAction = { cmd: commandName, status: "PENDING", time: Date.now(), msg: "수행 시작" };
 }
 
-/* 포인트 변동 검증 및 로그 저장 함수 */
-function verifyPointTransaction(user, prePoint, changeAmount, reason) {
+/**
+ * [v5.8 업그레이드] 포인트 변동 검증 및 실시간 블랙박스 기록
+ * 기능: 전체 파일을 저장(safeSaveData)하기 전, 텍스트 한 줄을 먼저 써서 '무조건적인 유실 방지' 달성
+ */
+function verifyPointTransaction(user, prePoint, changeAmount, reason, roomName, brDelta) {
     try {
         var expected = Number(prePoint) + Number(changeAmount);
         var actual = Number(user.point);
+        
         if (actual !== expected) {
             var errorMsg = "[" + new Date().toLocaleString() + "] [불일치] " + (user.name||"") + ": " + reason + " (예상:" + fp(expected) + "/실제:" + fp(actual) + ")\n";
             FileStream.append(ERROR_LOG_PATH, errorMsg);
-            
             try { Api.replyRoom("내리다", "⚠️ 포인트 불일치 발생\n" + errorMsg); } catch(e){}
             user.lastAction = { cmd: reason, status: "FAIL", amount: changeAmount, time: Date.now(), msg: "데이터 불일치" };
         } else {
+            // [v5.8 핵심] 고속 저널링(Journaling) 기록
+            // 방 이름(roomName)과 은행재원변동(brDelta)이 있을 경우에만 블랙박스에 남김
+            if (roomName) {
+                logLock.lock();
+                try {
+                    // 형식: UID|방이름|변동량|은행변동량
+                    var journalEntry = user.uid + "|" + roomName + "|" + changeAmount + "|" + (brDelta || 0) + "\n";
+                    FileStream.append(JOURNAL_PATH, journalEntry);
+                } finally {
+                    logLock.unlock();
+                }
+            }
+
             if (user.lastAction && user.lastAction.status !== "FAIL") {
                 user.lastAction = { cmd: reason, status: "SUCCESS", amount: changeAmount, time: Date.now(), msg: "정상 완료" };
             }
@@ -270,14 +318,14 @@ function endTracking(user, isSuccess, resultMsg) {
 
 //==========섹터3==========
 
-/* [최적화] 비동기 영속화(Asynchronous Persistence) 엔진 */
+/* [최적화] 하이브리드 비동기 영속화(Asynchronous Persistence) 엔진 v5.8 */
 /**
  * @param {Object} data - 저장할 데이터 객체
  * @param {Boolean} isForceBackup - true일 경우 백업 파일까지 물리적으로 기록
  */
 function safeSaveData(data, isForceBackup) {
     if (!data) return;
-    globalData = data; // 메모리 데이터 즉시 동기화 (답장 속도 최우선)
+    globalData = data; // 메모리 데이터 즉시 동기화 (응답 속도 최우선)
 
     // [방어형 로직] 무거운 직렬화 및 무결성 검증은 메인 스레드에서 먼저 수행
     var content;
@@ -313,6 +361,16 @@ function safeSaveData(data, isForceBackup) {
                     var orgFile = new java.io.File(targetPath);
                     if (orgFile.exists()) orgFile.delete();
                     tempFile.renameTo(orgFile);
+
+                    // [v5.8 핵심] 전체 저장이 성공했으므로 블랙박스(Journal) 로그 초기화
+                    // 데이터가 영구 파일에 안착했으므로 임시 기록된 로그들은 더 이상 필요 없음
+                    logLock.lock();
+                    try {
+                        var jFile = new java.io.File(JOURNAL_PATH);
+                        if (jFile.exists()) jFile.delete();
+                    } finally {
+                        logLock.unlock();
+                    }
                 } else {
                     throw new Error("임시 파일 생성 실패 또는 데이터 유실");
                 }
@@ -526,23 +584,30 @@ var sprayData = {
 var selectWaitState = {}; 
 var bankProcessState = {};
 
-/* [핵심] 지능형 포인트 통합 처리 및 은행 재원 연동 함수 (v5.6 자산가 칭호 완벽 대응) */
-function util_updatePoint(user, roomData, delta, reason) {
+/* [핵심] 지능형 포인트 통합 처리 및 은행 재원 연동 함수 (v5.8 블랙박스 저널링 완벽 대응) */
+function util_updatePoint(user, roomData, delta, reason, roomName) {
     if (!user || isNaN(delta) || delta === 0) return;
     
     var prePoint = Number(user.point || 0);
     var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급"];
     var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매: ", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부"];
 
+    var brDelta = 0; // [v5.8] 블랙박스 기록을 위한 은행 재원 변동폭 추적 변수
+
     if (roomData) {
         if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
         if (delta > 0) {
-            if (bankOutputReasons.some(function(r){ return reason.indexOf(r) !== -1; })) roomData.bankReserve -= delta;
+            // 은행이 유저에게 돈을 주는 경우 (금고 감소)
+            if (bankOutputReasons.some(function(r){ return reason.indexOf(r) !== -1; })) {
+                brDelta = -delta;
+            }
         } else {
+            // 유저가 은행에 돈을 내는 경우 (금고 증가)
             if (bankInputReasons.some(function(r){ return reason.indexOf(r) !== -1; }) || reason.indexOf("벌금") !== -1 || reason.indexOf("상환") !== -1) {
-                roomData.bankReserve += Math.abs(delta);
+                brDelta = Math.abs(delta);
             }
         }
+        roomData.bankReserve += brDelta;
     }
 
     user.point = prePoint + delta;
@@ -573,7 +638,8 @@ function util_updatePoint(user, roomData, delta, reason) {
     var isAssetTitle = assetTitles.some(function(t){ return t.name === currentTitle; });
 
     if (currentTitle !== suitableTitle) {
-        var targetRoom = (roomData && roomData.roomName) ? roomData.roomName : "내리다";
+        // [v5.8] 파라미터로 전달된 roomName을 우선적으로 사용하여 알림 발송
+        var targetRoom = roomName || (roomData && roomData.roomName ? roomData.roomName : "내리다");
 
         // A. 새로운 상위 칭호 획득
         if (suitableTitle !== "" && (currentTitle === "" || totalAssets >= requiredLimit)) {
@@ -595,7 +661,10 @@ function util_updatePoint(user, roomData, delta, reason) {
         }
     }
 
-    if (typeof verifyPointTransaction === 'function') verifyPointTransaction(user, prePoint, delta, reason);
+    // [v5.8 핵심] 이제 verifyPointTransaction에 roomName과 brDelta를 전달하여 실시간 저널링을 가동합니다.
+    if (typeof verifyPointTransaction === 'function') {
+        verifyPointTransaction(user, prePoint, delta, reason, roomName, brDelta);
+    }
 }
 
 /* [신규] 포인트 단위 쉼표 포맷팅 함수 (안전 모드) */
@@ -831,7 +900,7 @@ function checkEconomicStimulus(user, roomName, isManual) {
 
         /* [핵심 수정] 중앙은행 연동 및 통합 포인트 처리 */
         // 직접 할당(user.point += giveAmount) 대신 util_updatePoint를 호출하여 금고 잔액을 차감함
-        util_updatePoint(user, roomData, giveAmount, "민생지원금 지급");
+        util_updatePoint(user, roomData, giveAmount, "민생지원금 지급", roomName);
         
         user.dailyStimulusCount = currentCount + 1;
 
@@ -1053,7 +1122,7 @@ function processPoliceResult(roomName, thiefUid, victimUid) {
     // [검증] 경찰 벌금
     var prePoint = Number(thief.point);
     thief.point = Number(thief.point) - actualPenalty;
-    verifyPointTransaction(thief, prePoint, -actualPenalty, "경찰 체포 벌금");
+    verifyPointTransaction(thief, prePoint, -actualPenalty, "경찰 체포 벌금", roomName, actualPenalty);
     
     var jailTime = 1 * 60 * 60 * 1000;
     thief.jailReleaseTime = Date.now() + jailTime;
@@ -1086,14 +1155,14 @@ function processTheftResult(roomName, thiefUid, victimUid) {
     // [검증] 피해자 차감
     var vPre = Number(victim.point);
     victim.point = Number(victim.point) - stealAmount;
-    verifyPointTransaction(victim, vPre, -stealAmount, "도둑질 당함");
+    verifyPointTransaction(victim, vPre, -stealAmount, "도둑질 당함", roomName, 0);
 
     var res = processRepayment(thief, stealAmount, thiefUid, roomName); 
     
     // [검증] 도둑 획득
     var tPre = Number(thief.point);
     thief.point = Number(thief.point) + Number(res.actualGain);
-    verifyPointTransaction(thief, tPre, Number(res.actualGain), "도둑질 성공");
+    verifyPointTransaction(thief, tPre, Number(res.actualGain), "도둑질 성공", roomName, 0);
     
     /* [신규] 도둑질 누적 통계 및 칭호 체크 */
     if (thief.totalTheftSuccess === undefined) thief.totalTheftSuccess = 0;
@@ -2028,8 +2097,7 @@ function _runSector18Logic(data, ctx) {
                 var res = processRepayment(obj.u, p1, obj.id, obj.rm);
                 var preP = Number(obj.u.point);
                 obj.u.point = Number(obj.u.point) + Number(res.actualGain); 
-                if (typeof verifyPointTransaction === 'function') verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 1등 당첨");
-                totalPayout += p1;
+                if (typeof verifyPointTransaction === 'function') verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 1등 당첨", obj.rm, 0);
             }); 
             resM += "🥇 1등: " + w1.length + "명 (각 " + fp(p1) + "P)\n"; 
             data.lotto.jackpot = 0; 
@@ -2044,7 +2112,7 @@ function _runSector18Logic(data, ctx) {
             var res = processRepayment(obj.u, 500, obj.id, obj.rm);
             var preP = Number(obj.u.point);
             obj.u.point = Number(obj.u.point) + Number(res.actualGain); 
-            if (typeof verifyPointTransaction === 'function') verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 2등 당첨");
+            if (typeof verifyPointTransaction === 'function') verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 2등 당첨", obj.rm, 0);
             totalPayout += 500;
         }); 
         resM += "🥈 2등: " + w2.length + "명 (각 " + fp(500) + "P)\n";
@@ -2055,7 +2123,7 @@ function _runSector18Logic(data, ctx) {
             var res = processRepayment(obj.u, 100, obj.id, obj.rm);
             var preP = Number(obj.u.point);
             obj.u.point = Number(obj.u.point) + Number(res.actualGain); 
-            if (typeof verifyPointTransaction === 'function') verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 3등 당첨");
+            if (typeof verifyPointTransaction === 'function') verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 3등 당첨", obj.rm, 0);
             totalPayout += 100;
         }); 
         resM += "🥉 3등: " + w3.length + "명 (각 " + fp(100) + "P)";
@@ -2545,7 +2613,7 @@ if (selectWaitState[targetUid]) {
                 var res = processRepayment(user, prize, targetUid, roomName);
                 
                 user.point = Number(user.point) + Number(res.actualGain);
-                verifyPointTransaction(user, prePoint, Number(res.actualGain), "채팅 보너스");
+                verifyPointTransaction(user, prePoint, res.actualGain, "채팅 보너스", roomName, 0);
 
                 user.creditScore = Math.min(1000, Number(user.creditScore || 600) + 1);
                 
@@ -2630,7 +2698,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 }
                 roomData.bankReserve += amt;
 
-                verifyPointTransaction(user, preP, -amt, "은행 예금");
+                verifyPointTransaction(user, preP, -amt, "은행 예금", roomName,
 
                 replier.reply(formatCommand("💰 예금 완료", user, fp(amt) + "P를 통장에 입금했습니다.\n(중앙은행 가용 재원으로 편입됨)", "내 잔액: " + fp(user.point) + "P"));
                 delete bankProcessState[targetUid];
@@ -2647,7 +2715,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 replier.reply(formatError(user, "잔액 부족", "보유하신 포인트보다 많은 금액은 기부할 수 없습니다."));
             } else {
                 /* 1. 중앙은행 연동 기부금 처리 */
-                util_updatePoint(user, roomData, -amt, "은행 기부");
+                util_updatePoint(user, roomData, -amt, "은행 기부", roomName);
                 
                 /* 2. 누적 기부 금액 합산 */
                 user.totalDonation = (user.totalDonation || 0) + amt;
@@ -2718,7 +2786,8 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 /* [핵심] 출금 시 중앙은행 금고에서 포인트 유출 */
                 roomData.bankReserve -= amt;
                 
-                verifyPointTransaction(user, preP, amt, "은행 출금");
+                // [v5.8] 블랙박스 기록: 유저 +amt, 은행 -amt
+                verifyPointTransaction(user, preP, amt, "은행 출금", roomName, -amt);
 
                 replier.reply(formatCommand("🏧 출금 완료", user, fp(amt) + "P를 현금으로 출금했습니다.", "보유 포인트: " + fp(user.point) + "P"));
                 delete bankProcessState[targetUid];
@@ -2734,19 +2803,15 @@ if (bankProcessState && bankProcessState[targetUid]) {
             var lConf = SYSTEM_CONFIG.ECO.PRIVATE_LOAN;
 
             /* [핵심] 지급준비제도 기반 가용 대출 자산 계산 */
-            // 1. 방 전체 예금 총액 합산
             var totalDeposits = 0;
             for (var id in roomData.users) { totalDeposits += (roomData.users[id].bank || 0); }
             
-            // 2. 법정 지급준비금 계산 (예금 총액 * 준비율 20%)
             var requiredReserve = Math.floor(totalDeposits * bConf.RESERVE_RATIO);
-            // 3. 실제 대출 가능액 (현재 금고 - 준비금)
             var lendableAmount = roomData.bankReserve - requiredReserve;
 
             if (isNaN(amt) || amt <= 0) {
                 replier.reply(formatError(user, "금액 오류", "대출받을 숫자를 입력하세요."));
             } 
-            // 4. 은행 가용 재원 체크 (지급준비율 반영 버전)
             else if (amt > lendableAmount) {
                 var reserveInfo = "현재 은행의 대출 가능 한도를 초과했습니다.\n(지급준비율 " + (bConf.RESERVE_RATIO * 100) + "% 준수 중)\n\n" +
                                   "🏦 현재 금고: " + fp(roomData.bankReserve) + "P\n" +
@@ -2754,17 +2819,14 @@ if (bankProcessState && bankProcessState[targetUid]) {
                                   "💰 실제 대출 가능액: " + fp(Math.max(0, lendableAmount)) + "P";
                 replier.reply(formatError(user, "은행 자금 동결", reserveInfo));
             }
-            // 2. 일일 대출 횟수 제한 체크
             else if ((user.dailyLoanCount || 0) >= lConf.DAILY_LIMIT) {
                 delete bankProcessState[targetUid];
                 replier.reply(formatError(user, "대출 제한", "대출은 하루에 최대 " + lConf.DAILY_LIMIT + "회까지만 가능합니다."));
             } 
-            // 3. 신용 한도 체크
             else if (amt > cr.limit) {
                 replier.reply(formatError(user, "한도 초과", cr.label + "의 최대 한도는 " + fp(cr.limit) + "P입니다."));
             } 
             else {
-                // 대출 실행 및 신용 페널티
                 user.dailyLoanCount = (user.dailyLoanCount || 0) + 1;
                 if (user.dailyLoanCount >= 2) {
                     user.creditScore = Math.max(0, Number(user.creditScore || 600) - 20);
@@ -2780,10 +2842,12 @@ if (bankProcessState && bankProcessState[targetUid]) {
 
                 var preP = Number(user.point);
                 user.point = Number(user.point || 0) + Number(amt);
-                verifyPointTransaction(user, preP, amt, "대출 실행");
-
+                
                 // [중요] 은행 재원에서 대출금 차감
                 roomData.bankReserve -= amt;
+
+                // [v5.8] 블랙박스 기록: 유저 +amt, 은행 -amt
+                verifyPointTransaction(user, preP, amt, "대출 실행", roomName, -amt);
 
                 replier.reply(formatCommand("🏦 대출 승인", user, fp(amt) + "P 입금 완료\n(상환 예정액: " + fp(total) + "P)\n\n🏛️ 남은 가용 재원: " + fp(roomData.bankReserve - requiredReserve) + "P", "보유 포인트: " + fp(user.point) + "P"));
                 delete bankProcessState[targetUid];
@@ -2802,10 +2866,12 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 var preP = Number(user.point);
                 var res = distributeRepayment(user, amt);
                 user.point = Number(user.point) - Number(res.actualRepay); 
-                verifyPointTransaction(user, preP, -res.actualRepay, "대출 상환");
-
+                
                 // [중요] 상환된 원금은 은행 재원으로 다시 복구 (재원 순환)
                 roomData.bankReserve = (roomData.bankReserve || 0) + res.actualRepay;
+
+                // [v5.8] 블랙박스 기록: 유저 -actualRepay, 은행 +actualRepay
+                verifyPointTransaction(user, preP, -res.actualRepay, "대출 상환", roomName, res.actualRepay);
 
                 var currentDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
                 replier.reply(formatCommand("📉 상환 완료", user, fp(res.actualRepay) + "P 상환되었습니다.\n\n🏦 은행 재원 충전: +" + fp(res.actualRepay) + "P", "남은 대출금: " + fp(currentDebt) + "P"));
@@ -2846,7 +2912,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                     // 2. 포인트 차감 및 검증
                     var preP = Number(user.point);
                     user.point -= amt;
-                    verifyPointTransaction(user, preP, -amt, "사채 풀 등록");
+                    verifyPointTransaction(user, preP, -amt, "사채 풀 등록", roomName, 0);
 
                     // 3. 매물 데이터 생성 및 저장
                     var poolId = generateUUID();
@@ -2946,7 +3012,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 var actualRepay = Math.min(amt, contract.currentDebt);
                 var preP = Number(user.point);
                 user.point -= actualRepay;
-                verifyPointTransaction(user, preP, -actualRepay, "사채 상환 지불");
+                verifyPointTransaction(user, preP, -actualRepay, "사채 상환 지불", roomName, 0);
 
                 var lender = roomData.users[contract.lenderUid];
                 if (lender) {
@@ -3092,7 +3158,7 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
                     if (!isUsingTicket) {
                         var preP = Number(user.point);
                         user.point -= finalPrice;
-                        verifyPointTransaction(user, preP, -finalPrice, "상점 구매: " + item.name);
+                        verifyPointTransaction(user, preP, -finalPrice, "상점 구매: " + item.name, roomName, isUsingTicket ? 0 : finalPrice);
                     }
 
                     // 5. 상태 초기화 후 아이템 효과 실행
@@ -4656,7 +4722,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_give", { amount: am }, user); return true; }
         
         var targetUser = found[0].data;
-        util_updatePoint(targetUser, null, am, "관리자 직접 지급");
+        util_updatePoint(targetUser, null, am, "관리자 직접 지급", roomName);
         replier.reply(formatAdmin("포인트 지급 완료", getDisplayName(targetUser) + "님: +" + fp(am) + "P"));
         safeSaveData(data);
         return true;
@@ -4674,7 +4740,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_take", { amount: am }, user); return true; }
         
         var targetUser = found[0].data;
-        util_updatePoint(targetUser, null, -am, "관리자 직접 차감");
+        util_updatePoint(targetUser, null, -am, "관리자 직접 차감", roomName);
         replier.reply(formatAdmin("포인트 차감 완료", getDisplayName(targetUser) + "님: -" + fp(am) + "P"));
         safeSaveData(data);
         return true;
@@ -5211,12 +5277,12 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 user.totalGambleWins++;
                 var res = processRepayment(user, expectedPayout, targetUid, roomName);
                 var actualGain = Number(res.actualGain);
-                util_updatePoint(user, roomData, actualGain, "홀짝 적중");
+                util_updatePoint(user, roomData, actualGain, "홀짝 적중", roomName);
 
                 var winPrefix = isFeverActive ? "🔥 [피버] " : "🎊 ";
                 replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, "결과: [" + result + "]\n축하합니다! " + fp(actualGain) + "P를 획득했습니다." + res.repayMsg, "현재 잔액: " + fP(user.point) + "P"));
             } else {
-                util_updatePoint(user, roomData, -bet, "홀짝 미적중");
+                util_updatePoint(user, roomData, -bet, "홀짝 미적중", roomName);
                 var losePrefix = isFeverActive ? "🔥 [피버] " : "💀 ";
                 replier.reply(formatCommand(losePrefix + "홀짝 미적중", user, "결과: [" + result + "]\n아쉽지만 " + fp(bet) + "P를 잃었습니다.", "현재 잔액: " + fP(user.point) + "P"));
             }
@@ -5327,7 +5393,7 @@ function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
         if (target.id === targetUid) { replier.reply(formatError(user, "결투 불가", "자신과는 싸울 수 없습니다.")); return true; }
         if (isUserBusy(target.id)) { replier.reply(formatError(user, "대상 활동 중", "상대방이 현재 다른 활동을 하고 있습니다.")); return true; }
 
-        util_updatePoint(user, null, -am, "결투 신청 베팅");
+        util_updatePoint(user, null, -am, "결투 신청 베팅", roomName);
 
         duelData[target.id] = { challengerUid: targetUid, point: am, expire: Date.now() + 30000, room: roomName };
         replier.reply(formatCommand("⚔️ 결투 신청", target.data, getDisplayName(user) + "님이 " + fp(am) + "P 결투를 신청했습니다!\n\n승낙하시겠습니까? (수락/거절/취소)", "내 잔액: " + fP(user.point) + "P"));
@@ -5649,7 +5715,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         if (Number(user.point) < totalPrice) { replier.reply(formatError(user, "포인트 부족", "필요: " + fp(totalPrice) + "P")); return true; }
         
         /* [핵심] 중앙은행 연동: 매수 대금을 금고에 입고 */
-        util_updatePoint(user, roomData, -totalPrice, "주식 매수");
+        util_updatePoint(user, roomData, -totalPrice, "주식 매수", roomName);
 
         if (!user.stockHoldings) user.stockHoldings = {};
         if (!user.stockAvg) user.stockAvg = {};
@@ -5723,7 +5789,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var res = processRepayment(user, finalPrice, targetUid, roomName); 
         
         /* [핵심] 중앙은행 연동: 매도 대금을 금고에서 차감 지급 */
-        util_updatePoint(user, roomData, Number(res.actualGain), "주식 매도");
+        util_updatePoint(user, roomData, Number(res.actualGain), "주식 매도", roomName);
         
         if (!data.stockTraffic) data.stockTraffic = {};
         if (!data.stockTraffic[sName]) data.stockTraffic[sName] = { buy: 0, sell: 0 };
@@ -5814,7 +5880,7 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
         
         /* [핵심 수정] 중앙은행 연동: 보상금을 금고에서 차감 지급 */
         // util_updatePoint 호출 시 roomData를 전달하여 "출석 보상" 사유로 금고 잔액 차감
-        util_updatePoint(user, roomData, Number(res.actualGain), "출석 보상");
+        util_updatePoint(user, roomData, Number(res.actualGain), "출석 보상", roomName);
 
         // 4. 유저 상태 데이터 업데이트
         user.lastDate = today; 

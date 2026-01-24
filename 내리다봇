@@ -3482,32 +3482,55 @@ if (msg === "/도움말") {
 /**
  * [독립형 함수 1] 인벤토리 로직
  * 기능: 보유 아이템 확인, 장착, 분해 처리
- * 수정: 포인트 환급 삭제 -> 분해 조각 및 랜덤박스 이용권 시스템 도입
+ * 수정: 아이콘/칭호 카테고리 분리 표시 및 소모품 UI 유지
  */
 function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
-    // 1. 가방 조회 (조각 및 이용권 정보 표시 추가)
+    // 1. 가방 조회 (아이콘과 칭호 분류 출력)
     if (msg === "/가방") {
         var inv = user.inventory || [];
-        var itemList = [];
-        if (inv.length === 0) itemList.push("(보유 중인 아이콘/칭호가 없습니다)");
-        else {
+        var iconEntries = [];
+        var titleEntries = [];
+        
+        if (inv.length === 0) {
+            iconEntries.push("(보유 중인 아이템이 없습니다)");
+        } else {
             for (var i = 0; i < inv.length; i++) {
                 var it = inv[i];
                 var activeMark = "";
-                if (it.effect === "icon" && user.icon === it.icon) activeMark = " (✅ 장착 중)";
-                else if (it.effect === "title" && user.title === it.title) activeMark = " (✅ 장착 중)";
-                itemList.push((i + 1) + ". " + it.icon + " " + it.name + activeMark);
+                var entry = (i + 1) + ". " + it.icon + " " + it.name;
+                
+                // 장착 여부 확인 및 표시
+                if (it.effect === "icon" && user.icon === it.icon) {
+                    activeMark = " (✅ 장착 중)";
+                    iconEntries.push(entry + activeMark);
+                } else if (it.effect === "title" && user.title === it.title) {
+                    activeMark = " (✅ 장착 중)";
+                    titleEntries.push(entry + activeMark);
+                } else {
+                    // 미장착 아이템 분류
+                    if (it.effect === "icon") iconEntries.push(entry);
+                    else if (it.effect === "title") titleEntries.push(entry);
+                }
             }
         }
 
-        // [개편] 소모품 정보 UI 업데이트
-        var consumables = "\n[내 소모품 정보]\n" +
+        // 출력용 문자열 조립
+        var invDisplay = "[아이템 보관함]\n";
+        
+        invDisplay += "🖼️ 아이콘 목록\n";
+        invDisplay += (iconEntries.length > 0 ? iconEntries.join("\n") : "- 없음") + "\n\n";
+        
+        invDisplay += "🎖️ 칭호 목록\n";
+        invDisplay += (titleEntries.length > 0 ? titleEntries.join("\n") : "- 없음");
+
+        // 소모품 정보 (조각 및 이용권 포함)
+        var consumables = "\n\n[내 소모품 정보]\n" +
                           "🛡️ 강등 방어권: " + (user.tierGuard || 0) + "개\n" +
                           "🔂 추가 승급권: " + (user.purchasedPromotionAttempts || 0) + "회\n" +
                           "🧩 분해 조각: " + (user.boxFragments || 0) + " / 5 개\n" +
                           "🎫 랜덤박스 이용권: " + (user.boxTickets || 0) + "매";
         
-        var content = "[아이템 보관함]\n" + itemList.join("\n") + "\n" + consumables + "\n\n(장착: [/장착 번호]) (분해: [/분해 번호])";
+        var content = invDisplay + consumables + "\n\n(장착: [/장착 번호]) (분해: [/분해 번호])";
         replier.reply(formatCommand("🎒 내 가방", user, content, "원하는 번호를 입력하여 장착하세요."));
         return true;
     }
@@ -3542,7 +3565,7 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 3. 아이콘 분해 로직 (포인트 환급 -> 조각 지급 체제로 전면 개편)
+    // 3. 아이콘 분해 로직 (조각 지급 시스템 유지)
     if (msg.indexOf("/분해 ") === 0) {
         var inv = user.inventory || [];
         if (inv.length === 0) {
@@ -3569,9 +3592,8 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 분해 진행 및 조각 계산
         var disassembledNames = [];
-        var earnedFragments = targetIndices.length; // 아이템 1개당 조각 1개
+        var earnedFragments = targetIndices.length;
         
         targetIndices.sort(function(a, b) { return b - a; });
 
@@ -3585,7 +3607,6 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             inv.splice(idx, 1);
         });
 
-        // 조각 적립 및 이용권 변환 로직
         user.boxFragments = (user.boxFragments || 0) + earnedFragments;
         var earnedTickets = 0;
         
@@ -3601,7 +3622,7 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
                         "(현재 조각: " + user.boxFragments + " / 5 개)";
 
         if (earnedTickets > 0) {
-            resultMsg += "\n🎫 랜덤박스 이용권: +" + earnedTickets + "매 획득! (조각 변환)";
+            resultMsg += "\n🎫 랜덤박스 이용권: +" + earnedTickets + "매 획득! (조각 변환 완료)";
         }
 
         replier.reply(formatCommand("♻️ 아이콘 분해 완료", user, resultMsg, "이용권 확인: [/가방]"));

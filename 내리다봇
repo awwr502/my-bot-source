@@ -281,7 +281,7 @@ function endTracking(user, isSuccess, resultMsg) {
 
 //==========섹터3==========
 
-/* 데이터베이스 저장 함수 (하이브리드 최적화 및 비차단형 안정성 강화) */
+/* 데이터베이스 저장 함수 (대기 큐 안정화 및 무결성 강화) */
 /**
  * @param {Object} data - 저장할 데이터 객체
  * @param {Boolean} isForceBackup - true일 경우 백업 파일(last_stable_backup.json)까지 물리적으로 기록
@@ -309,51 +309,47 @@ function safeSaveData(data, isForceBackup) {
         return; // 오염된 데이터는 파일 기록을 생략하여 기존 데이터를 보호함
     }
 
-    // [최적화 2] 비차단형 락 획득 시도 (명령어 씹힘 방지 핵심)
-    if (lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-        try {
-            // [신규] 원자적 쓰기(Atomic Write) 로직 적용
-            // 1. 임시 파일(.tmp)에 먼저 기록하여 쓰기 도중 발생할 수 있는 파일 깨짐 방지
-            var targetPath = FILE_PATH;
-            var tempPath = FILE_PATH + ".tmp";
-            var tempFile = new java.io.File(tempPath);
-            
-            FileStream.write(tempPath, content);
+    // [수정] 명령어 씹힘 방지 핵심: tryLock 대신 lock()을 사용하여 모든 저장이 순차적으로 완료되도록 보장함
+    lock.lock(); 
+    try {
+        // [신규] 원자적 쓰기(Atomic Write) 로직 적용
+        // 1. 임시 파일(.tmp)에 먼저 기록하여 쓰기 도중 발생할 수 있는 파일 깨짐 방지
+        var targetPath = FILE_PATH;
+        var tempPath = FILE_PATH + ".tmp";
+        var tempFile = new java.io.File(tempPath);
+        
+        FileStream.write(tempPath, content);
 
-            // 2. 임시 파일이 정상적으로 생성되었고 내용이 있는지 검증 후 교체
-            if (tempFile.exists() && tempFile.length() > 0) {
-                var orgFile = new java.io.File(targetPath);
-                if (orgFile.exists()) orgFile.delete(); // 기존 파일 제거
-                tempFile.renameTo(orgFile); // 임시 파일을 실제 파일명으로 변경 (Atomic Rename)
-            } else {
-                throw new Error("임시 파일 생성 실패 또는 0바이트 기록됨");
-            }
-
-            // 3. 주기적 백업 (5분 주기 스케줄러 신호 발생 시에만 수행)
-            if (isForceBackup) {
-                var backupPath = BACKUP_DIR + "last_stable_backup.json";
-                var backupTempPath = backupPath + ".tmp";
-                var backupTempFile = new java.io.File(backupTempPath);
-
-                FileStream.write(backupTempPath, content);
-                
-                if (backupTempFile.exists() && backupTempFile.length() > 0) {
-                    var oldBackup = new java.io.File(backupPath);
-                    if (oldBackup.exists()) oldBackup.delete();
-                    backupTempFile.renameTo(oldBackup);
-                }
-            }
-        } catch (e) {
-            Log.error("File Write Error: " + e);
-            try {
-                Api.replyRoom("내리다", "⚠️ 시스템 오류: 파일 쓰기 실패\n" + e.message);
-            } catch (err) {}
-        } finally {
-            lock.unlock();
+        // 2. 임시 파일이 정상적으로 생성되었고 내용이 있는지 검증 후 교체
+        if (tempFile.exists() && tempFile.length() > 0) {
+            var orgFile = new java.io.File(targetPath);
+            if (orgFile.exists()) orgFile.delete(); // 기존 파일 제거
+            tempFile.renameTo(orgFile); // 임시 파일을 실제 파일명으로 변경 (Atomic Rename)
+        } else {
+            throw new Error("임시 파일 생성 실패 또는 0바이트 기록됨");
         }
-    } else {
-        // 락 획득 실패 시 (성능 보호를 위해 무리하게 대기하지 않음)
-        // Log.debug("Save Skipped: 다른 저장 작업이 진행 중입니다.");
+
+        // 3. 주기적 백업 (5분 주기 스케줄러 신호 발생 시에만 수행)
+        if (isForceBackup) {
+            var backupPath = BACKUP_DIR + "last_stable_backup.json";
+            var backupTempPath = backupPath + ".tmp";
+            var backupTempFile = new java.io.File(backupTempPath);
+
+            FileStream.write(backupTempPath, content);
+            
+            if (backupTempFile.exists() && backupTempFile.length() > 0) {
+                var oldBackup = new java.io.File(backupPath);
+                if (oldBackup.exists()) oldBackup.delete();
+                backupTempFile.renameTo(oldBackup);
+            }
+        }
+    } catch (e) {
+        Log.error("File Write Error: " + e);
+        try {
+            Api.replyRoom("내리다", "⚠️ 시스템 오류: 파일 쓰기 실패\n" + e.message);
+        } catch (err) {}
+    } finally {
+        lock.unlock(); // 작업 완료 후 반드시 락 해제
     }
 }
 
@@ -446,7 +442,7 @@ function generateAdminHelp() {
     return "⚙️ [관리자 전용 명령어]\n" + list.join("\n");
 }
 
-/* [2] 명령어 리스트 데이터 (수정됨: /신용조정 추가) */
+/* [2] 명령어 리스트 데이터 (수정됨: 결투 응답 명령어 수락/거절/취소 완벽 추가) */
 var CMD_LIST = {
     user: [
         { cmd: "/출석", desc: "매일 포인트 획득", cat: "조회", func: "_gameShopLogic" },
@@ -459,6 +455,9 @@ var CMD_LIST = {
         { cmd: "/홀짝", desc: "[홀|짝] [포인트] 도박", cat: "게임", func: "_gameActionLogic" },
         { cmd: "/승급", desc: "티어 승급 도전", cat: "게임", func: "_gameActionLogic" },
         { cmd: "/결투", desc: "[닉네임] [포인트] 신청", cat: "게임", func: "_gameActionLogic" },
+        { cmd: "수락", desc: "결투 신청 승낙", cat: "게임", func: "_gameActionLogic" },
+        { cmd: "거절", desc: "결투 신청 거절", cat: "게임", func: "_gameActionLogic" },
+        { cmd: "취소", desc: "결투 신청 철회", cat: "게임", func: "_gameActionLogic" }, // [신규 추가]
         { cmd: "/도둑질", desc: "[닉네임] 포인트 탈취 시도", cat: "게임", func: "_gameActionLogic" },
         { cmd: "잡았다요놈", desc: "도둑질 방어 (1분 이내)", cat: "게임", func: "_gameActionLogic" },
         { cmd: "줍기", desc: "바닥에 떨어진 포인트 획득", cat: "게임", func: "_gameActionLogic" },
@@ -467,7 +466,7 @@ var CMD_LIST = {
         { cmd: "/가방", desc: "보유 중인 아이콘/칭호 확인", cat: "상점", func: "_handleInventoryLogic" },
         { cmd: "/장착", desc: "[번호] 보유 아이템 장착", cat: "상점", func: "_handleInventoryLogic" },
         { cmd: "/분해", desc: "[번호] 아이콘 분해 및 포인트 회수", cat: "상점", func: "_handleInventoryLogic" },
-        { cmd: "/로또정보", desc: "내 로또 번호 및 결과 확인", cat: "상점", func: "_handleLottoLogic" },
+        { cmd: "/로또정보", desc: "내 로또 번구 및 결과 확인", cat: "상점", func: "_handleLottoLogic" },
         { cmd: "/아이콘초기화", desc: "설정한 아이콘 삭제", cat: "상점", func: "_handleLottoLogic" },
         { cmd: "/은행", desc: "예금/출금/송금/대출/사채 종합 관리", cat: "경제", func: "_gameBankLogic" },
         { cmd: "/대출한도", desc: "신용 등급별 한도 확인", cat: "경제", func: "_gameInfoLogic" },
@@ -519,7 +518,7 @@ var CMD_LIST = {
         { cmd: "/유저복원", desc: "[닉네임] 부분 복구", func: "_adminUserManageLogic" },
         { cmd: "/시스템자가복원", desc: "메모리 최적화 및 변수 초기화", func: "_adminEconomyLogic" },
         { cmd: "/재원충전", desc: "[금액] 은행 금고 자본 긴급 수혈", func: "_adminEconomyLogic" },
-        { cmd: "/신용조정", desc: "[닉네임] [점수] 신용점수 직접 가감", func: "_adminUserManageLogic" } // [신규] 신용 점수 조정 명령어
+        { cmd: "/신용조정", desc: "[닉네임] [점수] 신용점수 직접 가감", func: "_adminUserManageLogic" }
     ]
 };
 
@@ -5279,21 +5278,33 @@ function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
 
         duelData[target.id] = { challengerUid: targetUid, point: am, expire: Date.now() + 30000, room: roomName };
         replier.reply(formatCommand("⚔️ 결투 신청", target.data, getDisplayName(user) + "님이 " + fp(am) + "P 결투를 신청했습니다!\n\n승낙하시겠습니까? (수락/거절/취소)", "내 잔액: " + fP(user.point) + "P"));
-        return true;
-    }
-
-    /* 결투 취소 */
-    if (msg === "취소" && duelData[targetUid]) {
-        var d = duelData[targetUid];
-        var challenger = roomData.users[d.challengerUid];
-        if (challenger) util_updatePoint(challenger, null, d.point, "결투 취소 환급");
-        delete duelData[targetUid];
-        replier.reply(formatCommand("🚫 결투 취소", user, "결투 신청을 취소했습니다."));
         safeSaveData(data);
         return true;
     }
 
-    /* 결투 수락 */
+    /* [수정] 결투 취소 (신청자 본인이 철회) */
+    if (msg === "취소") {
+        var foundDuelId = null;
+        // 내가 신청한 결투가 있는지 전체 duelData에서 탐색
+        for (var tid in duelData) {
+            if (duelData[tid].challengerUid === targetUid) {
+                foundDuelId = tid;
+                break;
+            }
+        }
+
+        if (foundDuelId) {
+            var d = duelData[foundDuelId];
+            util_updatePoint(user, null, d.point, "결투 취소 환급");
+            delete duelData[foundDuelId];
+            replier.reply(formatCommand("🚫 결투 취소", user, "결투 신청을 철회하고 베팅금을 반환받았습니다.", "내 잔액: " + fp(user.point) + "P"));
+            safeSaveData(data);
+            return true;
+        }
+        return false; // 내가 신청한 결투가 없으면 일반 채팅으로 처리
+    }
+
+    /* [수정] 결투 수락 (상대방이 승낙) */
     if (msg === "수락" && duelData[targetUid]) {
         if (data.gambleLimit) { replier.reply(formatError(user, "도박 제한", "현재 도박 기능이 제한되어 있습니다.")); return true; }
         var d = duelData[targetUid];
@@ -5306,49 +5317,45 @@ function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
         }
 
         if (Number(user.point) < d.point) {
-            var prePoint = Number(challenger.point);
-            challenger.point = Number(challenger.point) + d.point;
-            verifyPointTransaction(challenger, prePoint, d.point, "결투 환급");
+            // 수락자 포인트 부족 시 신청자에게 포인트 돌려주고 결투 종료
+            util_updatePoint(challenger, null, d.point, "상대 포인트 부족으로 인한 환급");
             delete duelData[targetUid];
-            replier.reply(formatError(user, "포인트 부족", "수락하기 위한 포인트가 부족합니다."));
+            replier.reply(formatError(user, "포인트 부족", "수락하기 위한 포인트가 부족하여 결투가 무산되었습니다."));
+            safeSaveData(data);
             return true;
         }
 
-        var preUser = Number(user.point);
-        user.point = Number(user.point) - d.point;
-        verifyPointTransaction(user, preUser, -d.point, "결투 수락 베팅");
+        // 수락자 포인트 차감
+        util_updatePoint(user, null, -d.point, "결투 수락 베팅");
 
+        // 승패 결정 (50:50)
         var isChallengerWin = Math.random() < 0.5;
         var winner = isChallengerWin ? challenger : user;
+        var winnerId = isChallengerWin ? d.challengerUid : targetUid;
         var winPrize = d.point * 2;
 
-        /* [수정] 정의되지 않았던 winnerUid를 상황에 맞게 할당 */
-        var winnerUid = isChallengerWin ? d.challengerUid : targetUid;
-        var preWinner = Number(winner.point);
-
         /* 통합 상환 엔진 호출 및 승리금 지급 */
-        var res = processRepayment(winner, winPrize, winnerUid, roomName);
+        var res = processRepayment(winner, winPrize, winnerId, roomName);
         winner.point = Number(winner.point) + Number(res.actualGain);
-        verifyPointTransaction(winner, preWinner, Number(res.actualGain), "결투 승리 보상");
+        verifyPointTransaction(winner, winner.point - res.actualGain, Number(res.actualGain), "결투 승리 보상");
 
         var resBody = "⚔️ 결투 결과\n" + getDisplayName(challenger) + " VS " + getDisplayName(user) + "\n\n🏆 승자: " + getDisplayName(winner) + "\n💰 획득: " + fp(winPrize) + "P" + (res.repayMsg || "");
-        replier.reply(formatCommand("⚔️ 결투 종료", winner, resBody, null));
+        replier.reply(formatCommand("⚔️ 결투 종료", winner, resBody, "내 잔액: " + fp(winner.point) + "P"));
+        
         delete duelData[targetUid];
         safeSaveData(data);
         return true;
     }
 
-    /* 결투 거절 */
+    /* [수정] 결투 거절 (상대방이 거부) */
     if (msg === "거절" && duelData[targetUid]) {
         var d = duelData[targetUid];
         var challenger = roomData.users[d.challengerUid];
         if (challenger) {
-            var prePoint = Number(challenger.point);
-            challenger.point = Number(challenger.point) + d.point;
-            verifyPointTransaction(challenger, prePoint, d.point, "결투 거절 환급");
+            util_updatePoint(challenger, null, d.point, "결투 거절 환급");
         }
         delete duelData[targetUid];
-        replier.reply(formatCommand("🚫 결투 거절", user, "결투 신청을 거절했습니다."));
+        replier.reply(formatCommand("🚫 결투 거절", user, "결투 신청을 거절했습니다.", "신청자에게 베팅금이 반환되었습니다."));
         safeSaveData(data);
         return true;
     }

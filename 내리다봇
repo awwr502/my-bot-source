@@ -2548,9 +2548,7 @@ user.point = Number(user.point || 0);
 /* 민생지원금 즉시 체크 */
 checkEconomicStimulus(user, roomName, false);
 
-//==========섹터20-3==========
-
-/* 중복 유저 선택 처리부 (기존 로직 유지) */
+/* 중복 유저 선택 처리부 (사채 보전 및 국고 회수 로직 통합) */
 if (selectWaitState[targetUid]) {
     if (Date.now() - selectWaitState[targetUid].timestamp > 30000) {
         delete selectWaitState[targetUid];
@@ -2610,11 +2608,50 @@ if (selectWaitState[targetUid]) {
                 replier.reply(formatAdmin("출석 수정 완료", getDisplayName(targetUser) + "님: " + extra.days + "일"));
                 safeSaveData(data);
             }
+            /* [수정] 유저 삭제 (중복 선택 케이스) - 사채 보전 및 국고 회수 적용 */
             else if (type === "admin_delete") {
                 var tName = targetUser.name;
-                delete roomData.users[selected.id];
-                replier.reply(formatAdmin("유저 삭제 완료", "[" + tName + "]님의 데이터를 영구 삭제했습니다."));
+                var targetId = selected.id;
+                var refundLog = "";
+                var refundCount = 0;
+                var totalRefunded = 0;
+
+                // 1. 모든 사채 계약 강제 정산 및 삭제 (채권자 보호)
+                if (roomData.loanContracts) {
+                    for (var cid in roomData.loanContracts) {
+                        var c = roomData.loanContracts[cid];
+                        if (c.borrowerUid === targetId) {
+                            var lender = roomData.users[c.lenderUid];
+                            if (lender) {
+                                var debtAmt = Number(c.currentDebt);
+                                lender.point = Number(lender.point) + debtAmt;
+                                totalRefunded += debtAmt;
+                                refundCount++;
+                                try { Api.replyRoom(roomName, "🚬 [사채 강제 정산]\n" + tName + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); } catch(e){}
+                            }
+                            delete roomData.loanContracts[cid];
+                        }
+                    }
+                }
+
+                // 2. 은행 대출금 국고 회수
+                if (targetUser.loan && Number(targetUser.loan.debt) > 0) {
+                    var bankDebt = Number(targetUser.loan.debt);
+                    roomData.bankReserve = (Number(roomData.bankReserve) || 0) + bankDebt;
+                    refundLog += "\n\n🏦 은행 대출금 " + fp(bankDebt) + "P가 국고로 자동 회수되었습니다.";
+                }
+
+                if (refundCount > 0) refundLog += "\n⚠️ 사채 보전 완료: " + refundCount + "건 (" + fp(totalRefunded) + "P)";
+
+                // 3. 데이터 삭제 처리
+                if (typeof uidCache !== 'undefined') {
+                    for (var key in uidCache) {
+                        if (uidCache[key] === targetId) delete uidCache[key];
+                    }
+                }
+                delete roomData.users[targetId];
                 safeSaveData(data);
+                replier.reply(formatAdmin("유저 삭제 완료", "[" + tName + "]님의 데이터를 영구 삭제했습니다." + refundLog));
             }
             else if (type === "admin_attend_reset") {
                 targetUser.lastDate = "";
@@ -4387,11 +4424,10 @@ function _adminLogLogic(msg, user, data, replier) {
     return false;
 }
 
-//==========섹터34==========
-
 /**
  * [관리자 하위 모듈 3] 유저 데이터 관리
  * 기능: 유저 조회, 수정, 삭제, 복원, 데이터 이전, 닉네임 기록, 신용 조정
+ * 수정 사항: 유저 삭제 시 출석일수 무관 사채 전액 보전 및 계약서 강제 삭제 로직 적용
  */
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
@@ -4443,10 +4479,8 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
         var targetUser = found[0].data;
         var oldScore = Number(targetUser.creditScore || 600);
-        // 점수 제한: 0 ~ 1000점
         targetUser.creditScore = Math.min(1000, Math.max(0, oldScore + scoreChange));
         
-        // 신용 등급 변화에 따른 상태 제어 (신불자 등)
         if (typeof checkAndHandleDefaulter === 'function') {
             checkAndHandleDefaulter(targetUser, roomName);
         }
@@ -4538,7 +4572,7 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* 유저 삭제 */
+    /* 유저 삭제 (사채 전액 보전 및 계약 강제 삭제 적용) */
     if (msg.indexOf("/유저삭제 ") === 0) {
         var tn = msg.substring(6).trim();
         var roomData = data.rooms[roomName];
@@ -4549,27 +4583,35 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         var targetId = found[0].id;
         var targetData = found[0].data;
         var refundLog = "";
+        var refundCount = 0;
+        var totalRefunded = 0;
 
-        if (Number(targetData.totalAttendance || 0) <= 3) {
-            var refundCount = 0;
-            var totalRefunded = 0;
-            if (roomData.loanContracts) {
-                for (var cid in roomData.loanContracts) {
-                    var c = roomData.loanContracts[cid];
-                    if (c.borrowerUid === targetId) {
-                        var lender = roomData.users[c.lenderUid];
-                        if (lender) {
-                            lender.point = Number(lender.point) + Number(c.currentDebt);
-                            totalRefunded += Number(c.currentDebt);
-                            refundCount++;
-                            try { Api.replyRoom(roomName, "🚬 [사채 먹튀 방지]\n" + targetData.name + "님의 데이터 삭제로 인해 " + lender.name + "님께 " + fp(c.currentDebt) + "P가 반환되었습니다."); } catch(e){}
-                        }
-                        delete roomData.loanContracts[cid];
+        // [수정] 출석일수 관계없이 모든 사채 계약 강제 정산 및 삭제
+        if (roomData.loanContracts) {
+            for (var cid in roomData.loanContracts) {
+                var c = roomData.loanContracts[cid];
+                if (c.borrowerUid === targetId) {
+                    var lender = roomData.users[c.lenderUid];
+                    if (lender) {
+                        var debtAmt = Number(c.currentDebt);
+                        lender.point = Number(lender.point) + debtAmt;
+                        totalRefunded += debtAmt;
+                        refundCount++;
+                        try { Api.replyRoom(roomName, "🚬 [사채 강제 정산]\n" + targetData.name + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); } catch(e){}
                     }
+                    delete roomData.loanContracts[cid]; // 계약서 강제 파기
                 }
             }
-            if (refundCount > 0) refundLog = "\n\n⚠️ 먹튀 방지 작동: " + refundCount + "건의 사채 취소 및 " + fp(totalRefunded) + "P가 채권자들에게 반환되었습니다.";
         }
+
+        // [신규] 은행 대출금 국고 회수 (폐쇄형 경제 안정화)
+        if (targetData.loan && Number(targetData.loan.debt) > 0) {
+            var bankDebt = Number(targetData.loan.debt);
+            roomData.bankReserve = (Number(roomData.bankReserve) || 0) + bankDebt;
+            refundLog += "\n🏦 은행 대출금 " + fp(bankDebt) + "P가 국고로 자동 회수되었습니다.";
+        }
+
+        if (refundCount > 0) refundLog += "\n⚠️ 사채 보전 완료: " + refundCount + "건 (" + fp(totalRefunded) + "P)";
 
         if (typeof uidCache !== 'undefined') {
             for (var key in uidCache) {

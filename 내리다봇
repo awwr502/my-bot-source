@@ -2053,21 +2053,14 @@ function _runSector16Logic(data, ctx) {
 // 엔진 가동
 runScheduler();
 
-//==========섹터17==========
-
 /**
  * 섹터 17 로직 함수: 주식 장 마감, 일일 데이터 초기화 및 시즌 리셋 관리
- * @param {Object} data - 데이터베이스 객체
- * @param {Object} ctx - 스케줄러 공유 컨텍스트 (isUpdated, now, today, targetRoom 등)
  */
 function _runSector17Logic(data, ctx) {
     var currentHour = ctx.now.getHours();
     var currentMin = ctx.now.getMinutes();
 
-    // 자정(00:00)에 실행되는 로직들 모음
     if (currentHour === 0 && currentMin === 0) {
-        
-        /* 6. 주식 장 마감 알림 */
         if (data.lastStockClose !== ctx.today) {
             data.lastStockClose = ctx.today;
             try { 
@@ -2076,13 +2069,11 @@ function _runSector17Logic(data, ctx) {
             ctx.isUpdated = true;
         }
 
-        /* 7. 일일 데이터 초기화 (출석, 대출 횟수, 로또 등) */
         if (data.lastDailyReset !== ctx.today) {
             data.lastDailyReset = ctx.today; 
             if (!data.lotto) data.lotto = {}; 
             data.lotto.entries = {}; 
             
-            // 피버타임 스케줄 재생성
             data.feverData.scheduled = [];
             while(data.feverData.scheduled.length < 5) {
                 var h = Math.floor(Math.random() * 15) + 9; 
@@ -2092,7 +2083,6 @@ function _runSector17Logic(data, ctx) {
             }
             data.feverData.active = false; 
 
-            // 요일별 피버타임 알림
             var dayOfWeek = ctx.now.getDay(); 
             if (dayOfWeek === 0) {
                 try { Api.replyRoom(ctx.targetRoom, formatAdmin("🔥 피버타임 시작", "일요일 한정 이벤트!\n승급 확률 +5% 상승이 적용됩니다.")); } catch(e){}
@@ -2100,20 +2090,18 @@ function _runSector17Logic(data, ctx) {
                 try { Api.replyRoom(ctx.targetRoom, formatAdmin("❄️ 피버타임 종료", "이벤트가 종료되어\n승급 확률이 정상화되었습니다.")); } catch(e){}
             }
 
-            // 전 유저 일일 제한값 초기화 및 이자 지급
             for (var r in data.rooms) {
                 for (var id in data.rooms[r].users) {
                     var u = data.rooms[r].users[id];
-                    // 일일 제한 데이터 초기화
                     u.dailyLoanCount = 0; 
                     u.dailyGambleCount = 0; 
                     u.dailyPromotionAttempts = 1; 
                     u.dailyStimulusCount = 0; 
+                    /* [신규] 신용 회복제 일일 사용량 초기화 */
+                    u.dailyCreditRestoreCount = 0; 
                     
-                    // [수정] 은행 이자 콤마 적용
                     if (Number(u.bank) > 0) u.bank = Number(u.bank) + Math.floor(Number(u.bank) * 0.02); 
                     
-                    // 대출 페널티 및 연체 이자 계산
                     if (u.loan && Number(u.loan.debt) > 0) { 
                         u.creditScore = Math.max(0, Number(u.creditScore) - 5); 
                         var dailyInterest = Math.floor(Number(u.loan.debt) * 0.05);
@@ -2128,17 +2116,14 @@ function _runSector17Logic(data, ctx) {
             ctx.isUpdated = true;
         }
 
-        /* 8. 시즌 리셋 (매월 1일 자정) */
         if (ctx.now.getDate() === 1 && data.lastSeasonReset !== ctx.season) {
             data.lastSeasonReset = ctx.season;
             for (var r in data.rooms) { 
                 for (var id in data.rooms[r].users) { 
                     var u = data.rooms[r].users[id];
-                    u.tier = 0; // 티어 초기화
-                    
-                    /* [수정] 시즌제 판수 인증 데이터 초기화 (2회 한도 반영) */
-                    u.gameAuthCount = 0;      // 인증 횟수 초기화
-                    u.purchasedAuthCount = 0; // 인증권 구매 횟수 초기화 (시즌당 2회)
+                    u.tier = 0;
+                    u.gameAuthCount = 0; 
+                    u.purchasedAuthCount = 0; 
                 } 
             }
             try { 
@@ -2452,7 +2437,8 @@ if (!targetUid) {
         /* [개편] 랜덤박스 조각 및 이용권 시스템 */
         boxFragments: 0,       // 분해 시 획득하는 조각
         boxTickets: 0,         // 조각 5개가 모여 변환된 랜덤박스 이용권
-        collectedIcons: []     // [신규] 한 번이라도 뽑았던 아이콘 기록 (분해해도 유지됨)
+        collectedIcons: [],     // [신규] 한 번이라도 뽑았던 아이콘 기록 (분해해도 유지됨)
+        dailyCreditRestoreCount: 0 // 신용 회복제 일일 사용량 제
     };
     
     uidCache[cacheKey] = targetUid;
@@ -3282,10 +3268,16 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
             replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 입력해주세요."));
         } else {
             var item = filteredItems[idx];
+
+            /* [수정] 신용 점수 회복제 일일 제한 체크 */
+            if (item.effect === "credit" && (user.dailyCreditRestoreCount || 0) >= 1) {
+                delete bankProcessState[targetUid];
+                return replier.reply(formatError(user, "구매 제한", "신용 점수 회복제는 하루에 1개만 사용 가능합니다."));
+            }
             
             /* [수정] 복수 구매 가능 여부 판별 (소모성 아이템 추출) */
             // 가방(인벤토리)에서 수량으로 누적되는 소모품 효과들
-            var stackableEffects = ["promotion", "tierGuard", "credit"];
+            var stackableEffects = ["promotion", "tierGuard"];
             var isStackable = stackableEffects.indexOf(item.effect) !== -1;
 
             if (isStackable) {
@@ -4149,6 +4141,8 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
     }
 }
 
+//==========섹터30==========
+
 /**
  * [전역 독립 함수] 상점 아이템 효과 처리 엔진
  * 기능: 구매한 아이템의 효과 발동 및 중앙은행 재원 정산
@@ -4256,11 +4250,12 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         if (item.effect === "title") user.title = item.title;
         replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 및 장착 성공!", "장착 변경: [/가방]"));
     } else if (item.effect === "credit") {
-        // [수정] 신용 점수 회복 수량 반영
-        var totalRestore = (item.value || 50) * qty;
+        /* [수정] 수량은 항상 1로 고정되며 사용 카운트 증가 */
+        var totalRestore = (item.value || 50);
         user.creditScore = Math.min(1000, (user.creditScore || 600) + totalRestore);
-        checkAndHandleDefaulter(user, roomName);
-        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " x" + qty + " 사용 성공!", "현재 점수: " + user.creditScore));
+        user.dailyCreditRestoreCount = (user.dailyCreditRestoreCount || 0) + 1;
+        if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(user, roomName);
+        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 사용 성공! (신용 +50)", "현재 점수: " + user.creditScore));
     }
 
     safeSaveData(data);

@@ -2268,13 +2268,17 @@ if (!targetUid) {
         totalTheftSuccess: 0,  // 도둑질 총 성공 횟수
         totalInvestAmount: 0,  // 주식 총 누적 매수액
         totalMiningTime: 0,    // 광산 총 누적 채굴 시간(분)
-        totalDonation: 0       // [신규 추가] 누적 기부 금액 기록 필드
+        totalDonation: 0,      // 누적 기부 금액 기록 필드
+        /* [개편] 랜덤박스 조각 및 이용권 시스템 */
+        boxFragments: 0,       // 분해 시 획득하는 조각
+        boxTickets: 0,         // 조각 5개가 모여 변환된 랜덤박스 이용권
+        collectedIcons: []     // [신규] 한 번이라도 뽑았던 아이콘 기록 (분해해도 유지됨)
     };
     
     uidCache[cacheKey] = targetUid;
     
     var welcomeMsg = "🎊 [" + cleanSender + "]님 환영합니다!\n━━━━━━━━━━━━━━━\n" +
-                     "🎁 입장 축하 보너스: " + fP(1000) + "P 지급!\n" + 
+                     "🎁 입장 축하 보너스: " + fP(3000) + "P 지급!\n" + 
                      "🕹️ 미니게임 및 출석체크 기능 제공\n" +
                      "💳 신용 등급: 4등급 (600점) 부여\n\n" + 
                      "📖 이용 전 반드시 '/도움말'을 확인해주세요!";
@@ -2292,6 +2296,25 @@ if (!user.inventory) user.inventory = [];
 if (user.tierGuard === undefined) user.tierGuard = 0;
 if (user.gameAuthCount === undefined) user.gameAuthCount = 0;
 if (user.purchasedAuthCount === undefined) user.purchasedAuthCount = 0;
+
+/* [개편] 랜덤박스 시스템 관련 변수 안전 초기화 및 자동 마이그레이션 */
+if (user.boxFragments === undefined) user.boxFragments = 0;
+if (user.boxTickets === undefined) user.boxTickets = 0;
+
+// 1. 기록장(collectedIcons)이 없으면 생성
+if (user.collectedIcons === undefined) {
+    user.collectedIcons = [];
+}
+
+// 2. [Gemini 요청 사항] 기존 보유 아이콘 기록 자동 마이그레이션
+// 가방에 있는 아이콘들을 전수 조사하여 한 번이라도 뽑은 기록에 자동 등록합니다.
+if (user.inventory && user.inventory.length > 0) {
+    user.inventory.forEach(function(it) {
+        if (it.effect === "icon" && user.collectedIcons.indexOf(it.icon) === -1) {
+            user.collectedIcons.push(it.icon);
+        }
+    });
+}
 
 /* [핵심] 강제 추심 플래그 초기화 및 보정 */
 if (user.isTransferred === undefined) user.isTransferred = false;
@@ -2311,6 +2334,8 @@ if (user.inventory) {
                         id: SHOP_ITEMS[k].id, name: SHOP_ITEMS[k].name, icon: SHOP_ITEMS[k].icon,
                         effect: "icon", title: ""
                     });
+                    // 마이그레이션 시 기록장에도 동시 등록
+                    if (user.collectedIcons.indexOf(user.icon) === -1) user.collectedIcons.push(user.icon);
                     break;
                 }
             }
@@ -3044,8 +3069,11 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
             var item = filteredItems[idx];
             var finalPrice = getItemPrice(item, user, roomName);
 
-            // 2. 자산 보유 확인
-            if (Number(user.point) < finalPrice) {
+            /* [Gemini 요청 사항] 랜덤박스 이용권 우선 차감 판별 */
+            var isUsingTicket = (item.effect === "randomBox" && (user.boxTickets || 0) > 0);
+
+            // 2. 자산 보유 확인 (이용권이 없을 때만 포인트 체크)
+            if (!isUsingTicket && Number(user.point) < finalPrice) {
                 delete bankProcessState[targetUid];
                 replier.reply(formatError(user, "포인트 부족", fp(finalPrice) + "P가 필요합니다."));
             } else {
@@ -3071,16 +3099,19 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
                         return replier.reply(formatError(user, "구매 한도 초과", "인증권은 시즌당 최대 2회까지만 구매 가능합니다."));
                     }
 
-                    // 4. 포인트 차감 및 실시간 검증
-                    var preP = Number(user.point);
-                    user.point -= finalPrice;
-                    verifyPointTransaction(user, preP, -finalPrice, "상점 구매: " + item.name);
+                    // 4. 포인트 차감 및 실시간 검증 (이용권 사용 시 포인트 차감 건너뜀)
+                    if (!isUsingTicket) {
+                        var preP = Number(user.point);
+                        user.point -= finalPrice;
+                        verifyPointTransaction(user, preP, -finalPrice, "상점 구매: " + item.name);
+                    }
 
                     // 5. 상태 초기화 후 아이템 효과 실행
                     delete bankProcessState[targetUid];
 
                     if (typeof _handleShopEffect === 'function') {
-                        _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice);
+                        // [수정] 이용권 사용 여부(isUsingTicket)를 인자로 추가 전달하여 처리 엔진에 알림
+                        _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket);
                     } else {
                         replier.reply(formatError(user, "시스템 오류", "아이템 처리 엔진이 로드되지 않았습니다."));
                         Log.error("_handleShopEffect 함수를 찾을 수 없습니다.");
@@ -3451,10 +3482,10 @@ if (msg === "/도움말") {
 /**
  * [독립형 함수 1] 인벤토리 로직
  * 기능: 보유 아이템 확인, 장착, 분해 처리
- * 수정: 신용불량자 장착 제한 로직 추가 및 별표 제거
+ * 수정: 포인트 환급 삭제 -> 분해 조각 및 랜덤박스 이용권 시스템 도입
  */
 function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
-    // 1. 가방 조회
+    // 1. 가방 조회 (조각 및 이용권 정보 표시 추가)
     if (msg === "/가방") {
         var inv = user.inventory || [];
         var itemList = [];
@@ -3468,16 +3499,21 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
                 itemList.push((i + 1) + ". " + it.icon + " " + it.name + activeMark);
             }
         }
-        var consumables = "\n[내 소모품 정보]\n🛡️ 강등 방어권: " + (user.tierGuard || 0) + "개\n🔂 추가 승급권: " + (user.purchasedPromotionAttempts || 0) + "회";
+
+        // [개편] 소모품 정보 UI 업데이트
+        var consumables = "\n[내 소모품 정보]\n" +
+                          "🛡️ 강등 방어권: " + (user.tierGuard || 0) + "개\n" +
+                          "🔂 추가 승급권: " + (user.purchasedPromotionAttempts || 0) + "회\n" +
+                          "🧩 분해 조각: " + (user.boxFragments || 0) + " / 5 개\n" +
+                          "🎫 랜덤박스 이용권: " + (user.boxTickets || 0) + "매";
         
         var content = "[아이템 보관함]\n" + itemList.join("\n") + "\n" + consumables + "\n\n(장착: [/장착 번호]) (분해: [/분해 번호])";
         replier.reply(formatCommand("🎒 내 가방", user, content, "원하는 번호를 입력하여 장착하세요."));
         return true;
     }
 
-    // 2. 아이템 장착 (신용불량자 제한 추가)
+    // 2. 아이템 장착 (신용불량자 제한 유지)
     if (msg.indexOf("/장착 ") === 0) {
-        // [Gemini 요청 사항] 신용불량자 상태 체크
         if (Number(user.creditScore || 600) < 500) {
             replier.reply(formatError(user, "장착 불가", "현재 신용불량자 상태이므로 아이콘 및 칭호 변경이 불가능합니다. 신용을 먼저 회복하세요."));
             return true;
@@ -3506,7 +3542,7 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 3. 아이콘 분해 로직 (다중 선택 지원 및 ecobase 기반 환급)
+    // 3. 아이콘 분해 로직 (포인트 환급 -> 조각 지급 체제로 전면 개편)
     if (msg.indexOf("/분해 ") === 0) {
         var inv = user.inventory || [];
         if (inv.length === 0) {
@@ -3533,21 +3569,10 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        var boxItem = null;
-        for (var i = 0; i < SHOP_ITEMS.length; i++) {
-            if (SHOP_ITEMS[i].id === 12) { boxItem = SHOP_ITEMS[i]; break; }
-        }
-        
-        if (!boxItem) {
-            replier.reply(formatError(user, "시스템 오류", "랜덤박스 데이터를 찾을 수 없습니다."));
-            return true;
-        }
-
-        var boxCurrentPrice = getItemPrice(boxItem, user, roomName);
-        var refundPerIcon = Math.floor(boxCurrentPrice * 0.20); 
-        var totalRefund = refundPerIcon * targetIndices.length;
-
+        // 분해 진행 및 조각 계산
         var disassembledNames = [];
+        var earnedFragments = targetIndices.length; // 아이템 1개당 조각 1개
+        
         targetIndices.sort(function(a, b) { return b - a; });
 
         targetIndices.forEach(function(idx) {
@@ -3560,15 +3585,26 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             inv.splice(idx, 1);
         });
 
-        var res = processRepayment(user, totalRefund, targetUid, roomName);
-        util_updatePoint(user, null, Number(res.actualGain), "아이템 분해 회수");
+        // 조각 적립 및 이용권 변환 로직
+        user.boxFragments = (user.boxFragments || 0) + earnedFragments;
+        var earnedTickets = 0;
+        
+        while (user.boxFragments >= 5) {
+            user.boxFragments -= 5;
+            user.boxTickets = (user.boxTickets || 0) + 1;
+            earnedTickets++;
+        }
 
         var resultMsg = "아이템 " + targetIndices.length + "개를 분해했습니다.\n\n" +
                         "[분해 목록]\n" + disassembledNames.join(", ") + "\n\n" +
-                        "💰 회수 포인트: " + fp(totalRefund) + "P (박스가의 20%)\n" +
-                        res.repayMsg;
+                        "🧩 획득 조각: +" + earnedFragments + " 개\n" +
+                        "(현재 조각: " + user.boxFragments + " / 5 개)";
 
-        replier.reply(formatCommand("♻️ 아이콘 분해 완료", user, resultMsg, "내 잔액: " + fp(user.point) + "P"));
+        if (earnedTickets > 0) {
+            resultMsg += "\n🎫 랜덤박스 이용권: +" + earnedTickets + "매 획득! (조각 변환)";
+        }
+
+        replier.reply(formatCommand("♻️ 아이콘 분해 완료", user, resultMsg, "이용권 확인: [/가방]"));
         safeSaveData(data);
         return true;
     }
@@ -3844,111 +3880,118 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
 //==========섹터30==========
 
 /**
- * [전역 독립 함수] 상점 아이템 효과 처리 엔진
- * 기능: 구매한 아이템의 효과 발동 및 중앙은행 재원 정산
- * 설명: 모든 구매 대금은 은행으로 귀속되며, 중복 환급금은 은행 재원에서 차감됩니다.
- */
-function _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice) {
-    var roomData = data.rooms[roomName];
-    if (!roomData) return;
+ * [전역 독립 함수] 상점 아이템 효과 처리 엔진
+ * 기능: 구매한 아이템의 효과 발동 및 중앙은행 재원 정산
+ * 수정: 이용권 선차감, 영구 기록 기반 중복 체크, 분해 조각 보상 시스템 적용
+ */
+function _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket) {
+    var roomData = data.rooms[roomName];
+    if (!roomData) return;
 
-    // 중앙은행 재원 초기화 (기본 10,000P)
-    if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
-        roomData.bankReserve = 10000;
-    }
-    
-    /* [1. 상점 수익 귀속] 구매 금액 전액을 즉시 은행 재원에 합산 */
-    roomData.bankReserve += finalPrice;
+    // 중앙은행 재원 초기화 (기본 10,000P)
+    if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
+        roomData.bankReserve = 10000;
+    }
+    
+    /* [1. 자산 정산] 이용권을 사용하지 않은 경우에만 구매 대금을 은행으로 귀속 */
+    if (!isUsingTicket) {
+        roomData.bankReserve += finalPrice;
+    } else {
+        // 이용권 사용 시 유저 데이터에서 이용권 1매 차감
+        user.boxTickets = Math.max(0, (user.boxTickets || 0) - 1);
+    }
 
-    /* [핵심] 아이템 효과별 실행 로직 */
-    
-    // 1. 랜덤 아이콘 박스 처리
-    if (item.effect === "randomBox") {
-        var rand = Math.random();
-        var cumulative = 0;
-        var resultIdx = 0; 
+    /* [핵심] 아이템 효과별 실행 로직 */
+    
+    // 1. 랜덤 아이콘 박스 처리 (개편 버전)
+    if (item.effect === "randomBox") {
+        var rand = Math.random();
+        var cumulative = 0;
+        var resultIdx = 0; 
 
-        var msgTable = {
-            0: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "\"에고... 먼지만 쌓인 창고에서 쓸모없는 물건을 발견했습니다.\"", guide: "가방에 저장되었습니다. [/가방]" },
-            1: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "\"나쁘지 않네요! 싱그러운 아이콘을 획득했습니다.\"", guide: "장착 시 [/장착 번호]를 입력하세요." },
-            2: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "\"오! 빛나는 아이템입니다. 희귀한 가치가 느껴지네요!\"", guide: "가방에서 확인 가능합니다. [/가방]" },
-            3: { title: "🎊 에픽 아이템 획득! 🎊", desc: "\"와우! 대단한 운입니다. 화려한 에픽 아이콘을 손에 넣었습니다!\"", guide: "가방에 안전하게 보관되었습니다." },
-            4: { title: "✨ [전설급] 유니크 등장! ✨", desc: "\"믿기지 않는 행운! 신화 속에서나 보던 유니크 아이템입니다!\"", guide: "즉시 장착하여 자랑해보세요! [/가방]" },
-            5: { title: "🔥 [초비상] 레전더리 강림! 🔥", desc: "\"축하합니다! 서버 최상위 2%의 확률을 뚫고 전설을 획득했습니다!\"", guide: "이 아이콘은 상점에서 절대 구할 수 없습니다." }
-        };
+        var msgTable = {
+            0: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "\"에고... 먼지만 쌓인 창고에서 쓸모없는 물건을 발견했습니다.\"", guide: "가방에 저장되었습니다. [/가방]" },
+            1: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "\"나쁘지 않네요! 싱그러운 아이콘을 획득했습니다.\"", guide: "장착 시 [/장착 번호]를 입력하세요." },
+            2: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "\"오! 빛나는 아이템입니다. 희귀한 가치가 느껴지네요!\"", guide: "가방에서 확인 가능합니다. [/가방]" },
+            3: { title: "🎊 에픽 아이템 획득! 🎊", desc: "\"와우! 대단한 운입니다. 화려한 에픽 아이콘을 손에 넣었습니다!\"", guide: "가방에 안전하게 보관되었습니다." },
+            4: { title: "✨ [전설급] 유니크 등장! ✨", desc: "\"믿기지 않는 행운! 신화 속에서나 보던 유니크 아이템입니다!\"", guide: "즉시 장착하여 자랑해보세요! [/가방]" },
+            5: { title: "🔥 [초비상] 레전더리 강림! 🔥", desc: "\"축하합니다! 서버 최상위 2%의 확률을 뚫고 전설을 획득했습니다!\"", guide: "이 아이콘은 상점에서 절대 구할 수 없습니다." }
+        };
 
-        for (var g = 0; g < RANDOM_BOX_CONFIG.PROBS.length; g++) {
-            cumulative += RANDOM_BOX_CONFIG.PROBS[g].prob;
-            if (rand < cumulative) { resultIdx = g; break; }
-        }
+        for (var g = 0; g < RANDOM_BOX_CONFIG.PROBS.length; g++) {
+            cumulative += RANDOM_BOX_CONFIG.PROBS[g].prob;
+            if (rand < cumulative) { resultIdx = g; break; }
+        }
 
-        var resGrade = RANDOM_BOX_CONFIG.PROBS[resultIdx];
-        var winIcon = resGrade.items[Math.floor(Math.random() * resGrade.items.length)];
-        var isDuplicate = false;
-        
-        if (!user.inventory) user.inventory = [];
-        for (var k = 0; k < user.inventory.length; k++) {
-            if (user.inventory[k].icon === winIcon) { isDuplicate = true; break; }
-        }
+        var resGrade = RANDOM_BOX_CONFIG.PROBS[resultIdx];
+        var winIcon = resGrade.items[Math.floor(Math.random() * resGrade.items.length)];
+        
+        /* [Gemini 요청 사항] 영구 획득 기록(collectedIcons) 기반 중복 체크 */
+        if (!user.collectedIcons) user.collectedIcons = [];
+        var isDuplicate = (user.collectedIcons.indexOf(winIcon) !== -1);
 
-        var mData = msgTable[resultIdx] || msgTable[0];
-        var content = "등급: " + resGrade.icon + " " + resGrade.grade + "\n" +
-                      "결과: [" + winIcon + "]\n\n" + mData.desc;
+        var mData = msgTable[resultIdx] || msgTable[0];
+        var content = "등급: " + resGrade.icon + " " + resGrade.grade + "\n" +
+                      "결과: [" + winIcon + "]\n\n" + mData.desc;
 
-        if (isDuplicate) {
-            /* [2. 랜덤박스 환급] 중복 시 은행 재원에서 환급금 차감 후 지급 */
-            var payback = RANDOM_BOX_CONFIG.PAYBACK || 2000;
-            
-            // 은행 재원에서 환급금 지출
-            roomData.bankReserve -= payback;
-            
-            // 유저에게 환급금 지급 (통합 함수 연동, null 전달로 중복 적립 방지)
-            util_updatePoint(user, null, payback, "랜덤박스 중복 환급");
+        if (isDuplicate) {
+            /* [2. 중복 보상 개편] 포인트 환급 삭제 -> 분해 조각 1개 지급 */
+            user.boxFragments = (user.boxFragments || 0) + 1;
+            
+            var ticketConverted = false;
+            // 조각 5개 모일 시 이용권으로 자동 변환
+            if (user.boxFragments >= 5) {
+                user.boxFragments -= 5;
+                user.boxTickets = (user.boxTickets || 0) + 1;
+                ticketConverted = true;
+            }
+            
+            content += "\n\n⚠️ 중복 아이콘 당첨!\n(과거에 획득한 기록이 있습니다)\n\n🧩 보상: 분해 조각 +1개 지급\n📊 현재 조각: " + user.boxFragments + " / 5 개";
+            if (ticketConverted) {
+                content += "\n🎫 축하합니다! 조각이 모두 모여 랜덤박스 이용권 1매가 지급되었습니다!";
+            }
+        } else {
+            // 신규 획득 시 가방 추가 및 영구 기록 저장
+            user.inventory.push({ id: 900 + resultIdx, name: resGrade.grade.split(" ")[0] + " 아이콘", icon: winIcon, effect: "icon", title: "" });
+            user.collectedIcons.push(winIcon);
+        }
+        
+        var footer = isUsingTicket ? "🎫 랜덤박스 이용권 사용 완료" : "내 잔액: " + fp(user.point) + "P";
+        replier.reply(formatCommand(mData.title, user, content, mData.guide + "\n" + footer));
+    } 
+    
+    // 2. 게임 판수 인증권 처리
+    else if (item.effect === "gameAuth") {
+        user.gameAuthCount = (user.gameAuthCount || 0) + 1;
+        user.purchasedAuthCount = (user.purchasedAuthCount || 0) + 1;
+        replier.reply(formatCommand("🎫 인증권 사용 완료", user, "게임 판수 인증이 기록되었습니다.\n현재 인증 횟수: " + user.gameAuthCount + "/2", "시즌당 구매: " + user.purchasedAuthCount + "/2"));
+    } 
+    
+    // 3. 로또 구매 대기 처리
+    else if (item.effect === "lotto") {
+        lottoPurchaseState[targetUid] = { time: Date.now(), price: finalPrice };
+        replier.reply(formatCommand("🎫 로또 번호 입력", user, "1~15 사이의 숫자 3개를 입력해주세요.\n(예: 1 5 10)", "취소: [취소]"));
+    } 
+    
+    // 4. 승급 기회 / 방어권 / 아이콘 / 신용점수 회복
+    else if (item.effect === "promotion") {
+        user.purchasedPromotionAttempts = (user.purchasedPromotionAttempts || 0) + 1;
+        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 성공!", "남은 승급 기회: " + (user.dailyPromotionAttempts + user.purchasedPromotionAttempts)));
+    } else if (item.effect === "tierGuard") {
+        user.tierGuard = (user.tierGuard || 0) + 1;
+        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 성공!", "보유 방어권: " + user.tierGuard + "개"));
+    } else if (item.effect === "icon" || item.effect === "title") {
+        user.inventory.push({ id: item.id, name: item.name, icon: item.icon, effect: item.effect, title: item.title || "" });
+        if (item.effect === "icon") user.icon = item.icon;
+        if (item.effect === "title") user.title = item.title;
+        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 및 장착 성공!", "장착 변경: [/가방]"));
+    } else if (item.effect === "credit") {
+        user.creditScore = Math.min(1000, (user.creditScore || 600) + (item.value || 50));
+        checkAndHandleDefaulter(user, roomName);
+        replier.reply(formatCommand("🛒 구매 완료", user, "신용 점수가 회복되었습니다.", "현재 점수: " + user.creditScore));
+    }
 
-            /* [핵심 수정] 환급금 지급 전 방 정보와 UID를 포함한 통합 상환 엔진 호출 */
-            var res = processRepayment(user, payback, targetUid, roomName);
-            util_updatePoint(user, null, Number(res.actualGain), "랜덤박스 중복 환급");
-            
-            content += "\n\n⚠️ 중복 아이콘 당첨!\n🏦 은행 재원에서 " + fp(payback) + "P가 환급되었습니다.";
-        } else {
-            user.inventory.push({ id: 900 + resultIdx, name: resGrade.grade.split(" ")[0] + " 아이콘", icon: winIcon, effect: "icon", title: "" });
-        }
-        replier.reply(formatCommand(mData.title, user, content, mData.guide + "\n내 잔액: " + fp(user.point) + "P"));
-    } 
-    
-    // 2. 게임 판수 인증권 처리
-    else if (item.effect === "gameAuth") {
-        user.gameAuthCount = (user.gameAuthCount || 0) + 1;
-        user.purchasedAuthCount = (user.purchasedAuthCount || 0) + 1;
-        /* [수정] 성공 메시지 내 한도 표시 변경 (3회 -> 2회) */
-        replier.reply(formatCommand("🎫 인증권 사용 완료", user, "게임 판수 인증이 기록되었습니다.\n현재 인증 횟수: " + user.gameAuthCount + "/2", "시즌당 구매: " + user.purchasedAuthCount + "/2"));
-    } 
-    
-    // 3. 로또 구매 대기 처리 (베팅금은 이미 차감되어 은행에 들어간 상태)
-    else if (item.effect === "lotto") {
-        lottoPurchaseState[targetUid] = { time: Date.now(), price: finalPrice };
-        replier.reply(formatCommand("🎫 로또 번호 입력", user, "1~15 사이의 숫자 3개를 입력해주세요.\n(예: 1 5 10)", "취소: [취소]"));
-    } 
-    
-    // 4. 승급 기회 / 방어권 / 아이콘 / 신용점수 회복
-    else if (item.effect === "promotion") {
-        user.purchasedPromotionAttempts = (user.purchasedPromotionAttempts || 0) + 1;
-        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 성공!", "남은 승급 기회: " + (user.dailyPromotionAttempts + user.purchasedPromotionAttempts)));
-    } else if (item.effect === "tierGuard") {
-        user.tierGuard = (user.tierGuard || 0) + 1;
-        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 성공!", "보유 방어권: " + user.tierGuard + "개"));
-    } else if (item.effect === "icon" || item.effect === "title") {
-        user.inventory.push({ id: item.id, name: item.name, icon: item.icon, effect: item.effect, title: item.title || "" });
-        if (item.effect === "icon") user.icon = item.icon;
-        if (item.effect === "title") user.title = item.title;
-        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 및 장착 성공!", "장착 변경: [/가방]"));
-    } else if (item.effect === "credit") {
-        user.creditScore = Math.min(1000, (user.creditScore || 600) + (item.value || 50));
-        checkAndHandleDefaulter(user, roomName);
-        replier.reply(formatCommand("🛒 구매 완료", user, "신용 점수가 회복되었습니다.", "현재 점수: " + user.creditScore));
-    }
-
-    safeSaveData(data);
+    safeSaveData(data);
 }
 
 //==========섹터31==========

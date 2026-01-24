@@ -1778,31 +1778,23 @@ function _runSector16Logic(data, ctx) {
         }
     }
 
-    /* 2. 주식 뉴스 사전 알림 (매 9분 30초) */
-    if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && 
-        currentMin % 10 === 9 && ctx.now.getSeconds() >= 40 && data.lastNewsMin !== currentMin) {
+    /* 2. 주식 주기적 변동 처리 (매 0분) */
+    /* [수정] 사전 알림 로직을 제거하고, 변동 판정 로직을 이 구간으로 통합함 */
+    if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && currentMin % 10 === 0 && data.lastStockUpdateMin !== currentMin) {
+        data.lastStockUpdateMin = currentMin; 
         
-        data.lastNewsMin = currentMin;
+        // [로직 통합] 변동 직전 확률 판정 수행 (메시지 예고 없이 즉시 적용)
         var mani = conf.MANIPULATION;
-
         if (mani && mani.ACTIVE === true) {
             data.pendingSpecialEffect = { 
                 stock: mani.TARGET, 
                 factor: mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE),
                 forceMani: true 
             };
-            var maniMsg = "📢 [시장 동향: 특보]\n━━━━━━━━━━━━━━━\n" +
-                          "잠시 후 시장에 대규모 변동이 발생합니다!\n\n" +
-                          "대상: " + mani.TARGET + "\n" +
-                          "예상: " + (mani.IS_UP ? "🚀 급등 조짐" : "📉 급락 주의");
-            try { Api.replyRoom(ctx.targetRoom, maniMsg); } catch(e){}
-            data.pendingNewStock = false; 
-        } 
-        else {
+        } else {
             var currentStockCount = Object.keys(data.stockMarket || {}).length;
             if (currentStockCount < 10 && Math.random() < SYSTEM_CONFIG.PROB.STOCK_NEW_LISTING) { 
                 data.pendingNewStock = true;
-                try { Api.replyRoom(ctx.targetRoom, "📢 [시장 동향]\n━━━━━━━━━━━━━━━\n잠시 후 신규 기업이 상장됩니다!"); } catch(e){}
             } else if (Math.random() < SYSTEM_CONFIG.PROB.STOCK_SPECIAL) {
                 var stocks = Object.keys(data.stockMarket || {});
                 if (stocks.length > 0) {
@@ -1810,17 +1802,10 @@ function _runSector16Logic(data, ctx) {
                     var isUp = Math.random() < SYSTEM_CONFIG.PROB.STOCK_UP_CHANCE;
                     var randFactor = (Math.random() * 0.10) + 0.15; 
                     data.pendingSpecialEffect = { stock: target, factor: isUp ? randFactor : -randFactor };
-                    var newsMsg = "📢 [시장 동향]\n━━━━━━━━━━━━━━━\n잠시 후 변동이 감지됩니다!\n\n대상: " + target + "\n예상: " + (isUp ? "🚀 급등 조짐" : "📉 급락 주의");
-                    try { Api.replyRoom(ctx.targetRoom, newsMsg); } catch(e){}
                 }
             }
         }
-        ctx.isUpdated = true;
-    }
 
-    /* 3. 주식 주기적 변동 처리 (매 0분) */
-    if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && currentMin % 10 === 0 && data.lastStockUpdateMin !== currentMin) {
-        data.lastStockUpdateMin = currentMin; 
         try { java.lang.Thread.sleep(1000); } catch(e){}
 
         if (currentHour === conf.SETTINGS.CLOSE_HOUR && currentMin === 50 && typeof stock_applyClosingCorrection === 'function') {
@@ -1839,7 +1824,7 @@ function _runSector16Logic(data, ctx) {
         ctx.isUpdated = true;
     }
 
-    /* 4. 홀짝 피버타임 체크 */
+    /* 3. 홀짝 피버타임 체크 */
     if (!data.feverData) data.feverData = { active: false, endTime: 0, scheduled: [] };
     var timeKey = (currentHour < 10 ? "0"+currentHour : currentHour) + ":" + (currentMin < 10 ? "0"+currentMin : currentMin);
     if (data.feverData.scheduled.indexOf(timeKey) !== -1 && !data.feverData.active) {
@@ -1855,7 +1840,7 @@ function _runSector16Logic(data, ctx) {
         ctx.isUpdated = true;
     }
 
-    /* 5. 결투 만료 체크 */
+    /* 4. 결투 만료 체크 */
     for (var dKey in duelData) {
         var d = duelData[dKey];
         if (nowTs > d.expire) {

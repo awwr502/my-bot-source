@@ -3482,12 +3482,18 @@ if (msg === "/도움말") {
 /**
  * [독립형 함수 1] 인벤토리 로직
  * 기능: 보유 아이템 확인, 장착, 분해 처리
- * 수정: 아이콘/칭호 카테고리 분리 표시 및 소모품 UI 유지
+ * 수정: 아이콘/칭호 카테고리별 ID 오름차순 자동 정렬 기능 추가
  */
 function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
-    // 1. 가방 조회 (아이콘과 칭호 분류 출력)
+    // 1. 가방 조회 (분류 및 자동 정렬 적용)
     if (msg === "/가방") {
         var inv = user.inventory || [];
+        
+        // [Gemini 요청 사항] ID 기준 오름차순 정렬 (낮은 순서가 위로)
+        inv.sort(function(a, b) {
+            return (a.id || 0) - (b.id || 0);
+        });
+
         var iconEntries = [];
         var titleEntries = [];
         
@@ -3499,17 +3505,18 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
                 var activeMark = "";
                 var entry = (i + 1) + ". " + it.icon + " " + it.name;
                 
-                // 장착 여부 확인 및 표시
+                // 장착 여부 확인
                 if (it.effect === "icon" && user.icon === it.icon) {
                     activeMark = " (✅ 장착 중)";
-                    iconEntries.push(entry + activeMark);
                 } else if (it.effect === "title" && user.title === it.title) {
                     activeMark = " (✅ 장착 중)";
+                }
+
+                // 카테고리별 분류 (이미 정렬된 상태)
+                if (it.effect === "icon") {
+                    iconEntries.push(entry + activeMark);
+                } else if (it.effect === "title") {
                     titleEntries.push(entry + activeMark);
-                } else {
-                    // 미장착 아이템 분류
-                    if (it.effect === "icon") iconEntries.push(entry);
-                    else if (it.effect === "title") titleEntries.push(entry);
                 }
             }
         }
@@ -3517,10 +3524,10 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
         // 출력용 문자열 조립
         var invDisplay = "[아이템 보관함]\n";
         
-        invDisplay += "🖼️ 아이콘 목록\n";
+        invDisplay += "🖼️ 아이콘 목록 (등급순)\n";
         invDisplay += (iconEntries.length > 0 ? iconEntries.join("\n") : "- 없음") + "\n\n";
         
-        invDisplay += "🎖️ 칭호 목록\n";
+        invDisplay += "🎖️ 칭호 목록 (등급순)\n";
         invDisplay += (titleEntries.length > 0 ? titleEntries.join("\n") : "- 없음");
 
         // 소모품 정보 (조각 및 이용권 포함)
@@ -3547,12 +3554,15 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatError(user, "형식 오류", "/장착 [번호]"));
             return true;
         }
+
+        // 정렬된 순서에 맞게 인덱스 참조
         var idx = parseInt(parts[1]);
         var inv = user.inventory || [];
         if (isNaN(idx) || idx < 1 || idx > inv.length) {
             replier.reply(formatError(user, "번호 오류", "가방에 표시된 번호를 입력해주세요."));
             return true;
         }
+
         var selected = inv[idx - 1];
         if (selected.effect === "icon") {
             user.icon = selected.icon;

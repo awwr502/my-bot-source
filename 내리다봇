@@ -1,71 +1,56 @@
 //==========섹터1==========
 
 /* [신규] 명령어 자동 등록 시스템 (Command Registry) */
-// 모든 유저/관리자 명령어를 객체 형태로 관리하여 자동화된 도움말 및 분배 시스템을 지원합니다.
-var USER_COMMANDS = {}; // 유저용 명령어를 저장하는 객체
-var ADMIN_COMMANDS = {}; // 관리자용 명령어를 저장하는 객체
+var USER_COMMANDS = {}; 
+var ADMIN_COMMANDS = {}; 
 
-/**
- * @param {String} cmd - 명령어 이름 (예: "/출석")
- * @param {String} desc - 명령어에 대한 설명
- * @param {String} cat - 카테고리 (조회, 게임, 상점, 경제, 주식, 광산 등)
- * @param {Function} func - 해당 명령어를 처리할 섹터별 로직 함수
- */
 function registerUserCmd(cmd, desc, cat, func) {
     USER_COMMANDS[cmd] = { desc: desc, cat: cat, execute: func };
 }
 
-/**
- * @param {String} cmd - 관리자 명령어 이름
- * @param {String} desc - 관리자 명령어 설명
- * @param {Function} func - 관리자 로직 함수
- */
 function registerAdminCmd(cmd, desc, func) {
     ADMIN_COMMANDS[cmd] = { desc: desc, execute: func };
 }
 
 /* 파일 및 데이터 동기화 객체 */
-var Lock = java.util.concurrent.locks.ReentrantLock; // 파일 쓰기 시 충돌 방지를 위한 재진입 락 객체
-var lock = new Lock(); // 실제 락 인스턴스 생성
-var SD_PATH = android.os.Environment.getExternalStorageDirectory().getAbsolutePath(); // 기기의 외부 저장소 절대 경로 추출
-var BASE_DIR = SD_PATH + "/kakaobot/data/"; // 봇 데이터가 저장될 기본 디렉토리 경로
-var FILE_PATH = BASE_DIR + "attendance.json"; // 메인 데이터베이스(JSON) 파일 경로
-var BACKUP_DIR = BASE_DIR + "backup/"; // 데이터 백업 파일이 저장되는 디렉토리 경로
+var Lock = java.util.concurrent.locks.ReentrantLock; 
+var lock = new Lock(); 
+var SD_PATH = android.os.Environment.getExternalStorageDirectory().getAbsolutePath(); 
+var BASE_DIR = SD_PATH + "/kakaobot/data/"; 
+var FILE_PATH = BASE_DIR + "attendance.json"; 
+var BACKUP_DIR = BASE_DIR + "backup/"; 
 
-/* [최적화] 전역 UID 캐시 시스템 (Deep Optimization 핵심) */
-// 유저 식별 시 반복문을 제거하고 메모리에서 즉시 UID를 찾기 위한 해시 테이블입니다.
+/* [최적화] 전역 UID 캐시 시스템 */
 var uidCache = uidCache || {}; 
 
-/* [신규] 고정 스레드 풀 엔진 (Fixed Thread Pool) */
-// 최대 8개의 명령어를 동시에 병렬 처리하며, 그 이상의 입력은 대기열(Queue)에 쌓아 관리합니다.
+/* [최적화] 병렬 처리 엔진 분리 */
+// 1. 명령어 처리 엔진: 8개의 스레드가 유저와 소통 (응답 속도 담당)
 var Executor = java.util.concurrent.Executors.newFixedThreadPool(8);
+// 2. [신규] 저장 전담 엔진: 단 1개의 스레드가 순차적으로 파일 기록 (안전성 담당)
+var SaveExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
 
 /* 로그 저장 경로 및 디렉토리 설정 */ 
-var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt"; // 유저가 제보한 버그 내용 저장 경로
-var ERROR_LOG_PATH = BASE_DIR + "logs/error_log.txt"; // 시스템 로직 에러 로그 파일 경로
-var logDir = new java.io.File(BASE_DIR + "logs/"); // 로그 디렉토리 객체 생성
-if (!logDir.exists()) logDir.mkdirs(); // 로그 폴더가 없으면 생성
-var dir = new java.io.File(BACKUP_DIR); // 백업 디렉토리 객체 생성
-if (!dir.exists()) dir.mkdirs(); // 백업 폴더가 없으면 생성
+var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt"; 
+var ERROR_LOG_PATH = BASE_DIR + "logs/error_log.txt"; 
+var logDir = new java.io.File(BASE_DIR + "logs/"); 
+if (!logDir.exists()) logDir.mkdirs(); 
+var dir = new java.io.File(BACKUP_DIR); 
+if (!dir.exists()) dir.mkdirs(); 
 
-/* 전역 상태 변수 (휘발성 변수: 앱 재구동 시 초기화됨) */ 
-var globalData = null; // 메모리에 로드된 전체 유저 및 시스템 데이터
-var menuWaitState = {}; // 메인 메뉴(/도움말, /은행 등) 선택 대기 상태
-var lottoPurchaseState = {}; // 로또 번호 입력 대기 상태
-var sprinkleData = { active: false, winners: [] }; // 포인트 뿌리기 이벤트 상태
-var activeThefts = {}; // 현재 진행 중인 도둑질 시도 데이터
-var duelData = {}; // 유저 간 결투 신청 데이터
-var selectWaitState = {}; // 닉네임 중복 시 선택 대기 상태
-var bankProcessState = {}; // 은행 세부 업무(송금, 예금 등) 진행 상태
-var marketOpenPrice = 0; // [추가] 당일 장 오픈 가격 (기준점)
-
-/* 사채 및 광산 시스템 전용 상태 변수 */
-var loanRegisterState = {}; // 사채 매물 등록 절차 상태
-var loanContractWaitState = {}; // 사채 대출 계약 승낙 대기 상태
-var miningState = {}; // 광산 채굴 중인 유저의 작업 상태
-
-/* 홀짝 피버타임 전역 변수 */ 
-var feverData = { active: false, endTime: 0, scheduled: [] }; // 피버타임 활성 여부 및 스케줄
+/* 전역 상태 변수 */ 
+var globalData = null; 
+var menuWaitState = {}; 
+var lottoPurchaseState = {}; 
+var sprinkleData = { active: false, winners: [] }; 
+var activeThefts = {}; 
+var duelData = {}; 
+var selectWaitState = {}; 
+var bankProcessState = {}; 
+var marketOpenPrice = 0; 
+var loanRegisterState = {}; 
+var loanContractWaitState = {}; 
+var miningState = {}; 
+var feverData = { active: false, endTime: 0, scheduled: [] };
 
 /* 관리자 UID 기반 인증 */ 
 var adminUIDs = ["fixed-uuid-관리자1", "fixed-uuid-관리자2"]; // 고유 ID를 통한 관리자 권한 목록
@@ -281,76 +266,74 @@ function endTracking(user, isSuccess, resultMsg) {
 
 //==========섹터3==========
 
-/* 데이터베이스 저장 함수 (대기 큐 안정화 및 무결성 강화) */
+/* [최적화] 비동기 영속화(Asynchronous Persistence) 엔진 */
 /**
  * @param {Object} data - 저장할 데이터 객체
- * @param {Boolean} isForceBackup - true일 경우 백업 파일(last_stable_backup.json)까지 물리적으로 기록
+ * @param {Boolean} isForceBackup - true일 경우 백업 파일까지 물리적으로 기록
  */
 function safeSaveData(data, isForceBackup) {
     if (!data) return;
-    globalData = data; // 메모리 데이터 즉시 동기화
+    globalData = data; // 메모리 데이터 즉시 동기화 (답장 속도 최우선)
 
-    // [최적화 1] 무거운 문자열 변환 및 무결성 검증을 락(Lock) 밖에서 수행
-    // 이를 통해 파일을 쓰는 동안 다른 명령어 처리가 중단되는 병목 현상을 방지합니다.
+    // [방어형 로직] 무거운 직렬화 및 무결성 검증은 메인 스레드에서 먼저 수행
     var content;
     try {
         content = JSON.stringify(data);
-        
-        // 데이터 무결성 검증 (파일 손상 및 초기화 방지)
         var check = JSON.parse(content);
         if (!check || !check.rooms) {
             throw new Error("데이터 구조 불완전 (rooms 누락)");
         }
     } catch (e) {
+        // [복구] 기존 시스템의 알림 기능 유지
         Log.error("Save Guard Blocked: " + e.message);
         try {
             Api.replyRoom("내리다", "⚠️ 데이터 보호 작동: 오염된 데이터의 쓰기 시도를 차단했습니다.\n사유: " + e.message);
         } catch (err) {}
-        return; // 오염된 데이터는 파일 기록을 생략하여 기존 데이터를 보호함
+        return; // 오염된 데이터는 배경 일꾼에게 넘기지 않고 즉시 차단
     }
 
-    // [수정] 명령어 씹힘 방지 핵심: tryLock 대신 lock()을 사용하여 모든 저장이 순차적으로 완료되도록 보장함
-    lock.lock(); 
-    try {
-        // [신규] 원자적 쓰기(Atomic Write) 로직 적용
-        // 1. 임시 파일(.tmp)에 먼저 기록하여 쓰기 도중 발생할 수 있는 파일 깨짐 방지
-        var targetPath = FILE_PATH;
-        var tempPath = FILE_PATH + ".tmp";
-        var tempFile = new java.io.File(tempPath);
-        
-        FileStream.write(tempPath, content);
+    // [비동기 처리] 실제 파일 쓰기는 저장 전담 일꾼(SaveExecutor)에게 위임
+    SaveExecutor.execute(new java.lang.Runnable({
+        run: function() {
+            // [안정성] 싱글 스레드 환경에서 락을 통한 순차적 기록 보장
+            lock.lock(); 
+            try {
+                var targetPath = FILE_PATH;
+                var tempPath = FILE_PATH + ".tmp";
+                var tempFile = new java.io.File(tempPath);
+                
+                FileStream.write(tempPath, content);
 
-        // 2. 임시 파일이 정상적으로 생성되었고 내용이 있는지 검증 후 교체
-        if (tempFile.exists() && tempFile.length() > 0) {
-            var orgFile = new java.io.File(targetPath);
-            if (orgFile.exists()) orgFile.delete(); // 기존 파일 제거
-            tempFile.renameTo(orgFile); // 임시 파일을 실제 파일명으로 변경 (Atomic Rename)
-        } else {
-            throw new Error("임시 파일 생성 실패 또는 0바이트 기록됨");
-        }
+                // 원자적 교체 (Atomic Rename)
+                if (tempFile.exists() && tempFile.length() > 0) {
+                    var orgFile = new java.io.File(targetPath);
+                    if (orgFile.exists()) orgFile.delete();
+                    tempFile.renameTo(orgFile);
+                } else {
+                    throw new Error("임시 파일 생성 실패 또는 데이터 유실");
+                }
 
-        // 3. 주기적 백업 (5분 주기 스케줄러 신호 발생 시에만 수행)
-        if (isForceBackup) {
-            var backupPath = BACKUP_DIR + "last_stable_backup.json";
-            var backupTempPath = backupPath + ".tmp";
-            var backupTempFile = new java.io.File(backupTempPath);
-
-            FileStream.write(backupTempPath, content);
-            
-            if (backupTempFile.exists() && backupTempFile.length() > 0) {
-                var oldBackup = new java.io.File(backupPath);
-                if (oldBackup.exists()) oldBackup.delete();
-                backupTempFile.renameTo(oldBackup);
+                // 주기적 백업 처리
+                if (isForceBackup) {
+                    var backupPath = BACKUP_DIR + "last_stable_backup.json";
+                    FileStream.write(backupPath + ".tmp", content);
+                    var bTemp = new java.io.File(backupPath + ".tmp");
+                    if (bTemp.exists() && bTemp.length() > 0) {
+                        var oldB = new java.io.File(backupPath);
+                        if (oldB.exists()) oldB.delete();
+                        bTemp.renameTo(oldB);
+                    }
+                }
+            } catch (e) {
+                Log.error("Async File Write Error: " + e);
+                try {
+                    Api.replyRoom("내리다", "⚠️ 시스템 오류: 배경 저장 실패\n" + e.message);
+                } catch (err) {}
+            } finally {
+                lock.unlock(); // 작업 완료 후 락 해제
             }
         }
-    } catch (e) {
-        Log.error("File Write Error: " + e);
-        try {
-            Api.replyRoom("내리다", "⚠️ 시스템 오류: 파일 쓰기 실패\n" + e.message);
-        } catch (err) {}
-    } finally {
-        lock.unlock(); // 작업 완료 후 반드시 락 해제
-    }
+    }));
 }
 
 //==========섹터4==========

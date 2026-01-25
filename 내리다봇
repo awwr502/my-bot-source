@@ -650,64 +650,56 @@ var bankProcessState = {};
 
 /**
  * [Gemini 요청 사항] 통합 순자산 계산 엔진 (실시간 주가 반영 및 방어 로직)
- * 기능: 유저의 모든 실질 자산에서 부채를 차감하되, 주식은 '현재가'로 계산하고 순자산 하한선(0)을 보장합니다.
  */
 function util_calculateNetWorth(user, roomData) {
     if (!user) return 0;
-    var data = getDatabase(); // 실시간 주식 시세 참조를 위해 DB 호출
+    var data = getDatabase(); 
 
-    // 1. 가용 현금 자산 (지갑 + 통장)
     var liquidAssets = Number(user.point || 0) + Number(user.bank || 0);
 
-    // 2. [수정] 투자 자산 (보유 주식액: 평단가가 아닌 실시간 '현재가' 기준)
     var stockAssets = 0;
     if (user.stockHoldings && data.stockMarket) {
         for (var sName in user.stockHoldings) {
             var count = Number(user.stockHoldings[sName] || 0);
             var stock = data.stockMarket[sName];
-            // 종목이 존재하면 현재가 적용, 상장폐지 등 부재 시 0원 처리
             var currentPrice = stock ? Number(stock.price) : 0;
             if (!isNaN(count) && !isNaN(currentPrice)) stockAssets += (count * currentPrice);
         }
     }
 
-    // 3. 채무 및 채권 계산 (사채 시장 연동)
     var bankDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
-    var sacheDebt = 0;   // 내가 빌린 돈 (부채)
-    var sacheClaims = 0; // 내가 빌려준 돈 (채권/자산)
+    var sacheDebt = 0;   
+    var sacheClaims = 0; 
 
     if (roomData && roomData.loanContracts) {
         for (var cid in roomData.loanContracts) {
             var c = roomData.loanContracts[cid];
-            // 부채 합산 (채무자 식별)
             if (c.borrowerUid === user.uid || (user.name && c.borrowerName === user.name)) {
                 sacheDebt += Number(c.currentDebt);
             }
-            // 채권 합산 (채권자 식별)
             if (c.lenderUid === user.uid || (user.name && c.lenderName === user.name)) {
                 sacheClaims += Number(c.currentDebt);
             }
         }
     }
 
-    // [최종 공식]: 순자산 = (가용자산 + 주식현재가치 + 미수채권) - (은행대출 + 사채부채)
     var netWorth = (liquidAssets + stockAssets + sacheClaims) - (bankDebt + sacheDebt);
-    
-    // [허점 보완]: 순자산이 0 미만인 '깡통 계정'이 경제 지표를 훼손하지 않도록 하한선 0P 적용
     return Math.max(0, Math.floor(netWorth));
 }
 
-/* [핵심] 지능형 포인트 통합 처리 및 순자산 기반 칭호 엔진 (v5.8 저널링 대응) */
+/* [핵심] 지능형 포인트 통합 처리 (마이너스 원천 차단 및 실제 변동량 정산) */
 function util_updatePoint(user, roomData, delta, reason, roomName) {
     if (!user || isNaN(delta) || delta === 0) return;
     
     var prePoint = Number(user.point || 0);
 
-    /* [신규 추가] 마이너스 잔액 방지 로직 (Floor 0P) */
-    // 차감하려는 금액(delta)이 현재 잔액(prePoint)보다 클 경우, 잔액만큼만 차감하여 0원을 만듭니다.
+    /* * [물리적 마이너스 차단 로직]
+     * delta가 -2000인데 현재 잔액이 1000이라면, 
+     * 실제 차감 가능한 양(actualDelta)을 -1000으로 강제 조정합니다.
+     */
     var actualDelta = delta;
     if (delta < 0 && (prePoint + delta) < 0) {
-        actualDelta = -prePoint;
+        actualDelta = -prePoint; // 가진 돈만큼만 뺏음
     }
 
     var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급", "결투 승리 보상", "뿌리기 줍기", "경마 당첨금"];
@@ -718,7 +710,7 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     if (roomData) {
         if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
         
-        // 은행 재원 변동량도 실제 유저 지갑에서 오고 간 'actualDelta'를 기준으로 계산
+        // 국고(중앙은행) 재원도 '실제로 유저가 낸 금액'인 actualDelta만큼만 변동시킴
         if (actualDelta > 0) {
             if (bankOutputReasons.some(function(r){ return reason.indexOf(r) !== -1; })) brDelta = -actualDelta;
         } else {
@@ -729,11 +721,11 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
         roomData.bankReserve += brDelta;
     }
 
+    // 내부 데이터 수정: (1000 + (-1000)) = 0. 절대로 음수가 저장되지 않음.
     user.point = prePoint + actualDelta;
 
-    /* [수정] 자산가 칭호 영구 획득 엔진 (실시간 주가 반영 및 하한선 보정 적용) */
+    /* 자산가 칭호 엔진 */
     var totalNetWorth = util_calculateNetWorth(user, roomData);
-    
     var assetTitles = [
         { name: "대부호", limit: 1000000, id: 703 },
         { name: "부호", limit: 500000, id: 702 },
@@ -743,53 +735,39 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
 
     if (!user.inventory) user.inventory = [];
 
-    // 순자산 기준에 맞는 칭호를 가방에 영구 지급
     for (var i = 0; i < assetTitles.length; i++) {
         var t = assetTitles[i];
         if (totalNetWorth >= t.limit) {
-            // 이미 가방에 있는지 확인
             var isAlreadyOwned = user.inventory.some(function(it) { 
                 return it.effect === "title" && it.title === t.name; 
             });
 
             if (!isAlreadyOwned) {
                 user.inventory.push({ 
-                    id: t.id, 
-                    name: "[" + t.name + "] 칭호", 
-                    icon: "💰", 
-                    effect: "title", 
-                    title: t.name 
+                    id: t.id, name: "[" + t.name + "] 칭호", icon: "💰", effect: "title", title: t.name 
                 });
-
-                // 상위 칭호 획득 시 자동 장착 및 알림
                 user.title = t.name;
                 var targetRoom = roomName || (roomData && roomData.roomName ? roomData.roomName : "내리다");
                 var winMsg = "[🎖️ 신규 칭호 획득]\n━━━━━━━━━━━━━━━\n" + (user.name || "유저") + "님\n\n축하합니다! 실질 순자산이 " + fp(t.limit) + "P를 돌파하여 [" + t.name + "] 칭호를 획득했습니다!\n\n✨ 상태: [" + t.name + "] 칭호 자동 장착 완료\n💼 보관: 가방에 영구 저장되었습니다.\n━━━━━━━━━━━━━━━\n💡 이제 자산이 하락해도 칭호는 사라지지 않습니다.";
                 try { Api.replyRoom(targetRoom, winMsg); } catch(e){}
-                
-                // 가장 높은 등급 하나만 처리하고 브레이크 (중복 메시지 방지)
                 break;
             }
         }
     }
 
     if (typeof verifyPointTransaction === 'function') {
+        // 저널링에도 '실제 변동액'을 기록하여 복구 시 오차 발생 차단
         verifyPointTransaction(user, prePoint, actualDelta, reason, roomName, brDelta);
     }
 }
 
-/* [신규] 포인트 단위 쉼표 포맷팅 함수 (안전 모드) */
+/* 포인트 단위 쉼표 포맷팅 */
 function fp(val) {
     if (val === undefined || val === null || isNaN(val)) return "0";
     return String(Math.floor(Number(val))).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
-
-/* fP 별칭 설정 (호환성 유지) */
 var fP = fp;
 
-/**
- * [UI] 명령어 결과 포맷팅 함수
- */
 function formatCommand(title, user, content, nextStep) { 
     var msg = title + "\n━━━━━━━━━━━━━━━\n"; 
     if (user !== null) { 
@@ -801,25 +779,16 @@ function formatCommand(title, user, content, nextStep) {
     return msg; 
 }
 
-/**
- * [UI] 단순 정보 조회 포맷팅 함수
- */
 function formatSimple(title, content, nextStep) {
     var msg = "ℹ️ " + title + "\n━━━━━━━━━━━━━━━\n" + content + "\n━━━━━━━━━━━━━━━";
     if (nextStep) msg += "\n💡 [가이드]: " + nextStep;
     return msg;
 }
 
-/**
- * [UI] 관리자 전용 포맷팅 함수
- */
 function formatAdmin(title, content) { 
     return "⚙️ " + title + "\n━━━━━━━━━━━━━━━\n" + content + "\n━━━━━━━━━━━━━━━"; 
 }
 
-/**
- * [UI] 시스템 에러 포맷팅 함수
- */
 function formatError(user, content, nextStep) { 
     var nameTag = (typeof user === "string") ? user : getDisplayName(user); 
     var msg = "🚫 오류 발생\n━━━━━━━━━━━━━━━\n" + nameTag + "님\n사유: " + content + "\n━━━━━━━━━━━━━━━"; 
@@ -5149,20 +5118,35 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [9] 포인트 차감 */
+    /* [9] 포인트 차감 (강화: 잔액 초과 차감 시 안내 문구 추가) */
     if (msg.indexOf("/포인트차감 ") === 0) {
         var parts = msg.trim().split(/\s+/);
         if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/포인트차감 [닉네임] [금액]")); return true; }
-        var am = parseInt(parts.pop());
+        var requestedAmount = parseInt(parts.pop());
         var tn = parts.slice(1).join(" ").trim();
         var roomData = data.rooms[roomName];
         var found = findUserByName(roomData, tn);
+
         if (found.length === 0) { replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_take", { amount: am }, user); return true; }
+        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_take", { amount: requestedAmount }, user); return true; }
         
         var targetUser = found[0].data;
-        util_updatePoint(targetUser, null, -am, "관리자 직접 차감", roomName);
-        replier.reply(formatAdmin("포인트 차감 완료", getDisplayName(targetUser) + "님: -" + fp(am) + "P"));
+        var currentPoint = Number(targetUser.point);
+        
+        // 실제로 가져갈 수 있는 양 계산
+        var actualTake = Math.min(currentPoint, requestedAmount);
+        var isShortage = requestedAmount > currentPoint;
+
+        // 실제 차감 집행 (섹터 7의 util_updatePoint 호출)
+        util_updatePoint(targetUser, roomData, -actualTake, "관리자 직접 차감", roomName);
+        
+        var resContent = getDisplayName(targetUser) + "님: -" + fp(actualTake) + "P 차감 완료";
+        if (isShortage) {
+            resContent += "\n(⚠️ 요청액 " + fp(requestedAmount) + "P 중 잔액 부족으로 보유 전액 차감)";
+        }
+        resContent += "\n현재 잔액: 0P";
+
+        replier.reply(formatAdmin("포인트 차감 보고", resContent));
         safeSaveData(data);
         return true;
     }

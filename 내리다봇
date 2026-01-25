@@ -5189,12 +5189,10 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
     return false;
 }
 
-//==========섹터38==========
-
 /**
- * [게임 하위 모듈 2] 정보 및 랭킹 조회 (부채 통합 표시 및 예외 처리 강화)
+ * [게임 하위 모듈 2] 정보 및 랭킹 조회 (UI 최적화 및 출석 상태 추가)
  * 기능: 내정보, 유물도감, 신용등급, 대출한도, 명예의전당, 순위, 유저정보, 경마조회
- * 설명: 조회 시 은행 대출뿐만 아니라 사채 및 연체 현황을 통합하여 출력하며, 입력 오류를 검증합니다.
+ * 수정 사항: 주식자산 표시 제거, 오늘 출석 여부(✅/⏳) 표시 추가
  */
 function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
@@ -5206,20 +5204,18 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 각 말별 실시간 배팅액 집계 로직
         var hList = racingData.horses.map(function(h) {
             var horseBetSum = 0;
             for (var uid in racingData.bets) {
                 if (racingData.bets[uid].horseId === h.id) horseBetSum += Number(racingData.bets[uid].amount);
             }
-            return h.id + ". " + h.name + " [" + h.icon + "]\n   └ 현 배팅액: " + fp(horseBetSum) + "P";
+            return h.id + ". " + h.name + " [" + h.icon + "]\n    └ 현 배팅액: " + fp(horseBetSum) + "P";
         }).join("\n");
 
-        // 마감까지 남은 시간 정밀 계산 (매시 50분 기준)
         var now = new Date();
         var remainMin = 49 - now.getMinutes();
         var remainSec = 59 - now.getSeconds();
-        if (remainMin < 0) { remainMin = 0; remainSec = 0; } // 정산 시간 예외처리
+        if (remainMin < 0) { remainMin = 0; remainSec = 0; }
 
         var totalPrizePool = racingData.totalPool + racingData.carryOver;
         var racingBody = "제 " + racingData.round + "회차 경기 배팅 진행 중\n\n" +
@@ -5232,23 +5228,15 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [기능 3] 내 정보 조회 (Gemini 요청: 실질 순자산 상세 표시 반영) */
+    /* [기능 3] 내 정보 조회 (주식자산 제거 및 출석 상태 반영 버전) */
     if (msg === "/내정보") {
         var cr = getCreditInfo(user.creditScore);
         var authInfo = "🎮 게임 인증: " + (user.gameAuthCount || 0) + "/2 (시즌)";
         
-        // 1. 주식 자산 별도 계산 (UI 출력용)
-        var stockVal = 0;
-        if (user.stockHoldings && user.stockAvg) {
-            for (var sName in user.stockHoldings) {
-                stockVal += (Number(user.stockHoldings[sName] || 0) * Number(user.stockAvg[sName] || 0));
-            }
-        }
-
-        // 2. 부채 및 채권(빌려준 돈) 상세 계산
+        // 1. 부채 및 채권 계산
         var bankDebt = (user.loan && user.loan.debt) ? Math.floor(Number(user.loan.debt)) : 0;
         var sacheDebt = 0;
-        var sacheClaims = 0; // 채권
+        var sacheClaims = 0; 
         var overdueSache = 0;
 
         if (roomData && roomData.loanContracts) {
@@ -5264,17 +5252,18 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             }
         }
 
-        // 3. 섹터 7 통합 엔진을 통한 최종 순자산 확정
-        var totalNetWorth = util_calculateNetWorth(user, roomData);
+        // 2. 오늘 출석 여부 판별 (✅: 완료, ⏳: 미완료)
+        var todayStr = getSimpleDate();
+        var attendMark = (user.lastDate === todayStr) ? " (✅)" : " (⏳)";
 
+        // 3. 정보 텍스트 구성 (주식 자산 라인 삭제됨)
         var infoBody = authInfo + "\n" +
                        "💰 보유 포인트: " + fp(user.point) + "P\n" +
-                       "🏦 은행 예금: " + fp(user.bank) + "P\n" +
-                       "📈 주식 자산: " + fp(stockVal) + "P\n" +
+                       "🏦 예금: " + fp(user.bank) + "P\n" +
                        (sacheClaims > 0 ? "🤝 미수 채권: " + fp(sacheClaims) + "P\n" : "") +
                        "💳 신용 등급: " + cr.label + " (" + user.creditScore + "점)\n" +
                        "🏅 현재 티어: " + (TIERS[user.tier] || "아이언") + "\n" +
-                       "📅 누적 출석: " + (user.totalAttendance || 0) + "일";
+                       "📅 누적 출석: " + (user.totalAttendance || 0) + "일" + attendMark;
         
         if (bankDebt > 0) {
             var transferTag = user.isTransferred ? " (🚨대환 채무: 70% 강제상환)" : "";
@@ -5290,7 +5279,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [수정] 유물 도감 조회 (기존 유지) */
+    /* [유물 도감 조회] */
     if (msg === "/유물도감") {
         var pieces = Number(user.artifactPieces || 0);
         var conf = SYSTEM_CONFIG.ECO.MINE;
@@ -5307,7 +5296,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [기능 4] 신용 등급 및 대출 한도 조회 (기존 유지) */
+    /* [신용 등급 및 대출 한도 조회] */
     if (msg === "/신용등급" || msg === "/대출한도") {
         var cr = getCreditInfo(user.creditScore);
         var table = getCreditLimitTable(); 
@@ -5316,7 +5305,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [기능 5] 명예의 전당 (챌린저 조회) (기존 유지) */
+    /* [명예의 전당] */
     if (msg === "/명예의전당") {
         var challengers = [];
         var roomUsers = roomData.users;
@@ -5324,7 +5313,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             var u = roomUsers[id];
             if (u && u.tier === 9) {
                 var count = Math.max(1, u.challengerCount || 0);
-                 challengers.push("🏆 " + u.name + " (누적 " + count + "회)");
+                  challengers.push("🏆 " + u.name + " (누적 " + count + "회)");
             }
         }
         var content = challengers.length > 0 ? challengers.join("\n") : "현재 이 방에 등록된 챌린저가 없습니다.";
@@ -5332,13 +5321,12 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [기능 7] 자산 순위 (지갑 + 예금 합산 -> 순자산 합산으로 기준 변경) */
+    /* [자산 순위] */
     if (msg === "/출석순위") {
         var users = [];
         var roomUsers = roomData.users;
         for (var id in roomUsers) {
             var u = roomUsers[id];
-            // 랭킹 산정도 실질 순자산 기준으로 변경하여 일관성 확보
             var netWorth = util_calculateNetWorth(u, roomData);
             if (netWorth >= 1) users.push({ data: u, total: netWorth });
         }
@@ -5352,7 +5340,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [기능 8] 타 유저 정보 조회 (Gemini 요청: 실질 순자산 표시 반영) */
+    /* [타 유저 정보 조회] */
     if (msg.indexOf("/유저정보") === 0) {
         var tn = msg.substring(5).trim(); 
         if (tn === "") {
@@ -5369,7 +5357,6 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             var targetIdInside = found[0].id;
             var cr = getCreditInfo(targetUser.creditScore);
             
-            // 타인 조회 시에도 순자산 및 채권 계산
             var sDebt = 0;
             var sClaims = 0;
             if (roomData.loanContracts) {
@@ -5379,7 +5366,6 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
                     if (c.lenderUid === targetIdInside) sClaims += Math.floor(c.currentDebt);
                 }
             }
-            var tNetWorth = util_calculateNetWorth(targetUser, roomData);
 
             var info = "💰 포인트: " + fp(targetUser.point) + "P\n" +
                        "🏦 예금: " + fp(targetUser.bank) + "P\n" +

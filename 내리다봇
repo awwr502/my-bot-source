@@ -1178,7 +1178,7 @@ function util_checkAndAwardTitle(user, replier, titleName, titleId, icon, condDe
 
 //==========섹터12==========
 
-/* 경찰 출동 결과 처리 함수 */
+/* 경찰 출동 결과 처리 함수 (중앙은행 연동 및 방별 격리 보정) */
 function processPoliceResult(roomName, thiefUid, victimUid) {
     var theftData = activeThefts[victimUid];
     if (!theftData) return;
@@ -1206,10 +1206,9 @@ function processPoliceResult(roomName, thiefUid, victimUid) {
     var penalty = Math.floor(basePenalty * multiplier);
     var actualPenalty = Math.min(penalty, Number(thief.point));
     
-    // [검증] 경찰 벌금
-    var prePoint = Number(thief.point);
-    thief.point = Number(thief.point) - actualPenalty;
-    verifyPointTransaction(thief, prePoint, -actualPenalty, "경찰 체포 벌금", roomName, actualPenalty);
+    // [Gemini 요청 사항] 직접 수정 대신 util_updatePoint 호출하여 해당 방 중앙은행 재원과 동기화
+    // 벌금은 국고로 환수되어야 하므로 util_updatePoint 내부의 bankInputReasons 로직을 태웁니다.
+    util_updatePoint(thief, room, -actualPenalty, "경찰 체포 벌금", roomName);
     
     var jailTime = 1 * 60 * 60 * 1000;
     thief.jailReleaseTime = Date.now() + jailTime;
@@ -1220,7 +1219,7 @@ function processPoliceResult(roomName, thiefUid, victimUid) {
     safeSaveData(data);
 }
 
-/* 도둑질 성공 결과 처리 함수 (검증 및 칭호 부여 적용) */
+/* 도둑질 성공 결과 처리 함수 (중앙은행 연동 및 방별 격리 보정) */
 function processTheftResult(roomName, thiefUid, victimUid) {
     var data = getDatabase();
     if (!data) return;
@@ -1239,17 +1238,14 @@ function processTheftResult(roomName, thiefUid, victimUid) {
     var stealAmount = Math.floor(Math.random() * maxSteal) + 1;
     if (Number(victim.point) < stealAmount) stealAmount = Number(victim.point); 
     
-    // [검증] 피해자 차감
-    var vPre = Number(victim.point);
-    victim.point = Number(victim.point) - stealAmount;
-    verifyPointTransaction(victim, vPre, -stealAmount, "도둑질 당함", roomName, 0);
+    // [Gemini 요청 사항] 피해자 차감 및 도둑 획득 시 util_updatePoint 사용하여 방별 경제 지표 유지
+    // 피해자의 포인트 차감 (이 돈은 도둑에게 가므로 은행 재원 변동 0)
+    util_updatePoint(victim, room, -stealAmount, "도둑질 당함", roomName);
 
     var res = processRepayment(thief, stealAmount, thiefUid, roomName); 
     
-    // [검증] 도둑 획득
-    var tPre = Number(thief.point);
-    thief.point = Number(thief.point) + Number(res.actualGain);
-    verifyPointTransaction(thief, tPre, Number(res.actualGain), "도둑질 성공", roomName, 0);
+    // 도둑의 포인트 증가 (이 돈은 피해자에게서 왔으므로 은행 재원 변동 0)
+    util_updatePoint(thief, room, Number(res.actualGain), "도둑질 성공", roomName);
     
     /* [신규] 도둑질 누적 통계 및 칭호 체크 */
     if (thief.totalTheftSuccess === undefined) thief.totalTheftSuccess = 0;
@@ -2358,7 +2354,6 @@ function _runSector18Logic(data, ctx) {
 
 /* 메인 메시지 리스너 함수 */
 action = function(room, msg, sender, isGroupChat, replier, imageDB) {
-    /* [최적화] 고정 스레드 풀 엔진 가동: 모든 처리를 비동기 작업 큐에 할당하여 반응 속도 극대화 및 씹힘 방지 */
     Executor.execute(new java.lang.Runnable({
         run: function() {
             try {
@@ -2370,9 +2365,6 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 var data = getDatabase(); 
                 if (!data) return;
 
-                /* [Gemini 요청 사항] 방별 독립 데이터 엔진 가상화 (Mapping) */
-                // 설명: 섹터 1에서 정의한 방별 독립 구조(Features)를 현재 실행 스레드의 변수로 연결합니다.
-                // 전역 로직 함수들이 참조할 수 있도록 var 키워드를 생략하여 스코프를 확장합니다.
                 if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
                 var roomData = data.rooms[roomName];
                 
@@ -2384,23 +2376,30 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 
                 var rFeatures = roomData.features;
 
-                // [데이터 분리] 전역 변수명을 현재 방의 독립 변수로 실시간 매핑
+                /* [마이그레이션] 기존 전역 데이터를 현재 방으로 이사 (최초 1회) */
+                if (data.lotto && !rFeatures.lotto.round) {
+                    rFeatures.lotto = data.lotto; // 기존 로또 데이터를 이 방으로 복사
+                    // delete data.lotto; // (선택사항) 전역 데이터 삭제
+                }
+
+                // [데이터 분리] 참조(Reference) 연결 - var 생략 필수
                 racingData = rFeatures.racing;
                 lotto = rFeatures.lotto;
                 marketOpenPrice = rFeatures.marketOpenPrice;
                 feverData = rFeatures.feverData;
                 sprinkleData = rFeatures.sprinkleData;
 
-                // [상태 분리] 각종 입력 대기 상태값 격리 매핑 (var 생략 필수)
-                menuWaitState = rFeatures.states.menuWait;
-                bankProcessState = rFeatures.states.bankProcess;
-                selectWaitState = rFeatures.states.selectWait;
-                lottoPurchaseState = rFeatures.states.lottoPurchase;
-                activeThefts = rFeatures.states.activeThefts;
-                duelData = rFeatures.states.duelData;
-                miningState = rFeatures.states.mining;
-                loanRegisterState = rFeatures.states.loanRegister;
-                loanContractWaitState = rFeatures.states.loanContractWait;
+                // [상태 분리 핵심] 주머니(Object) 자체를 매핑하여 하위 섹터와 연동
+                // 이렇게 해두면 하위 섹터에서 menuWaitState.menuWait = true; 할 때 실시간 저장됩니다.
+                menuWaitState = rFeatures.states; 
+                bankProcessState = rFeatures.states;
+                selectWaitState = rFeatures.states;
+                lottoPurchaseState = rFeatures.states;
+                activeThefts = rFeatures.states;
+                duelData = rFeatures.states;
+                miningState = rFeatures.states;
+                loanRegisterState = rFeatures.states;
+                loanContractWaitState = rFeatures.states;
 
                 /* [신규] 도배 방지 및 타임아웃 체크 엔진 */
                 var user = null;
@@ -6043,7 +6042,7 @@ function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
 
 /**
  * [게임 하위 모듈 3-3] 액션 및 도박 게임 (도둑질 & 줍기)
- * 설명: 도둑질의 쿨타임, 징역, 신용도 페널티 및 벌금의 은행 적립 로직을 원본 그대로 유지합니다.
+ * 수정 사항: 벌금 이중 가산 버그 수정 및 모든 포인트 로직에 방 격리 식별자(roomName) 적용
  */
 function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
@@ -6054,7 +6053,7 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         if (data.gambleLimit) { replier.reply(formatError(user, "도박 제한", "현재 도박 기능이 제한되어 있습니다.")); return true; }
         if (user.mining && user.mining.active) { replier.reply(formatError(user, "작업 중", "광산에서 일하는 중에는 도둑질을 할 수 없습니다.")); return true; }
         
-        // [원본 유지] 징역 상태 확인
+        // 징역 상태 확인
         if (user.jailReleaseTime && Date.now() < user.jailReleaseTime) {
             var diff = user.jailReleaseTime - Date.now();
             var remainMin = Math.ceil(diff / (1000 * 60));
@@ -6063,7 +6062,7 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // [원본 유지] 중복 도둑질 진행 여부 체크
+        // 중복 도둑질 진행 여부 체크
         for (var v in activeThefts) { 
             if (activeThefts[v].thiefUid === targetUid) { replier.reply(formatError(user, "작업 중", "이미 도둑질을 진행 중입니다.")); return true; }
         }
@@ -6075,7 +6074,7 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         
         var victim = found[0];
 
-        // [원본 유지] 대상 상태 확인 (광산, 중복 강탈 등)
+        // 대상 상태 확인
         if (victim.data.mining && victim.data.mining.active) {
             replier.reply(formatError(user, "접근 불가", "대상이 현재 광산 깊은 곳에서 작업 중이라 털 수 없습니다."));
             return true;
@@ -6083,7 +6082,7 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         if (activeThefts[victim.id]) { replier.reply(formatError(user, "중복 강탈 불가", getDisplayName(victim.data) + "님은 현재 다른 도둑이 작업 중입니다!")); return true; }
         if (victim.id === targetUid) { replier.reply(formatError(user, "강탈 불가", "자신의 지갑은 털 수 없습니다.")); return true; }
 
-        // [원본 유지] 쿨타임(1시간) 및 대상 포인트(300P 초과) 확인
+        // 쿨타임 및 대상 포인트 확인
         if (!user.theftCooldowns) user.theftCooldowns = {};
         var now = Date.now();
         var lastTheftTime = user.theftCooldowns[victim.id] || 0;
@@ -6094,7 +6093,7 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         }
         if (Number(victim.data.point) <= 300) { replier.reply(formatError(user, "강탈 대상 부적합", fp(300) + "P를 초과하는 유저만 털 수 있습니다.")); return true; }
 
-        // [원본 유지] 도둑질 프로세스 시작 (타이머 설정)
+        // 도둑질 프로세스 시작
         var sT = setTimeout(function(){ processTheftResult(roomName, targetUid, victim.id); }, 60000);
         var pT = setTimeout(function(){ if (Math.random() < 0.5) { processPoliceResult(roomName, targetUid, victim.id); } }, 30000);
         activeThefts[victim.id] = { thiefUid: targetUid, successTimer: sT, policeTimer: pT };
@@ -6103,6 +6102,8 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         user.creditScore = Math.max(0, Number(user.creditScore || 600) - 10);
 
         replier.reply(formatCommand("🕵️ 도둑질 시도", user, getDisplayName(victim.data) + "님 강탈 시도 중 (1분 소요)\n\n🚓 30초 후 경찰 출동 확률 50%!", "방어: 1분 내 [잡았다요놈] 입력"));
+        
+        // [Gemini 요청 사항] 방 식별자 roomName 추가
         checkAndHandleDefaulter(user, roomName);
         safeSaveData(data);
         return true;
@@ -6129,14 +6130,15 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         var penalty = Math.floor(basePenalty * multiplier);
         var actualPenalty = Math.min(penalty, Number(thief.point));
         
-        // [원본 복구] 포인트 차감 및 은행 재원 수동 적립
-        util_updatePoint(thief, roomData, -actualPenalty, "도둑질 체포 벌금");
-        roomData.bankReserve = (Number(roomData.bankReserve) || 0) + actualPenalty;
+        // [Gemini 요청 사항] 이중 합산 버그 수정
+        // util_updatePoint 내부에서 "도둑질 체포 벌금" 사유 시 이미 bankReserve에 합산되므로, 
+        // 하단의 수동 합산 로직(roomData.bankReserve += ...)을 제거하고 이 함수 하나로 통합합니다.
+        util_updatePoint(thief, roomData, -actualPenalty, "도둑질 체포 벌금", roomName);
         
         thief.jailReleaseTime = Date.now() + (1 * 60 * 60 * 1000); // 1시간 징역
         delete activeThefts[targetUid];
         
-        replier.reply(formatAdmin("🚓 체포 완료", "🚨 [현행범 체포]\n대상: " + getDisplayName(thief) + "\n결과: " + fp(actualPenalty) + "P 차감 / 징역 1시간"));
+        replier.reply(formatAdmin("🚓 체포 완료", "🚨 [현행범 체포]\n대상: " + getDisplayName(thief) + "\n결과: -" + fp(actualPenalty) + "P 차감 / 징역 1시간"));
         safeSaveData(data);
         return true;
     }
@@ -6151,27 +6153,23 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         sprinkleData.winners.push(targetUid);
         sprinkleData.currentWinners++;
         
-        /* [핵심 수정] 줍기 성공 시에도 방 정보와 UID를 포함한 통합 상환 엔진 호출 */
-        var res = processRepayment(user, prize, targetUid, roomName);
-        
-        // 포인트 지급 (추심 후 남은 금액 반영)
-        var prePoint = Number(user.point);
-        user.point = prePoint + Number(res.actualGain);
-        if (typeof verifyPointTransaction === 'function') {
-            verifyPointTransaction(user, prePoint, Number(res.actualGain), "뿌리기 줍기");
-        }
-        
-        replier.reply(formatCommand("🎉 줍기 성공!", user, fp(prize) + "P를 주웠습니다!" + res.repayMsg, "내 잔액: " + fP(user.point) + "P"));
-        
-        if (sprinkleData.currentWinners >= sprinkleData.limit) { 
-            sprinkleData.active = false; 
-            Api.replyRoom(roomName, formatAdmin("🏁 뿌리기 마감", "모든 포인트가 소진되었습니다.")); 
-        }
-        safeSaveData(data);
-        return true;
-    }
+        /* [Gemini 요청 사항] 통합 상환 엔진 및 통합 업데이트 함수 적용 */
+        var res = processRepayment(user, prize, targetUid, roomName);
+        
+        // 직접 포인트 가산 대신 통합 함수 사용하여 중앙은행 재원과 검증 로직 동시 수행
+        util_updatePoint(user, roomData, Number(res.actualGain), "뿌리기 줍기", roomName);
+        
+        replier.reply(formatCommand("🎉 줍기 성공!", user, fp(prize) + "P를 주웠습니다!" + res.repayMsg, "내 잔액: " + fP(user.point) + "P"));
+        
+        if (sprinkleData.currentWinners >= sprinkleData.limit) { 
+            sprinkleData.active = false; 
+            Api.replyRoom(roomName, formatAdmin("🏁 뿌리기 마감", "모든 포인트가 소진되었습니다.")); 
+        }
+        safeSaveData(data);
+        return true;
+    }
 
-    return false;
+    return false;
 }
 
 //==========섹터43==========

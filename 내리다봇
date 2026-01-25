@@ -3947,7 +3947,7 @@ function _handleLottoLogic(msg, user, data, replier, roomName, targetUid) {
 /**
  * [독립형] 방치형 광산 시스템 로직 구현부 (누적 시간 및 성취 칭호 통합 버전)
  * 설명: 섹터 46(구 섹터 27 호출부)에서 호출되며, 광산 시작/정보/종료 및 보상 정산 로직을 수행합니다.
- * 수정 사항: 중앙은행 폐쇄형 경제 연동 및 누적 시간 칭호(두더지~채굴의신) 반영
+ * 반영 사항: 유물 조각 5단계 칭호 체계 적용 (도굴왕만 전용 아이콘 [⚜️] 부여)
  */
 function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName]; 
@@ -4017,7 +4017,7 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 3. 광산 종료 (누적 시간 및 칭호 부여 로직 통합)
+    // 3. 광산 종료 (유물 5단계 칭호 정산 및 누적 시간 반영)
     if (msg === "/광산종료") {
         if (!user.mining || !user.mining.active) {
             replier.reply(formatError(user, "상태 오류", "현재 작업 중이지 않습니다."));
@@ -4068,18 +4068,10 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
             var rand = Math.random();
             var minIncome = basePrice * multiplier;
 
-            if (rand < conf.DIA_PROB) { 
-                diaCount++; 
-                totalEarn += (minIncome * conf.DIA_MULT); 
-            } else if (rand < conf.GOLD_PROB) { 
-                goldCount++; 
-                totalEarn += (minIncome * conf.GOLD_MULT); 
-            } else if (rand < conf.COPPER_PROB) { 
-                copperCount++; 
-                totalEarn += (minIncome * conf.COPPER_MULT); 
-            } else { 
-                totalEarn += minIncome; 
-            }
+            if (rand < conf.DIA_PROB) { diaCount++; totalEarn += (minIncome * conf.DIA_MULT); }
+            else if (rand < conf.GOLD_PROB) { goldCount++; totalEarn += (minIncome * conf.GOLD_MULT); }
+            else if (rand < conf.COPPER_PROB) { copperCount++; totalEarn += (minIncome * conf.COPPER_MULT); }
+            else { totalEarn += minIncome; }
 
             if (Math.random() < (conf.ARTIFACT_CHANCE || 0.0005)) {
                 artifactFound++;
@@ -4092,40 +4084,37 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         
         util_updatePoint(user, roomData, Number(res.actualGain), "광산 채굴");
 
-        // [신규] 누적 시간 업데이트
+        // [누적 시간 칭호 체크]
         if (user.totalMiningTime === undefined) user.totalMiningTime = 0;
         user.totalMiningTime += durationMin;
 
-        // [신규] 광산 누적 시간 칭호 체크
+        var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
+
         if (user.totalMiningTime >= 7000) {
-            util_checkAndAwardTitle(user, replier, "채굴의신", 2903, "⛏️", "누적 채굴 7,000분", "유물 도감도 함께 확인해보세요! [/유물도감]");
+            util_checkAndAwardTitle(user, replierStub, "채굴의신", 2903, "⛏️", "누적 채굴 7,000분", "유물 도감도 함께 확인해보세요! [/유물도감]");
         } else if (user.totalMiningTime >= 5000) {
-            util_checkAndAwardTitle(user, replier, "석공", 2902, "⛏️", "누적 채굴 5,000분", "7,000분 달성 시 [채굴의신]을 획득합니다.");
+            util_checkAndAwardTitle(user, replierStub, "석공", 2902, "⛏️", "누적 채굴 5,000분", "7,000분 달성 시 [채굴의신]을 획득합니다.");
         } else if (user.totalMiningTime >= 1000) {
-            util_checkAndAwardTitle(user, replier, "두더지", 2901, "⛏️", "누적 채굴 1,000분", "5,000분 달성 시 [석공]에 도전하세요!");
+            util_checkAndAwardTitle(user, replierStub, "두더지", 2901, "⛏️", "누적 채굴 1,000분", "5,000분 달성 시 [석공]에 도전하세요!");
         }
 
+        /* [Gemini 요청 사항] 유물 조각 5단계 칭호 자동 부여 (하위는 아이콘 없음, 도굴왕만 전용아이콘) */
         user.artifactPieces = (user.artifactPieces || 0) + artifactFound;
-        var goal = conf.ARTIFACT_GOAL || 10;
-        var titleAwarded = false;
 
-        if (user.artifactPieces >= goal) {
-            if (!user.inventory) user.inventory = [];
-            var hasTombTitle = false;
-            for (var k = 0; k < user.inventory.length; k++) {
-                if (user.inventory[k].title === "도굴왕") { hasTombTitle = true; break; }
-            }
-            if (!hasTombTitle) {
-                user.inventory.push({ id: 888, name: "[도굴왕] 칭호", icon: "🏺", effect: "title", title: "도굴왕" });
-                titleAwarded = true;
-                user.title = "도굴왕"; // 도굴왕도 자동 장착 적용
-            }
+        if (user.artifactPieces >= 50) {
+            util_checkAndAwardTitle(user, replierStub, "도굴왕", 2915, "⚜️", "유물 조각 50개 달성", "전설의 도굴왕으로 등극하셨습니다!");
+        } else if (user.artifactPieces >= 40) {
+            util_checkAndAwardTitle(user, replierStub, "트레저헌터", 2914, "", "유물 조각 40개 달성", "50개 달성 시 전용 아이콘이 있는 [도굴왕]이 됩니다.");
+        } else if (user.artifactPieces >= 30) {
+            util_checkAndAwardTitle(user, replierStub, "발굴가", 2913, "", "유물 조각 30개 달성", "조금 더 힘내서 트레저헌터에 도전하세요!");
+        } else if (user.artifactPieces >= 20) {
+            util_checkAndAwardTitle(user, replierStub, "탐사원", 2912, "", "유물 조각 20개 달성", "유적의 흔적들이 보이기 시작합니다.");
+        } else if (user.artifactPieces >= 10) {
+            util_checkAndAwardTitle(user, replierStub, "도굴꾼", 2911, "", "유물 조각 10개 달성", "드디어 첫 번째 유물 칭호를 획득하셨습니다.");
         }
 
         user.mining.active = false;
-        
         var repayInfo = res.repayMsg ? "\n\n" + res.repayMsg : "";
-
         var resultBody = "\n⛏️ 채굴 시간: " + durationMin + "분\n" +
                          "🟫 구리 " + copperCount + "회 🗂️ 황금 " + goldCount + "회\n" +
                          "💎 다이아 " + diaCount + "회\n\n" +
@@ -4133,24 +4122,12 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
 
         if (artifactFound > 0) {
             resultBody += "\n\n✨ [특별 발견] ✨\n━━━━━━━━━━━━━━━\n" +
-                           "먼지 쌓인 흙더미 속에서 \n" +
                            "심상치 않은 기운의 조각을 발견했습니다!\n\n" +
                            "🧩 유물 조각 획득 (+" + artifactFound + ")\n" +
-                           "(현재 보유: " + user.artifactPieces + " / " + goal + " 개)";
+                           "(현재 보유: " + user.artifactPieces + " 개)";
         }
-                                 
+                                  
         replier.reply(formatCommand("⛏️ 채굴 결과", user, resultBody, "내 잔액: " + fP(user.point) + "P"));
-
-        if (titleAwarded) {
-            var celebMsg = "드디어 " + goal + "개의 유물 조각을 모두 모았습니다.\n\n" +
-                           "흩어져 있던 조각들이 하나로 합쳐지며 \n" +
-                           "찬란한 빛과 함께 고대의 기운이 \n" +
-                           "당신의 온몸을 감쌉니다...\n\n" +
-                           "🎁 수집 보상 완료\n" +
-                           "🎖️ 칭호 획득: [도굴왕]";
-            replier.reply(formatCommand("🏺 [전설의 완성: 도굴왕]", user, celebMsg, "칭호가 자동 장착되었습니다."));
-        }
-
         safeSaveData(data);
         return true;
     }
@@ -4161,7 +4138,7 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
 /**
  * [전역 독립 함수] 상점 아이템 효과 처리 엔진
  * 기능: 구매한 아이템의 효과 발동 및 중앙은행 재원 정산
- * 수정: 복수 구매 수량(quantity) 파라미터 추가 및 소모품 합산 로직 반영
+ * 수정: msgTable 복구, gameAuth/lotto 로직 복구, 수집대마왕(🏵️) 칭호 체크 통합
  */
 function _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket, quantity) {
     var roomData = data.rooms[roomName];
@@ -4183,9 +4160,9 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         user.boxTickets = Math.max(0, (user.boxTickets || 0) - 1);
     }
 
-    /* [핵심] 아이템 효과별 실행 로직 */
+    /* [2. 아이템 효과별 실행 로직] */
     
-    // 1. 랜덤 아이콘 박스 처리 (개편 버전 - 단권 처리)
+    // 1. 랜덤 아이콘 박스 처리 (메시지 테이블 및 중복 조각 지급 포함)
     if (item.effect === "randomBox") {
         var rand = Math.random();
         var cumulative = 0;
@@ -4210,12 +4187,10 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         
         if (!user.collectedIcons) user.collectedIcons = [];
         var isDuplicate = (user.collectedIcons.indexOf(winIcon) !== -1);
-
         var mData = msgTable[resultIdx] || msgTable[0];
-        var content = "등급: " + resGrade.icon + " " + resGrade.grade + "\n" +
-                      "결과: [" + winIcon + "]\n\n" + mData.desc;
 
         if (isDuplicate) {
+            // [Gemini 요청 사항] 중복 시 분해 조각 +1 지급
             user.boxFragments = (user.boxFragments || 0) + 1;
             var ticketConverted = false;
             if (user.boxFragments >= 5) {
@@ -4223,54 +4198,68 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
                 user.boxTickets = (user.boxTickets || 0) + 1;
                 ticketConverted = true;
             }
-            content += "\n\n⚠️ 중복 아이콘 당첨!\n(과거에 획득한 기록이 있습니다)\n\n🧩 보상: 분해 조각 +1개 지급\n📊 현재 조각: " + user.boxFragments + " / 5 개";
-            if (ticketConverted) {
-                content += "\n🎫 축하합니다! 조각이 모두 모여 랜덤박스 이용권 1매가 지급되었습니다!";
-            }
+            
+            var dupContent = "등급: " + resGrade.icon + " " + resGrade.grade + "\n" +
+                             "결과: [" + winIcon + "]\n\n" +
+                             "⚠️ 중복 아이콘 당첨!\n(이미 도감에 등록된 아이콘입니다)\n\n" +
+                             "🧩 보상: 분해 조각 +1개 지급\n" +
+                             "📊 현재 조각: " + user.boxFragments + " / 5 개";
+            if (ticketConverted) dupContent += "\n🎫 조각이 모여 [랜덤박스 이용권] 1매 자동 지급!";
+            
+            replier.reply(formatCommand("🎁 박스 개봉 결과", user, dupContent, "내 잔액: " + fp(user.point) + "P"));
         } else {
+            // 신규 아이콘 획득 시 가방 추가 및 도감 등록
             user.inventory.push({ id: 900 + resultIdx, name: resGrade.grade.split(" ")[0] + " 아이콘", icon: winIcon, effect: "icon", title: "" });
             user.collectedIcons.push(winIcon);
+            
+            var newContent = "등급: " + resGrade.icon + " " + resGrade.grade + "\n" +
+                             "결과: [" + winIcon + "]\n\n" + mData.desc;
+            replier.reply(formatCommand(mData.title, user, newContent, mData.guide + "\n내 잔액: " + fp(user.point) + "P"));
         }
-        
-        var footer = isUsingTicket ? "🎫 랜덤박스 이용권 사용 완료" : "내 잔액: " + fp(user.point) + "P";
-        replier.reply(formatCommand(mData.title, user, content, mData.guide + "\n" + footer));
     } 
     
-    // 2. 게임 판수 인증권 처리 (단권 처리)
+    // 2. [복구] 게임 판수 인증권 처리 (단권 처리)
     else if (item.effect === "gameAuth") {
         user.gameAuthCount = (user.gameAuthCount || 0) + 1;
         user.purchasedAuthCount = (user.purchasedAuthCount || 0) + 1;
         replier.reply(formatCommand("🎫 인증권 사용 완료", user, "게임 판수 인증이 기록되었습니다.\n현재 인증 횟수: " + user.gameAuthCount + "/2", "시즌당 구매: " + user.purchasedAuthCount + "/2"));
     } 
     
-    // 3. 로또 구매 대기 처리 (단권 처리)
+    // 3. [복구] 로또 구매 대기 처리 (단권 처리)
     else if (item.effect === "lotto") {
         lottoPurchaseState[targetUid] = { time: Date.now(), price: finalPrice };
         replier.reply(formatCommand("🎫 로또 번호 입력", user, "1~15 사이의 숫자 3개를 입력해주세요.\n(예: 1 5 10)", "취소: [취소]"));
     } 
     
-    // 4. 소모성 아이템 처리 (수량 qty 반영)
+    // 4. 상점 일반 아이콘 구매 처리
+    else if (item.effect === "icon") {
+        user.inventory.push({ id: item.id, name: item.name, icon: item.icon, effect: item.effect, title: "" });
+        if (!user.collectedIcons) user.collectedIcons = [];
+        if (user.collectedIcons.indexOf(item.icon) === -1) user.collectedIcons.push(item.icon);
+        user.icon = item.icon;
+        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 및 장착 성공!", "장착 변경: [/가방]"));
+    }
+    
+    // 5. 기타 소모성 아이템 처리 (수량 qty 반영)
     else if (item.effect === "promotion") {
-        // [수정] 승급 기회 구매 수량 합산
         user.purchasedPromotionAttempts = (user.purchasedPromotionAttempts || 0) + qty;
         replier.reply(formatCommand("🛒 구매 완료", user, item.name + " x" + qty + " 구매 성공!", "남은 승급 기회: " + (user.dailyPromotionAttempts + user.purchasedPromotionAttempts)));
     } else if (item.effect === "tierGuard") {
-        // [수정] 강등 방어권 수량 합산
         user.tierGuard = (user.tierGuard || 0) + qty;
         replier.reply(formatCommand("🛒 구매 완료", user, item.name + " x" + qty + " 구매 성공!", "보유 방어권: " + user.tierGuard + "개"));
-    } else if (item.effect === "icon" || item.effect === "title") {
-        // 아이콘 및 칭호는 단권 처리
-        user.inventory.push({ id: item.id, name: item.name, icon: item.icon, effect: item.effect, title: item.title || "" });
-        if (item.effect === "icon") user.icon = item.icon;
-        if (item.effect === "title") user.title = item.title;
-        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 및 장착 성공!", "장착 변경: [/가방]"));
     } else if (item.effect === "credit") {
-        /* [수정] 수량은 항상 1로 고정되며 사용 카운트 증가 */
         var totalRestore = (item.value || 50);
         user.creditScore = Math.min(1000, (user.creditScore || 600) + totalRestore);
         user.dailyCreditRestoreCount = (user.dailyCreditRestoreCount || 0) + 1;
         if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(user, roomName);
         replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 사용 성공! (신용 +50)", "현재 점수: " + user.creditScore));
+    }
+
+    /* [Gemini 요청 사항] 수집대마왕 칭호 체크 (모든 아이콘 수집 시) */
+    if (user.collectedIcons && user.collectedIcons.length >= TOTAL_COLLECTABLE_ICONS) {
+        var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
+        // 전용 화려한 아이콘 [🏵️] 부여
+        util_checkAndAwardTitle(user, replierStub, "수집대마왕", 3001, "🏵️", "모든 아이콘 수집 완료", "모든 상징을 손에 넣은 전설의 수집가입니다.");
     }
 
     safeSaveData(data);
@@ -5207,14 +5196,14 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
 //==========섹터38==========
 
 /**
- * [게임 하위 모듈 2] 정보 및 랭킹 조회 (UI 최적화 및 출석 상태 추가)
+ * [게임 하위 모듈 2] 정보 및 랭킹 조회 (UI 최적화 및 수집 체계 반영)
  * 기능: 내정보, 유물도감, 신용등급, 대출한도, 명예의전당, 순위, 유저정보, 경마조회
- * 수정 사항: /경마 시 본인의 배팅 정보(말 이름, 금액) 표시 로직 추가
+ * 수정 사항: 유물 5단계 로드맵 가이드 적용 및 전용 아이콘 상징성 강화
  */
 function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
 
-    /* [Gemini 요청 사항] 경마 정보 실시간 브리핑 기능 통합 (내 배팅 정보 추가됨) */
+    /* [Gemini 요청 사항] 경마 정보 실시간 브리핑 기능 통합 (내 배팅 정보 포함) */
     if (msg === "/경마") {
         if (!racingData.isOperating) {
             replier.reply(formatSimple("🏇 경마장 휴장 안내", "현재 경마 운영 시간이 아닙니다.\n(운영시간: 09:00 ~ 23:59)", "오전 9시 정각에 개장합니다."));
@@ -5235,22 +5224,20 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         var remainSec = 59 - now.getSeconds();
         if (remainMin < 0) { remainMin = 0; remainSec = 0; }
 
-        // [신규] 내 배팅 정보 확인 로직
         var myBet = racingData.bets[targetUid];
         var myBetInfo = "";
         if (myBet) {
-            var myHorse = racingData.horses[myBet.horseId - 1]; // 말 ID는 1부터 시작하므로 인덱스 조정
+            var myHorse = racingData.horses[myBet.horseId - 1]; 
             myBetInfo = "👤 내 배팅: " + myBet.horseId + "번 " + myHorse.name + " (" + fp(myBet.amount) + "P)";
         } else {
             myBetInfo = "👤 내 배팅: 참여 내역 없음";
         }
 
         var raceHeader = (nowMin >= 50) ? "🏁 배팅 마감 및 정산 중" : "제 " + racingData.round + "회차 경기 배팅 진행 중";
-
         var totalPrizePool = racingData.totalPool + racingData.carryOver;
         var racingBody = raceHeader + "\n\n" +
                          "[🏇 출전마 라인업]\n" + hList + "\n\n" +
-                         myBetInfo + "\n" + // 내 배팅 정보 삽입
+                         myBetInfo + "\n" +
                          "💰 현재 총 배당금: " + fp(totalPrizePool) + "P\n" +
                          (racingData.carryOver > 0 ? "✨ 이월 적립금: " + fp(racingData.carryOver) + "P 포함\n" : "") +
                          "🕒 배팅 마감: " + remainMin + "분 " + remainSec + "초 남음";
@@ -5259,12 +5246,11 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [기능 3] 내 정보 조회 (미수 채권 표시 조건 수정) */
+    /* [기능 3] 내 정보 조회 (수집대마왕 🏵️ 및 도굴왕 ⚜️ 등 칭호 아이콘 대응) */
     if (msg === "/내정보") {
         var cr = getCreditInfo(user.creditScore);
         var authInfo = "🎮 게임 인증: " + (user.gameAuthCount || 0) + "/2 (시즌)";
         
-        // 1. 부채 및 채권 계산
         var bankDebt = (user.loan && user.loan.debt) ? Math.floor(Number(user.loan.debt)) : 0;
         var sacheDebt = 0;
         var sacheClaims = 0; 
@@ -5283,12 +5269,10 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             }
         }
 
-        // 2. 오늘 출석 여부 및 승급 기회 계산
         var todayStr = getSimpleDate();
         var attendMark = (user.lastDate === todayStr) ? " (✅)" : " (⏳)";
         var totalPromotion = (Number(user.dailyPromotionAttempts) || 0) + (Number(user.purchasedPromotionAttempts) || 0);
 
-        // 3. 정보 텍스트 구성 (Gemini 요청: sacheClaims >= 1 조건 적용)
         var infoBody = authInfo + "\n" +
                        "💰 보유 포인트: " + fp(user.point) + "P\n" +
                        "🏦 예금: " + fp(user.bank) + "P\n" +
@@ -5308,28 +5292,48 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             if (overdueSache > 0) infoBody += "\n🚨 사채 연체: " + fp(overdueSache) + "P (50% 자동상환)";
         }
         
-        replier.reply(formatCommand("📌 내 상세 정보", user, infoBody, "아이템 구매: [/상점]")); 
+        replier.reply(formatCommand("📌 내 상세 정보", user, infoBody, "가방 확인: [/가방]")); 
         return true;
     }
 
-    /* [유물 도감 조회] */
+    /* [Gemini 요청 사항] 유물 도감 조회 (개편된 5단계 로드맵 가이드) */
     if (msg === "/유물도감") {
         var pieces = Number(user.artifactPieces || 0);
-        var conf = SYSTEM_CONFIG.ECO.MINE;
-        var goal = conf.ARTIFACT_GOAL || 10;
-        var chancePercent = (conf.ARTIFACT_CHANCE * 100).toFixed(2).replace(/\.?0+$/, "") + "%";
-        var rewardStatus = (pieces >= goal) ? "🎖️ 칭호: [도굴왕] (획득 완료!)" : "🎖️ 칭호: [도굴왕] (진행 중...)";
-        var content = pieces >= goal ? "" : "\n"; 
-        content += "✨ 유물 조각 (Fragment)\n" +
-                   "🧩 보유: " + pieces + " / " + goal + " 개\n\n" +
-                   "🎁 수집 달성 보상\n" +
-                   rewardStatus;
-        var guide = "광산에서 " + chancePercent + " 확률로 조각이 발견됩니다. " + goal + "개를 모으면 자동으로 칭호가 부여됩니다.";
-        replier.reply(formatCommand("🏺 유물 도감 (Artifacts)", user, content, guide));
+        
+        // 현재 등급 판별
+        var currentTitle = "무명";
+        if (pieces >= 50) currentTitle = "도굴왕";
+        else if (pieces >= 40) currentTitle = "트레저헌터";
+        else if (pieces >= 30) currentTitle = "발굴가";
+        else if (pieces >= 20) currentTitle = "탐사원";
+        else if (pieces >= 10) currentTitle = "도굴꾼";
+
+        // 다음 목표 및 남은 개수 계산
+        var nextGoal = 10;
+        if (pieces < 10) nextGoal = 10;
+        else if (pieces < 20) nextGoal = 20;
+        else if (pieces < 30) nextGoal = 30;
+        else if (pieces < 40) nextGoal = 40;
+        else nextGoal = 50;
+
+        var statusContent = "✨ 유물 수집 현황\n" +
+                            "━━━━━━━━━━━━━━━\n" +
+                            "🧩 보유 조각: " + pieces + " 개\n" +
+                            "🎖️ 현재 등급: [" + currentTitle + "]\n\n" +
+                            "[명예의 5단계 로드맵]\n" +
+                            "• 10개: 도굴꾼 🧤\n" +
+                            "• 20개: 탐사원 🔦\n" +
+                            "• 30개: 발굴가 🧱\n" +
+                            "• 40개: 트레저헌터 🗺️\n" +
+                            "• 50개: 도굴왕 ⚜️ (전용아이콘)";
+        
+        var guideText = (pieces < 50) ? "다음 단계까지 " + (nextGoal - pieces) + "개 남았습니다." : "축하합니다! 전설의 도굴왕에 등극하셨습니다.";
+        
+        replier.reply(formatCommand("🏺 고대 유물 도감", user, statusContent, guideText));
         return true;
     }
 
-    /* [신용 등급 및 대출 한도 조회] */
+    /* [기능 4] 신용 등급 및 대출 한도 조회 */
     if (msg === "/신용등급" || msg === "/대출한도") {
         var cr = getCreditInfo(user.creditScore);
         var table = getCreditLimitTable(); 
@@ -5338,7 +5342,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [명예의 전당] */
+    /* [기능 5] 명예의 전당 */
     if (msg === "/명예의전당") {
         var challengers = [];
         var roomUsers = roomData.users;
@@ -5346,7 +5350,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             var u = roomUsers[id];
             if (u && u.tier === 9) {
                 var count = Math.max(1, u.challengerCount || 0);
-                  challengers.push("🏆 " + u.name + " (누적 " + count + "회)");
+                challengers.push("🏆 " + u.name + " (누적 " + count + "회)");
             }
         }
         var content = challengers.length > 0 ? challengers.join("\n") : "현재 이 방에 등록된 챌린저가 없습니다.";
@@ -5354,7 +5358,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [자산 순위] */
+    /* [기능 6] 자산 순위 */
     if (msg === "/출석순위") {
         var users = [];
         var roomUsers = roomData.users;
@@ -5373,11 +5377,11 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [타 유저 정보 조회] (채권 표시 로직 수정 반영) */
+    /* [기능 7] 유저 정보 상세 조회 */
     if (msg.indexOf("/유저정보") === 0) {
         var tn = msg.substring(5).trim(); 
         if (tn === "") {
-            replier.reply(formatError(user, "입력 오류", "조회할 유저의 닉네임을 입력하세요.\n(예: /유저정보 홍길동)"));
+            replier.reply(formatError(user, "입력 오류", "조회할 유저의 닉네임을 입력하세요."));
             return true;
         }
         var found = findUserByName(roomData, tn);

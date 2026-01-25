@@ -1032,7 +1032,10 @@ function getCreditLimitTable() {
     return list.join("\n");
 }
 
-/* 닉네임 표시 생성 함수 (수정: 신용불량자 칭호 우선순위 및 중복 방지) */
+/**
+ * [수정] 닉네임 표시 생성 함수 (칭호 전용 아이콘 자동 노출 시스템)
+ * [Gemini 요청 사항 반영]: 칭호 장착 시 인벤토리에서 해당 칭호의 아이콘을 찾아 자동으로 접두사에 붙입니다.
+ */
 function getDisplayName(user) {
     if (!user) return "알 수 없음";
     var userIcon = user.icon || "";
@@ -1041,14 +1044,27 @@ function getDisplayName(user) {
     
     var titleStr = "";
     
-    // [Gemini 요청 사항 반영]
     // 1순위: 신용불량자일 경우 무조건 [신용불량자] 표시
     if (credit.label === "신용불량자") {
         titleStr = "[신용불량자] ";
     } 
-    // 2순위: 일반 상태일 때만 장착 중인 칭호 표시
+    // 2순위: 일반 상태일 때 장착 중인 칭호 표시 (아이콘 자동 탐색)
     else if (user.title && user.title.length > 0) {
-        titleStr = "[" + user.title + "] ";
+        var titleIcon = "";
+        
+        // 인벤토리를 순회하여 현재 장착된 칭호명과 일치하는 아이템의 아이콘을 가져옴
+        if (user.inventory && user.inventory.length > 0) {
+            for (var i = 0; i < user.inventory.length; i++) {
+                var item = user.inventory[i];
+                if (item.effect === "title" && item.title === user.title) {
+                    titleIcon = item.icon || ""; // 아이콘이 있을 경우에만 할당
+                    break;
+                }
+            }
+        }
+        
+        // 예시: [🏵️수집대마왕] 
+        titleStr = "[" + titleIcon + user.title + "] ";
     }
     
     return titleStr + tierIcon + userIcon + (user.name || "알 수 없음");
@@ -4287,7 +4303,7 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
 /**
  * [전역 독립 함수] 상점 아이템 효과 처리 엔진
  * 기능: 구매한 아이템의 효과 발동 및 중앙은행 재원 정산
- * 수정: 경고삭제권(warnClear) 구매 완료 처리 및 평생 제한 기록 로직 추가
+ * 수정 사항: [Gemini 요청 사항] 수집대마왕 판정 로직을 아이콘 획득 시점으로 한정하여 오작동 방지
  */
 function _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket, quantity) {
     var roomData = data.rooms[roomName];
@@ -4308,6 +4324,15 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         // 이용권 사용 시 유저 데이터에서 이용권 1매 차감 (이용권은 단권 구매만 가능)
         user.boxTickets = Math.max(0, (user.boxTickets || 0) - 1);
     }
+
+    /* [수집대마왕 판정 함수] - 중복 방지 및 아이콘 획득 시에만 호출됨 */
+    var checkCollectionMaster = function() {
+        var TOTAL_COLLECTABLE_ICONS = 6; // 상점 아이콘 6종 기준
+        if (user.collectedIcons && user.collectedIcons.length >= TOTAL_COLLECTABLE_ICONS) {
+            var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
+            util_checkAndAwardTitle(user, replierStub, "수집대마왕", 3001, "🏵️", "모든 아이콘 수집 완료", "모든 상징을 손에 넣은 전설의 수집가입니다.");
+        }
+    };
 
     /* [2. 아이템 효과별 실행 로직] */
     
@@ -4364,6 +4389,9 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
             var newContent = "등급: " + resGrade.icon + " " + resGrade.grade + "\n" +
                              "결과: [" + winIcon + "]\n\n" + mData.desc;
             replier.reply(formatCommand(mData.title, user, newContent, mData.guide + "\n내 잔액: " + fp(user.point) + "P"));
+
+            /* [신규 수집 발생] 칭호 판정 호출 */
+            checkCollectionMaster();
         }
     } 
     
@@ -4388,15 +4416,23 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
 
         lottoPurchaseState[targetUid] = { time: Date.now(), price: finalPrice };
         replier.reply(formatCommand("🎫 로또 번호 입력", user, "1~15 사이의 숫자 3개를 입력해주세요.\n(예: 1 5 10)", "취소: [취소]"));
-    }
+    } 
     
     // 4. 상점 일반 아이콘 구매 처리
     else if (item.effect === "icon") {
         user.inventory.push({ id: item.id, name: item.name, icon: item.icon, effect: item.effect, title: "" });
+        
+        var isNewIcon = false;
         if (!user.collectedIcons) user.collectedIcons = [];
-        if (user.collectedIcons.indexOf(item.icon) === -1) user.collectedIcons.push(item.icon);
+        if (user.collectedIcons.indexOf(item.icon) === -1) {
+            user.collectedIcons.push(item.icon);
+            isNewIcon = true;
+        }
         user.icon = item.icon;
         replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 및 장착 성공!", "장착 변경: [/가방]"));
+
+        /* [신규 수집 발생] 칭호 판정 호출 */
+        if (isNewIcon) checkCollectionMaster();
     }
     
     // 5. 기타 소모성 아이템 처리 (수량 qty 반영)
@@ -4423,12 +4459,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         replier.reply(formatCommand("🎫 경고삭제권 사용 완료", user, "경고삭제권 구매 및 사용이 성공적으로 완료되었습니다.\n(평생 1회 사용 기록 완료)", "내 잔액: " + fp(user.point) + "P"));
     }
 
-    /* [Gemini 요청 사항] 수집대마왕 칭호 체크 (모든 아이콘 수집 시) */
-    var TOTAL_COLLECTABLE_ICONS = 6; // 상점 아이콘 6종 기준
-    if (user.collectedIcons && user.collectedIcons.length >= TOTAL_COLLECTABLE_ICONS) {
-        var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
-        util_checkAndAwardTitle(user, replierStub, "수집대마왕", 3001, "🏵️", "모든 아이콘 수집 완료", "모든 상징을 손에 넣은 전설의 수집가입니다.");
-    }
+    /* [수정] 전체 하단에 있던 수집대마왕 체크 로직을 삭제하고 위쪽의 아이콘 획득 분기로 이동함 */
 
     safeSaveData(data);
 }

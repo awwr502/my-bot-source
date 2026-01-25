@@ -626,8 +626,6 @@ var CMD_LIST = {
     ]
 };
 
-//==========섹터7==========
-
 /* 전역 상태 변수들 (섹터1과 중복 방지 처리) */ 
 var sprayData = { 
     totalPoint: 0, 
@@ -711,52 +709,45 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
 
     user.point = prePoint + delta;
 
-    /* [Gemini 요청 사항] 실질 순자산 기반 자산가 칭호 실시간 판별 엔진 */
+    /* [수정] 자산가 칭호 영구 획득 엔진 (하락 시 소멸 로직 제거) */
     var totalNetWorth = util_calculateNetWorth(user, roomData);
     
     var assetTitles = [
-        { name: "대부호", limit: 1000000 },
-        { name: "부호", limit: 500000 },
-        { name: "거상", limit: 300000 },
-        { name: "재벌", limit: 100000 }
+        { name: "대부호", limit: 1000000, id: 703 },
+        { name: "부호", limit: 500000, id: 702 },
+        { name: "거상", limit: 300000, id: 701 },
+        { name: "재벌", limit: 100000, id: 700 }
     ];
 
-    var currentTitle = user.title || "";
-    var suitableTitle = "";
-    var requiredLimit = 0;
+    if (!user.inventory) user.inventory = [];
 
-    // 1. 현재 실질 순자산에 맞는 적정 칭호 찾기
+    // 순자산 기준에 맞는 칭호를 가방에 영구 지급
     for (var i = 0; i < assetTitles.length; i++) {
-        if (totalNetWorth >= assetTitles[i].limit) {
-            suitableTitle = assetTitles[i].name;
-            requiredLimit = assetTitles[i].limit;
-            break;
-        }
-    }
+        var t = assetTitles[i];
+        if (totalNetWorth >= t.limit) {
+            // 이미 가방에 있는지 확인
+            var isAlreadyOwned = user.inventory.some(function(it) { 
+                return it.effect === "title" && it.title === t.name; 
+            });
 
-    // 2. 칭호 변경 감지 (상승 또는 하락)
-    var isAssetTitle = assetTitles.some(function(t){ return t.name === currentTitle; });
+            if (!isAlreadyOwned) {
+                user.inventory.push({ 
+                    id: t.id, 
+                    name: "[" + t.name + "] 칭호", 
+                    icon: "💰", 
+                    effect: "title", 
+                    title: t.name 
+                });
 
-    if (currentTitle !== suitableTitle) {
-        var targetRoom = roomName || (roomData && roomData.roomName ? roomData.roomName : "내리다");
-
-        // A. 새로운 상위 칭호 획득 (순자산 기준)
-        if (suitableTitle !== "" && (currentTitle === "" || totalNetWorth >= requiredLimit)) {
-            if (!user.inventory) user.inventory = [];
-            if (!user.inventory.some(function(it){ return it.title === suitableTitle; })) {
-                user.inventory.push({ id: 700 + i, name: "[" + suitableTitle + "] 칭호", icon: "💰", effect: "title", title: suitableTitle });
+                // 상위 칭호 획득 시 자동 장착 및 알림
+                user.title = t.name;
+                var targetRoom = roomName || (roomData && roomData.roomName ? roomData.roomName : "내리다");
+                var winMsg = "[🎖️ 신규 칭호 획득]\n━━━━━━━━━━━━━━━\n" + (user.name || "유저") + "님\n\n축하합니다! 실질 순자산이 " + fp(t.limit) + "P를 돌파하여 [" + t.name + "] 칭호를 획득했습니다!\n\n✨ 상태: [" + t.name + "] 칭호 자동 장착 완료\n💼 보관: 가방에 영구 저장되었습니다.\n━━━━━━━━━━━━━━━\n💡 이제 자산이 하락해도 칭호는 사라지지 않습니다.";
+                try { Api.replyRoom(targetRoom, winMsg); } catch(e){}
+                
+                // 가장 높은 등급 하나만 처리하고 브레이크 (중복 메시지 방지)
+                break;
             }
-            user.title = suitableTitle;
-            var winMsg = "[🎖️ 신규 칭호 획득]\n━━━━━━━━━━━━━━━\n" + (user.name || "유저") + "님\n\n축하합니다! 실질 순자산이 " + fp(totalNetWorth) + "P를 돌파하여 [" + suitableTitle + "] 칭호를 획득했습니다!\n\n✨ 상태: [" + suitableTitle + "] 칭호 자동 장착 완료\n💼 보관: 가방에 영구 저장되었습니다.\n━━━━━━━━━━━━━━━\n⚠️ 순자산(현금+주식+채권-부채) 기준 미달 시 자동 해제됩니다.";
-            try { Api.replyRoom(targetRoom, winMsg); } catch(e){}
-        } 
-        // B. 자격 미달로 인한 칭호 소멸 또는 강등
-        else if (isAssetTitle && (suitableTitle === "" || totalNetWorth < assetTitles.find(function(t){return t.name === currentTitle}).limit)) {
-            var oldTitle = currentTitle;
-            user.title = suitableTitle; 
-            var loseMsg = "📉 [칭호 자격 상실]\n━━━━━━━━━━━━━━━\n" + (user.name || "유저") + "님\n실질 순자산이 기준치 미만으로 하락하여 [" + oldTitle + "] 칭호가 해제되었습니다.";
-            if (suitableTitle !== "") loseMsg += "\n(현재 자산에 맞는 [" + suitableTitle + "] 칭호로 교체되었습니다.)";
-            try { Api.replyRoom(targetRoom, loseMsg); } catch(e){}
         }
     }
 
@@ -3727,19 +3718,17 @@ if (msg === "/도움말") {
 }));
 }
 
-//==========섹터27==========
-
 /**
- * [독립형 함수 1] 인벤토리 로직
+ * [독립형 함수 1] 인벤토리 로직 (자산가 영구 칭호 통합본)
  * 기능: 보유 아이템 확인, 장착, 분해 처리
- * 수정: 카테고리 분리, ID 기반 오름차순 정렬, 상세 분해 결과 메시지 복구
+ * 수정: 영구 칭호(700번대) 카테고리 분류 및 보호 로직 추가
  */
 function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
     // 1. 가방 조회 (분류 및 자동 정렬 적용)
     if (msg === "/가방") {
         var inv = user.inventory || [];
         
-        // ID 기준 오름차순 정렬 (ID가 없으면 9999로 처리)
+        // ID 기준 오름차순 정렬 (자산가 칭호 700~703번이 칭호 상단에 오도록 정렬)
         inv.sort(function(a, b) {
             var idA = Number(a.id) || 9999;
             var idB = Number(b.id) || 9999;
@@ -3757,10 +3746,11 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
                 var it = inv[i];
                 var activeMark = "";
                 
+                // 현재 장착 상태 확인 (✅ 표시)
                 if (it.effect === "icon" && user.icon === it.icon) activeMark = " (✅ 장착 중)";
                 else if (it.effect === "title" && user.title === it.title) activeMark = " (✅ 장착 중)";
                 
-                var entry = (i + 1) + ". " + it.icon + " " + it.name + activeMark;
+                var entry = (i + 1) + ". " + (it.icon || "📦") + " " + it.name + activeMark;
 
                 if (it.effect === "icon") iconEntries.push(entry);
                 else if (it.effect === "title") titleEntries.push(entry);
@@ -3817,7 +3807,7 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 3. 아이콘 분해 로직 (상세 결과 메시지 복구 완료)
+    // 3. 아이콘 분해 로직 (영구 칭호 보호 로직 추가)
     if (msg.indexOf("/분해 ") === 0) {
         var inv = user.inventory || [];
         if (inv.length === 0) return replier.reply(formatError(user, "분해 불가", "분해할 아이템이 없습니다."));
@@ -3826,23 +3816,35 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
         if (!numbers) return replier.reply(formatError(user, "입력 오류", "/분해 [번호]"));
 
         var targetIndices = [];
+        var protectedCount = 0;
+
         numbers.forEach(function(n) {
             var idx = parseInt(n) - 1;
             if (idx >= 0 && idx < inv.length && targetIndices.indexOf(idx) === -1) {
-                targetIndices.push(idx);
+                var item = inv[idx];
+                // [안전 장치] ID 700~799번대(자산가/업적 영구 칭호)는 분해 대상에서 제외
+                if (item.effect === "title" && item.id >= 700 && item.id < 800) {
+                    protectedCount++;
+                } else {
+                    targetIndices.push(idx);
+                }
             }
         });
 
+        if (protectedCount > 0 && targetIndices.length === 0) {
+            return replier.reply(formatError(user, "분해 불가", "영구 업적 칭호는 분해할 수 없습니다."));
+        }
         if (targetIndices.length === 0) return replier.reply(formatError(user, "번호 오류", "정확한 번호를 입력하세요."));
 
         var disassembledNames = [];
         var earnedFragments = targetIndices.length;
         
+        // 역순 정렬하여 splice 시 인덱스 밀림 방지
         targetIndices.sort(function(a, b) { return b - a; });
 
         targetIndices.forEach(function(idx) {
             var item = inv[idx];
-            disassembledNames.push(item.icon + " " + item.name);
+            disassembledNames.push((item.icon || "📦") + " " + item.name);
             if (item.effect === "icon" && user.icon === item.icon) user.icon = "";
             if (item.effect === "title" && user.title === item.title) user.title = "";
             inv.splice(idx, 1);
@@ -3857,15 +3859,13 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
             earnedTickets++;
         }
 
-        // [복구] 상세 결과 메시지 로직
         var resultMsg = "아이템 " + targetIndices.length + "개를 분해했습니다.\n\n" +
                         "[분해 목록]\n" + disassembledNames.join(", ") + "\n\n" +
                         "🧩 획득 조각: +" + earnedFragments + " 개\n" +
                         "(현재 조각: " + user.boxFragments + " / 5 개)";
 
-        if (earnedTickets > 0) {
-            resultMsg += "\n🎫 랜덤박스 이용권: +" + earnedTickets + "매 획득! (조각 변환 완료)";
-        }
+        if (protectedCount > 0) resultMsg += "\n\n⚠️ 알림: 선택하신 영구 칭호 " + protectedCount + "개는 분해 대상에서 제외되었습니다.";
+        if (earnedTickets > 0) resultMsg += "\n🎫 랜덤박스 이용권: +" + earnedTickets + "매 획득! (조각 변환 완료)";
 
         replier.reply(formatCommand("♻️ 아이콘 분해 완료", user, resultMsg, "이용권 확인: [/가방]"));
         safeSaveData(data);

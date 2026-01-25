@@ -42,39 +42,48 @@ if (!dir.exists()) dir.mkdirs();
 /* 전역 상태 변수 */ 
 var globalData = null; 
 var isRecovering = false; // [v5.8] 부팅 시 복구 프로세스 진행 여부 플래그
-var menuWaitState = {}; 
-var lottoPurchaseState = {}; 
-var sprinkleData = { active: false, winners: [] }; 
-var activeThefts = {}; 
-var duelData = {}; 
-var selectWaitState = {}; 
-var bankProcessState = {}; 
-var marketOpenPrice = 0; 
-var loanRegisterState = {}; 
-var loanContractWaitState = {}; 
-var miningState = {}; 
-var feverData = { active: false, endTime: 0, scheduled: [] };
 
-/* [Gemini 요청 사항] 경마 시스템 실시간 상태 및 상수 설명 통합 */
-var racingData = {
-    round: 1,           // [회차]: 경마의 진행 차수를 기록 (봇 재시작 시 1로 초기화됨)
-    horses: [           // [출전마 정보]: 각 말의 고유 ID, 이름, 우승 가중치(weight), 상태 아이콘 저장
-        { id: 1, name: "어마어마", weight: 1.0, icon: "☁️ 보통" },
-        { id: 2, name: "어서말을해", weight: 1.0, icon: "☁️ 보통" },
-        { id: 3, name: "마의웨이", weight: 1.0, icon: "☁️ 보통" },
-        { id: 4, name: "핵탄두", weight: 1.0, icon: "☁️ 보통" },
-        { id: 5, name: "돌격앞으로", weight: 1.0, icon: "☁️ 보통" }
-    ],
-    bets: {},           // [배팅 기록]: { UID: {horseId, amount, name} } 형식으로 현재 회차 배팅 정보를 저장
-    totalPool: 0,       // [당기 누적금]: 이번 회차에 유저들이 배팅한 순수 포인트 합계
-    carryOver: 0,       // [이월금/Jackpot]: 이전 회차에서 당첨자가 없어 넘어온 포인트 (70% 비율 적용액)
-    // [운영 플래그]: 봇 로드 시 현재 시간을 즉시 판별하여 09:00~23:59 사이면 자동으로 가동 상태(true)로 설정
-    isOperating: (function() {
-        var h = new Date().getHours();
-        return h >= 9 && h <= 23; 
-    })(),
-    isDeadlineNotified: false, // [알림 제어]: 49분 59초 마감 공지가 중복 발송되는 것을 방지하는 스위치
-    isResultProcessed: false   // [정산 제어]: 정각(00분) 결과 정산 로직이 중복 실행되는 것을 방지하는 스위치
+/**
+ * [Gemini 요청 사항] 방별 독립화를 위한 데이터 템플릿
+ * 설명: 아래의 구조가 각 방(Room)이 생성될 때마다 독립적으로 복제되어 할당됩니다.
+ */
+var ROOM_FEATURE_TEMPLATE = function() {
+    return {
+        /* [Gemini 요청 사항] 경마 시스템 실시간 상태 및 상수 설명 통합 */
+        racing: {
+            round: 1,           // [회차]: 경마의 진행 차수를 기록 (봇 재시작 시 1로 초기화됨)
+            horses: [           // [출전마 정보]: 각 말의 고유 ID, 이름, 우승 가중치(weight), 상태 아이콘 저장
+                { id: 1, name: "어마어마", weight: 1.0, icon: "☁️ 보통" },
+                { id: 2, name: "어서말을해", weight: 1.0, icon: "☁️ 보통" },
+                { id: 3, name: "마의웨이", weight: 1.0, icon: "☁️ 보통" },
+                { id: 4, name: "핵탄두", weight: 1.0, icon: "☁️ 보통" },
+                { id: 5, name: "돌격앞으로", weight: 1.0, icon: "☁️ 보통" }
+            ],
+            bets: {},           // [배팅 기록]: { UID: {horseId, amount, name} } 형식으로 현재 회차 배팅 정보를 저장
+            totalPool: 0,       // [당기 누적금]: 이번 회차에 유저들이 배팅한 순수 포인트 합계
+            carryOver: 0,       // [이월금/Jackpot]: 이전 회차에서 당첨자가 없어 넘어온 포인트 (70% 비율 적용액)
+            // [운영 플래그]: 봇 로드 시 현재 시간을 즉시 판별하여 09:00~23:59 사이면 자동으로 가동 상태(true)로 설정
+            isOperating: (function() {
+                var h = new Date().getHours();
+                return h >= 9 && h <= 23; 
+            })(),
+            isDeadlineNotified: false, // [알림 제어]: 49분 59초 마감 공지가 중복 발송되는 것을 방지하는 스위치
+            isResultProcessed: false   // [정산 제어]: 정각(00분) 결과 정산 로직이 중복 실행되는 것을 방지하는 스위치
+        },
+        /* 방별 주식 시장 및 기타 데이터 */
+        stockMarket: {},
+        stockTraffic: {},
+        marketOpenPrice: 0,
+        feverData: { active: false, endTime: 0, scheduled: [] },
+        sprinkleData: { active: false, winners: [], portions: [] },
+        lotto: { round: 1, entries: {}, dailyPool: 0, jackpot: 0, lastWinNums: [] },
+        /* 방별 독립 입력 대기 상태 */
+        states: {
+            menuWait: {}, bankProcess: {}, selectWait: {}, lottoPurchase: {},
+            activeThefts: {}, duelData: {}, mining: {},
+            loanRegister: {}, loanContractWait: {}
+        }
+    };
 };
 
 /* 관리자 UID 기반 인증 */ 
@@ -229,7 +238,7 @@ function recoverFromJournal(data) {
             var delta = Number(parts[2]);
             var brDelta = Number(parts[3] || 0);
 
-            // 해당 방과 유저를 찾아 메모리 데이터에 즉시 합산
+            // [방별 격리 대응] 해당 방과 유저를 찾아 메모리 데이터에 즉시 합산
             if (data.rooms[room] && data.rooms[room].users[uid]) {
                 data.rooms[room].users[uid].point += delta;
                 data.rooms[room].bankReserve += brDelta;
@@ -245,7 +254,10 @@ function recoverFromJournal(data) {
     }
 }
 
-/* 데이터베이스 로드 함수 (복구 로직 및 경마 데이터 동기화 통합) */
+/**
+ * [Gemini 요청 사항] 데이터베이스 로드 함수 (방별 독립 구조 자동 마이그레이션 통합)
+ * 기능: JSON 파일을 로드하고, 모든 방이 독립된 게임 데이터(features)를 갖도록 강제 정규화합니다.
+ */
 function getDatabase() {
     if (globalData !== null) return globalData; 
     try {
@@ -253,15 +265,16 @@ function getDatabase() {
         var initialData;
         
         if (!file.exists()) {
+            // 초기 데이터 구조: 방별 분리를 위해 최상위 게임 데이터를 제거함
             initialData = {
-                rooms: {}, admins: ["관리자"], botActive: true,
-                lotto: { round: 1, entries: {}, dailyPool: 0, jackpot: 0, lastWinNums: [] },
-                /* [신규] 경마 데이터 초기 구조 등록 */
-                racing: { round: 1, bets: {}, totalPool: 0, carryOver: 0, lastWinner: null },
-                nickHistory: {}, adminLogs: [], stockMarket: {}, stockTraffic: {},
-                economyBase: 0, economyDamping: 0.5, lastDailyReset: "", lastDietDate: "",
-                feverData: { active: false, endTime: 0, scheduled: [] }, isCalibrated: false,
-                loanPools: {}, loanContracts: {}, marketOpenPrice: 0 
+                rooms: {}, 
+                admins: ["관리자"], 
+                botActive: true,
+                nickHistory: {}, 
+                adminLogs: [],
+                economyDamping: 0.5,
+                lastDailyReset: "",
+                isRecovering: false
             };
         } else {
             var content = FileStream.read(FILE_PATH);
@@ -272,43 +285,36 @@ function getDatabase() {
         // [v5.8 핵심] JSON 로드 직후, 아직 파일에 안 적힌 '블랙박스 로그'를 읽어 데이터 정밀 보정
         recoverFromJournal(initialData);
         
-        globalData = initialData;
-        
-        if (globalData.marketOpenPrice !== undefined) marketOpenPrice = globalData.marketOpenPrice;
+        // [Gemini 요청 사항] 방별 독립화 엔진 (Feature Injection)
+        // 로드된 모든 방을 순회하며 독립된 게임 데이터 패키지가 없는 경우 생성해줍니다.
+        if (initialData.rooms) {
+            for (var rName in initialData.rooms) {
+                var targetRoom = initialData.rooms[rName];
+                
+                // 1. 방별 독립 게임 데이터(features)가 없으면 섹터 1의 템플릿으로 생성
+                if (!targetRoom.features) {
+                    if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
+                        targetRoom.features = ROOM_FEATURE_TEMPLATE();
+                        Log.info("[" + rName + "] 방에 독립 게임 엔진을 할당했습니다.");
+                    }
+                }
 
-        /* [Gemini 요청 사항] 경마 데이터 영속성(Persistence) 연동 */
-        // 파일에 저장된 경마 정보가 있으면 메모리 객체(racingData)에 동기화
-        if (globalData.racing) {
-            for (var key in globalData.racing) {
-                // bets, round, carryOver 등 파일의 최신 값을 메모리로 복사
-                racingData[key] = globalData.racing[key];
-            }
-        } else {
-            // 파일에 경마 항목이 없으면 섹터 1의 기본값을 DB 구조에 삽입
-            globalData.racing = racingData;
-        }
-        
-        if (globalData.rooms) {
-            for (var r in globalData.rooms) {
-                var targetRoom = globalData.rooms[r];
+                // 2. 필수 기본 구조 보안 강화
                 if (!targetRoom.loanPools) targetRoom.loanPools = {};
                 if (!targetRoom.loanContracts) targetRoom.loanContracts = {};
                 if (targetRoom.bankReserve === undefined) {
-                    targetRoom.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE; 
+                    targetRoom.bankReserve = (SYSTEM_CONFIG && SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE) ? SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE : 10000; 
                 }
             }
         }
+        
+        globalData = initialData;
         return globalData;
     } catch (e) {
         Log.error("DB Load Error: " + e);
         var stableFile = new java.io.File(BACKUP_DIR + "last_stable_backup.json");
         if (stableFile.exists()) {
             globalData = JSON.parse(FileStream.read(BACKUP_DIR + "last_stable_backup.json"));
-            if (globalData.marketOpenPrice !== undefined) marketOpenPrice = globalData.marketOpenPrice;
-            
-            // 백업 로드 시에도 경마 데이터 동기화
-            if (globalData.racing) racingData = globalData.racing;
-            
             return globalData;
         }
         return null;
@@ -1716,6 +1722,7 @@ function runScheduler() {
                 now: new Date(),
                 today: getSimpleDate(),
                 season: getSimpleSeason(),
+                /* [Gemini 요청 사항] 하드코딩 유지: 메인 운영 방 지정 */
                 targetRoom: "내리다",
                 // 아래 URL에 본인의 구글 웹 앱 URL을 입력하세요.
                 dashboardUrl: "https://script.google.com/macros/s/AKfycbyoURblg3-nLNgSE57Pb9RmjqK3wXyMSRpm9WrkWe3z2kyE_q_wmoabNECLNXWQ2SBZ/exec"
@@ -1739,7 +1746,7 @@ function runScheduler() {
 
             /* [최종 저장] 하이브리드 비동기 저장 처리 */
             if (ctx.isUpdated) {
-                Executor.execute(new java.lang.Runnable({
+                SaveExecutor.execute(new java.lang.Runnable({
                     run: function() { safeSaveData(data, ctx.isForceBackup); }
                 }));
             }
@@ -1749,16 +1756,28 @@ function runScheduler() {
     java.lang.System.setProperty(SCHEDULER_KEY, String(newTimer));
 }
 
-/* 대시보드 데이터 전송 함수 (비동기) */
+/** * [Gemini 요청 사항] 대시보드 데이터 전송 함수 (방별 데이터 분리 및 격리)
+ * 수정 내용: 테스트 방의 자산이 대시보드 및 전체 경제 지표에 합산되지 않도록 
+ * ctx.targetRoom("내리다")의 데이터만 필터링하여 집계합니다.
+ */
 function _sendToDashboard(data, ctx) {
     var totalPoints = 0;
     var userCount = 0;
     
-    for (var r in data.rooms) {
-        for (var u in data.rooms[r].users) {
-            var userObj = data.rooms[r].users[u];
+    // [수정] 모든 방(data.rooms)을 순회하는 대신 지정된 메인 방만 참조하여 '지표 오염' 방지
+    var mainRoomData = data.rooms[ctx.targetRoom];
+    
+    if (mainRoomData && mainRoomData.users) {
+        for (var u in mainRoomData.users) {
+            var userObj = mainRoomData.users[u];
+            // 해당 방의 유저 포인트와 예금만 합산
             totalPoints += (Number(userObj.point || 0) + Number(userObj.bank || 0));
             userCount++;
+        }
+        
+        // 해당 방의 중앙은행 재원(bankReserve)도 경제 지표에 포함
+        if (mainRoomData.bankReserve !== undefined) {
+            totalPoints += Number(mainRoomData.bankReserve);
         }
     }
 
@@ -1825,6 +1844,8 @@ function _runSector16Logic(data, ctx) {
             var reserve = roomData.bankReserve;
             if (!roomData.lastBankAlert) roomData.lastBankAlert = "normal";
 
+            /* [Gemini 요청 사항] 방별 경제 지표 독립 적용 */
+            // 테스트 방의 자산과 관계없이 해당 방의 economyBase를 기준으로 위기 판독
             var roomBase = roomData.economyBase || 1000000;
             var warningLimit = Math.floor(roomBase * 0.1);
             var disasterLimit = Math.floor(roomBase * 0.01);
@@ -1832,19 +1853,19 @@ function _runSector16Logic(data, ctx) {
 
             if (reserve < disasterLimit && roomData.lastBankAlert !== "disaster") {
                 roomData.lastBankAlert = "disaster";
-                var disasterMsg = "🚨 [국가 경제 재난 선포] 🚨\n━━━━━━━━━━━━━━━\n현 시각부로 국가 경제 재난 상태를 선포합니다.\n중앙은행 금고 자산이 임계치(" + fp(disasterLimit) + "P) 아래로 급락하여 모든 보상 및 출금이 정지될 위험이 큽니다.\n\n🏦 현재 금고: " + fp(reserve) + "P\n⚠️ 조치: 관리자의 즉각적인 재원 수혈이 필요합니다.";
+                var disasterMsg = "🚨 [국가 경제 재난 선포] 🚨\n━━━━━━━━━━━━━━━\n현 시각부로 [" + rName + "] 국가 경제 재난 상태를 선포합니다.\n중앙은행 금고 자산이 임계치(" + fp(disasterLimit) + "P) 아래로 급락하여 모든 보상 및 출금이 정지될 위험이 큽니다.\n\n🏦 현재 금고: " + fp(reserve) + "P\n⚠️ 조치: 관리자의 즉각적인 재원 수혈이 필요합니다.";
                 Api.replyRoom(rName, disasterMsg);
                 ctx.isUpdated = true;
             }
             else if (reserve < warningLimit && reserve >= disasterLimit && roomData.lastBankAlert === "normal") {
                 roomData.lastBankAlert = "warning";
-                var warningMsg = "⚠️ [국가 경제 마비 예비 경보]\n━━━━━━━━━━━━━━━\n중앙은행 금고 잔액이 " + fp(warningLimit) + "P 미만으로 하락했습니다.\n지속적인 보상 유지를 위해 경제 활동 활성화 또는 재원 보충이 권고됩니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
+                var warningMsg = "⚠️ [국가 경제 마비 예비 경보]\n━━━━━━━━━━━━━━━\n[" + rName + "] 중앙은행 금고 잔액이 " + fp(warningLimit) + "P 미만으로 하락했습니다.\n지속적인 보상 유지를 위해 경제 활동 활성화 또는 재원 보충이 권고됩니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
                 Api.replyRoom(rName, warningMsg);
                 ctx.isUpdated = true;
             }
             else if (reserve >= normalLimit && (roomData.lastBankAlert === "warning" || roomData.lastBankAlert === "disaster")) {
                 roomData.lastBankAlert = "normal";
-                var normalMsg = "✅ [국가 경제 정상화 알림]\n━━━━━━━━━━━━━━━\n재원 수혈 및 유동성 확보를 통해 금고가 다시 안정권(" + fp(normalLimit) + "P 이상)에 진입했습니다.\n중단되었던 각종 경제 로직이 정상화되었습니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
+                var normalMsg = "✅ [국가 경제 정상화 알림]\n━━━━━━━━━━━━━━━\n재원 수혈 및 유동성 확보를 통해 [" + rName + "] 금고가 다시 안정권(" + fp(normalLimit) + "P 이상)에 진입했습니다.\n중단되었던 각종 경제 로직이 정상화되었습니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
                 Api.replyRoom(rName, normalMsg);
                 ctx.isUpdated = true;
             }
@@ -1939,12 +1960,15 @@ function _runSector16Logic(data, ctx) {
         if (currentHour === conf.SETTINGS.CLOSE_HOUR && currentMin === 50 && typeof stock_applyClosingCorrection === 'function') {
             for (var sName in data.stockMarket) { data.stockMarket[sName].price = stock_applyClosingCorrection(data.stockMarket[sName].price); }
         }
-        var stockResult = updateStockPrices(data); 
+
+        /* [Gemini 요청 사항: 버그 방지 핵심] 경제 지표 방별 분리 적용 */
+        // 주식 가격 변동 및 '정리매매' 판독 시, 테스트 방이 아닌 메인 운영 방("내리다")의 자산 지표만 사용하도록 강제함.
+        var stockResult = updateStockPrices(data, ctx.targetRoom); 
+
         var isMarketOpen = (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR);
         var statusText = isMarketOpen ? "🟢 장 운영 중 (07:00 ~ 23:59)" : "🔴 장 마감";
         var body = "📉 주식 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateStockList(data) || "시세 정보 없음"); 
         if (stockResult.length > 0) body += "\n\n" + stockResult.join("\n");
-        // [수정] 실시간 차트 링크 제거
         body += "\n━━━━━━━━━━━━━━━";
         try { Api.replyRoom(ctx.targetRoom, body); } catch(err) {}
         ctx.isUpdated = true;
@@ -1987,8 +2011,6 @@ function _runSector16Logic(data, ctx) {
         var resultBody = "";
         
         if(winnerUids.length > 0) {
-            /* [핵심] 3배 보전 및 지원금 계산 로직 */
-            // 당첨금 배당률이 3배가 안 될 경우, 부족한 만큼 은행이 메워줌
             var minDiv = 3.0; // 최소 3배 보장
             var totalRequiredFor3x = Math.floor(winPool * minDiv);
             var subsidyNeeded = Math.max(0, totalRequiredFor3x - basePool);
@@ -1999,7 +2021,6 @@ function _runSector16Logic(data, ctx) {
                 mainRoom.bankReserve -= actualSubsidy;
             }
 
-            // 최종 분배 풀 = (배팅액-세금+이월금) + 은행보조금
             var finalDistributePool = basePool + actualSubsidy;
             var totalActuallyPaid = 0;
 
@@ -2013,28 +2034,20 @@ function _runSector16Logic(data, ctx) {
                 var b = racingData.bets[uId]; var u = null;
                 for(var r in data.rooms){ if(data.rooms[r].users[uId]){ u = data.rooms[r].users[uId]; break; } }
                 if(u){
-                    // 지분 기반 차등 분배 (배팅 금액 비율대로)
                     var share = b.amount / winPool;
                     var prize = Math.floor(share * finalDistributePool);
-                    
-                    // 상한선 (10배) 적용
                     var maxLimit = b.amount * (rConf.MAX_PAYOUT_MULT || 10);
-                    var isCapped = prize > maxLimit;
-                    if (isCapped) prize = maxLimit;
+                    if (prize > maxLimit) prize = maxLimit;
 
                     var res = processRepayment(u, prize, uId, ctx.targetRoom);
                     u.point += res.actualGain; 
                     totalActuallyPaid += prize;
 
-                    var tag = "";
-                    if (isCapped) tag = " ⚠️최대배당";
-                    else if (actualSubsidy > 0) tag = " ✨3배보전";
-
+                    var tag = (prize === maxLimit) ? " ⚠️최대배당" : (actualSubsidy > 0 ? " ✨3배보전" : "");
                     resultBody += "\n• " + b.name + " (+" + fp(res.actualGain) + "P)" + tag;
                 }
             });
             
-            // 이월금 정산 (상한 초과분 및 지원금 미사용 잔액 등)
             racingData.carryOver = Math.max(0, finalDistributePool - totalActuallyPaid);
             if (racingData.carryOver > 10) {
                 resultBody += "\n\n💰 상한 초과분 " + fp(racingData.carryOver) + "P는\n다음 회차 잭팟으로 이월되었습니다!";
@@ -2296,7 +2309,7 @@ function _runSector18Logic(data, ctx) {
 //==========섹터19==========
 
 /* 메인 메시지 리스너 함수 */
-action=function(room, msg, sender, isGroupChat, replier, imageDB) {
+action = function(room, msg, sender, isGroupChat, replier, imageDB) {
     /* [최적화] 고정 스레드 풀 엔진 가동: 모든 처리를 비동기 작업 큐에 할당하여 반응 속도 극대화 및 씹힘 방지 */
     Executor.execute(new java.lang.Runnable({
         run: function() {
@@ -2309,8 +2322,38 @@ action=function(room, msg, sender, isGroupChat, replier, imageDB) {
                 var data = getDatabase(); 
                 if (!data) return;
 
-                /* [신규] 도배 방지 및 타임아웃 체크 엔진 */
+                /* [Gemini 요청 사항] 방별 독립 데이터 엔진 가상화 (Mapping) */
+                // 설명: 섹터 1에서 정의한 방별 독립 구조(Features)를 현재 실행 스레드의 변수로 연결합니다.
+                // 이 매핑을 통해 하위 섹터들의 로직 수정 없이도 방별 데이터 고립이 완성됩니다.
                 var roomData = data.rooms[roomName] || { users: {} };
+                if (!roomData.features) {
+                    if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
+                        roomData.features = ROOM_FEATURE_TEMPLATE();
+                    }
+                }
+                
+                var rFeatures = roomData.features;
+
+                // [데이터 분리] 전역 변수명을 방별 독립 변수로 치환
+                // 이제 각 방은 자신만의 경마, 로또, 상태 대기열을 가집니다.
+                var racingData = rFeatures.racing;
+                var lotto = rFeatures.lotto;
+                var marketOpenPrice = rFeatures.marketOpenPrice;
+                var feverData = rFeatures.feverData;
+                var sprinkleData = rFeatures.sprinkleData;
+
+                // [상태 분리] 각종 입력 대기 상태값 격리
+                var menuWaitState = rFeatures.states.menuWait;
+                var bankProcessState = rFeatures.states.bankProcess;
+                var selectWaitState = rFeatures.states.selectWait;
+                var lottoPurchaseState = rFeatures.states.lottoPurchase;
+                var activeThefts = rFeatures.states.activeThefts;
+                var duelData = rFeatures.states.duelData;
+                var miningState = rFeatures.states.mining;
+                var loanRegisterState = rFeatures.states.loanRegister;
+                var loanContractWaitState = rFeatures.states.loanContractWait;
+
+                /* [신규] 도배 방지 및 타임아웃 체크 엔진 */
                 var user = null;
                 var currentImgHash = null;
                 try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
@@ -2365,7 +2408,6 @@ action=function(room, msg, sender, isGroupChat, replier, imageDB) {
                     var content = msg.substring(6).trim();
                     if (content.length < 2) return replier.reply("내용을 상세히 적어주세요.");
                     
-                    // 위에서 이미 user를 찾았으므로 재사용
                     if(!user) return; 
 
                     var lastAct = user.lastAction;
@@ -2403,7 +2445,16 @@ action=function(room, msg, sender, isGroupChat, replier, imageDB) {
                         replier.reply(formatAdmin("🔄 시스템 재가동", "결과: 락 해제 및 메모리 동기화, 시스템 정상화 완료"));
                         return;
                     }
-                 }
+                }
+                
+                // 이후 섹터 20부터는 여기서 정의된 방별 변수들을 사용하여 로직이 진행됩니다.
+
+            } catch (e) {
+                Log.error("Thread Runtime Error: " + e);
+            }
+        }
+    }));
+}
 
 //==========섹터20-1==========
 

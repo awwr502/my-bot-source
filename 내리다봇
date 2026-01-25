@@ -1844,8 +1844,6 @@ function _runSector16Logic(data, ctx) {
             var reserve = roomData.bankReserve;
             if (!roomData.lastBankAlert) roomData.lastBankAlert = "normal";
 
-            /* [Gemini 요청 사항] 방별 경제 지표 독립 적용 */
-            // 테스트 방의 자산과 관계없이 해당 방의 economyBase를 기준으로 위기 판독
             var roomBase = roomData.economyBase || 1000000;
             var warningLimit = Math.floor(roomBase * 0.1);
             var disasterLimit = Math.floor(roomBase * 0.01);
@@ -1853,19 +1851,19 @@ function _runSector16Logic(data, ctx) {
 
             if (reserve < disasterLimit && roomData.lastBankAlert !== "disaster") {
                 roomData.lastBankAlert = "disaster";
-                var disasterMsg = "🚨 [국가 경제 재난 선포] 🚨\n━━━━━━━━━━━━━━━\n현 시각부로 [" + rName + "] 국가 경제 재난 상태를 선포합니다.\n중앙은행 금고 자산이 임계치(" + fp(disasterLimit) + "P) 아래로 급락하여 모든 보상 및 출금이 정지될 위험이 큽니다.\n\n🏦 현재 금고: " + fp(reserve) + "P\n⚠️ 조치: 관리자의 즉각적인 재원 수혈이 필요합니다.";
+                var disasterMsg = "🚨 [국가 경제 재난 선포] 🚨\n━━━━━━━━━━━━━━━\n현 시각부로 국가 경제 재난 상태를 선포합니다.\n중앙은행 금고 자산이 임계치(" + fp(disasterLimit) + "P) 아래로 급락하여 모든 보상 및 출금이 정지될 위험이 큽니다.\n\n🏦 현재 금고: " + fp(reserve) + "P\n⚠️ 조치: 관리자의 즉각적인 재원 수혈이 필요합니다.";
                 Api.replyRoom(rName, disasterMsg);
                 ctx.isUpdated = true;
             }
             else if (reserve < warningLimit && reserve >= disasterLimit && roomData.lastBankAlert === "normal") {
                 roomData.lastBankAlert = "warning";
-                var warningMsg = "⚠️ [국가 경제 마비 예비 경보]\n━━━━━━━━━━━━━━━\n[" + rName + "] 중앙은행 금고 잔액이 " + fp(warningLimit) + "P 미만으로 하락했습니다.\n지속적인 보상 유지를 위해 경제 활동 활성화 또는 재원 보충이 권고됩니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
+                var warningMsg = "⚠️ [국가 경제 마비 예비 경보]\n━━━━━━━━━━━━━━━\n중앙은행 금고 잔액이 " + fp(warningLimit) + "P 미만으로 하락했습니다.\n지속적인 보상 유지를 위해 경제 활동 활성화 또는 재원 보충이 권고됩니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
                 Api.replyRoom(rName, warningMsg);
                 ctx.isUpdated = true;
             }
             else if (reserve >= normalLimit && (roomData.lastBankAlert === "warning" || roomData.lastBankAlert === "disaster")) {
                 roomData.lastBankAlert = "normal";
-                var normalMsg = "✅ [국가 경제 정상화 알림]\n━━━━━━━━━━━━━━━\n재원 수혈 및 유동성 확보를 통해 [" + rName + "] 금고가 다시 안정권(" + fp(normalLimit) + "P 이상)에 진입했습니다.\n중단되었던 각종 경제 로직이 정상화되었습니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
+                var normalMsg = "✅ [국가 경제 정상화 알림]\n━━━━━━━━━━━━━━━\n재원 수혈 및 유동성 확보를 통해 금고가 다시 안정권(" + fp(normalLimit) + "P 이상)에 진입했습니다.\n중단되었던 각종 경제 로직이 정상화되었습니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
                 Api.replyRoom(rName, normalMsg);
                 ctx.isUpdated = true;
             }
@@ -1960,11 +1958,7 @@ function _runSector16Logic(data, ctx) {
         if (currentHour === conf.SETTINGS.CLOSE_HOUR && currentMin === 50 && typeof stock_applyClosingCorrection === 'function') {
             for (var sName in data.stockMarket) { data.stockMarket[sName].price = stock_applyClosingCorrection(data.stockMarket[sName].price); }
         }
-
-        /* [Gemini 요청 사항: 버그 방지 핵심] 경제 지표 방별 분리 적용 */
-        // 주식 가격 변동 및 '정리매매' 판독 시, 테스트 방이 아닌 메인 운영 방("내리다")의 자산 지표만 사용하도록 강제함.
-        var stockResult = updateStockPrices(data, ctx.targetRoom); 
-
+        var stockResult = updateStockPrices(data); 
         var isMarketOpen = (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR);
         var statusText = isMarketOpen ? "🟢 장 운영 중 (07:00 ~ 23:59)" : "🔴 장 마감";
         var body = "📉 주식 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateStockList(data) || "시세 정보 없음"); 
@@ -2011,6 +2005,7 @@ function _runSector16Logic(data, ctx) {
         var resultBody = "";
         
         if(winnerUids.length > 0) {
+            /* [핵심] 3배 보전 및 지원금 계산 로직 */
             var minDiv = 3.0; // 최소 3배 보장
             var totalRequiredFor3x = Math.floor(winPool * minDiv);
             var subsidyNeeded = Math.max(0, totalRequiredFor3x - basePool);
@@ -2053,11 +2048,21 @@ function _runSector16Logic(data, ctx) {
                 resultBody += "\n\n💰 상한 초과분 " + fp(racingData.carryOver) + "P는\n다음 회차 잭팟으로 이월되었습니다!";
             }
         } else {
-            var toBank = Math.floor(basePool * rConf.WINLESS_BANK_RATE);
-            var toJackpot = basePool - toBank;
+            /**
+             * [Gemini 요청 사항: 이월금 전액 보전 로직 적용]
+             * 당첨자 없을 시:
+             * 1. 현재 판돈(racingData.totalPool - tax)에서만 30% 국고 회수
+             * 2. 기존 이월금(carryOver)은 100% 보존하여 합산 이월
+             */
+            var currentRoundNetPool = racingData.totalPool - tax; // 당기 순수 판돈
+            var toBank = Math.floor(currentRoundNetPool * rConf.WINLESS_BANK_RATE); // 당기 판돈의 30%만 회수
+            
+            // (당기 판돈 70%) + (기존 이월금 100%) = 합계 이월
+            racingData.carryOver = (currentRoundNetPool - toBank) + racingData.carryOver;
+            
             if(mainRoom) mainRoom.bankReserve += toBank;
-            racingData.carryOver = toJackpot;
-            resultBody += "💀 당첨 유저 없음\n💰 이월금(70%): " + fp(toJackpot) + "P\n🏛️ 국고 귀속(30%): " + fp(toBank) + "P";
+            
+            resultBody += "💀 당첨 유저 없음\n💰 이월금 보전 완료: " + fp(racingData.carryOver) + "P\n🏛️ 금기 판돈 국고 귀속(30%): " + fp(toBank) + "P";
         }
 
         var isClosing = (currentHour === 0);

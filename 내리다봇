@@ -2217,114 +2217,140 @@ function _runSector17Logic(data, ctx) {
 
 /**
  * 섹터 18 로직 함수: 로또 판매 마감 알림 및 당첨 추첨 프로세스
- * 수정 사항: 1등(상금의 5배), 2등(5,000P), 3등(1,000P) 정책 반영 및 은행 재원 연동
+ * 수정 사항: 방별 격리된 로또 데이터(Features) 통합 추첨 및 상금 지급
  */
 function _runSector18Logic(data, ctx) {
     var currentHour = ctx.now.getHours();
     var currentMin = ctx.now.getMinutes();
-    var roomData = data.rooms[ctx.targetRoom]; 
+    
+    // 중앙은행 재원 참조 (메인 운영 방 기준)
+    var mainRoomData = data.rooms[ctx.targetRoom]; 
 
     /* 7. 로또 판매 마감 알림 (21:00) */
-    if (currentHour === 21 && currentMin === 0 && data.lotto.notifiedClose !== ctx.today) {
-        data.lotto.notifiedClose = ctx.today;
-        var pool = Number(data.lotto.dailyPool || 0) + Number(data.lotto.jackpot || 0);
-        try { 
-            Api.replyRoom(ctx.targetRoom, formatAdmin("🏁 로또 판매 마감", "잠시 후 22시 추첨!\n현재 누적 상금: " + fp(pool) + "P")); 
-        } catch(e) {}
-        ctx.isUpdated = true;
+    if (currentHour === 21 && currentMin === 0) {
+        if (!data.lotto_flags) data.lotto_flags = {};
+        if (data.lotto_flags.lastCloseNotify !== ctx.today) {
+            data.lotto_flags.lastCloseNotify = ctx.today;
+
+            // [핵심] 모든 방의 판매금(dailyPool)을 합산하여 총액 계산
+            var totalDailyPool = 0;
+            for (var r in data.rooms) {
+                if (data.rooms[r].features && data.rooms[r].features.lotto) {
+                    totalDailyPool += Number(data.rooms[r].features.lotto.dailyPool || 0);
+                }
+            }
+            var totalJackpot = Number(data.lotto_jackpot_pool || 0); 
+            var displayPool = totalDailyPool + totalJackpot;
+
+            // 모든 방에 마감 알림 전송 (격리 발송)
+            for (var i = 0; i < ALLOWED_ROOMS.length; i++) {
+                try { 
+                    Api.replyRoom(ALLOWED_ROOMS[i], formatAdmin("🏁 로또 판매 마감", "잠시 후 22시 추첨!\n현재 누적 상금: " + fp(displayPool) + "P")); 
+                } catch(e) {}
+            }
+            ctx.isUpdated = true;
+        }
     }
 
     /* 8. 로또 당첨 번호 추첨 및 상금 지급 (22:00) */
-    if (currentHour === 22 && currentMin === 0 && data.lotto.notifiedDraw !== ctx.today) {
-        data.lotto.notifiedDraw = ctx.today;
-        
-        var win = []; 
-        while(win.length < 3) { 
-            var n = Math.floor(Math.random() * 15) + 1; 
-            if(win.indexOf(n) === -1) win.push(n); 
-        }
-        win.sort(function(a,b){return a-b}); 
-        data.lotto.lastWinNums = win;
-        
-        var tp = Number(data.lotto.dailyPool || 0) + Number(data.lotto.jackpot || 0);
-        var w1 = [], w2 = [], w3 = [];
-        
-        // 당첨자 분류 및 방 정보 매핑
-        for(var uid in data.lotto.entries) {
-            var userFound = null;
-            var userRoom = null;
-            for(var rn in data.rooms) { 
-                if(data.rooms[rn].users[uid]) {
-                    userFound = data.rooms[rn].users[uid];
-                    userRoom = rn;
-                    break;
-                }
+    if (currentHour === 22 && currentMin === 0) {
+        if (!data.lotto_flags) data.lotto_flags = {};
+        if (data.lotto_flags.lastDrawNotify !== ctx.today) {
+            data.lotto_flags.lastDrawNotify = ctx.today;
+            
+            // 당첨 번호 생성
+            var win = []; 
+            while(win.length < 3) { 
+                var n = Math.floor(Math.random() * 15) + 1; 
+                if(win.indexOf(n) === -1) win.push(n); 
             }
-            if(!userFound) continue;
+            win.sort(function(a,b){return a-b}); 
+            data.last_win_nums = win; 
 
-            data.lotto.entries[uid].forEach(function(tk){
-                var m = 0; 
-                tk.forEach(function(n){ if(win.indexOf(n) !== -1) m++; });
-                if(m === 3) w1.push({u: userFound, id: uid, rm: userRoom}); 
-                else if(m === 2) w2.push({u: userFound, id: uid, rm: userRoom}); 
-                else if(m === 1) w3.push({u: userFound, id: uid, rm: userRoom});
-            });
-        }
-        
-        var resM = "당첨 번호: [" + win.join(", ") + "]\n";
-        var totalPayout = 0;
-        
-        // [Gemini 요청 사항] 1등 처리 (총 상금의 5배 배당)
-        if(w1.length > 0) { 
-            var p1 = Math.floor((tp * 5) / w1.length); 
-            w1.forEach(function(obj){ 
-                var res = processRepayment(obj.u, p1, obj.id, obj.rm);
+            var totalDailyPool = 0;
+            var w1 = [], w2 = [], w3 = [];
+
+            // [핵심] 모든 방을 돌며 독립된 응모 내역(entries) 수집 및 당첨자 분류
+            for (var rName in data.rooms) {
+                var roomObj = data.rooms[rName];
+                if (!roomObj.features || !roomObj.features.lotto) continue;
+                
+                var rLotto = roomObj.features.lotto;
+                totalDailyPool += Number(rLotto.dailyPool || 0);
+
+                for (var uid in rLotto.entries) {
+                    var userFound = roomObj.users[uid];
+                    if (!userFound) continue;
+
+                    rLotto.entries[uid].forEach(function(tk) {
+                        var match = 0; 
+                        tk.forEach(function(n){ if(win.indexOf(n) !== -1) match++; });
+                        if(match === 3) w1.push({u: userFound, id: uid, rm: rName}); 
+                        else if(match === 2) w2.push({u: userFound, id: uid, rm: rName}); 
+                        else if(match === 1) w3.push({u: userFound, id: uid, rm: rName});
+                    });
+                }
+                // 정산 후 해당 방의 판돈 초기화
+                rLotto.dailyPool = 0;
+            }
+
+            var baseJackpot = Number(data.lotto_jackpot_pool || 0);
+            var totalPrizePool = totalDailyPool + baseJackpot;
+            var totalPayout = 0;
+            var resM = "당첨 번호: [" + win.join(", ") + "]\n";
+
+            // 1등 지급 (전액 n빵)
+            if(w1.length > 0) { 
+                var p1 = Math.floor(totalPrizePool / w1.length); 
+                w1.forEach(function(obj){ 
+                    var res = processRepayment(obj.u, p1, obj.id, obj.rm);
+                    var preP = Number(obj.u.point);
+                    obj.u.point = preP + Number(res.actualGain); 
+                    verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 1등 당첨", obj.rm, 0);
+                    totalPayout += p1;
+                }); 
+                resM += "🥇 1등: " + w1.length + "명 (각 " + fp(p1) + "P)\n"; 
+                data.lotto_jackpot_pool = 0; 
+            } else { 
+                resM += "🥇 1등 없음 (전액 이월)\n"; 
+                data.lotto_jackpot_pool = totalPrizePool; 
+            }
+
+            // 2등/3등 지급 (고정 상금)
+            w2.forEach(function(obj){ 
+                var res = processRepayment(obj.u, 5000, obj.id, obj.rm);
                 var preP = Number(obj.u.point);
-                obj.u.point = Number(obj.u.point) + Number(res.actualGain); 
-                if (typeof verifyPointTransaction === 'function') verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 1등 당첨", obj.rm, 0);
-                totalPayout += p1;
+                obj.u.point = preP + Number(res.actualGain); 
+                verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 2등 당첨", obj.rm, 0);
+                totalPayout += 5000;
             }); 
-            resM += "🥇 1등: " + w1.length + "명 (각 " + fp(p1) + "P)\n"; 
-            data.lotto.jackpot = 0; 
-        } else { 
-            resM += "🥇 1등 없음 (이월)\n"; 
-            data.lotto.jackpot = tp; 
+            if(w2.length > 0) resM += "🥈 2등: " + w2.length + "명 (각 5,000P)\n";
+
+            w3.forEach(function(obj){ 
+                var res = processRepayment(obj.u, 1000, obj.id, obj.rm);
+                var preP = Number(obj.u.point);
+                obj.u.point = preP + Number(res.actualGain); 
+                verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 3등 당첨", obj.rm, 0);
+                totalPayout += 1000;
+            }); 
+            if(w3.length > 0) resM += "🥉 3등: " + w3.length + "명 (각 1,000P)";
+
+            // 국고(중앙은행) 재원 정산
+            if (mainRoomData && totalPayout > 0) {
+                if (mainRoomData.bankReserve === undefined) mainRoomData.bankReserve = 10000;
+                mainRoomData.bankReserve -= totalPayout;
+                resM += "\n\n🏦 상금 총액 " + fp(totalPayout) + "P 국고 지급 완료";
+            }
+
+            // 모든 방에 결과 발표
+            for (var j = 0; j < ALLOWED_ROOMS.length; j++) {
+                try {
+                    java.lang.Thread.sleep(200); 
+                    Api.replyRoom(ALLOWED_ROOMS[j], formatAdmin("🎰 로또 추첨 결과", resM));
+                } catch(e) {}
+            }
+            ctx.isUpdated = true;
         }
-        
-        // [Gemini 요청 사항] 2등 상금 처리 (고정 5,000P)
-        w2.forEach(function(obj){ 
-            var res = processRepayment(obj.u, 5000, obj.id, obj.rm);
-            var preP = Number(obj.u.point);
-            obj.u.point = Number(obj.u.point) + Number(res.actualGain); 
-            if (typeof verifyPointTransaction === 'function') verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 2등 당첨", obj.rm, 0);
-            totalPayout += 5000;
-        }); 
-        resM += "🥈 2등: " + w2.length + "명 (각 " + fp(5000) + "P)\n";
-        
-        // [Gemini 요청 사항] 3등 상금 처리 (고정 1,000P)
-        w3.forEach(function(obj){ 
-            var res = processRepayment(obj.u, 1000, obj.id, obj.rm);
-            var preP = Number(obj.u.point);
-            obj.u.point = Number(obj.u.point) + Number(res.actualGain); 
-            if (typeof verifyPointTransaction === 'function') verifyPointTransaction(obj.u, preP, Number(res.actualGain), "로또 3등 당첨", obj.rm, 0);
-            totalPayout += 1000;
-        }); 
-        resM += "🥉 3등: " + w3.length + "명 (각 " + fp(1000) + "P)";
-        
-        /* 중앙은행 재원에서 실제 지급된 상금 총액 차감 */
-        if (roomData && totalPayout > 0) {
-            if (roomData.bankReserve === undefined || roomData.bankReserve === null) roomData.bankReserve = 10000;
-            roomData.bankReserve -= totalPayout;
-            resM += "\n\n🏦 상금 총액 " + fp(totalPayout) + "P가 은행 재원에서 지급되었습니다.";
-        }
-        
-        try {
-            java.lang.Thread.sleep(500); 
-            Api.replyRoom(ctx.targetRoom, formatAdmin("🎰 로또 추첨 결과", resM));
-        } catch(e) { Log.error("로또 결과 발송 실패: " + e); }
-        
-        data.lotto.dailyPool = 0; 
-        ctx.isUpdated = true;
     }
 }
 
@@ -2826,9 +2852,9 @@ if (selectWaitState[targetUid]) {
                 user.point = Number(user.point) - lottoPrice;
                 verifyPointTransaction(user, prePoint, -lottoPrice, "로또 구매");
 
-                if (!data.lotto.entries[targetUid]) data.lotto.entries[targetUid] = [];
-                data.lotto.entries[targetUid].push(nums);
-                data.lotto.dailyPool = (data.lotto.dailyPool || 0) + lottoPrice;
+                if (!lotto.entries[targetUid]) lotto.entries[targetUid] = [];
+                lotto.entries[targetUid].push(nums);
+                lotto.dailyPool = (lotto.dailyPool || 0) + lottoPrice;
                 
                 delete lottoPurchaseState[targetUid];
                 replier.reply(formatCommand("🎫 로또 구매 완료", user, "선택 번호: [" + nums.join(", ") + "]\n비용: " + fp(lottoPrice) + "P\n추첨 시간: 매일 밤 22:00", "내 잔액: " + fP(user.point) + "P"));
@@ -4029,8 +4055,8 @@ function _handleLottoLogic(msg, user, data, replier, roomName, targetUid) {
     if (msg === "/로또정보") {
         var currentHour = new Date().getHours();
         var isAfterDraw = (currentHour >= 22);
-        var myLottos = (data.lotto.entries && data.lotto.entries[targetUid]) ? data.lotto.entries[targetUid] : [];
-        var winNums = data.lotto.lastWinNums || [];
+        var myLottos = (lotto.entries && lotto.entries[targetUid]) ? lotto.entries[targetUid] : [];
+        var winNums = lotto.lastWinNums || [];
 
         var result = "🎫 로또 정보\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n[나의 구매 번호]\n";
         
@@ -5129,7 +5155,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
 
     /* [12] 시스템 초기화 세트 */
     if (msg === "/로또데이터초기화") {
-        data.lotto = { round: (data.lotto.round || 0) + 1, entries: {}, dailyPool: 0, jackpot: 0, lastWinNums: [] };
+        lotto = { round: (lotto.round || 0) + 1, entries: {}, dailyPool: 0, jackpot: 0, lastWinNums: [] };
         safeSaveData(data);
         replier.reply(formatAdmin("완료", "로또 시스템 리셋 완료"));
         return true;

@@ -121,7 +121,8 @@ var SYSTEM_CONFIG = {
             WINLESS_BANK_RATE: 0.3,   // [무승자 국고행]: 우승자 없을 시 판돈의 30%를 은행 금고로 즉시 회수
             WINLESS_JACKPOT_RATE: 0.7, // [무승자 이월액]: 우승자 없을 시 판돈의 70%를 다음 회차 carryOver로 누적
             OPEN_HOUR: 9,        // 경마장 자동 개장 시각 (오전 9시)
-            CLOSE_HOUR: 23       // 경마장 마지막 배팅 마감 시각 (오후 11시 59분)
+            CLOSE_HOUR: 23,       // 경마장 마지막 배팅 마감 시각 (오후 11시 59분)
+            MAX_PAYOUT_MULT: 10   // [신규: 배당 상한선]: 배팅 금액의 최대 10배까지만 당첨금 수령 가능 (독식 방지)
         },
         
         STOCK: {
@@ -1955,7 +1956,6 @@ function _runSector16Logic(data, ctx) {
     }
 
     // C. 결과 발표 및 새 라운드 시작 (매시 00:00:00)
-    // [수정] currentHour !== rConf.OPEN_HOUR 조건을 추가하여 09시에는 결과가 발표되지 않도록 함
     if ((racingData.isOperating || currentHour === 0) && currentMin === 0 && currentSec === 0 && currentHour !== rConf.OPEN_HOUR && !racingData.isResultProcessed) {
         racingData.isResultProcessed = true;
         
@@ -1975,18 +1975,36 @@ function _runSector16Logic(data, ctx) {
         var resultBody = "";
         
         if(winnerUids.length > 0) {
-            var rate = (distributePool / winPool).toFixed(1);
-            resultBody += "💰 최종 배당률: x" + rate + "\n🏛️ 국고 수수료(10%): " + fp(tax) + "P 입고\n\n[🎖️ 주요 당첨자]";
+            var totalActuallyPaid = 0; // 실제로 유저들에게 지급된 총액
+            resultBody += "🏛️ 국고 수수료(10%): " + fp(tax) + "P 입고\n\n[🎖️ 주요 당첨자]";
+            
             winnerUids.forEach(function(uId){
                 var b = racingData.bets[uId]; var u = null;
                 for(var r in data.rooms){ if(data.rooms[r].users[uId]){ u = data.rooms[r].users[uId]; break; } }
                 if(u){
-                    var share = b.amount / winPool; var prize = Math.floor(share * distributePool);
+                    var share = b.amount / winPool; 
+                    var theoreticalPrize = Math.floor(share * distributePool);
+                    
+                    // [핵심: 상한제 적용] 배팅금의 N배 제한
+                    var maxLimit = b.amount * (rConf.MAX_PAYOUT_MULT || 10);
+                    var prize = Math.min(theoreticalPrize, maxLimit);
+                    var isCapped = theoreticalPrize > maxLimit;
+
                     var res = processRepayment(u, prize, uId, ctx.targetRoom);
-                    u.point += res.actualGain; resultBody += "\n• " + b.name + " (+" + fp(res.actualGain) + "P)";
+                    u.point += res.actualGain; 
+                    totalActuallyPaid += prize;
+
+                    resultBody += "\n• " + b.name + " (+" + fp(res.actualGain) + "P)" + (isCapped ? " ⚠️상한적용" : "");
                 }
             });
-            racingData.carryOver = 0;
+            
+            // 배당 상한으로 인해 남은 금액은 다음 회차 이월금으로 저장
+            racingData.carryOver = distributePool - totalActuallyPaid;
+            if (racingData.carryOver < 0) racingData.carryOver = 0;
+            
+            if (racingData.carryOver > 0) {
+                resultBody += "\n\n💰 상한 초과분 " + fp(racingData.carryOver) + "P는\n다음 회차 잭팟으로 이월되었습니다!";
+            }
         } else {
             var toBank = Math.floor(distributePool * rConf.WINLESS_BANK_RATE);
             var toJackpot = distributePool - toBank;

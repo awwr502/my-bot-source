@@ -702,6 +702,14 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     if (!user || isNaN(delta) || delta === 0) return;
     
     var prePoint = Number(user.point || 0);
+
+    /* [신규 추가] 마이너스 잔액 방지 로직 (Floor 0P) */
+    // 차감하려는 금액(delta)이 현재 잔액(prePoint)보다 클 경우, 잔액만큼만 차감하여 0원을 만듭니다.
+    var actualDelta = delta;
+    if (delta < 0 && (prePoint + delta) < 0) {
+        actualDelta = -prePoint;
+    }
+
     var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급", "결투 승리 보상", "뿌리기 줍기", "경마 당첨금"];
     var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매: ", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부", "경마 배팅", "배팅 취소 수수료"];
 
@@ -709,17 +717,19 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
 
     if (roomData) {
         if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
-        if (delta > 0) {
-            if (bankOutputReasons.some(function(r){ return reason.indexOf(r) !== -1; })) brDelta = -delta;
+        
+        // 은행 재원 변동량도 실제 유저 지갑에서 오고 간 'actualDelta'를 기준으로 계산
+        if (actualDelta > 0) {
+            if (bankOutputReasons.some(function(r){ return reason.indexOf(r) !== -1; })) brDelta = -actualDelta;
         } else {
             if (bankInputReasons.some(function(r){ return reason.indexOf(r) !== -1; }) || reason.indexOf("벌금") !== -1 || reason.indexOf("상환") !== -1) {
-                brDelta = Math.abs(delta);
+                brDelta = Math.abs(actualDelta);
             }
         }
         roomData.bankReserve += brDelta;
     }
 
-    user.point = prePoint + delta;
+    user.point = prePoint + actualDelta;
 
     /* [수정] 자산가 칭호 영구 획득 엔진 (실시간 주가 반영 및 하한선 보정 적용) */
     var totalNetWorth = util_calculateNetWorth(user, roomData);
@@ -764,7 +774,7 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     }
 
     if (typeof verifyPointTransaction === 'function') {
-        verifyPointTransaction(user, prePoint, delta, reason, roomName, brDelta);
+        verifyPointTransaction(user, prePoint, actualDelta, reason, roomName, brDelta);
     }
 }
 

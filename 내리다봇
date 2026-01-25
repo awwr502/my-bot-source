@@ -2711,6 +2711,38 @@ if (selectWaitState[targetUid]) {
                 replier.reply(formatAdmin("출석 수정 완료", getDisplayName(targetUser) + "님: " + extra.days + "일"));
                 safeSaveData(data);
             }
+            /* [Gemini 요청 사항] 중복 닉네임 선택 시 신용 점수 조정 처리 */
+            else if (type === "admin_credit_edit") {
+                var oldScore = Number(targetUser.creditScore || 600);
+                targetUser.creditScore = Math.min(1000, Math.max(0, oldScore + extra.score));
+                if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(targetUser, roomName);
+                safeSaveData(data);
+                var crInfo = getCreditInfo(targetUser.creditScore);
+                replier.reply(formatAdmin("⚙️ 신용 점수 조정 완료", "대상: " + getDisplayName(targetUser) + "\n변동: " + extra.score + "점\n현재: " + targetUser.creditScore + "점 (" + crInfo.label + ")"));
+            }
+            /* [Gemini 요청 사항] 중복 닉네임 선택 시 칭호 회수 처리 */
+            else if (type === "admin_title_take") {
+                var titleToTake = extra.title;
+                var inv = targetUser.inventory || [];
+                var removed = false;
+                targetUser.inventory = inv.filter(function(it) {
+                    if (it.effect === "title" && (it.title === titleToTake || it.name.indexOf(titleToTake) !== -1)) {
+                        removed = true;
+                        return false;
+                    }
+                    return true;
+                });
+                if (targetUser.title === titleToTake) {
+                    targetUser.title = "";
+                    removed = true;
+                }
+                if (removed) {
+                    safeSaveData(data);
+                    replier.reply(formatAdmin("🎖️ 칭호 회수 완료", getDisplayName(targetUser) + "님에게서 [" + titleToTake + "] 칭호를 박탈했습니다."));
+                } else {
+                    replier.reply(formatAdmin("회수 실패", getDisplayName(targetUser) + "님은 해당 칭호를 보유하고 있지 않습니다."));
+                }
+            }
             /* [수정] 유저 삭제 (중복 선택 케이스) - 사채 보전 및 국고 회수 적용 */
             else if (type === "admin_delete") {
                 var tName = targetUser.name;
@@ -4326,7 +4358,7 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
 /**
  * [전역 독립 함수] 상점 아이템 효과 처리 엔진
  * 기능: 구매한 아이템의 효과 발동 및 중앙은행 재원 정산
- * 수정 사항: [Gemini 요청 사항] 수집대마왕 판정 로직을 아이콘 획득 시점으로 한정하여 오작동 방지
+ * 수정 사항: [Gemini 요청 사항] 수집대마왕 판정 로직을 "보유+분해 누적" 및 "전종 수집" 기준으로 정밀화
  */
 function _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket, quantity) {
     var roomData = data.rooms[roomName];
@@ -4348,10 +4380,29 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         user.boxTickets = Math.max(0, (user.boxTickets || 0) - 1);
     }
 
-    /* [수집대마왕 판정 함수] - 중복 방지 및 아이콘 획득 시에만 호출됨 */
+    /* [Gemini 요청 사항] 수집대마왕 판정 함수 - 전종 수집(보유+분해) 체크 */
     var checkCollectionMaster = function() {
-        var TOTAL_COLLECTABLE_ICONS = 6; // 상점 아이콘 6종 기준
-        if (user.collectedIcons && user.collectedIcons.length >= TOTAL_COLLECTABLE_ICONS) {
+        // 1. 상점 판매 아이콘 추출
+        var shopIcons = SHOP_ITEMS.filter(function(it) { return it.effect === "icon"; }).map(function(it) { return it.icon; });
+        
+        // 2. 랜덤 박스 모든 아이콘 추출
+        var boxIcons = [];
+        if (RANDOM_BOX_CONFIG && RANDOM_BOX_CONFIG.PROBS) {
+            RANDOM_BOX_CONFIG.PROBS.forEach(function(grade) {
+                if (grade.items) boxIcons = boxIcons.concat(grade.items);
+            });
+        }
+        
+        // 3. 중복 제거된 전체 고유 아이콘 목록 생성
+        var allUniqueIcons = {};
+        shopIcons.concat(boxIcons).forEach(function(icon) {
+            if (icon) allUniqueIcons[icon] = true;
+        });
+        
+        var totalTargetCount = Object.keys(allUniqueIcons).length;
+        
+        // 4. 유저의 누적 수집 기록(collectedIcons)과 비교 판정
+        if (user.collectedIcons && user.collectedIcons.length >= totalTargetCount) {
             var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
             util_checkAndAwardTitle(user, replierStub, "수집대마왕", 3001, "🏵️", "모든 아이콘 수집 완료", "모든 상징을 손에 넣은 전설의 수집가입니다.");
         }
@@ -4413,7 +4464,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
                              "결과: [" + winIcon + "]\n\n" + mData.desc;
             replier.reply(formatCommand(mData.title, user, newContent, mData.guide + "\n내 잔액: " + fp(user.point) + "P"));
 
-            /* [신규 수집 발생] 칭호 판정 호출 */
+            /* [신규 수집 발생] 칭호 판정 호출 (Gemini 요청 사항 반영) */
             checkCollectionMaster();
         }
     } 
@@ -4454,7 +4505,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         user.icon = item.icon;
         replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 구매 및 장착 성공!", "장착 변경: [/가방]"));
 
-        /* [신규 수집 발생] 칭호 판정 호출 */
+        /* [신규 수집 발생] 칭호 판정 호출 (Gemini 요청 사항 반영) */
         if (isNewIcon) checkCollectionMaster();
     }
     
@@ -4481,8 +4532,6 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         
         replier.reply(formatCommand("🎫 경고삭제권 사용 완료", user, "경고삭제권 구매 및 사용이 성공적으로 완료되었습니다.\n(평생 1회 사용 기록 완료)", "내 잔액: " + fp(user.point) + "P"));
     }
-
-    /* [수정] 전체 하단에 있던 수집대마왕 체크 로직을 삭제하고 위쪽의 아이콘 획득 분기로 이동함 */
 
     safeSaveData(data);
 }
@@ -4678,6 +4727,131 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         var logMsg = [];
         for(var i=0; i<history.length; i++) logMsg.push((i+1) + ". " + history[i].old + " (" + history[i].date + ")");
         replier.reply(formatAdmin("📋 닉네임 변경 이력", "현재: " + found[0].data.name + "\n\n[과거 기록]\n" + logMsg.join("\n")));
+        return true;
+    }
+
+    요청하신 규칙과 Gemini 요청 사항에 따라 섹터 34에 관리자 전용 칭호 회수 로직을 추가했습니다.
+
+이 기능을 통해 오류로 지급된 "수집대마왕" 등의 칭호를 유저의 인벤토리에서 삭제하고 장착을 강제 해제할 수 있으며, 수정된 데이터는 닉네임 표시부와 정보창 등 모든 UI에 즉시 반영됩니다.
+
+JavaScript
+
+//==========섹터34==========
+
+/**
+ * [관리자 하위 모듈 3] 유저 데이터 관리
+ * 기능: 유저 조회, 수정, 삭제, 복원, 데이터 이전, 닉네임 기록, 신용 조정, 칭호 회수
+ * 수정 사항: [Gemini 요청 사항] 오류 지급 칭호 박탈을 위한 /칭호회수 명령어 추가
+ */
+function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
+
+    /* 상세 유저 데이터 조회 */
+    if (msg.indexOf("/유저데이터 ") === 0) {
+        var tn = msg.substring(7).trim();
+        var roomData = data.rooms[roomName];
+        var found = findUserByName(roomData, tn);
+        if (!found.length) replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
+        else if (found.length > 1) handleUserSelection(replier, targetUid, found, "admin_userdata", null, user);
+        else replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(found[0].data, null, 2)));
+        return true;
+    }
+
+    /* 닉네임 변경 이력 */
+    if (msg.indexOf("/닉네임기록 ") === 0) {
+        var tn = msg.substring(7).trim();
+        var roomData = data.rooms[roomName];
+        var found = findUserByName(roomData, tn);
+        if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
+        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_nick_log", null, user); return true; }
+        var targetId = found[0].id;
+        var history = data.nickHistory[targetId] || [];
+        if (history.length === 0) { replier.reply(formatAdmin("닉네임 기록", getDisplayName(found[0].data) + "님은 변경 이력이 없습니다.")); return true; }
+        var logMsg = [];
+        for(var i=0; i<history.length; i++) logMsg.push((i+1) + ". " + history[i].old + " (" + history[i].date + ")");
+        replier.reply(formatAdmin("📋 닉네임 변경 이력", "현재: " + found[0].data.name + "\n\n[과거 기록]\n" + logMsg.join("\n")));
+        return true;
+    }
+
+    /* [신규] 신용 점수 직접 조정 (v5.2) */
+    if (msg.indexOf("/신용조정 ") === 0) {
+        var ps = msg.split(" ");
+        if (ps.length < 3) {
+            replier.reply(formatAdmin("오류", "형식: /신용조정 [닉네임] [점수]\n예) /신용조정 홍길동 -50"));
+            return true;
+        }
+        var scoreChange = parseInt(ps.pop());
+        var targetName = ps.slice(1).join(" ").trim();
+        var roomData = data.rooms[roomName];
+        var found = findUserByName(roomData, targetName);
+
+        if (isNaN(scoreChange)) { replier.reply(formatAdmin("오류", "조정할 점수를 숫자로 입력하세요.")); return true; }
+        if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
+        if (found.length > 1) { 
+            handleUserSelection(replier, targetUid, found, "admin_credit_edit", { score: scoreChange }, user); 
+            return true; 
+        }
+
+        var targetUser = found[0].data;
+        var oldScore = Number(targetUser.creditScore || 600);
+        targetUser.creditScore = Math.min(1000, Math.max(0, oldScore + scoreChange));
+        
+        if (typeof checkAndHandleDefaulter === 'function') {
+            checkAndHandleDefaulter(targetUser, roomName);
+        }
+
+        safeSaveData(data);
+        var crInfo = getCreditInfo(targetUser.creditScore);
+        var resText = "대상: " + getDisplayName(targetUser) + "님\n" +
+                      "변동: " + (scoreChange > 0 ? "+" : "") + scoreChange + "점\n" +
+                      "현재: " + targetUser.creditScore + "점 (" + crInfo.label + ")";
+        
+        replier.reply(formatAdmin("⚙️ 신용 점수 조정 완료", resText));
+        return true;
+    }
+
+    /* [Gemini 요청 사항] 관리자 전용 칭호 회수 로직 (오류 지급분 박탈용) */
+    if (msg.indexOf("/칭호회수 ") === 0) {
+        var ps = msg.split(" ");
+        if (ps.length < 3) {
+            replier.reply(formatAdmin("오류", "형식: /칭호회수 [닉네임] [칭호명]"));
+            return true;
+        }
+        var titleToTake = ps.pop().trim();
+        var targetName = ps.slice(1).join(" ").trim();
+        var roomData = data.rooms[roomName];
+        var found = findUserByName(roomData, targetName);
+
+        if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
+        if (found.length > 1) {
+            handleUserSelection(replier, targetUid, found, "admin_title_take", { title: titleToTake }, user);
+            return true;
+        }
+
+        var targetUser = found[0].data;
+        var inv = targetUser.inventory || [];
+        var removed = false;
+
+        // 1. 인벤토리(가방)에서 해당 칭호 삭제
+        targetUser.inventory = inv.filter(function(it) {
+            if (it.effect === "title" && (it.title === titleToTake || it.name.indexOf(titleToTake) !== -1)) {
+                removed = true;
+                return false;
+            }
+            return true;
+        });
+
+        // 2. 현재 장착 중인 경우 해제
+        if (targetUser.title === titleToTake) {
+            targetUser.title = "";
+            removed = true;
+        }
+
+        if (removed) {
+            safeSaveData(data);
+            replier.reply(formatAdmin("🎖️ 칭호 회수 완료", getDisplayName(targetUser) + "님에게서 [" + titleToTake + "] 칭호를 박탈했습니다."));
+        } else {
+            replier.reply(formatAdmin("회수 실패", getDisplayName(targetUser) + "님은 해당 칭호를 보유하고 있지 않습니다."));
+        }
         return true;
     }
 

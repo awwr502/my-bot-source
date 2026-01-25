@@ -63,7 +63,7 @@ var racingData = {
         { id: 2, name: "어서말을해", weight: 1.0, icon: "☁️ 보통" },
         { id: 3, name: "마의웨이", weight: 1.0, icon: "☁️ 보통" },
         { id: 4, name: "핵탄두", weight: 1.0, icon: "☁️ 보통" },
-        { id: 5, name: "돌격앞으", weight: 1.0, icon: "☁️ 보통" }
+        { id: 5, name: "돌격앞으로", weight: 1.0, icon: "☁️ 보통" }
     ],
     bets: {},           // [배팅 기록]: { UID: {horseId, amount, name} } 형식으로 현재 회차 배팅 정보를 저장
     totalPool: 0,       // [당기 누적금]: 이번 회차에 유저들이 배팅한 순수 포인트 합계
@@ -5193,12 +5193,12 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
 /**
  * [게임 하위 모듈 2] 정보 및 랭킹 조회 (UI 최적화 및 출석 상태 추가)
  * 기능: 내정보, 유물도감, 신용등급, 대출한도, 명예의전당, 순위, 유저정보, 경마조회
- * 수정 사항: 주식자산 표시 제거, 오늘 출석 여부(✅/⏳) 표시 추가
+ * 수정 사항: 주식자산 표시 제거, 오늘 출석 여부(✅/⏳) 표시 추가, 경마 마감 문구 및 채권 표시 로직 수정
  */
 function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
 
-    /* [Gemini 요청 사항] 경마 정보 실시간 브리핑 기능 통합 */
+    /* [Gemini 요청 사항] 경마 정보 실시간 브리핑 기능 통합 (마감 시간 처리 추가) */
     if (msg === "/경마") {
         if (!racingData.isOperating) {
             replier.reply(formatSimple("🏇 경마장 휴장 안내", "현재 경마 운영 시간이 아닙니다.\n(운영시간: 09:00 ~ 23:59)", "오전 9시 정각에 개장합니다."));
@@ -5214,12 +5214,16 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         }).join("\n");
 
         var now = new Date();
-        var remainMin = 49 - now.getMinutes();
+        var nowMin = now.getMinutes();
+        var remainMin = 49 - nowMin;
         var remainSec = 59 - now.getSeconds();
         if (remainMin < 0) { remainMin = 0; remainSec = 0; }
 
+        // [Gemini 요청 사항] 50분 이후 정산 타임일 경우 문구 변경
+        var raceHeader = (nowMin >= 50) ? "🏁 배팅 마감 및 정산 중" : "제 " + racingData.round + "회차 경기 배팅 진행 중";
+
         var totalPrizePool = racingData.totalPool + racingData.carryOver;
-        var racingBody = "제 " + racingData.round + "회차 경기 배팅 진행 중\n\n" +
+        var racingBody = raceHeader + "\n\n" +
                          "[🏇 출전마 라인업]\n" + hList + "\n\n" +
                          "💰 현재 총 배당금: " + fp(totalPrizePool) + "P\n" +
                          (racingData.carryOver > 0 ? "✨ 이월 적립금: " + fp(racingData.carryOver) + "P 포함\n" : "") +
@@ -5229,7 +5233,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [기능 3] 내 정보 조회 (주식자산 제거 및 출석 상태 반영 버전) */
+    /* [기능 3] 내 정보 조회 (미수 채권 표시 조건 수정) */
     if (msg === "/내정보") {
         var cr = getCreditInfo(user.creditScore);
         var authInfo = "🎮 게임 인증: " + (user.gameAuthCount || 0) + "/2 (시즌)";
@@ -5253,23 +5257,21 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             }
         }
 
-        // 2. 오늘 출석 여부 및 승급 기회 계산 (오류 수정 지점)
+        // 2. 오늘 출석 여부 및 승급 기회 계산
         var todayStr = getSimpleDate();
         var attendMark = (user.lastDate === todayStr) ? " (✅)" : " (⏳)";
-        // 승급 기회 합산 변수 선언
         var totalPromotion = (Number(user.dailyPromotionAttempts) || 0) + (Number(user.purchasedPromotionAttempts) || 0);
 
-        // 3. 정보 텍스트 구성
+        // 3. 정보 텍스트 구성 (Gemini 요청: sacheClaims >= 1 조건 적용)
         var infoBody = authInfo + "\n" +
                        "💰 보유 포인트: " + fp(user.point) + "P\n" +
                        "🏦 예금: " + fp(user.bank) + "P\n" +
-                       (sClaims > 0 ? "🤝 미수 채권: " + fp(sacheClaims) + "P\n" : "") +
+                       (sacheClaims >= 1 ? "🤝 미수 채권: " + fp(sacheClaims) + "P\n" : "") +
                        "💳 신용 등급: " + cr.label + " (" + user.creditScore + "점)\n" +
                        "🏅 현재 티어: " + (TIERS[user.tier] || "아이언") + "\n" +
                        "📅 누적 출석: " + (user.totalAttendance || 0) + "일" + attendMark + "\n" +
                        "🔂 승급 기회: " + totalPromotion + "회";
         
-        // 채무 보유 시에만 하단에 조건부 노출
         if (bankDebt > 0) {
             var transferTag = user.isTransferred ? " (🚨대환 채무: 70% 강제상환)" : "";
             infoBody += "\n🏦 미상환 대출: " + fp(bankDebt) + "P" + transferTag;
@@ -5345,7 +5347,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [타 유저 정보 조회] */
+    /* [타 유저 정보 조회] (채권 표시 로직 수정 반영) */
     if (msg.indexOf("/유저정보") === 0) {
         var tn = msg.substring(5).trim(); 
         if (tn === "") {
@@ -5374,7 +5376,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
 
             var info = "💰 포인트: " + fp(targetUser.point) + "P\n" +
                        "🏦 예금: " + fp(targetUser.bank) + "P\n" +
-                       (sClaims > 0 ? "🤝 미수 채권: " + fp(sClaims) + "P\n" : "") +
+                       (sClaims >= 1 ? "🤝 미수 채권: " + fp(sClaims) + "P\n" : "") +
                        "💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n" +
                        "🏅 티어: " + (TIERS[targetUser.tier] || "아이언") + "\n" +
                        "📅 출석: " + (targetUser.totalAttendance || 0) + "일";
@@ -5425,7 +5427,7 @@ function _gameActionLogic(msg, user, data, replier, roomName, targetUid) {
 /**
  * [게임 하위 모듈 3-1] 액션 및 도박 게임 (홀짝 & 승급 & 경마 액션)
  * 설명: 독립된 함수로 구성하여 컴파일 오류를 방지하고 유지보수성을 높였습니다.
- * 수정 사항: 중앙은행 폐쇄형 경제 연동, 경마 배팅(/배팅) 및 취소(배팅취소) 로직 통합
+ * 수정 사항: 배팅 명령어 인식 버그 수정, 50분 이후 배팅 차단 로직 강화, 중앙은행 연동 최적화
  */
 function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
@@ -5438,37 +5440,44 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
 
     var rConf = SYSTEM_CONFIG.ECO.RACING; // 경마 설정 참조
 
-    /* [Gemini 요청 사항] 1. 경마 배팅 액션 (/배팅 [번호] [금액]) */
+    /* [수정] 1. 경마 배팅 액션 (/배팅 [번호] [금액]) */
     if (msg.indexOf("/배팅 ") === 0) {
+        // 1. 운영 시간 체크
         if (!racingData.isOperating) {
             replier.reply(formatError(user, "경마장 휴장", "현재 운영 시간이 아닙니다. (09:00 ~ 23:59)"));
             return true;
         }
 
+        // 2. 배팅 마감 시간 체크 (50분~59분)
         var nowMin = new Date().getMinutes();
         if (nowMin >= 50) {
-            replier.reply(formatError(user, "배팅 마감", "현재 경기 정산 중입니다. 정각(00분) 이후 배팅하세요."));
+            replier.reply(formatError(user, "배팅 마감", "현재 제 " + racingData.round + "회차 경기가 마감되어 정산 중입니다.\n정각(00분) 새로운 경기 개장 후 배팅해주세요."));
             return true;
         }
 
+        // 3. 상태 체크 (광산 등)
         if (user.mining && user.mining.active) {
             replier.reply(formatError(user, "작업 중", "광산 채굴 중에는 배팅이 불가능합니다."));
             return true;
         }
 
-        var ps = msg.split(" ");
-        if (ps.length < 3) { replier.reply(formatError(user, "형식 오류", "/배팅 [말번호] [금액]")); return true; }
+        // 4. [버그 수정] 명령어 파싱 (연속 공백 대응 정규식 적용)
+        var ps = msg.trim().split(/\s+/);
+        if (ps.length < 3) { 
+            replier.reply(formatError(user, "형식 오류", "/배팅 [말번호] [금액]\n예) /배팅 1 1000")); 
+            return true; 
+        }
         
         var hId = parseInt(ps[1]);
         var betAmt = parseInt(ps[2].replace(/,/g, ""));
 
-        // 유효성 검사 (마리 수 가변 대응)
+        // 5. 유효성 검사
         if (isNaN(hId) || hId < 1 || hId > racingData.horses.length) {
             replier.reply(formatError(user, "번호 오류", "1~" + racingData.horses.length + "번 사이의 말을 선택하세요."));
             return true;
         }
 
-        // [Gemini 요청 사항] Eco-base 기반 동적 한도 계산
+        // 6. Eco-base 기반 동적 한도 계산
         var multiplier = 1.0;
         if (roomData.economyBase && roomData.economyBase > 0) {
             var eco = calculateEconomy(data, roomName);
@@ -5494,12 +5503,13 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
+        // 7. 중복 배팅 체크
         if (racingData.bets[targetUid]) {
-            replier.reply(formatError(user, "중복 배팅 불가", "이미 배팅하셨습니다. 수정을 원하시면 [배팅취소] 후 다시 시도하세요."));
+            replier.reply(formatError(user, "중복 배팅 불가", "이미 배팅하셨습니다.\n취소 후 다시 배팅하려면 [배팅취소]를 입력하세요."));
             return true;
         }
 
-        // 배팅 실행 및 중앙은행 금고 입고
+        // 8. 배팅 실행 및 자산 차감
         util_updatePoint(user, roomData, -betAmt, "경마 배팅", roomName);
         
         var selectedHorse = racingData.horses[hId - 1];
@@ -5516,13 +5526,13 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [Gemini 요청 사항] 2. 경마 배팅 취소 (배팅취소) */
+    /* [기능 2] 경마 배팅 취소 (배팅취소) */
     if (msg === "배팅취소") {
         if (!racingData.isOperating) return false;
         
         var nowMin = new Date().getMinutes();
         if (nowMin >= 50) {
-            replier.reply(formatError(user, "취소 불가", "정산이 시작되어 배팅을 취소할 수 없습니다."));
+            replier.reply(formatError(user, "취소 불가", "정산이 진행 중인 마감 시간에는 취소가 불가능합니다."));
             return true;
         }
 
@@ -5532,18 +5542,18 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // [Gemini 요청 사항] 취소 수수료 10% 적용
+        // 수수료 10% 적용
         var fee = Math.floor(myBet.amount * rConf.CANCEL_FEE);
         var refund = myBet.amount - fee;
 
-        // 환불 처리 (수수료는 금고에 남음)
+        // 환불 처리 (수수료는 국고 bankReserve에 남음)
         util_updatePoint(user, roomData, refund, "경마 배팅 취소", roomName);
         
         racingData.totalPool -= myBet.amount;
         delete racingData.bets[targetUid];
 
         var cancelMsg = "경마 배팅을 철회했습니다.\n\n💰 원래 배팅금: " + fp(myBet.amount) + "P\n" +
-                         "⚖️ 취소 수수료(10%): -" + fp(fee) + "P\n" +
+                         "⚖️ 취소 위약금(10%): -" + fp(fee) + "P\n" +
                          "🎁 최종 환불액: " + fp(refund) + "P";
         
         replier.reply(formatCommand("🚫 배팅 취소 완료", user, cancelMsg, "내 잔액: " + fp(user.point) + "P"));
@@ -5551,7 +5561,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [기존 로직 유지] 홀짝 도박 */
+    /* [기존 로직] 홀짝 도박 (중략 - 기존 코드 유지됨) */
     if (msg.indexOf("/홀짝 ") === 0) {
         startTracking(user, "홀짝 게임");
         try {
@@ -5565,7 +5575,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 replier.reply(formatError(user, "시스템 제한", "현재 관리자에 의해 도박 시스템이 비활성화되었습니다."));
                 return true;
             }
-            var ps = msg.split(" ");
+            var ps = msg.trim().split(/\s+/);
             if (ps.length < 3) { replier.reply(formatError(user, "형식 오류", "/홀짝 [홀|짝] [금액]")); return true; }
             var pick = ps[1];
             var bet = parseInt(ps[2].replace(/,/g, ""));
@@ -5642,7 +5652,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         } catch(e) { endTracking(user, false, "CRASH: " + e); replier.reply("🚫 시스템 오류가 발생했습니다."); return true; }
     }
 
-    /* [기존 로직 유지] 티어 승급 */
+    /* [기존 로직] 티어 승급 */
     if (msg === "/승급") {
         var totalAttempts = Number(user.dailyPromotionAttempts || 0) + Number(user.purchasedPromotionAttempts || 0);
         if (totalAttempts <= 0) { replier.reply(formatError(user, "기회 없음", "상점에서 승급권을 구매하세요.")); return true; }
@@ -5690,6 +5700,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         safeSaveData(data);
         return true;
     }
+
     return false;
 }
 

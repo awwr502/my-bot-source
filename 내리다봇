@@ -4591,6 +4591,8 @@ function _adminLogLogic(msg, user, data, replier) {
     return false;
 }
 
+//==========섹터34==========
+
 /**
  * [관리자 하위 모듈 3] 유저 데이터 관리
  * 기능: 유저 조회, 수정, 삭제, 복원, 데이터 이전, 닉네임 기록, 신용 조정
@@ -5138,16 +5140,22 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [11] 포인트 뿌리기 */
+    /* [11] 포인트 뿌리기 (방별 독립 엔진 참조 유지 버전) */
     if (msg === "/뿌리기") {
-        if (sprinkleData.active) { replier.reply(formatAdmin("오류", "이미 뿌리기가 진행 중입니다.")); return true; }
+        if (sprinkleData.active) { 
+            replier.reply(formatAdmin("오류", "이미 뿌리기가 진행 중입니다.")); 
+            return true; 
+        }
+        
         var roomData = data.rooms[roomName];
         var count = Math.floor(Math.random() * 3) + 2; 
         var multiplier = 1.0;
+        
         if (roomData.economyBase && roomData.economyBase > 0) {
             var eco = calculateEconomy(data, roomName);
             multiplier = 1 + (eco.total / roomData.economyBase - 1) * (data.economyDamping || 0.5);
         }
+        
         var portions = [];
         var totalSprinkle = 0;
         for(var i=0; i<count; i++) {
@@ -5156,9 +5164,30 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             portions.push(finalP);
             totalSprinkle += finalP;
         }
-        sprinkleData = { active: true, totalPoint: totalSprinkle, remainingPoint: totalSprinkle, limit: count, currentWinners: 0, winners: [], portions: portions };
+
+        /* [Gemini 요청 사항] 참조 보존 방식의 데이터 업데이트 */
+        // 설명: sprinkleData = { ... } 식의 재할당은 섹터 19의 매핑을 파괴하므로 
+        // 기존 객체의 속성값만 수정하여 데이터베이스와의 연결을 유지합니다.
+        sprinkleData.active = true;
+        sprinkleData.totalPoint = totalSprinkle;
+        sprinkleData.remainingPoint = totalSprinkle;
+        sprinkleData.limit = count;
+        sprinkleData.currentWinners = 0;
+        sprinkleData.winners = [];
+        sprinkleData.portions = portions;
+
         Api.replyRoom(roomName, formatAdmin("🎉 포인트 뿌리기 시작!", "선착순 " + count + "명!\n채팅창에 [줍기]를 입력하세요!\n💰 총 배정: " + fp(totalSprinkle) + "P"));
-        setTimeout(function() { if (sprinkleData.active) { sprinkleData.active = false; Api.replyRoom(roomName, formatAdmin("🏁 뿌리기 시간 초과", "이벤트가 종료되었습니다.")); } }, 60000);
+        
+        // 1분 후 자동 종료 타이머
+        setTimeout(function() { 
+            if (sprinkleData.active) { 
+                sprinkleData.active = false; 
+                Api.replyRoom(roomName, formatAdmin("🏁 뿌리기 시간 초과", "이벤트가 종료되었습니다.")); 
+                safeSaveData(globalData);
+            } 
+        }, 60000);
+        
+        safeSaveData(data);
         return true;
     }
 
@@ -6143,24 +6172,31 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* 뿌리기 줍기 */
+   /* [Gemini 요청 사항] 뿌리기 줍기 (참조 기반 데이터 확인 및 국고 연동) */
     if (msg === "줍기") {
-        if (!sprinkleData.active) return false;
-        if (sprinkleData.winners.indexOf(targetUid) !== -1) { replier.reply(formatError(user, "중복 참여 불가")); return true; }
-        if (sprinkleData.currentWinners >= sprinkleData.limit) { replier.reply(formatError(user, "선착순 마감")); return true; }
+        // [수정] sprinkleData 객체의 속성을 직접 확인하여 방별 독립 상태 체크
+        if (!sprinkleData || sprinkleData.active !== true) return false;
+        
+        if (sprinkleData.winners.indexOf(targetUid) !== -1) { 
+            replier.reply(formatError(user, "중복 참여 불가", "이미 이 이벤트에서 포인트를 획득하셨습니다.")); 
+            return true; 
+        }
+        if (sprinkleData.currentWinners >= sprinkleData.limit) { 
+            replier.reply(formatError(user, "선착순 마감", "이미 모든 포인트가 소진되었습니다.")); 
+            return true; 
+        }
         
         var prize = sprinkleData.portions.pop();
         sprinkleData.winners.push(targetUid);
         sprinkleData.currentWinners++;
         
-        /* [Gemini 요청 사항] 통합 상환 엔진 및 통합 업데이트 함수 적용 */
+        // 통합 상환 엔진 및 포인트 가산
         var res = processRepayment(user, prize, targetUid, roomName);
-        
-        // 직접 포인트 가산 대신 통합 함수 사용하여 중앙은행 재원과 검증 로직 동시 수행
         util_updatePoint(user, roomData, Number(res.actualGain), "뿌리기 줍기", roomName);
         
         replier.reply(formatCommand("🎉 줍기 성공!", user, fp(prize) + "P를 주웠습니다!" + res.repayMsg, "내 잔액: " + fP(user.point) + "P"));
         
+        // 전량 소진 시 상태 해제
         if (sprinkleData.currentWinners >= sprinkleData.limit) { 
             sprinkleData.active = false; 
             Api.replyRoom(roomName, formatAdmin("🏁 뿌리기 마감", "모든 포인트가 소진되었습니다.")); 

@@ -1544,18 +1544,18 @@ function updateStockPrices(data) {
     var count = 0;
     for (var k in data.stockMarket) { totalSum += Number(data.stockMarket[k].price); count++; }
     var marketAvg = count > 0 ? (totalSum / count) : 1000;
-    var eco = calculateEconomy(data);
+
+    /* [수정] 경제 지표 계산 시 '내리다' 방의 데이터만 독립적으로 참조 (방 격리) */
+    var eco = calculateEconomy(data, "내리다");
     var activeUserCount = Math.max(1, eco.count); 
 
-    var mainRoom = data.rooms["내리다"];
-    /* [Gemini 요청 사항 반영] 하한선 기준을 economyBase(총액)가 아닌 eco.average(실질 평균)로 변경 */
-    // 국고가 합산되어 커진 economyBase 대신 유저들의 지갑 수준인 평균 자산에 3%를 곱해 계산합니다.
-    var ecoBaseFloor = Math.min(500, Math.floor(eco.average * 0.01)); 
+    /* [수정] 상폐 하한선(Floor) 로직 안정화: 평균 자산의 1%를 따르되, 최대 400P를 넘지 않도록 캡(Cap) 적용 */
+    var ecoBaseFloor = Math.min(400, Math.floor(eco.average * 0.01)); 
     if (ecoBaseFloor < 50) ecoBaseFloor = 50; 
 
     var eventNews = [];
 
-    /* [1] 신규 상장 처리 (참조 에러 수정 완료) */
+    /* [1] 신규 상장 처리 */
     if (data.pendingNewStock && isMarketOpen) {
         if (Object.keys(data.stockMarket).length < conf.SETTINGS.MAX_COUNT) {
             var newName = generateStockName(data);
@@ -1578,7 +1578,6 @@ function updateStockPrices(data) {
     var specStock = (mani && mani.ACTIVE) ? mani.TARGET : null;
     var specFactor = (mani && mani.ACTIVE) ? (mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE)) : 0;
 
-    // 예약된 특수 효과가 있다면 조작 설정보다 우선하거나 대체함
     if (!specStock && data.pendingSpecialEffect && isMarketOpen) {
         specStock = data.pendingSpecialEffect.stock;
         specFactor = data.pendingSpecialEffect.factor;
@@ -1592,15 +1591,19 @@ function updateStockPrices(data) {
         
         stock.lastPrice = Number(stock.price);
 
-        // 상장폐지 체크
-        if (stock.price < marketAvg * 0.25 || stock.price < ecoBaseFloor) { stock.delistTick++; } else { stock.delistTick = 0; }
+        // [핵심] 상장폐지 조건 판별 및 스택 가감
+        if (stock.price < marketAvg * 0.20 || stock.price < ecoBaseFloor) { 
+            stock.delistTick++; 
+        } else { 
+            // 조건에서 벗어나면 경고 스택을 즉시 초기화하여 '⚠️' 표시 제거
+            stock.delistTick = 0; 
+        }
 
         if (isMarketOpen) {
             if (name === specStock) { 
                 changePercent = specFactor;
                 eventNews.push("🚨 [변동성 알림]\n종목: " + name + "\n내용: " + (specFactor > 0 ? "🚀 폭등" : "📉 폭락") + " (" + (Math.abs(specFactor * 100)).toFixed(0) + "%)");
             } else {
-                // 추세 기반 변동
                 if (stock.trendTick <= 0) {
                     stock.trendTick = Math.floor(Math.random() * 4) + 2;
                     var p = Math.random(); stock.trend = (p < 0.35) ? "up" : (p < 0.70 ? "down" : "volatile");
@@ -1610,43 +1613,35 @@ function updateStockPrices(data) {
                 if (stock.trendTick > 0) stock.trendTick--;
             }
             
-            // 거래량 반영
             var traffic = data.stockTraffic[name] || { buy: 0, sell: 0 };
             var trafficImpact = Math.max(-0.15, Math.min(0.15, ((traffic.buy - traffic.sell) / (activeUserCount * 5)) * 0.01));
             changePercent += trafficImpact;
 
-            /* [신규 통합] 동적 저항(Dynamic Resistance) 시스템 */
-            // 시가가 설정되어 있고 현재가가 저항 시작점(+15%)을 넘었을 때 작동
             if (marketOpenPrice > 0) {
                 var growthRate = (stock.price - marketOpenPrice) / marketOpenPrice;
                 var sConf = conf.SETTINGS;
 
                 if (growthRate > sConf.RESISTANCE_START) {
-                    // 장 시간에 따른 가중치 계산
                     var elapsed = (currentHour - sConf.OPEN_HOUR) * 60 + currentMin;
                     var totalTime = (sConf.CLOSE_HOUR - sConf.OPEN_HOUR) * 60;
                     var timeWeight = Math.min(Math.max(elapsed / totalTime, 0), 1.0);
-
-                    // 저항 압력(Gravity) 적용: 멀어질수록, 시간이 지날수록 강해짐
                     var resistance = (growthRate - sConf.RESISTANCE_START) * sConf.GRAVITY * (1 + timeWeight);
                     changePercent -= resistance;
 
-                    // +19% 초과 시 상승 시도 확률적 차단 (심리적 상한선 연출)
                     if (growthRate >= (sConf.CLOSING_LIMIT - 0.01) && changePercent > 0) {
                         if (Math.random() < 0.85) {
-                            changePercent = -Math.abs(changePercent) * 0.4; // 85% 확률로 상승분 반납 및 미세 하락
+                            changePercent = -Math.abs(changePercent) * 0.4;
                         }
                     }
                 }
             }
         }
         
-        /* [핵심 수정] Math.floor 대신 Math.round를 사용하여 미세 변동이 절사되는 문제 해결 */
         var nextPrice = stock.price * (1 + changePercent);
         stock.price = Math.max(10, Math.round(nextPrice)); 
     }
 
-    // 상장폐지 집행
+    /* 상장폐지 집행 */
     var delisted = [];
     for (var name in data.stockMarket) {
         if (data.stockMarket[name].delistTick >= data.stockMarket[name].delistLimit) delisted.push(name);
@@ -1673,7 +1668,7 @@ function updateStockPrices(data) {
     return eventNews;
 }
 
-/* 주식 시장 수동 제어 엔진 (참조 보정) */
+/* 주식 시장 수동 제어 엔진 */
 function market_forceNewListing() {
     var data = getDatabase();
     data.pendingNewStock = true;
@@ -1695,7 +1690,6 @@ function market_updateNow(roomName) {
     var result = updateStockPrices(data);
     var body = "📉 주식 시세 변동\n━━━━━━━━━━━━━━━\n🟢 장 운영 중\n\n" + (generateStockList(data) || "시세 정보 없음");
     if (result.length > 0) body += "\n\n" + result.join("\n");
-    // [수정] 실시간 차트 링크 제거
     body += "\n━━━━━━━━━━━━━━━"; 
     Api.replyRoom(roomName || "내리다", body);
     safeSaveData(data);

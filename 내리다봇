@@ -1683,7 +1683,8 @@ function market_updateNow(roomName) {
     var result = updateStockPrices(data);
     var body = "📉 주식 시세 변동\n━━━━━━━━━━━━━━━\n🟢 장 운영 중\n\n" + (generateStockList(data) || "시세 정보 없음");
     if (result.length > 0) body += "\n\n" + result.join("\n");
-    body += "\n━━━━━━━━━━━━━━━\n🔗 실시간 차트:\nhttps://docs.google.com/spreadsheets/d/e/2PACX-1vQWUH4iH7iLI2ZAR1MC3OERD4I2LcJVX23waSW7MLhjgGwjr6hTXKSNiAD048B9K4dtr8OosHqbTsrb/pubchart?oid=121239500&format=interactive";
+    // [수정] 실시간 차트 링크 제거
+    body += "\n━━━━━━━━━━━━━━━"; 
     Api.replyRoom(roomName || "내리다", body);
     safeSaveData(data);
     return "✅ 시장 갱신 완료.";
@@ -1937,16 +1938,18 @@ function _runSector16Logic(data, ctx) {
         var statusText = isMarketOpen ? "🟢 장 운영 중 (07:00 ~ 23:59)" : "🔴 장 마감";
         var body = "📉 주식 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateStockList(data) || "시세 정보 없음"); 
         if (stockResult.length > 0) body += "\n\n" + stockResult.join("\n");
-        body += "\n━━━━━━━━━━━━━━━\n🔗 실시간 차트 보기:\n" + DASHBOARD_URL;
+        // [수정] 실시간 차트 링크 제거
+        body += "\n━━━━━━━━━━━━━━━";
         try { Api.replyRoom(ctx.targetRoom, body); } catch(err) {}
         ctx.isUpdated = true;
     }
 
-    /* [Gemini 요청 사항] 3. 경마 시스템 통합 스케줄러 (09:00 ~ 00:00) */
+    /* [수정] 3. 경마 시스템 통합 스케줄러 (09시 예외 처리 반영) */
     
-    // A. 개장 알림 (09:00:00) - 결과발표 없이 배팅가능 안내만
+    // A. 개장 알림 (09:00:00) - 개장 시에는 결과 프로세스를 건너뛰기 위해 플래그 선제 조정
     if (currentHour === rConf.OPEN_HOUR && currentMin === 0 && currentSec === 0) {
         racingData.isOperating = true;
+        racingData.isResultProcessed = true; // [수정] 09시 결과 출력을 막기 위해 즉시 처리 완료로 간주
         var startMsg = "🏇 [내리다 경마장 개장 알림]\n━━━━━━━━━━━━━━━\n지금부터 제 " + racingData.round + "회차 경마 배팅이 가능합니다!\n\n🕒 배팅 시간: 매시 00분 ~ 49분 59초\n🏁 결과 발표: 매시 00분 00초\n🚫 운영 종료: 23:59 (00:00 최종 결과)\n━━━━━━━━━━━━━━━\n💡 현황 확인: [/경마] 입력";
         Api.replyRoom(ctx.targetRoom, startMsg);
     }
@@ -1959,21 +1962,19 @@ function _runSector16Logic(data, ctx) {
     }
 
     // C. 결과 발표 및 새 라운드 시작 (매시 00:00:00)
-    if ((racingData.isOperating || currentHour === 0) && currentMin === 0 && currentSec === 0 && !racingData.isResultProcessed) {
+    // [수정] currentHour !== rConf.OPEN_HOUR 조건을 추가하여 09시에는 결과가 발표되지 않도록 함
+    if ((racingData.isOperating || currentHour === 0) && currentMin === 0 && currentSec === 0 && currentHour !== rConf.OPEN_HOUR && !racingData.isResultProcessed) {
         racingData.isResultProcessed = true;
         
-        // 1. 우승마 선출 (가중치 기반)
         var totalW = 0; racingData.horses.forEach(function(h){ totalW += h.weight; });
         var rVal = Math.random() * totalW; var accum = 0; var winner = racingData.horses[0];
         for(var i=0; i<racingData.horses.length; i++){ accum += racingData.horses[i].weight; if(rVal < accum){ winner = racingData.horses[i]; break; } }
 
-        // 2. 당첨금 및 국고 수수료(10%) 계산
         var tax = Math.floor(racingData.totalPool * rConf.TAX_RATE);
         var distributePool = racingData.totalPool - tax + racingData.carryOver;
         var winPool = 0; var winnerUids = [];
         for(var uid in racingData.bets){ if(racingData.bets[uid].horseId === winner.id){ winPool += racingData.bets[uid].amount; winnerUids.push(uid); } }
 
-        // 3. 국고 입고 및 결과 메시지 구성
         var mainRoom = data.rooms[ctx.targetRoom];
         if(mainRoom) mainRoom.bankReserve = (mainRoom.bankReserve || 0) + tax;
 
@@ -1988,14 +1989,12 @@ function _runSector16Logic(data, ctx) {
                 for(var r in data.rooms){ if(data.rooms[r].users[uId]){ u = data.rooms[r].users[uId]; break; } }
                 if(u){
                     var share = b.amount / winPool; var prize = Math.floor(share * distributePool);
-                    // 강제 상환 엔진 연동
                     var res = processRepayment(u, prize, uId, ctx.targetRoom);
                     u.point += res.actualGain; resultBody += "\n• " + b.name + " (+" + fp(res.actualGain) + "P)";
                 }
             });
-            racingData.carryOver = 0; // 당첨자 발생 시 이월금 초기화
+            racingData.carryOver = 0;
         } else {
-            // [Gemini 요청 사항] 우승자 없을 시 30% 국고 / 70% 이월
             var toBank = Math.floor(distributePool * rConf.WINLESS_BANK_RATE);
             var toJackpot = distributePool - toBank;
             if(mainRoom) mainRoom.bankReserve += toBank;
@@ -2003,7 +2002,6 @@ function _runSector16Logic(data, ctx) {
             resultBody += "💀 당첨 유저 없음\n💰 이월금(70%): " + fp(toJackpot) + "P\n🏛️ 국고 귀속(30%): " + fp(toBank) + "P";
         }
 
-        // 24시 정각 처리 (마지막 결과 발표 후 폐장)
         var isClosing = (currentHour === 0);
         if (isClosing) {
             racingData.isOperating = false;
@@ -2014,7 +2012,6 @@ function _runSector16Logic(data, ctx) {
 
         Api.replyRoom(ctx.targetRoom, resultHeader + resultBody);
 
-        // 4. 리셋 및 컨디션 재설정
         racingData.round++; racingData.bets = {}; racingData.totalPool = 0;
         racingData.isDeadlineNotified = false; racingData.isResultProcessed = false;
         var conds = [{l:"🚀 최상",w:1.5},{l:"☀️ 양호",w:1.2},{l:"☁️ 보통",w:1.0},{l:"💧 부진",w:0.7}];
@@ -2052,6 +2049,8 @@ function _runSector16Logic(data, ctx) {
 
 // 엔진 가동
 runScheduler();
+
+//==========섹터17==========
 
 /**
  * 섹터 17 로직 함수: 주식 장 마감, 일일 데이터 초기화 및 시즌 리셋 관리
@@ -2134,7 +2133,7 @@ function _runSector17Logic(data, ctx) {
     }
 }
 
-//==========섹터 18==========
+//==========섹터18==========
 
 /**
  * 섹터 18 로직 함수: 로또 판매 마감 알림 및 당첨 추첨 프로세스

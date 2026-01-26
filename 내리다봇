@@ -4835,29 +4835,54 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        var target = found[0].data;
+        var t = found[0].data;
         var tId = found[0].id;
         var rFeatures = roomData.features;
         var now = Date.now();
 
         var report = "🔍 [" + tn + "] 유저 정밀 진단 보고서\n" +
                      "━━━━━━━━━━━━━━━\n" +
-                     "🆔 UID: " + tId + "\n";
+                     "🆔 UID: " + tId + "\n" +
+                     "🖼️ 해시: " + (t.imageHash ? "등록됨" : "미등록") + "\n";
         
-        var busyReason = "없음";
-        if (target.jailReleaseTime && now < target.jailReleaseTime) busyReason = "징역 중";
-        if (target.mining && target.mining.active) busyReason = "광산 채굴 중";
-        report += "⛏️ 활동상태: " + busyReason + "\n";
+        // 1. 스팸 및 타임아웃 분석
+        var isSpam = (t.timeoutEndTime && now < t.timeoutEndTime);
+        report += "🚫 스팸: " + (isSpam ? "제한됨 (" + Math.ceil((t.timeoutEndTime - now)/1000) + "초 남음)" : "정상") + "\n";
+        report += "💬 최근발송: " + (t.chatLog ? t.chatLog.length : 0) + "회 (3초 이내)\n";
 
-        var currentState = "없음";
+        // 2. 활동 차단 상태 (Busy) 분석
+        var busy = "정상";
+        if (t.jailReleaseTime && now < t.jailReleaseTime) {
+            busy = "징역 (" + Math.ceil((t.jailReleaseTime - now)/60000) + "분 남음)";
+        } else if (t.mining && t.mining.active) {
+            busy = "채굴 중 (" + Math.floor((now - t.mining.startTime)/60000) + "분 경과)";
+        }
+        report += "⛏️ 활동: " + busy + "\n";
+
+        // 3. 논리적 대기 상태 (WaitState) 분석
+        var wait = "없음";
         if (rFeatures && rFeatures.states) {
             var st = rFeatures.states;
-            if (st.menuWait && st.menuWait[tId]) currentState = "메뉴 대기 중";
-            if (st.bankProcess && st.bankProcess[tId]) currentState = "은행/상점 입력 중";
+            if (st.menuWait[tId]) wait = "도움말/메뉴 선택 중";
+            else if (st.bankProcess[tId]) wait = "은행/상점 수량 입력 중";
+            else if (st.lottoPurchase[tId]) wait = "로또 번호 입력 중";
+            else if (st.activeThefts[tId]) wait = "도둑질 방어 대기 중";
+            else if (st.duelData[tId]) wait = "결투 수락 대기 중";
         }
-        report += "⏳ 대기상태: " + currentState + "\n" +
-                  "━━━━━━━━━━━━━━━\n" +
-                  "💡 분석: " + (busyReason !== "없음" ? busyReason + " (줍기 허용됨)" : (currentState !== "없음" ? "메뉴에 갇힘" : "정상"));
+        report += "⏳ 대기: " + wait + "\n";
+
+        // 4. 경제 및 이벤트 동기화 분석
+        var sprActive = (rFeatures && rFeatures.sprinkleData && rFeatures.sprinkleData.active);
+        report += "🎉 뿌리기: " + (sprActive ? "진행 중" : "종료됨") + "\n";
+        report += "💰 포인트: " + fp(t.point) + "P / 예금: " + fp(t.bank) + "P\n";
+
+        report += "━━━━━━━━━━━━━━━\n" +
+                  "💡 진단: ";
+        
+        if (isSpam) report += "도배로 인한 일시 차단 상태입니다.";
+        else if (wait !== "없음") report += "특정 메뉴에 갇혀 있습니다. [취소]를 입력하게 하세요.";
+        else if (busy !== "정상") report += "현재 활동 중입니다. (줍기는 가능하도록 패치됨)";
+        else report += "모든 시스템이 정상입니다.";
 
         replier.reply(report);
         return true;

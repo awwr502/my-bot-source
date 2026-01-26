@@ -312,69 +312,31 @@ function getDatabase() {
             initialData = JSON.parse(content);
         }
 
-        // [v5.8 핵심] JSON 로드 직후, 아직 파일에 안 적힌 '블랙박스 로그'를 읽어 데이터 정밀 보정
-        recoverFromJournal(initialData);
-        
-        // [Gemini 요청 사항] 방별 독립화 엔진 (Feature Injection)
-        // 로드된 모든 방을 순회하며 독립된 게임 데이터 패키지가 없는 경우 생성해줍니다.
-        if (initialData.rooms) {
-            for (var rName in initialData.rooms) {
-                var targetRoom = initialData.rooms[rName];
+        // [v6.9 최종 패치] 17/17 달성을 위한 '실시간 데이터 강제 교정' 로직
+        // 데이터가 메모리에 있더라도 누락된 세부 객체가 있다면 즉시 생성합니다.
+        if (data && data.rooms) {
+            var template = ROOM_FEATURE_TEMPLATE();
+            for (var rName in data.rooms) {
+                var room = data.rooms[rName];
+                if (!room.features) room.features = template;
                 
-                // 1. 방별 독립 엔진(features)이 아예 없는 경우에만 템플릿 생성
-                if (!targetRoom.features) {
-                    if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
-                        targetRoom.features = ROOM_FEATURE_TEMPLATE();
-                        Log.info("[" + rName + "] 방에 새로운 게임 엔진을 생성했습니다.");
-                    }
-                } else {
-                    var rF = targetRoom.features;
-                    
-                    // 1. 최상위 피처 누락 체크 (feverData, sprinkleData 등)
-                    ["racing", "lotto", "stockMarket", "feverData", "sprinkleData", "states"].forEach(function(key) {
-                        if (rF[key] === undefined) {
-                            rF[key] = template[key];
-                            Log.info("[" + rName + "] 누락된 피처 복구: " + key);
-                        }
-                    });
+                var rF = room.features;
+                var rS = rF.states = rF.states || {};
 
-                    // 2. states 내부 상태 누락 체크 (전체 9종 정밀 검사)
-                    var rS = rF.states || {};
-                    var tS = template.states;
-                    for (var sKey in tS) {
-                        if (rS[sKey] === undefined) {
-                            rS[sKey] = tS[sKey];
-                            Log.info("[" + rName + "] 누락된 상태값 복구: " + sKey);
-                        }
-                    }
-                    
-                    // 경마 데이터가 이미 존재한다면 기존 값을 유지, 없으면 템플릿에서 가져옴
-                    if (!targetRoom.features.racing) {
-                        targetRoom.features.racing = template.racing;
-                    } else {
-                        // 회차가 이미 있다면 1로 리셋하지 않고 보존함
-                        if (targetRoom.features.racing.round === undefined) targetRoom.features.racing.round = 1;
-                        if (targetRoom.features.racing.carryOver === undefined) targetRoom.features.racing.carryOver = 0;
-                        
-                        // 말 정보(상태)는 리로드 시 템플릿의 최신 정보를 따르도록 갱신 가능
-                        if (!targetRoom.features.racing.horses) targetRoom.features.racing.horses = template.racing.horses;
-                    }
+                // 1. 피처 레이어 (feverData, sprinkleData 등 5종)
+                ["racing", "lotto", "stockMarket", "feverData", "sprinkleData"].forEach(function(k) {
+                    if (rF[k] === undefined) rF[k] = template[k];
+                });
 
-                    // 로또, 주식 등 기타 데이터 주머니도 동일하게 보존 처리
-                    if (!targetRoom.features.lotto) targetRoom.features.lotto = template.lotto;
-                    if (!targetRoom.features.stockMarket) targetRoom.features.stockMarket = template.stockMarket;
-                    if (!targetRoom.features.feverData) targetRoom.features.feverData = template.feverData;
-                    if (!targetRoom.features.sprinkleData) targetRoom.features.sprinkleData = template.sprinkleData;
-                    if (!targetRoom.features.states) targetRoom.features.states = template.states;
-                }
+                // 2. 상태 레이어 (menuWait, mining 등 9종)
+                ["menuWait", "bankProcess", "selectWait", "lottoPurchase", "activeThefts", "duelData", "mining", "loanRegister", "loanContractWait"].forEach(function(k) {
+                    if (rS[k] === undefined) rS[k] = template.states[k];
+                });
 
-                // 2. 필수 기본 구조 보안 강화
-                if (!targetRoom.loanPools) targetRoom.loanPools = {};
-                if (!targetRoom.loanContracts) targetRoom.loanContracts = {};
-                if (targetRoom.economyBase === undefined) targetRoom.economyBase = 1000000; // [결함 해결] 방별 기준점 보강
-                if (targetRoom.bankReserve === undefined) {
-                    targetRoom.bankReserve = (SYSTEM_CONFIG && SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE) ? SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE : 10000; 
-                }
+                // 3. 룸 데이터 레이어 (loanPools, loanContracts, bankReserve 3종)
+                if (room.loanPools === undefined) room.loanPools = {};
+                if (room.loanContracts === undefined) room.loanContracts = {};
+                if (room.bankReserve === undefined) room.bankReserve = 10000;
             }
         }
         

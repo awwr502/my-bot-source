@@ -239,9 +239,9 @@ function recoverFromJournal(data) {
             var brDelta = Number(parts[3] || 0);
 
             // [방별 격리 대응] 해당 방과 유저를 찾아 메모리 데이터에 즉시 합산
-            if (data.rooms[room] && data.rooms[room].users[uid]) {
-                data.rooms[room].users[uid].point += delta;
-                data.rooms[room].bankReserve += brDelta;
+            if (data.rooms[room] && data.rooms[room].users[uid] && !isNaN(delta)) {
+                data.rooms[room].users[uid].point = Number(data.rooms[room].users[uid].point || 0) + delta;
+                data.rooms[room].bankReserve = Number(data.rooms[room].bankReserve || 0) + brDelta;
                 recoveryCount++;
             }
         });
@@ -694,10 +694,18 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     var prePoint = Number(user.point || 0);
 
     /* [전 구간 마이너스 방지 장치] */
-    var actualDelta = delta;
-    if (delta < 0 && (prePoint + delta) < 0) {
-        actualDelta = -prePoint; // 가진 돈이 부족하면 가진 만큼만 뺌 (결과는 항상 0)
+    var prePoint = Number(user.point || 0);
+    var numDelta = Number(delta);
+
+    var actualDelta = numDelta;
+    if (numDelta < 0 && (prePoint + numDelta) < 0) {
+        actualDelta = -prePoint; // 보유액보다 많이 뺄 경우 0원으로 고정
     }
+
+    var newPoint = prePoint + actualDelta;
+    if (isNaN(newPoint)) return; // 계산 결과가 비정상이면 업데이트 중단
+
+    user.point = newPoint;
 
     var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급", "결투 승리 보상", "뿌리기 줍기", "경마 당첨금"];
     var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매: ", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부", "경마 배팅", "배팅 취소 수수료", "송금 보냄", "은행 예금", "사채"];
@@ -759,8 +767,10 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
 
 /* 포인트 단위 쉼표 포맷팅 */
 function fp(val) {
-    if (val === undefined || val === null || isNaN(val)) return "0";
-    return String(Math.floor(Number(val))).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    
+var num = Number(val);
+    if (isNaN(num)) return "0";
+    return String(Math.floor(num)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 var fP = fp;
 
@@ -1023,22 +1033,24 @@ function getDisplayName(user) {
     if (credit.label === "신용불량자") {
         titleStr = "[신용불량자] ";
     } 
-    // 2순위: 일반 상태일 때 장착 중인 칭호 표시 (아이콘 자동 탐색)
+    // 2순위: 일반 상태일 때 장착 중인 칭호 표시 (아이콘 제한 로직)
     else if (user.title && user.title.length > 0) {
         var titleIcon = "";
         
-        // 인벤토리를 순회하여 현재 장착된 칭호명과 일치하는 아이템의 아이콘을 가져옴
-        if (user.inventory && user.inventory.length > 0) {
-            for (var i = 0; i < user.inventory.length; i++) {
-                var item = user.inventory[i];
-                if (item.effect === "title" && item.title === user.title) {
-                    titleIcon = item.icon || ""; // 아이콘이 있을 경우에만 할당
-                    break;
+        // 도굴왕, 수집대마왕만 아이콘 표시 허용
+        if (user.title === "도굴왕" || user.title === "수집대마왕") {
+            if (user.inventory && user.inventory.length > 0) {
+                for (var i = 0; i < user.inventory.length; i++) {
+                    var item = user.inventory[i];
+                    if (item.effect === "title" && item.title === user.title) {
+                        titleIcon = item.icon || ""; 
+                        break;
+                    }
                 }
             }
         }
         
-        // 예시: [🏵️수집대마왕] 
+        // 칭호 표시 형태: [아이콘+칭호명] 또는 [칭호명]
         titleStr = "[" + titleIcon + user.title + "] ";
     }
     

@@ -5235,7 +5235,8 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
  */
 function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
 
-if (msg === "/서버진단") {
+/* [방별 독립] 서버 정밀 자가진단 엔진 (v6.6) */
+    if (msg === "/서버진단") {
         var roomData = data.rooms[roomName];
         if (!roomData) return replier.reply("❌ [" + roomName + "] 방의 데이터를 조회할 수 없습니다.");
 
@@ -5261,7 +5262,6 @@ if (msg === "/서버진단") {
         var rF = roomData.features || {};
         var rS = rF.states || {};
 
-        // 필수 객체 존재 여부 체크 리스트 (방별 데이터 기반)
         var checkList = [
             rF.racing, rF.lotto, rF.stockMarket, rF.feverData, rF.sprinkleData,
             rS.menuWait, rS.bankProcess, rS.selectWait, rS.lottoPurchase,
@@ -5271,7 +5271,13 @@ if (msg === "/서버진단") {
 
         checkList.forEach(function(item) { if (item !== undefined && item !== null) activeTasks++; });
 
-        var schedulerActive = (java.lang.System.getProperty("kakaobot_scheduler_v5")) ? "가동 중" : "❗중단";
+        // 3. 스케줄러 엔진 상세 카운트 (3개 엔진 체크)
+        var activeEngines = 0;
+        if (java.lang.System.getProperty("kakaobot_scheduler_v5")) activeEngines++;
+        if (typeof Executor !== 'undefined' && !Executor.isShutdown()) activeEngines++;
+        if (typeof SaveExecutor !== 'undefined' && !SaveExecutor.isShutdown()) activeEngines++;
+
+        var schedulerActive = (java.lang.System.getProperty("kakaobot_scheduler_v5")) ? "가동 중 (" + activeEngines + " / 3)" : "❗중단";
         
         report += "[🔒 프로세스 및 스레드]\n" +
                   "• 메모리 락: " + (lock.isLocked() ? "❗잠김 (교착위험)" : "정상 (Unlocked)") + "\n" +
@@ -5279,7 +5285,7 @@ if (msg === "/서버진단") {
                   "• 방별 가동률: [" + activeTasks + " / " + totalTasks + "]\n" +
                   "• 저장 엔진: " + (SaveExecutor.isTerminated() ? "❗중단됨" : "정상 가동") + "\n\n";
 
-        // 3. 방별 데이터베이스 건강도
+        // 4. 방별 데이터베이스 건강도
         var roomUsers = Object.keys(roomData.users || {}).length;
         var roomCacheCount = 0;
         if (typeof uidCache !== 'undefined') {
@@ -5294,19 +5300,17 @@ if (msg === "/서버진단") {
                   "• 입력 대기: " + Object.keys(rS.bankProcess || {}).length + "명\n" +
                   "• 중복 선택: " + Object.keys(rS.selectWait || {}).length + "명\n\n";
 
-        // 4. 명령어 장애 정밀 진단
-        var diagnosticMsg = "- 슬래시(/) 명령어: [정상]";
-        if (activeTasks < totalTasks) {
-            diagnosticMsg = "❗ 로직 결함 발견: ";
-            if (!rF.lotto) diagnosticMsg += "[로또 엔진 누락] ";
-            if (!rF.racing) diagnosticMsg += "[경마 엔진 누락] ";
-            if (!roomData.bankReserve) diagnosticMsg += "[국고 데이터 파손]";
-        }
+        // 5. 명령어 장애 정밀 진단 (한글 키워드 항목 포함)
+        var diagSlash = (activeTasks >= 15) ? "[정상]" : "❗확인필요";
+        var diagNum = (Object.keys(rS.bankProcess || {}).length > 10) ? "❗지연됨" : "[정상]";
+        var diagKwd = (rF.sprinkleData && rF.states.duelData) ? "[정상]" : "❗엔진누락";
 
         report += "━━━━━━━━━━━━━━━\n💡 명령어 장애 정밀 진단:\n" +
-                  diagnosticMsg + "\n" +
-                  "- 숫자 입력 응답: " + (Object.keys(rS.bankProcess || {}).length > 10 ? "❗지연됨" : "[정상]") + "\n\n" +
-                  "※ 가동률이 낮을 경우 '/시스템자가복원'을 실행하세요.";
+                  "- 슬래시(/) 명령어: " + diagSlash + "\n" +
+                  "- 숫자 입력 응답: " + diagNum + "\n" +
+                  "- 한글 키워드: " + diagKwd + "\n\n" +
+                  (activeTasks < totalTasks ? "⚠️ 결함 발견: [" + (totalTasks - activeTasks) + "]개 객체 손상\n" : "") +
+                  "※ 장애 발생 시 '/시스템자가복원'을 실행하세요.";
 
         replier.reply(report);
         return true;

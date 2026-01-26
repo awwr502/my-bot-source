@@ -422,75 +422,45 @@ function endTracking(user, isSuccess, resultMsg) {
 
 //==========섹터3==========
 
-/* [최적화] 하이브리드 비동기 영속화(Asynchronous Persistence) 엔진 v5.8 */
-/**
- * @param {Object} data - 저장할 데이터 객체
- * @param {Boolean} isForceBackup - true일 경우 백업 파일까지 물리적으로 기록
- */
-
-function remoteBackup(content) {
-    // [중요] 여기에 구글 앱 스크립트에서 복사한 '웹 앱 URL'을 넣으세요.
-    var backupUrl = "https://script.google.com/macros/s/AKfycbzjZww3A8_89HrD0-mIeVHlhPtLPex-n055GMQoxB2mZNF-xALVyc0coWr_xDQTeOkO2w/exec"; 
-    if (backupUrl.indexOf("내_배포_ID") !== -1) return; 
-
-    // 저장이 아닌 '백업'이므로 병렬 엔진(Executor)을 사용하여 메인 로직 속도에 영향을 주지 않습니다.
-    Executor.execute(new java.lang.Runnable({
-        run: function() {
-            try {
-                org.jsoup.Jsoup.connect(backupUrl)
-                    .header("Content-Type", "application/json")
-                    .requestBody(JSON.stringify({
-                        "type": "FULL_BACKUP",
-                        "data": content,
-                        "timestamp": new Date().getTime()
-                    }))
-                    .ignoreContentType(true)
-                    .ignoreHttpErrors(true)
-                    .method(org.jsoup.Connection.Method.POST)
-                    .execute();
-            } catch (e) {
-                Log.error("Remote Backup Failed: " + e);
-            }
-        }
-    }));
-}
-
+/* [최적화] 하이브리드 비동기 영속화 엔진 v6.5 (보호 가드 + 원격 백업 통합) */
 function safeSaveData(data, isForceBackup) {
     if (!data) return;
 
-    globalData = data; // 메모리 데이터 즉시 동기화 (응답 속도 최우선)
+    globalData = data; 
 
-    // [방어형 로직] 무거운 직렬화 및 무결성 검증은 메인 스레드에서 먼저 수행
     var content;
     try {
         content = JSON.stringify(data);
         var check = JSON.parse(content);
+        
+        // [가드 1] 구조적 무결성 검사
         if (!check || !check.rooms) {
             throw new Error("데이터 구조 불완전 (rooms 누락)");
         }
-var roomKeys = Object.keys(data.rooms);
+
+        // [가드 2] 양적 무결성 검사 (이번 사고 방지 핵심 로직)
+        var roomKeys = Object.keys(data.rooms);
         var totalUserCount = 0;
         roomKeys.forEach(function(r) { 
             if(data.rooms[r].users) totalUserCount += Object.keys(data.rooms[r].users).length; 
         });
 
-        // 방 목록은 존재하는데 유저가 0명이라면, 비정상적인 초기화 상태로 간주하고 저장을 중단합니다.
+        // 방 목록은 있는데 유저가 0명이라면 비정상 초기화로 간주하고 저장을 차단함
         if (totalUserCount === 0 && roomKeys.length > 0) {
             throw new Error("위험: 유저 데이터가 0명입니다. 저장을 차단합니다.");
         }
+
     } catch (e) {
-        // [복구] 기존 시스템의 알림 기능 유지
         Log.error("Save Guard Blocked: " + e.message);
         try {
-            Api.replyRoom("내리다", "⚠️ 데이터 보호 작동: 오염된 데이터의 쓰기 시도를 차단했습니다.\n사유: " + e.message);
+            Api.replyRoom("내리다", "⚠️ 데이터 보호 작동: " + e.message);
         } catch (err) {}
-        return; // 오염된 데이터는 배경 일꾼에게 넘기지 않고 즉시 차단
+        return; // 오염된 데이터는 하단의 파일 쓰기 로직으로 넘어가지 않고 여기서 종료
     }
 
-    // [비동기 처리] 실제 파일 쓰기는 저장 전담 일꾼(SaveExecutor)에게 위임
+    // [비동기 처리] 실제 파일 기록 및 원격 전송 위임
     SaveExecutor.execute(new java.lang.Runnable({
         run: function() {
-            // [안정성] 싱글 스레드 환경에서 락을 통한 순차적 기록 보장
             lock.lock(); 
             try {
                 var targetPath = FILE_PATH;
@@ -505,10 +475,12 @@ var roomKeys = Object.keys(data.rooms);
                     if (orgFile.exists()) orgFile.delete();
                     tempFile.renameTo(orgFile);
 
-                    remoteBackup(content);
+                    /* [v6.5 핵심] 로더(본체)에 상주하는 원격 백업 함수 호출 */
+                    if (typeof remoteBackup === 'function') {
+                        remoteBackup(content);
+                    }
 
-                    // [v5.8 핵심] 전체 저장이 성공했으므로 블랙박스(Journal) 로그 초기화
-                    // 데이터가 영구 파일에 안착했으므로 임시 기록된 로그들은 더 이상 필요 없음
+                    // 저널 로그(블랙박스) 초기화
                     logLock.lock();
                     try {
                         var jFile = new java.io.File(JOURNAL_PATH);
@@ -520,7 +492,7 @@ var roomKeys = Object.keys(data.rooms);
                     throw new Error("임시 파일 생성 실패 또는 데이터 유실");
                 }
 
-                // 주기적 백업 처리
+                // 주기적 백업 처리 (last_stable_backup.json)
                 if (isForceBackup) {
                     var backupPath = BACKUP_DIR + "last_stable_backup.json";
                     FileStream.write(backupPath + ".tmp", content);
@@ -537,7 +509,7 @@ var roomKeys = Object.keys(data.rooms);
                     Api.replyRoom("내리다", "⚠️ 시스템 오류: 배경 저장 실패\n" + e.message);
                 } catch (err) {}
             } finally {
-                lock.unlock(); // 작업 완료 후 락 해제
+                lock.unlock(); 
             }
         }
     }));

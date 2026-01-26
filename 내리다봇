@@ -4814,6 +4814,63 @@ function _adminLogLogic(msg, user, data, replier) {
  */
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
+    if (msg.indexOf("/진단 ") === 0) {
+    var tn = msg.substring(4).trim();
+    var roomData = data.rooms[roomName];
+    var found = findUserByName(roomData, tn);
+
+    if (found.length === 0) {
+        replier.reply("❌ [" + tn + "] 유저를 찾을 수 없습니다.");
+        return true;
+    }
+
+    var target = found[0].data;
+    var tId = found[0].id;
+    var rFeatures = roomData.features;
+    var now = Date.now();
+
+    var report = "🔍 [" + tn + "] 유저 정밀 진단 보고서\n";
+    report += "━━━━━━━━━━━━━━━\n";
+    report += "🆔 UID: " + tId + "\n";
+    report += "🖼️ 해시보유: " + (target.imageHash ? "YES" : "NO") + "\n";
+    
+    // 1. 스팸 필터 체크
+    var isTimedOut = (target.timeoutEndTime && now < target.timeoutEndTime);
+    report += "🚫 스팸제한: " + (isTimedOut ? "제한됨 (" + Math.ceil((target.timeoutEndTime - now)/1000) + "초 남음)" : "정상") + "\n";
+
+    // 2. 활동 상태(Busy) 체크
+    var busyReason = "없음";
+    if (target.jailReleaseTime && now < target.jailReleaseTime) busyReason = "징역 중";
+    if (target.mining && target.mining.active) busyReason = "광산 채굴 중";
+    report += "⛏️ 활동상태: " + busyReason + "\n";
+
+    // 3. 입력 대기 상태(State) 체크 (가장 유력한 원인)
+    var currentState = "없음";
+    if (rFeatures && rFeatures.states) {
+        var st = rFeatures.states;
+        if (st.menuWait[tId]) currentState = "메뉴 선택 대기 (/도움말 등)";
+        if (st.bankProcess[tId]) currentState = "은행 업무 입력 중 (/은행 등)";
+        if (st.lottoPurchase[tId]) currentState = "로또 번호 입력 중";
+        if (st.activeThefts[tId]) currentState = "도둑질 방어 중";
+        if (st.duelData[tId]) currentState = "결투 응답 대기 중";
+    }
+    report += "⏳ 대기상태: " + currentState + "\n";
+
+    // 4. 뿌리기 데이터 매칭 체크
+    var sprinkleActive = (rFeatures && rFeatures.sprinkleData && rFeatures.sprinkleData.active);
+    report += "🎉 뿌리기인식: " + (sprinkleActive ? "진행 중" : "종료됨") + "\n";
+
+    report += "━━━━━━━━━━━━━━━\n";
+    report += "💡 진단 결과: ";
+    if (isTimedOut) report += "스팸 필터에 걸려 봇이 무시 중입니다.";
+    else if (currentState !== "없음") report += "특정 메뉴 입력 상태에 갇혀 명령어가 씹히고 있습니다.";
+    else if (busyReason !== "없음") report += "징역/채굴 중이라 줍기 등 액션이 차단되었습니다.";
+    else report += "정상입니다. 식별 로직 중복 여부를 확인하세요.";
+
+    replier.reply(report);
+    return true;
+}
+
     /* 상세 유저 데이터 조회 */
     if (msg.indexOf("/유저데이터 ") === 0) {
         var tn = msg.substring(7).trim();

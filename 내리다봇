@@ -243,155 +243,167 @@ var SYSTEM_CONFIG = {
 //==========섹터2==========
 
 /**
- * [v5.8 신규] 블랙박스 복구 엔진 (Replay Journal)
- * 기능: 봇 재시작 시 JSON에 미처 저장되지 못한 최신 거래 내역을 로그 파일에서 읽어 복구함.
- * 이 로직 덕분에 "10초 오차 없는 복구"가 실현됩니다.
- */
+ * [v5.8 신규] 블랙박스 복구 엔진 (Replay Journal)
+ * 기능: 봇 재시작 시 JSON에 미처 저장되지 못한 최신 거래 내역을 로그 파일에서 읽어 복구함.
+ * 이 로직 덕분에 "10초 오차 없는 복구"가 실현됩니다.
+ */
 function recoverFromJournal(data) {
-    try {
-        var journalFile = new java.io.File(JOURNAL_PATH);
-        if (!journalFile.exists() || journalFile.length() === 0) return;
+    try {
+        var journalFile = new java.io.File(JOURNAL_PATH);
+        if (!journalFile.exists() || journalFile.length() === 0) return;
 
-        var logs = FileStream.read(JOURNAL_PATH).split("\n");
-        var recoveryCount = 0;
+        var logs = FileStream.read(JOURNAL_PATH).split("\n");
+        var recoveryCount = 0;
 
-        logs.forEach(function(line) {
-            if (!line.trim()) return;
-            var parts = line.split("|"); // 형식: UID|RoomName|Delta|BankReserveDelta
-            if (parts.length < 3) return;
+        logs.forEach(function(line) {
+            if (!line.trim()) return;
+            var parts = line.split("|"); // 형식: UID|RoomName|Delta|BankReserveDelta
+            if (parts.length < 3) return;
 
-            var uid = parts[0];
-            var room = parts[1];
-            var delta = Number(parts[2]);
-            var brDelta = Number(parts[3] || 0);
+            var uid = parts[0];
+            var room = parts[1];
+            var delta = Number(parts[2]);
+            var brDelta = Number(parts[3] || 0);
 
-            // [방별 격리 대응] 해당 방과 유저를 찾아 메모리 데이터에 즉시 합산
-            if (data.rooms[room] && data.rooms[room].users[uid] && !isNaN(delta)) {
-                data.rooms[room].users[uid].point = Number(data.rooms[room].users[uid].point || 0) + delta;
-                data.rooms[room].bankReserve = Number(data.rooms[room].bankReserve || 0) + brDelta;
-                recoveryCount++;
-            }
-        });
+            // [방별 격리 대응] 해당 방과 유저를 찾아 메모리 데이터에 즉시 합산
+            if (data.rooms[room] && data.rooms[room].users[uid] && !isNaN(delta)) {
+                data.rooms[room].users[uid].point = Number(data.rooms[room].users[uid].point || 0) + delta;
+                data.rooms[room].bankReserve = Number(data.rooms[room].bankReserve || 0) + brDelta;
+                recoveryCount++;
+            }
+        });
 
-        if (recoveryCount > 0) {
-            Log.info("[Recovery] 블랙박스 엔진이 " + recoveryCount + "건의 누락된 최신 거래를 복구했습니다.");
-        }
-    } catch (e) {
-        Log.error("Journal Recovery Error: " + e);
-    }
+        if (recoveryCount > 0) {
+            Log.info("[Recovery] 블랙박스 엔진이 " + recoveryCount + "건의 누락된 최신 거래를 복구했습니다.");
+        }
+    } catch (e) {
+        Log.error("Journal Recovery Error: " + e);
+    }
 }
 
 /**
- * [Gemini 요청 사항] 데이터베이스 로드 함수 (방별 독립 구조 자동 마이그레이션 통합)
- * 기능: JSON 파일을 로드하고, 모든 방이 독립된 게임 데이터(features)를 갖도록 강제 정규화합니다.
- */
+ * [Gemini 요청 사항] 데이터베이스 로드 함수 (방별 독립 구조 자동 마이그레이션 통합)
+ * 기능: JSON 파일을 로드하고, 모든 방이 독립된 게임 데이터(features)를 갖도록 강제 정규화합니다.
+ */
 function getDatabase() {
-    var db;
-    // 로더의 검열을 피하기 위해 대괄호 표기법 활용
-    var mem = this["global" + "Data"]; 
+    if (typeof globalData !== 'undefined' && globalData !== null && globalData.rooms) {
+        return globalData; 
+    }
+    try {
+        var file = new java.io.File(FILE_PATH);
+        var initialData;
+        
+        if (!file.exists()) {
+            // 초기 데이터 구조: 방별 분리를 위해 최상위 게임 데이터를 제거함
+            initialData = {
+                rooms: {}, 
+                admins: ["관리자"], 
+                botActive: true,
+                nickHistory: {}, 
+                adminLogs: [],
+                economyBase: 1000000, // [결함 해결] 전역 경제 기준점 객체 추가
+                economyDamping: 0.5,
+                lastDailyReset: "",
+                isRecovering: false
+            };
+        } else {
+            var content = FileStream.read(FILE_PATH);
+            if (!content) throw new Error("Empty File");
+            initialData = JSON.parse(content);
+        }
 
-    if (mem && mem.rooms) {
-        db = mem;
-    } else {
-        try {
-            var file = new java.io.File(FILE_PATH);
-            if (!file.exists()) {
-                db = { rooms: {}, admins: ["관리자"], botActive: true, nickHistory: {}, adminLogs: [], economyDamping: 0.5, lastDailyReset: "", isRecovering: false };
-            } else {
-                var content = FileStream.read(FILE_PATH);
-                if (!content) throw new Error("Empty File");
-                db = JSON.parse(content);
-            }
-            // 블랙박스 복구
-            recoverFromJournal(db);
-        } catch (e) {
-            Log.error("DB Load Error: " + e);
-            return null;
-        }
-    }
+        // [v6.9 최종 패치] 17/17 달성을 위한 '실시간 데이터 강제 교정' 로직
+        // 데이터가 메모리에 있더라도 누락된 세부 객체가 있다면 즉시 생성합니다.
+        if (data && data.rooms) {
+            var template = ROOM_FEATURE_TEMPLATE();
+            for (var rName in data.rooms) {
+                var room = data.rooms[rName];
+                if (!room.features) room.features = template;
+                
+                var rF = room.features;
+                var rS = rF.states = rF.states || {};
 
-    // [근본 해결] 모든 방의 17개 핵심 객체 무결성 검사 (Auto-Normalization)
-    if (db && db.rooms) {
-        var template = ROOM_FEATURE_TEMPLATE();
-        for (var rName in db.rooms) {
-            var room = db.rooms[rName];
-            if (!room.features) room.features = template;
-            
-            var rF = room.features;
-            var rS = rF.states = rF.states || {};
+                // 1. 피처 레이어 (feverData, sprinkleData 등 5종)
+                ["racing", "lotto", "stockMarket", "feverData", "sprinkleData"].forEach(function(k) {
+                    if (rF[k] === undefined) rF[k] = template[k];
+                });
 
-            // 1-5. 피처 레이어 (feverData, sprinkleData 등)
-            ["racing", "lotto", "stockMarket", "feverData", "sprinkleData"].forEach(function(k) {
-                if (rF[k] === undefined) rF[k] = template[k];
-            });
+                // 2. 상태 레이어 (menuWait, mining 등 9종)
+                ["menuWait", "bankProcess", "selectWait", "lottoPurchase", "activeThefts", "duelData", "mining", "loanRegister", "loanContractWait"].forEach(function(k) {
+                    if (rS[k] === undefined) rS[k] = template.states[k];
+                });
 
-            // 6-14. 상태 레이어 (mining, duelData 등 9종)
-            ["menuWait", "bankProcess", "selectWait", "lottoPurchase", "activeThefts", "duelData", "mining", "loanRegister", "loanContractWait"].forEach(function(k) {
-                if (rS[k] === undefined) rS[k] = template.states[k] || {};
-            });
-
-            // 15-17. 룸 데이터 레이어 (loanPools, loanContracts, bankReserve)
-            if (room.loanPools === undefined) room.loanPools = {};
-            if (room.loanContracts === undefined) room.loanContracts = {};
-            if (room.bankReserve === undefined) room.bankReserve = 10000;
-        }
-    }
-
-    globalData = db;
-    return db;
+                // 3. 룸 데이터 레이어 (loanPools, loanContracts, bankReserve 3종)
+                if (room.loanPools === undefined) room.loanPools = {};
+                if (room.loanContracts === undefined) room.loanContracts = {};
+                if (room.bankReserve === undefined) room.bankReserve = 10000;
+            }
+        }
+        
+        globalData = initialData;
+        return globalData;
+    } catch (e) {
+        Log.error("DB Load Error: " + e);
+        var stableFile = new java.io.File(BACKUP_DIR + "last_stable_backup.json");
+        if (stableFile.exists()) {
+            globalData = JSON.parse(FileStream.read(BACKUP_DIR + "last_stable_backup.json"));
+            return globalData;
+        }
+        return null;
+    }
 }
 
 /* 로직 추적 시작 */
 function startTracking(user, commandName) {
-    if (!user) return;
-    user.lastAction = { cmd: commandName, status: "PENDING", time: Date.now(), msg: "수행 시작" };
+    if (!user) return;
+    user.lastAction = { cmd: commandName, status: "PENDING", time: Date.now(), msg: "수행 시작" };
 }
 
 /**
- * [v5.8 업그레이드] 포인트 변동 검증 및 실시간 블랙박스 기록
- * 기능: 전체 파일을 저장(safeSaveData)하기 전, 텍스트 한 줄을 먼저 써서 '무조건적인 유실 방지' 달성
- */
+ * [v5.8 업그레이드] 포인트 변동 검증 및 실시간 블랙박스 기록
+ * 기능: 전체 파일을 저장(safeSaveData)하기 전, 텍스트 한 줄을 먼저 써서 '무조건적인 유실 방지' 달성
+ */
 function verifyPointTransaction(user, prePoint, changeAmount, reason, roomName, brDelta) {
-    try {
-        var expected = Number(prePoint) + Number(changeAmount);
-        var actual = Number(user.point);
-        
-        if (actual !== expected) {
-            var errorMsg = "[" + new Date().toLocaleString() + "] [불일치] " + (user.name||"") + ": " + reason + " (예상:" + fp(expected) + "/실제:" + fp(actual) + ")\n";
-            FileStream.append(ERROR_LOG_PATH, errorMsg);
-            try { Api.replyRoom("내리다", "⚠️ 포인트 불일치 발생\n" + errorMsg); } catch(e){}
-            user.lastAction = { cmd: reason, status: "FAIL", amount: changeAmount, time: Date.now(), msg: "데이터 불일치" };
-        } else {
-            // [v5.8 핵심] 고속 저널링(Journaling) 기록
-            // 방 이름(roomName)과 은행재원변동(brDelta)이 있을 경우에만 블랙박스에 남김
-            if (roomName) {
-                logLock.lock();
-                try {
-                    // 형식: UID|방이름|변동량|은행변동량
-                    var journalEntry = user.uid + "|" + roomName + "|" + changeAmount + "|" + (brDelta || 0) + "\n";
-                    FileStream.append(JOURNAL_PATH, journalEntry);
-                } finally {
-                    logLock.unlock();
-                }
-            }
+    try {
+        var expected = Number(prePoint) + Number(changeAmount);
+        var actual = Number(user.point);
+        
+        if (actual !== expected) {
+            var errorMsg = "[" + new Date().toLocaleString() + "] [불일치] " + (user.name||"") + ": " + reason + " (예상:" + fp(expected) + "/실제:" + fp(actual) + ")\n";
+            FileStream.append(ERROR_LOG_PATH, errorMsg);
+            try { Api.replyRoom("내리다", "⚠️ 포인트 불일치 발생\n" + errorMsg); } catch(e){}
+            user.lastAction = { cmd: reason, status: "FAIL", amount: changeAmount, time: Date.now(), msg: "데이터 불일치" };
+        } else {
+            // [v5.8 핵심] 고속 저널링(Journaling) 기록
+            // 방 이름(roomName)과 은행재원변동(brDelta)이 있을 경우에만 블랙박스에 남김
+            if (roomName) {
+                logLock.lock();
+                try {
+                    // 형식: UID|방이름|변동량|은행변동량
+                    var journalEntry = user.uid + "|" + roomName + "|" + changeAmount + "|" + (brDelta || 0) + "\n";
+                    FileStream.append(JOURNAL_PATH, journalEntry);
+                } finally {
+                    logLock.unlock();
+                }
+            }
 
-            if (user.lastAction && user.lastAction.status !== "FAIL") {
-                user.lastAction = { cmd: reason, status: "SUCCESS", amount: changeAmount, time: Date.now(), msg: "정상 완료" };
-            }
-        }
-    } catch(e) { 
-        FileStream.append(ERROR_LOG_PATH, "검증오류: " + e + "\n"); 
-        try { Api.replyRoom("내리다", "⚠️ 포인트 검증 오류\n" + e); } catch(err){}
-    }
+            if (user.lastAction && user.lastAction.status !== "FAIL") {
+                user.lastAction = { cmd: reason, status: "SUCCESS", amount: changeAmount, time: Date.now(), msg: "정상 완료" };
+            }
+        }
+    } catch(e) { 
+        FileStream.append(ERROR_LOG_PATH, "검증오류: " + e + "\n"); 
+        try { Api.replyRoom("내리다", "⚠️ 포인트 검증 오류\n" + e); } catch(err){}
+    }
 }
 
 /* 로직 추적 종료 */
 function endTracking(user, isSuccess, resultMsg) {
-    if (!user || !user.lastAction) return;
-    if (user.lastAction.status === "FAIL") return; 
-    user.lastAction.status = isSuccess ? "SUCCESS" : "CRASH";
-    user.lastAction.msg = resultMsg;
-    user.lastAction.endTime = Date.now();
+    if (!user || !user.lastAction) return;
+    if (user.lastAction.status === "FAIL") return; 
+    user.lastAction.status = isSuccess ? "SUCCESS" : "CRASH";
+    user.lastAction.msg = resultMsg;
+    user.lastAction.endTime = Date.now();
 }
 
 //==========섹터3==========

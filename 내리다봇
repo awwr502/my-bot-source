@@ -701,6 +701,8 @@ function util_calculateNetWorth(user, roomData) {
     return Math.max(0, Math.floor(netWorth));
 }
 
+//==========섹터7==========
+
 /**
  * [핵심: 포인트 게이트웨이 엔진] v5.9
  * 기능: 모든 포인트 변동의 단일 입구. 숫자 검증, 마이너스 방지, 국고 연동, 칭호 부여, 저널링 통합 처리.
@@ -718,24 +720,24 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
         actualDelta = -prePoint; // 보유액보다 많이 뺄 경우 0원 고정
     }
 
-    // 3. 중앙은행(국고) 재원 변동 로직
+    // 3. 중앙은행(국고) 재원 변동 로직 (정수 연산 보장)
     var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급", "결투 승리 보상", "뿌리기 줍기", "경마 당첨금", "채팅 보너스"];
     var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부", "경마 배팅", "배팅 취소 수수료", "송금 보냄", "은행 예금", "사채", "벌금", "상환"];
 
     var brDelta = 0; 
     if (roomData) {
-        if (roomData.bankReserve === undefined) roomData.bankReserve = (SYSTEM_CONFIG && SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE) ? SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE : 10000;
+        if (roomData.bankReserve === undefined) roomData.bankReserve = 10000;
         
         if (actualDelta > 0) {
             if (bankOutputReasons.some(function(r){ return reason.indexOf(r) !== -1; })) brDelta = -actualDelta;
         } else {
             if (bankInputReasons.some(function(r){ return reason.indexOf(r) !== -1; })) brDelta = Math.abs(actualDelta);
         }
-        roomData.bankReserve = Number(roomData.bankReserve) + brDelta;
+        roomData.bankReserve = Math.floor(Number(roomData.bankReserve) + brDelta);
     }
 
-    // 4. 최종 포인트 갱신 (안전 연산)
-    var newPoint = prePoint + actualDelta;
+    // 4. 최종 포인트 갱신 (변수 선언 순서 교정 및 정수화 강제)
+    var newPoint = Math.floor(prePoint + actualDelta);
     if (!isNaN(newPoint)) user.point = newPoint;
 
     // 5. 자산가 칭호 엔진 (실질 순자산 기준)
@@ -2418,12 +2420,16 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                     rFeatures.lotto = data.lotto;
                 }
 
-                // [데이터 분리] 참조(Reference) 연결 - 전역 변수 오염 방지
-                racingData = rFeatures.racing;
-                lotto = rFeatures.lotto;
-                marketOpenPrice = rFeatures.marketOpenPrice;
-                feverData = rFeatures.feverData;
-                sprinkleData = rFeatures.sprinkleData;
+                /* [데이터 격리] 하위 로직 호출 시 rFeatures를 인자로 전달하여 혼선 방지 */
+                if (typeof _handleGameLogic === 'function') {
+                    if (_handleGameLogic(msg, user, data, replier, roomName, targetUid, sender, rFeatures)) return;
+                }
+
+                if (isAdmin(sender, data)) {
+                    if (typeof _handleAdminLogic === 'function') {
+                        if (_handleAdminLogic(msg, user, data, replier, roomName, targetUid, sender, rFeatures)) return;
+                    }
+                }
 
                 /**
                  * [Gemini 요청 사항] 상태 관리 엔진 독립화 (Bug Fix)
@@ -4580,20 +4586,12 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
  * 설명: 관리자 명령어의 통합 진입점입니다. 
  * 섹터 1의 ADMIN_COMMANDS 레지스트리를 참조하여 등록된 로직을 자동으로 매핑 및 실행합니다.
  */
-function _handleAdminLogic(msg, user, data, replier, roomName, targetUid, sender) {
-    // 1. 명령어 첫 단어 추출 (예: "/재원수정 1000" -> "/재원수정")
+function _handleAdminLogic(msg, user, data, replier, roomName, targetUid, sender, rFeatures) {
     var cmd = msg.split(" ")[0]; 
-
-    // 2. 관리자 명령어 레지스트리(ADMIN_COMMANDS)에서 해당 명령어 검색
-    // 섹터 6에서 등록된 매핑 정보를 바탕으로 최적화된 O(1) 탐색을 수행합니다.
     if (ADMIN_COMMANDS[cmd] && typeof ADMIN_COMMANDS[cmd].execute === 'function') {
-        
-        // 3. 등록된 하위 로직 함수(섹터 35~38 등)를 즉시 실행 및 결과 반환
-        // 실행 시 필요한 모든 컨텍스트 객체를 인자로 전달합니다.
-        return ADMIN_COMMANDS[cmd].execute(msg, user, data, replier, roomName, targetUid);
+        // 인자에 rFeatures를 추가하여 전달
+        return ADMIN_COMMANDS[cmd].execute(msg, user, data, replier, roomName, targetUid, rFeatures);
     }
-
-    // 4. 처리된 명령어가 없거나 등록되지 않은 경우 false 반환
     return false; 
 }
 
@@ -5535,21 +5533,12 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
  * 설명: 유저들의 게임/경제 활동 명령어를 각 전문 담당 함수로 연결합니다.
  * 섹터 1의 USER_COMMANDS 레지스트리를 참조하여 등록된 로직을 자동으로 매핑 및 실행합니다.
  */
-function _handleGameLogic(msg, user, data, replier, roomName, targetUid, sender) {
-    
-    // 1. 명령어 첫 단어 추출 (예: "/홀짝 100" -> "/홀짝")
+function _handleGameLogic(msg, user, data, replier, roomName, targetUid, sender, rFeatures) {
     var cmd = msg.split(" ")[0];
-
-    // 2. 유저 명령어 레지스트리(USER_COMMANDS)에서 해당 명령어 검색
-    // 섹터 6에서 등록된 정보를 바탕으로 최적화된 탐색을 수행합니다.
     if (USER_COMMANDS[cmd] && typeof USER_COMMANDS[cmd].execute === 'function') {
-        
-        // 3. 등록된 하위 로직 함수(섹터 40~44 및 로또/광산/가방 등)를 즉시 실행 및 결과 반환
-        // 실행 시 필요한 모든 컨텍스트 객체를 인자로 전달하여 위임합니다.
-        return USER_COMMANDS[cmd].execute(msg, user, data, replier, roomName, targetUid);
+        // 인자에 rFeatures를 추가하여 전달
+        return USER_COMMANDS[cmd].execute(msg, user, data, replier, roomName, targetUid, rFeatures);
     }
-
-    // 4. 등록되지 않은 명령어이거나 처리할 로직이 없는 경우 false 반환
     return false;
 }
 
@@ -5560,7 +5549,7 @@ function _handleGameLogic(msg, user, data, replier, roomName, targetUid, sender)
  * 기능: 은행 메뉴 호출, 대출금 직접 상환
  * 설명: 메뉴 UI에 기부 항목을 추가하고, 상환 시 중앙은행 재고로 환수되도록 연동함.
  */
-function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
+function _gameBankLogic(msg, user, data, replier, roomName, targetUid, rFeatures) {
     var roomData = data.rooms[roomName];
     if (!roomData) return false;
 
@@ -5635,7 +5624,7 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
  * 기능: 내정보, 유물도감, 신용등급, 대출한도, 명예의전당, 순위, 유저정보, 경마조회
  * 수정 사항: 도굴왕 달성 시 특별 축하 멘트 적용 및 유물 도감 UI 최종 최적화
  */
-function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
+function _gameInfoLogic(msg, user, data, replier, roomName, targetUid, rFeatures) {
     var roomData = data.rooms[roomName];
 
     /* [Gemini 요청 사항] 경마 정보 실시간 브리핑 기능 통합 (내 배팅 정보 포함) */
@@ -5876,23 +5865,23 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
  * 설명: 섹터 39(전체 분배기)로부터 호출받아, 실제 세부 로직(42-1 ~ 42-3)으로 연결합니다.
  * 이 구조를 통해 각 기능별로 독립적인 수정 및 관리가 가능해집니다.
  */
-function _gameActionLogic(msg, user, data, replier, roomName, targetUid) {
+function _gameActionLogic(msg, user, data, replier, roomName, targetUid, rFeatures) {
     var cmd = msg.split(" ")[0]; // 명령어 첫 단어 추출
     
     // 1. 홀짝, 승급, 경마 관련 로직 (섹터 40 위임)
     // [수정]: /배팅 및 배팅취소 조건을 추가하여 Part1 함수가 실행될 수 있도록 입구를 개방함
     if (cmd === "/홀짝" || cmd === "/승급" || cmd === "/배팅" || cmd === "배팅취소") {
-        return _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid);
+        return _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid, rFeatures);
     }
     
     // 2. 결투 로직 (섹터 41 위임)
     if (cmd === "/결투" || cmd === "수락" || cmd === "거절" || cmd === "취소") {
-        return _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid);
+        return _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid, rFeatures);
     }
     
     // 3. 도둑질 및 줍기 로직 (섹터 42 위임)
     if (cmd === "/도둑질" || cmd === "잡았다요놈" || cmd === "줍기") {
-        return _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid);
+        return _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid, rFeatures);
     }
     
     return false; // 해당되는 명령어가 없음
@@ -5902,7 +5891,7 @@ function _gameActionLogic(msg, user, data, replier, roomName, targetUid) {
  * [게임 하위 모듈 3-1] 액션 및 도박 게임 (홀짝 & 승급 & 경마 액션)
  * v5.9: 통합 엔진(7, 9, 11) 연결 완료
  */
-function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
+function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid, rFeatures) {
     var roomData = data.rooms[roomName];
     if (!roomData) return false;
 
@@ -6153,7 +6142,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
 /**
  * [게임 하위 모듈 3-2] 액션 및 도박 게임 (결투 시스템)
  */
-function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
+function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid, rFeatures) {
     var roomData = data.rooms[roomName];
     if (!roomData) return false;
 
@@ -6273,7 +6262,7 @@ function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
  * [게임 하위 모듈 3-3] 액션 및 도박 게임 (도둑질 & 줍기)
  * 수정 사항: 벌금 이중 가산 버그 수정 및 모든 포인트 로직에 방 격리 식별자(roomName) 적용
  */
-function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
+function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid, rFeatures) {
     var roomData = data.rooms[roomName];
     if (!roomData) return false;
 
@@ -6401,7 +6390,7 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
  * 기능: 주식 시세 조회, 내 주식 확인, 매수, 매도
  * 설명: 폐쇄형 순환 경제 연동 - 매수금은 금고 입고, 매도금은 금고 지출
  */
-function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
+function _gameStockLogic(msg, user, data, replier, roomName, targetUid, rFeatures) {
     var roomData = data.rooms[roomName];
     if (!roomData) return false;
 
@@ -6605,7 +6594,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
  * 기능: 상점 메뉴 호출, 출석 체크
  * 설명: 폐쇄형 순환 경제 연동 - 출석 보상을 중앙은행 금고에서 지급합니다.
  */
-function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
+function _gameShopLogic(msg, user, data, replier, roomName, targetUid, rFeatures) {
     var roomData = data.rooms[roomName];
     if (!roomData) return false;
 

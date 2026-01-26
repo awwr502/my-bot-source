@@ -630,6 +630,7 @@ var CMD_LIST = {
     ],
     admin: [
         { cmd: "/봇구동", desc: "[온|오프] 시스템 제어", func: "_adminSystemLogic" },
+        { cmd: "/서버진단", desc: "시스템 하드웨어 및 로직 무결성 체크", func: "_adminEconomyLogic" },
         { cmd: "/진단", desc: "[닉네임] 유저 상태 정밀 분석", func: "_adminUserManageLogic" },
         { cmd: "/시장자산복구", desc: "유저 평단가 기반 주가 긴급 복구", func: "_adminEconomyLogic" },
         { cmd: "/종목추가", desc: "[이름] [가격] 신규 상장", func: "_adminEconomyLogic" },
@@ -5205,6 +5206,81 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
  * 기능: 경제지표, 데이터교정, 물가조정, 포인트 지급/차감/뿌리기, 각종 초기화, 재원수정 및 충전, 자가복원
  */
 function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
+
+    /* [전역] 서버 정밀 자가진단 엔진 (v6.0) */
+    if (msg === "/서버진단") {
+        var report = "🖥️ 서버 정밀 자가진단 보고서\n━━━━━━━━━━━━━━━\n\n";
+        
+        // 1. I/O 및 기본 환경 테스트
+        var ioStatus = "정상 (I/O 통과)";
+        try {
+            var testPath = BASE_DIR + "diag_test.tmp";
+            FileStream.write(testPath, "t");
+            var f = new java.io.File(testPath);
+            if (!f.exists()) throw new Error();
+            f.delete();
+        } catch(e) { ioStatus = "❗쓰기권한 에러"; }
+
+        report += "[⚙️ 시스템 기본 환경]\n" +
+                  "• 구동 모드: " + (data.botActive ? "정상 (ON)" : "❗정지 (OFF)") + "\n" +
+                  "• 파일 쓰기: " + ioStatus + "\n" +
+                  "• 데이터 로드: " + (data.rooms ? "성공 (JSON 연동)" : "❗데이터 유실") + "\n\n";
+
+        // 2. 스케줄러 및 엔진 가동 상태 (Main, Executor, SaveExecutor)
+        var activeSched = 0;
+        if (java.lang.System.getProperty("kakaobot_scheduler_v5")) activeSched++;
+        if (!Executor.isShutdown()) activeSched++;
+        if (!SaveExecutor.isShutdown()) activeSched++;
+        
+        report += "[🔒 프로세스 및 스레드]\n" +
+                  "• 메모리 락: " + (lock.isLocked() ? "❗잠김 (교착위험)" : "정상 (Unlocked)") + "\n" +
+                  "• 스케줄러: 가동 중 (" + activeSched + " / 3)\n" +
+                  "• 저장 엔진: " + (SaveExecutor.isTerminated() ? "❗중단됨" : "정상 가동 중") + "\n\n";
+
+        // 3. 병목 현상 및 캐시 조사
+        var waitMenu = 0, waitBank = 0, waitSelect = 0;
+        for (var r in data.rooms) {
+            var st = data.rooms[r].features ? data.rooms[r].features.states : null;
+            if (st) {
+                waitMenu += Object.keys(st.menuWait || {}).length;
+                waitBank += Object.keys(st.bankProcess || {}).length;
+                waitSelect += Object.keys(st.selectWait || {}).length;
+            }
+        }
+        var cacheSize = typeof uidCache !== 'undefined' ? Object.keys(uidCache).length : 0;
+
+        report += "[📊 데이터베이스 건강도]\n" +
+                  "• 전체 유저: " + (function(){var c=0; for(var r in data.rooms) c+=Object.keys(data.rooms[r].users||{}).length; return c;})() + "명 등록\n" +
+                  "• 닉네임 캐시: " + cacheSize + "개 활성\n\n" +
+                  "[⏳ 병목 현상 감지]\n" +
+                  "• 메뉴 대기: " + waitMenu + "명\n" +
+                  "• 입력 대기: " + waitBank + "명\n" +
+                  "• 중복 선택: " + waitSelect + "명\n\n";
+
+        // 4. 명령어 장애 정밀 진단 로직
+        report += "━━━━━━━━━━━━━━━\n💡 명령어 장애 정밀 진단:\n";
+        
+        // 슬래시 명령어 진단
+        var slashOk = (typeof USER_COMMANDS !== 'undefined' && Object.keys(USER_COMMANDS).length > 0);
+        report += "- 슬래시(/) 명령어: " + (slashOk ? "[정상] 레지스트리 로드 완료" : "❗[오류] 명령어 등록 누락") + "\n";
+        
+        // 숫자 응답 진단
+        var numOk = (waitBank < 10 && waitMenu < 10);
+        report += "- 숫자 입력 응답: " + (numOk ? "[정상] 대기열 병목 없음" : "❗[지연] 대기열 과부하 발생") + "\n";
+        
+        // 한글 키워드 진단
+        var keywordOk = !lock.isLocked();
+        report += "- 한글 키워드: " + (keywordOk ? "[정상] 시스템 가드 통과 확인" : "❗[잠김] 메모리 락 해제 필요") + "\n\n";
+
+        // 최종 조언
+        if (!data.botActive) report += "※ 조치: 관리자가 [/봇구동 온]을 입력해야 합니다.";
+        else if (lock.isLocked()) report += "※ 조치: [/강제재가동]으로 메모리 락을 풀어주세요.";
+        else if (waitBank > 5) report += "※ 조치: [/시스템자가복원]으로 꼬인 대기열을 청소하세요.";
+        else report += "※ 현재 장애 요인이 발견되지 않았습니다.";
+
+        replier.reply(report);
+        return true;
+    }
 
     /* [1] 은행 가용 재원 수동 수정 (강제 설정) */
     if (msg.indexOf("/재원수정 ") === 0) {

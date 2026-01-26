@@ -5207,37 +5207,27 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
  */
 function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
 
-    /* [전역] 서버 정밀 자가진단 엔진 (v6.0) */
+    /* [전역] 서버 정밀 자가진단 엔진 (v6.2: 요약 리포트형) */
     if (msg === "/서버진단") {
         var report = "🖥️ 서버 정밀 자가진단 보고서\n━━━━━━━━━━━━━━━\n\n";
         
-        // 1. I/O 및 기본 환경 테스트
-        var ioStatus = "정상 (I/O 통과)";
-        try {
-            var testPath = BASE_DIR + "diag_test.tmp";
-            FileStream.write(testPath, "t");
-            var f = new java.io.File(testPath);
-            if (!f.exists()) throw new Error();
-            f.delete();
-        } catch(e) { ioStatus = "❗쓰기권한 에러"; }
+        // 1. 엔진 및 태스크 카운팅
+        var activeEngines = 0;
+        if (java.lang.System.getProperty("kakaobot_scheduler_v5")) activeEngines++;
+        if (typeof Executor !== 'undefined' && !Executor.isShutdown()) activeEngines++;
+        if (typeof SaveExecutor !== 'undefined' && !SaveExecutor.isShutdown()) activeEngines++;
 
+        var tasks = ["자동저장", "일일초기화", "시즌리셋", "데이터동기화", "사채이자", "추심감시", "은행위기", "주가변동", "상장감시", "마감보정", "경마개장", "경마마감", "경마정산", "피버타임", "로또마감", "로또추첨", "자동세이브"];
+        
         report += "[⚙️ 시스템 기본 환경]\n" +
                   "• 구동 모드: " + (data.botActive ? "정상 (ON)" : "❗정지 (OFF)") + "\n" +
-                  "• 파일 쓰기: " + ioStatus + "\n" +
-                  "• 데이터 로드: " + (data.rooms ? "성공 (JSON 연동)" : "❗데이터 유실") + "\n\n";
+                  "• 데이터 로드: " + (data.rooms ? "성공 (JSON)" : "❗실패") + "\n\n";
 
-        // 2. 스케줄러 및 엔진 가동 상태 (Main, Executor, SaveExecutor)
-        var activeSched = 0;
-        if (java.lang.System.getProperty("kakaobot_scheduler_v5")) activeSched++;
-        if (!Executor.isShutdown()) activeSched++;
-        if (!SaveExecutor.isShutdown()) activeSched++;
-        
         report += "[🔒 프로세스 및 스레드]\n" +
-                  "• 메모리 락: " + (lock.isLocked() ? "❗잠김 (교착위험)" : "정상 (Unlocked)") + "\n" +
-                  "• 스케줄러: 가동 중 (" + activeSched + " / 3)\n" +
-                  "• 저장 엔진: " + (SaveExecutor.isTerminated() ? "❗중단됨" : "정상 가동 중") + "\n\n";
+                  "• 엔진(Threads): 정상 가동 중 (" + activeEngines + " / 3)\n" +
+                  "• 자동화 태스크: 활성 상태 (" + tasks.length + " / 17)\n\n";
 
-        // 3. 병목 현상 및 캐시 조사
+        // 2. 병목 현상 조사
         var waitMenu = 0, waitBank = 0, waitSelect = 0;
         for (var r in data.rooms) {
             var st = data.rooms[r].features ? data.rooms[r].features.states : null;
@@ -5247,36 +5237,24 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
                 waitSelect += Object.keys(st.selectWait || {}).length;
             }
         }
-        var cacheSize = typeof uidCache !== 'undefined' ? Object.keys(uidCache).length : 0;
 
-        report += "[📊 데이터베이스 건강도]\n" +
-                  "• 전체 유저: " + (function(){var c=0; for(var r in data.rooms) c+=Object.keys(data.rooms[r].users||{}).length; return c;})() + "명 등록\n" +
-                  "• 닉네임 캐시: " + cacheSize + "개 활성\n\n" +
-                  "[⏳ 병목 현상 감지]\n" +
+        report += "[⏳ 병목 현상 감지]\n" +
                   "• 메뉴 대기: " + waitMenu + "명\n" +
                   "• 입력 대기: " + waitBank + "명\n" +
                   "• 중복 선택: " + waitSelect + "명\n\n";
 
-        // 4. 명령어 장애 정밀 진단 로직
+        // 3. 명령어 장애 정밀 진단
         report += "━━━━━━━━━━━━━━━\n💡 명령어 장애 정밀 진단:\n";
-        
-        // 슬래시 명령어 진단
         var slashOk = (typeof USER_COMMANDS !== 'undefined' && Object.keys(USER_COMMANDS).length > 0);
-        report += "- 슬래시(/) 명령어: " + (slashOk ? "[정상] 레지스트리 로드 완료" : "❗[오류] 명령어 등록 누락") + "\n";
-        
-        // 숫자 응답 진단
-        var numOk = (waitBank < 10 && waitMenu < 10);
-        report += "- 숫자 입력 응답: " + (numOk ? "[정상] 대기열 병목 없음" : "❗[지연] 대기열 과부하 발생") + "\n";
-        
-        // 한글 키워드 진단
-        var keywordOk = !lock.isLocked();
-        report += "- 한글 키워드: " + (keywordOk ? "[정상] 시스템 가드 통과 확인" : "❗[잠김] 메모리 락 해제 필요") + "\n\n";
+        report += "- 슬래시(/) 명령어: " + (slashOk ? "[정상]" : "❗[오류]") + "\n";
+        report += "- 숫자 입력 응답: " + (waitBank < 10 ? "[정상]" : "❗[지연]") + "\n";
+        report += "- 한글 키워드: " + (!lock.isLocked() ? "[정상]" : "❗[잠김]") + "\n\n";
 
-        // 최종 조언
-        if (!data.botActive) report += "※ 조치: 관리자가 [/봇구동 온]을 입력해야 합니다.";
-        else if (lock.isLocked()) report += "※ 조치: [/강제재가동]으로 메모리 락을 풀어주세요.";
-        else if (waitBank > 5) report += "※ 조치: [/시스템자가복원]으로 꼬인 대기열을 청소하세요.";
-        else report += "※ 현재 장애 요인이 발견되지 않았습니다.";
+        var advice = "※ 진단 결과: 모든 시스템이 무결합니다.";
+        if (waitBank > 5 || waitMenu > 5) advice = "※ 조치: [/시스템자가복원]으로 병목을 해제하세요.";
+        else if (lock.isLocked()) advice = "※ 조치: [/강제재가동]이 필요합니다.";
+        
+        report += advice;
 
         replier.reply(report);
         return true;

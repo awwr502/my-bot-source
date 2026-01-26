@@ -2391,7 +2391,7 @@ function _runSector18Logic(data, ctx) {
 
 //==========섹터19==========
 
-/* 메인 메시지 리스너 함수 (v6.2 상세 로직 완전 복구본) */
+/* 메인 메시지 리스너 함수 (v6.3 통합 엔진: 문법 오류 완벽 수정본) */
 action = function(room, msg, sender, isGroupChat, replier, imageDB) {
     Executor.execute(new java.lang.Runnable({
         run: function() {
@@ -2399,11 +2399,13 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 var roomName = room ? room.trim() : "";
                 var cleanSender = sender ? String(sender).trim() : ""; 
                 
+                // 1. 기본 필터링
                 if (ALLOWED_ROOMS.indexOf(roomName) === -1 || cleanSender === "오픈채팅봇") return;
 
                 var data = getDatabase(); 
                 if (!data) return;
 
+                // 2. 방 데이터 및 기능 템플릿 준비
                 if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
                 var roomData = data.rooms[roomName];
                 
@@ -2414,18 +2416,18 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 }
                 var rFeatures = roomData.features;
 
+                // 3. 환경 설정 및 데이터 마이그레이션
                 if (data.lotto && rFeatures.lotto && !rFeatures.lotto.round) {
                     rFeatures.lotto = data.lotto;
                 }
-
-                //==========섹터20-2==========
-
                 var currentImgHash = null;
                 try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
 
+                /* [유저 식별 및 가입 로직] */
                 var targetUid = null;
                 var cacheKey = roomName + "_" + cleanSender + (currentImgHash ? "_" + currentImgHash : "");
 
+                // 유저 식별 (캐시 우선 탐색)
                 if (uidCache[cacheKey] && roomData.users[uidCache[cacheKey]]) {
                     targetUid = uidCache[cacheKey];
                 } else {
@@ -2440,6 +2442,7 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                     }
                 }
 
+                // 신규 유저 자동 등록
                 if (!targetUid) {
                     targetUid = generateUUID();
                     roomData.users[targetUid] = { 
@@ -2450,17 +2453,21 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                         dailyPromotionAttempts: 1, purchasedPromotionAttempts: 0, lastBonusTriggeredCount: -1,
                         gameAuthCount: 0, purchasedAuthCount: 0, chatLog: [], timeoutEndTime: 0,
                         artifactPieces: 0, totalGambleCount: 0, totalGambleWins: 0,
-                        totalTheftSuccess: 0, totalInvestAmount: 0, totalMiningTime: 0,
-                        totalDonation: 0, boxFragments: 0, boxTickets: 0, collectedIcons: [],
-                        dailyCreditRestoreCount: 0, boughtWarningRemoval: false 
+                        totalTheftSuccess: 0, totalInvestAmount: 0, totalMiningTime: 0, totalDonation: 0,
+                        boxFragments: 0, boxTickets: 0, collectedIcons: [], dailyCreditRestoreCount: 0,
+                        boughtWarningRemoval: false 
                     };
                     uidCache[cacheKey] = targetUid;
+                    
                     var welcomeMsg = "🎊 [" + cleanSender + "]님 환영합니다!\n━━━━━━━━━━━━━━━\n🎁 입장 축하 보너스: 3,000P 지급!\n💳 신용 등급: 4등급 부여\n📖 '/도움말'을 확인해주세요!";
                     replier.reply(welcomeMsg);
                     safeSaveData(data);
                 }
 
+                /* [명령어 실행 환경 구축] */
                 var user = roomData.users[targetUid];
+
+                // 전역 상태 변수 바인딩
                 menuWaitState = rFeatures.states.menuWait; 
                 bankProcessState = rFeatures.states.bankProcess;
                 selectWaitState = rFeatures.states.selectWait;
@@ -2469,6 +2476,7 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 duelData = rFeatures.states.duelData;
                 miningState = rFeatures.states.mining;
 
+                // 4. 명령어 실행 (true 반환 시 프로세스 종료)
                 if (typeof _handleGameLogic === 'function') {
                     if (_handleGameLogic(msg, user, data, replier, roomName, targetUid, sender, rFeatures)) return;
                 }
@@ -2478,24 +2486,29 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                     }
                 }
 
+                /* [사후 처리] 도배 방지 및 시스템 관리 */
                 if (user) {
                     var now = Date.now();
                     var conf = SYSTEM_CONFIG.SPAM;
+
                     if (user.timeoutEndTime && now < user.timeoutEndTime) return;
+
                     if (!user.chatLog) user.chatLog = [];
                     user.chatLog.push(now);
-                    user.chatLog = user.chatLog.filter(function(time) { return now - time < conf.LIMIT_WINDOW; });
+                    user.chatLog = user.chatLog.filter(function(time) {
+                        return now - time < conf.LIMIT_WINDOW;
+                    });
+
                     if (user.chatLog.length > conf.LIMIT_COUNT) {
                         user.timeoutEndTime = now + conf.TIMEOUT_MS;
                         var expireTime = new Date(user.timeoutEndTime).toLocaleTimeString();
-                        replier.reply("🔇 [도배 감지]\n━━━━━━━━━━━━━━━\n대상: " + getDisplayName(user) + "님\n제한: 5분간 이용 불가\n💡 해제: " + expireTime);
+                        replier.reply("🔇 [도배 감지]\n━━━━━━━━━━━━━━━\n대상: " + getDisplayName(user) + "님\n제한: 5분간 이용 불가\n💡 해제 시각: " + expireTime);
                         safeSaveData(data);
                         return;
                     }
                 }
 
-                // =====요청사항 시작=====
-                /* [사후 처리: 버그 제보 로직 완전 복구] */
+                // 버그 제보 시스템 (정밀 진단 로직 복구)
                 if (msg.startsWith("/버그제보 ")) {
                     var content = msg.substring(6).trim();
                     if (content.length < 2) return replier.reply("내용을 상세히 적어주세요.");
@@ -2511,38 +2524,32 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                             else if (lastAct.status === "CRASH") { diagnosis = "🚫 시스템 에러(Crash)"; isConfirmed = true; }
                             else if (lastAct.status === "FAIL") { diagnosis = "📉 데이터 불일치(계산오류)"; isConfirmed = true; }
                             else if (lastAct.status === "SUCCESS") { 
-                                replier.reply("🤖 [시스템 진단: 정상]\n직전 작업(" + lastAct.cmd + ")이 성공적으로 완료되었습니다.\n오류가 발견되지 않았습니다.");
+                                replier.reply("🤖 [시스템 진단: 정상]\n직전 작업(" + lastAct.cmd + ")이 성공적으로 완료되었습니다.");
                                 return;
                             }
-                        } else { 
-                            diagnosis = "❓ 실행 기록 없음(로직 미진입/오타)"; isConfirmed = true; 
-                        }
+                        } else { diagnosis = "❓ 실행 기록 없음(로직 미진입/오타)"; isConfirmed = true; }
 
                         var logTime = new Date().toLocaleString();
                         var logTxt = "[" + logTime + "] " + cleanSender + ": " + content + "\n    ㄴ 판독: " + diagnosis + "\n";
                         FileStream.append(BUG_LOG_PATH, logTxt);
                         
-                        if(isConfirmed) replier.reply("✅ [제보 접수]\n판독 결과: " + diagnosis + "\n분석 내용이 버그 리스트에 등록되었습니다.");
+                        if(isConfirmed) replier.reply("✅ [제보 접수]\n판독 결과: " + diagnosis + "\n분석 내용이 등록되었습니다.");
                         else replier.reply("📝 제보가 접수되었습니다.");
                     }
                     return;
                 }
 
-                /* [사후 처리: 관리자 강제재가동 로직 복구] */
+                // 관리자 강제 재가동
                 if (isAdmin(sender, data, targetUid) && msg === "/강제재가동") {
                     if (lock.isLocked()) lock.unlock(); 
                     globalData = getDatabase(); 
-                    if (globalData) { 
-                        globalData.botActive = true; 
-                        safeSaveData(globalData); 
-                    }
+                    if (globalData) { globalData.botActive = true; safeSaveData(globalData); }
                     replier.reply(formatAdmin("🔄 시스템 재가동", "결과: 락 해제 및 메모리 동기화 완료"));
                     return;
                 }
-                // =====요청사항 끝=====
 
             } catch (e) {
-                Log.error("Integrated Engine Error: " + e);
+                Log.error("Critical Engine Error: " + e);
             }
         }
     }));

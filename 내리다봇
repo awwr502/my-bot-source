@@ -6066,38 +6066,52 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
     return true;
 }
 
-if (msg.indexOf("/계정연동 ") === 0) {
-    var inputCode = msg.substring(6).trim();
-    var oldUser = null;
-    var oldUid = null;
-
-    // 전체 방 유저 데이터를 뒤져서 해당 코드를 가진 유저가 있는지 탐색
-    for (var r in data.rooms) {
-        if (data.rooms[r].users[inputCode]) {
-            oldUser = data.rooms[r].users[inputCode];
-            oldUid = inputCode;
-            break;
+// [기능: 계정 연동 및 복구]
+    if (msg.indexOf("/계정연동") === 0) {
+        var rawInput = msg.replace("/계정연동", "").trim();
+        if (!rawInput) {
+            replier.reply(formatError(user, "입력 오류", "/계정연동 [복구코드]를 입력하세요."));
+            return true;
         }
-    }
 
-    if (!oldUser) {
-        replier.reply(formatError(user, "연동 실패", "일치하는 복구 코드를 찾을 수 없습니다."));
-    } else if (oldUid === targetUid) {
-        replier.reply(formatError(user, "연동 불가", "현재 이미 사용 중인 계정 코드입니다."));
-    } else {
-        // [핵심] 기존 데이터를 현재의 새 닉네임과 새 해시에 덮어씌움
-        oldUser.name = cleanSender;
-        oldUser.imageHash = currentImgHash;
-        
-        // 현재 생성된 빈 껍데기(신규유저 데이터)는 삭제하고 캐시를 예전 UID로 연결
-        delete roomData.users[targetUid];
-        uidCache[cacheKey] = oldUid; 
-        
-        safeSaveData(data);
-        replier.reply(formatCommand("✅ 계정 연동 성공", oldUser, "이전 자산과 티어가 현재 계정으로 복구되었습니다.", "기존 코드는 계속 유지됩니다."));
+        // 입력값에서 하이픈 제거 (비교를 위해 정규화)
+        var normalizedInput = rawInput.replace(/-/g, "").toLowerCase();
+        var oldUser = null;
+        var oldUid = null;
+        var foundRoom = null;
+
+        // 전체 방 데이터를 순회하며 하이픈 무시 검색 수행
+        for (var r in data.rooms) {
+            var usersInRoom = data.rooms[r].users;
+            for (var uid in usersInRoom) {
+                if (uid.replace(/-/g, "").toLowerCase() === normalizedInput) {
+                    oldUser = usersInRoom[uid];
+                    oldUid = uid;
+                    foundRoom = r;
+                    break;
+                }
+            }
+            if (oldUser) break;
+        }
+
+        if (!oldUser) {
+            replier.reply(formatError(user, "연동 실패", "일치하는 복구 코드를 찾을 수 없습니다.\n코드를 다시 확인해주세요."));
+        } else if (oldUid === targetUid) {
+            replier.reply(formatError(user, "연동 불가", "현재 이미 사용 중인 계정 코드입니다."));
+        } else {
+            // [데이터 통합] 현재 계정 정보 업데이트
+            oldUser.name = cleanSender;
+            if (currentImgHash) oldUser.imageHash = currentImgHash;
+            
+            // 기존 껍데기 삭제 및 캐시 연결
+            delete roomData.users[targetUid];
+            uidCache[cacheKey] = oldUid; 
+            
+            safeSaveData(data);
+            replier.reply(formatCommand("✅ 계정 연동 성공", oldUser, "이전 자산과 티어가 현재 계정으로 완벽히 복구되었습니다.", "기존 코드는 계속 유지됩니다."));
+        }
+        return true;
     }
-    return true;
-}    
 
     /* [기능 6] 자산 순위 */
     if (msg === "/출석순위") {

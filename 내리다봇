@@ -598,6 +598,8 @@ var CMD_LIST = {
         { cmd: "/명예의전당", desc: "챌린저 명단 확인", cat: "조회", func: "_gameInfoLogic" },
         { cmd: "/버그제보", desc: "[내용] 오류 및 버그 신고", cat: "조회", func: "response" }, 
         { cmd: "/경마", desc: "현재 출전마 정보 및 배당 확인", cat: "조회", func: "_gameInfoLogic" }, // [신규 경마 조회]
+        { cmd: "/코드확인", desc: "기기변경/전체변경 대비 복구코드 확인", cat: "조회", func: "_gameInfoLogic" },
+        { cmd: "/계정연동", desc: "[코드] 입력하여 이전 데이터 복구", cat: "조회", func: "_gameInfoLogic" },
         { cmd: "/홀짝", desc: "[홀|짝] [포인트] 도박", cat: "게임", func: "_gameActionLogic" },
         { cmd: "/승급", desc: "티어 승급 도전", cat: "게임", func: "_gameActionLogic" },
         { cmd: "/배팅", desc: "[말번호] [포인트] 경마 참여", cat: "게임", func: "_gameActionLogic" }, // [신규 경마 배팅]
@@ -2604,29 +2606,43 @@ if (uidCache[cacheKey] && roomData.users[uidCache[cacheKey]]) {
     targetUid = uidCache[cacheKey];
 } 
 
-// 2. 캐시 미적중 시 정밀 탐색 (해시와 이름 교차 검증)
+// 2. 캐시 미적중 시 정밀 탐색 (안전 교차 식별 시스템)
 if (!targetUid) {
+    var nameMatchId = null;
+    var hashMatchId = null;
+
     for (var id in roomData.users) {
         var u = roomData.users[id];
         if (!u) continue;
         
-        // A. 프로필 해시가 일치하는 경우 (가장 확실한 식별)
-        if (currentImgHash && u.imageHash === currentImgHash) {
+        var isNameEqual = (u.name === cleanSender);
+        var isHashEqual = (currentImgHash && u.imageHash === currentImgHash);
+
+        // [1순위] 이름과 해시가 모두 일치 (완벽한 동일인)
+        if (isNameEqual && isHashEqual) {
             targetUid = id;
-            if (u.name !== cleanSender) { // 이름 변경 감지 시 업데이트
-                if (!data.nickHistory[id]) data.nickHistory[id] = [];
-                data.nickHistory[id].push({ old: u.name, date: getSimpleDate() });
-                u.name = cleanSender;
-            }
             break;
         }
         
-        // B. 닉네임이 일치하는 경우 (차선책 식별)
-        if (u.name === cleanSender) { 
-            targetUid = id; 
-            // 해시가 등록되지 않은 유저라면 현재 해시를 동기화하여 고유성 확보
-            if (currentImgHash && !u.imageHash) u.imageHash = currentImgHash; 
-            break; 
+        // [임시 저장] 교차 검증을 위해 일치하는 항목 기록
+        if (isNameEqual) nameMatchId = id;
+        if (isHashEqual) hashMatchId = id;
+    }
+
+    // [2순위] 완벽 일치가 없을 경우 교차 판별
+    if (!targetUid) {
+        if (nameMatchId) { 
+            // 이름은 같은데 해시가 바뀜 (프사 변경 유저)
+            targetUid = nameMatchId;
+            if (currentImgHash) roomData.users[targetUid].imageHash = currentImgHash;
+        } 
+        else if (hashMatchId) {
+            // 해시는 같은데 이름이 바뀜 (닉네임 변경 유저)
+            targetUid = hashMatchId;
+            var u = roomData.users[targetUid];
+            if (!data.nickHistory[targetUid]) data.nickHistory[targetUid] = [];
+            data.nickHistory[targetUid].push({ old: u.name, date: getSimpleDate() });
+            u.name = cleanSender;
         }
     }
 }
@@ -6042,6 +6058,46 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         replier.reply(formatSimple("🏅 명예의 전당", content, "최고 티어 달성 시 등록됩니다."));
         return true;
     }
+
+    /* [기능 5-1] 계정 확인 및 연동 */
+    if (msg === "/코드확인") {
+    var codeMsg = "당신의 고유 복구 코드입니다.\n닉네임과 프사를 동시에 바꿀 경우를 대비해 반드시 따로 저장해두세요.\n\n🔑 코드: " + targetUid;
+    replier.reply(formatCommand("🔐 보안 복구 코드", user, codeMsg, "연동 방법: [/계정연동 코드]"));
+    return true;
+}
+
+if (msg.indexOf("/계정연동 ") === 0) {
+    var inputCode = msg.substring(6).trim();
+    var oldUser = null;
+    var oldUid = null;
+
+    // 전체 방 유저 데이터를 뒤져서 해당 코드를 가진 유저가 있는지 탐색
+    for (var r in data.rooms) {
+        if (data.rooms[r].users[inputCode]) {
+            oldUser = data.rooms[r].users[inputCode];
+            oldUid = inputCode;
+            break;
+        }
+    }
+
+    if (!oldUser) {
+        replier.reply(formatError(user, "연동 실패", "일치하는 복구 코드를 찾을 수 없습니다."));
+    } else if (oldUid === targetUid) {
+        replier.reply(formatError(user, "연동 불가", "현재 이미 사용 중인 계정 코드입니다."));
+    } else {
+        // [핵심] 기존 데이터를 현재의 새 닉네임과 새 해시에 덮어씌움
+        oldUser.name = cleanSender;
+        oldUser.imageHash = currentImgHash;
+        
+        // 현재 생성된 빈 껍데기(신규유저 데이터)는 삭제하고 캐시를 예전 UID로 연결
+        delete roomData.users[targetUid];
+        uidCache[cacheKey] = oldUid; 
+        
+        safeSaveData(data);
+        replier.reply(formatCommand("✅ 계정 연동 성공", oldUser, "이전 자산과 티어가 현재 계정으로 복구되었습니다.", "기존 코드는 계속 유지됩니다."));
+    }
+    return true;
+}    
 
     /* [기능 6] 자산 순위 */
     if (msg === "/출석순위") {

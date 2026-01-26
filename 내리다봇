@@ -2000,27 +2000,33 @@ function _runSector16Logic(data, ctx) {
     /* [수정] 3. 경마 시스템 통합 스케줄러 (배당 보전 및 3배 보장 로직 반영) */
     
     // A. 개장 알림 (09:00:00)
-    if (currentHour === rConf.OPEN_HOUR && currentMin === 0 && currentSec === 0) {
-        racingData.isOperating = true;
-        racingData.isResultProcessed = true; 
-        var startMsg = "🏇 [내리다 경마장 개장 알림]\n━━━━━━━━━━━━━━━\n지금부터 제 " + racingData.round + "회차 경마 배팅이 가능합니다!\n\n🕒 배팅 시간: 매시 00분 ~ 49분 59초\n🏁 결과 발표: 매시 00분 00초\n🚫 운영 종료: 23:59 (00:00 최종 결과)\n━━━━━━━━━━━━━━━\n💡 현황 확인: [/경마] 입력";
-        Api.replyRoom(ctx.targetRoom, startMsg);
+    if (currentHour === rConf.OPEN_HOUR && currentMin === 0) {
+        if (racingData.lastOpenDate !== ctx.today) {
+            racingData.isOperating = true;
+            racingData.isResultProcessed = false; 
+            racingData.isDeadlineNotified = false;
+            racingData.lastOpenDate = ctx.today; // 오늘 개장 완료 기록
+            var startMsg = "🏇 [내리다 경마장 개장 알림]\n━━━━━━━━━━━━━━━\n지금부터 제 " + racingData.round + "회차 경마 배팅이 가능합니다!\n\n🕒 배팅 시간: 매시 00분 ~ 49분 59초\n🏁 결과 발표: 매시 00분 00초\n🚫 운영 종료: 23:59 (00:00 최종 결과)\n━━━━━━━━━━━━━━━\n💡 현황 확인: [/경마] 입력";
+            Api.replyRoom(ctx.targetRoom, startMsg);
+        }
     }
 
     // B. 배팅 마감 알림 (매시 49:59)
-    if (racingData.isOperating && currentMin === 49 && currentSec === 59 && !racingData.isDeadlineNotified) {
+    if (racingData.isOperating && currentMin === 49 && !racingData.isDeadlineNotified) {
         racingData.isDeadlineNotified = true;
         var deadlineMsg = "📢 [경마 배팅 마감 알림]\n━━━━━━━━━━━━━━━\n제 " + racingData.round + "회차 배팅이 종료되었습니다!\n\n🏦 최종 집계 포인트: " + fp(racingData.totalPool) + "P\n🏁 우승마 판독 및 정산 진행 중...\n━━━━━━━━━━━━━━━\n🏇 잠시 후 정각(00분)에 결과가 발표됩니다!";
         Api.replyRoom(ctx.targetRoom, deadlineMsg);
     }
 
     // C. 결과 발표 및 새 라운드 시작 (매시 00:00:00)
-    if ((racingData.isOperating || currentHour === 0) && currentMin === 0 && currentSec === 0 && currentHour !== rConf.OPEN_HOUR && !racingData.isResultProcessed) {
-        racingData.isResultProcessed = true;
-        
-        var totalW = 0; racingData.horses.forEach(function(h){ totalW += h.weight; });
-        var rVal = Math.random() * totalW; var accum = 0; var winner = racingData.horses[0];
-        for(var i=0; i<racingData.horses.length; i++){ accum += racingData.horses[i].weight; if(rVal < accum){ winner = racingData.horses[i]; break; } }
+    if ((racingData.isOperating || currentHour === 0) && currentMin === 0 && currentHour !== rConf.OPEN_HOUR) {
+        if (racingData.lastProcessedHour !== currentHour) {
+            racingData.lastProcessedHour = currentHour; // 해당 시간 정산 완료 기록 (무한루프 방지)
+            
+            /* --- 정산 로직 시작 --- */
+            var totalW = 0; racingData.horses.forEach(function(h){ totalW += h.weight; });
+            var rVal = Math.random() * totalW; var accum = 0; var winner = racingData.horses[0];
+            for(var i=0; i<racingData.horses.length; i++){ accum += racingData.horses[i].weight; if(rVal < accum){ winner = racingData.horses[i]; break; } }
 
         var tax = Math.floor(racingData.totalPool * rConf.TAX_RATE);
         var basePool = racingData.totalPool - tax + racingData.carryOver;
@@ -2104,11 +2110,16 @@ function _runSector16Logic(data, ctx) {
 
         Api.replyRoom(ctx.targetRoom, resultHeader + resultBody);
 
-        racingData.round++; racingData.bets = {}; racingData.totalPool = 0;
-        racingData.isDeadlineNotified = false; racingData.isResultProcessed = false;
-        var conds = [{l:"🚀 최상",w:1.5},{l:"☀️ 양호",w:1.2},{l:"☁️ 보통",w:1.0},{l:"💧 부진",w:0.7}];
-        racingData.horses.forEach(function(h){ var c=conds[Math.floor(Math.random()*conds.length)]; h.icon=c.l; h.weight=c.w; });
-        ctx.isUpdated = true;
+        /* --- 새 라운드 준비 --- */
+            racingData.round++; 
+            racingData.bets = {}; 
+            racingData.totalPool = 0;
+            racingData.isDeadlineNotified = false; // 마감 알림 플래그 리셋
+            
+            var conds = [{l:"🚀 최상",w:1.5},{l:"☀️ 양호",w:1.2},{l:"☁️ 보통",w:1.0},{l:"💧 부진",w:0.7}];
+            racingData.horses.forEach(function(h){ var c=conds[Math.floor(Math.random()*conds.length)]; h.icon=c.l; h.weight=c.w; });
+            ctx.isUpdated = true;
+        }
     }
 
     /* 4. 홀짝 피버타임 및 결투 체크 (기존 로직 유지) */
@@ -2260,7 +2271,7 @@ function _runSector18Logic(data, ctx) {
     var mainRoomData = data.rooms[ctx.targetRoom]; 
 
     /* 7. 로또 판매 마감 알림 (21:00) */
-    if (currentHour === 21 && currentMin === 0) {
+    if (currentHour === 21) {
         if (!data.lotto_flags) data.lotto_flags = {};
         if (data.lotto_flags.lastCloseNotify !== ctx.today) {
             data.lotto_flags.lastCloseNotify = ctx.today;
@@ -2286,7 +2297,7 @@ function _runSector18Logic(data, ctx) {
     }
 
     /* 8. 로또 당첨 번호 추첨 및 상금 지급 (22:00) */
-    if (currentHour === 22 && currentMin === 0) {
+    if (currentHour === 22) {
         if (!data.lotto_flags) data.lotto_flags = {};
         if (data.lotto_flags.lastDrawNotify !== ctx.today) {
             data.lotto_flags.lastDrawNotify = ctx.today;

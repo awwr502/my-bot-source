@@ -422,7 +422,7 @@ function endTracking(user, isSuccess, resultMsg) {
 
 //==========섹터3==========
 
-/* [최적화] 하이브리드 비동기 영속화 엔진 v6.5 (보호 가드 + 원격 백업 통합) */
+/* [최적화] 하이브리드 비동기 영속화 엔진 v6.6 (보호 가드 강화 버전) */
 function safeSaveData(data, isForceBackup) {
     if (!data) return;
 
@@ -433,19 +433,19 @@ function safeSaveData(data, isForceBackup) {
         content = JSON.stringify(data);
         var check = JSON.parse(content);
         
-        // [가드 1] 구조적 무결성 검사
+        // [검증 1] 구조 무결성 체크
         if (!check || !check.rooms) {
             throw new Error("데이터 구조 불완전 (rooms 누락)");
         }
 
-        // [가드 2] 양적 무결성 검사 (이번 사고 방지 핵심 로직)
+        // [검증 2] 양적 무결성 체크 (데이터 초기화 방어막)
         var roomKeys = Object.keys(data.rooms);
         var totalUserCount = 0;
         roomKeys.forEach(function(r) { 
             if(data.rooms[r].users) totalUserCount += Object.keys(data.rooms[r].users).length; 
         });
 
-        // 방 목록은 있는데 유저가 0명이라면 비정상 초기화로 간주하고 저장을 차단함
+        // 방 목록은 있으나 유저가 0명인 비정상 상황 발생 시 쓰기 중단
         if (totalUserCount === 0 && roomKeys.length > 0) {
             throw new Error("위험: 유저 데이터가 0명입니다. 저장을 차단합니다.");
         }
@@ -455,10 +455,10 @@ function safeSaveData(data, isForceBackup) {
         try {
             Api.replyRoom("내리다", "⚠️ 데이터 보호 작동: " + e.message);
         } catch (err) {}
-        return; // 오염된 데이터는 하단의 파일 쓰기 로직으로 넘어가지 않고 여기서 종료
+        return; // 오염된 데이터는 실제 파일 기록 단계로 넘어가지 않음
     }
 
-    // [비동기 처리] 실제 파일 기록 및 원격 전송 위임
+    // [비동기 처리] 실제 파일 쓰기 엔진
     SaveExecutor.execute(new java.lang.Runnable({
         run: function() {
             lock.lock(); 
@@ -475,12 +475,7 @@ function safeSaveData(data, isForceBackup) {
                     if (orgFile.exists()) orgFile.delete();
                     tempFile.renameTo(orgFile);
 
-                    /* [v6.5 핵심] 로더(본체)에 상주하는 원격 백업 함수 호출 */
-                    if (typeof remoteBackup === 'function') {
-                        remoteBackup(content);
-                    }
-
-                    // 저널 로그(블랙박스) 초기화
+                    // 저장 성공 시 블랙박스(저널 로그) 초기화
                     logLock.lock();
                     try {
                         var jFile = new java.io.File(JOURNAL_PATH);
@@ -492,7 +487,7 @@ function safeSaveData(data, isForceBackup) {
                     throw new Error("임시 파일 생성 실패 또는 데이터 유실");
                 }
 
-                // 주기적 백업 처리 (last_stable_backup.json)
+                // 주기적 물리 백업 처리
                 if (isForceBackup) {
                     var backupPath = BACKUP_DIR + "last_stable_backup.json";
                     FileStream.write(backupPath + ".tmp", content);

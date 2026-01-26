@@ -5451,21 +5451,15 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [11] 포인트 뿌리기 (방별 독립 엔진 참조 유지 버전) */
+    /* [11] 포인트 뿌리기 (방별 독립 주머니 연동 - 먹통 해결 핵심) */
     if (msg === "/뿌리기") {
         if (sprinkleData.active) { 
             replier.reply(formatAdmin("오류", "이미 뿌리기가 진행 중입니다.")); 
             return true; 
         }
         
-        var roomData = data.rooms[roomName];
         var count = Math.floor(Math.random() * 3) + 2; 
-        var multiplier = 1.0;
-        
-        if (roomData.economyBase && roomData.economyBase > 0) {
-            var eco = calculateEconomy(data, roomName);
-            multiplier = 1 + (eco.total / roomData.economyBase - 1) * (data.economyDamping || 0.5);
-        }
+        var multiplier = util_getEcoMultiplier(roomName);
         
         var portions = [];
         var totalSprinkle = 0;
@@ -5476,9 +5470,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             totalSprinkle += finalP;
         }
 
-        /* [Gemini 요청 사항] 참조 보존 방식의 데이터 업데이트 */
-        // 설명: sprinkleData = { ... } 식의 재할당은 섹터 19의 매핑을 파괴하므로 
-        // 기존 객체의 속성값만 수정하여 데이터베이스와의 연결을 유지합니다.
+        // [v5.9 수정] 전역 sprinkleData가 아닌 현재 방의 rFeatures.sprinkleData에 할당
         sprinkleData.active = true;
         sprinkleData.totalPoint = totalSprinkle;
         sprinkleData.remainingPoint = totalSprinkle;
@@ -5489,14 +5481,17 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
 
         Api.replyRoom(roomName, formatAdmin("🎉 포인트 뿌리기 시작!", "선착순 " + count + "명!\n채팅창에 [줍기]를 입력하세요!\n💰 총 배정: " + fp(totalSprinkle) + "P"));
         
-        // 1분 후 자동 종료 타이머
-        setTimeout(function() { 
-            if (sprinkleData.active) { 
-                sprinkleData.active = false; 
-                Api.replyRoom(roomName, formatAdmin("🏁 뿌리기 시간 초과", "이벤트가 종료되었습니다.")); 
-                safeSaveData(globalData);
-            } 
-        }, 60000);
+        // 1분 후 자동 종료 타이머 (방 이름을 클로저로 전달)
+        (function(targetRoom, targetData) {
+            setTimeout(function() { 
+                var rData = targetData.rooms[targetRoom];
+                if (rData && rData.features.sprinkleData.active) { 
+                    rData.features.sprinkleData.active = false; 
+                    Api.replyRoom(targetRoom, formatAdmin("🏁 뿌리기 시간 초과", "이벤트가 종료되었습니다.")); 
+                    safeSaveData(targetData);
+                } 
+            }, 60000);
+        })(roomName, data);
         
         safeSaveData(data);
         return true;
@@ -6471,32 +6466,45 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
 
    /* [Gemini 요청 사항] 뿌리기 줍기 (참조 기반 데이터 확인 및 국고 연동) */
     if (msg === "줍기") {
-        // [수정] sprinkleData 객체의 속성을 직접 확인하여 방별 독립 상태 체크
-        if (!sprinkleData || sprinkleData.active !== true) return false;
-        
-        if (sprinkleData.winners.indexOf(targetUid) !== -1) { 
-            replier.reply(formatError(user, "중복 참여 불가", "이미 이 이벤트에서 포인트를 획득하셨습니다.")); 
-            return true; 
+        // 1. 이벤트 활성화 체크 (방별 주머니 기준)
+        if (!sprinkleData || sprinkleData.active !== true) {
+            // 이벤트가 없을 때 무응답 대신 안내를 주어 '먹통' 오해를 해소합니다.
+            // replier.reply(formatError(user, "줍기 실패", "현재 진행 중인 뿌리기 이벤트가 없습니다."));
+            return false; 
         }
-        if (sprinkleData.currentWinners >= sprinkleData.limit) { 
-            replier.reply(formatError(user, "선착순 마감", "이미 모든 포인트가 소진되었습니다.")); 
-            return true; 
+
+        // 2. 유저 데이터 무결성 체크
+        var currentUser = user || roomData.users[targetUid];
+        if (!currentUser) return false;
+
+        // 3. 중복 참여 및 선착순 검증
+        if (sprinkleData.winners.indexOf(targetUid) !== -1) {
+            replier.reply(formatError(currentUser, "중복 참여 불가", "이미 이 이벤트에서 포인트를 획득하셨습니다."));
+            return true;
         }
-        
+        if (sprinkleData.currentWinners >= sprinkleData.limit) {
+            replier.reply(formatError(currentUser, "선착순 마감", "이미 모든 포인트가 소진되었습니다."));
+            return true;
+        }
+
+        // 4. 포인트 배정 및 지급 (portions 배열에서 마지막 값 추출)
         var prize = sprinkleData.portions.pop();
+        if (prize === undefined) return false;
+
         sprinkleData.winners.push(targetUid);
         sprinkleData.currentWinners++;
-        
-        // [v5.9] 통합 상환 엔진 및 게이트웨이 포인트 지급 (국고 자동 차감)
-        var res = processRepayment(user, prize, targetUid, roomName);
-        util_updatePoint(user, roomData, Number(res.actualGain), "뿌리기 줍기", roomName);
-        
-        replier.reply(formatCommand("🎉 줍기 성공!", user, fp(prize) + "P를 주웠습니다!" + res.repayMsg, "내 잔액: " + fP(user.point) + "P"));
-        
-        // 전량 소진 시 상태 해제
-        if (sprinkleData.currentWinners >= sprinkleData.limit) { 
-            sprinkleData.active = false; 
-            Api.replyRoom(roomName, formatAdmin("🏁 뿌리기 마감", "모든 포인트가 소진되었습니다.")); 
+        sprinkleData.remainingPoint -= prize;
+
+        // [v5.9] 통합 상환 엔진 및 게이트웨이 지급
+        var res = processRepayment(currentUser, prize, targetUid, roomName);
+        util_updatePoint(currentUser, roomData, Number(res.actualGain), "뿌리기 줍기", roomName);
+
+        replier.reply(formatCommand("🎉 줍기 성공!", currentUser, fp(prize) + "P를 주웠습니다!" + res.repayMsg, "내 잔액: " + fp(currentUser.point) + "P"));
+
+        // 5. 전량 소진 시 이벤트 자동 종료
+        if (sprinkleData.currentWinners >= sprinkleData.limit) {
+            sprinkleData.active = false;
+            Api.replyRoom(roomName, formatAdmin("🏁 뿌리기 마감", "모든 포인트가 소진되어 이벤트가 종료되었습니다."));
         }
         safeSaveData(data);
         return true;

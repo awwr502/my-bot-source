@@ -2453,9 +2453,8 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 sprinkleData = rFeatures.sprinkleData;
 
                 /**
-                 * [Gemini 요청 사항] 상태 관리 엔진 독립화 (Bug Fix)
-                 * 설명: 모든 상태를 rFeatures.states 하나에 넣으면 '변수 충돌'이 발생하여 숫자가 작동하지 않습니다.
-                 * 섹터 1의 TEMPLATE 구조에 맞게 각각의 독립된 주머니로 정확히 매핑합니다.
+                 * [Gemini 요청 사항] 상태 관리 엔진 독립화 및 우선순위 보정 (Bug Fix)
+                 * 설명: 각 상태 주머니를 독립 매핑하고, 결투 키워드가 타 업무 상태에 먹히지 않도록 가드를 세웁니다.
                  */
                 menuWaitState = rFeatures.states.menuWait; 
                 bankProcessState = rFeatures.states.bankProcess;
@@ -2466,6 +2465,10 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 miningState = rFeatures.states.mining;
                 loanRegisterState = rFeatures.states.loanRegister;
                 loanContractWaitState = rFeatures.states.loanContractWait;
+
+                // [결투 로직 우선순위 가드]
+                // 수락, 거절, 취소 키워드 입력 시 다른 대기 상태가 간섭하지 못하도록 결투 데이터를 최우선 탐색합니다.
+                var isDuelKeyword = (msg === "수락" || msg === "거절" || msg === "취소");
 
                 /* [신규] 도배 방지 및 타임아웃 체크 엔진 */
                 var user = null;
@@ -2575,20 +2578,23 @@ var currentImgHash = null;
 try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) { currentImgHash = null; }
 
 var targetUid = null;
-var cacheKey = roomName + "_" + cleanSender + (currentImgHash ? "_" + currentImgHash : "");
+var cacheKey = roomName + "_" + cleanSender;
 
-// 1. 캐시에서 먼저 찾기
+// 1. 캐시에서 먼저 찾기 (성능 최적화)
 if (uidCache[cacheKey] && roomData.users[uidCache[cacheKey]]) {
     targetUid = uidCache[cacheKey];
-} else {
-    // 2. 루프 탐색 (최초 1회 실행)
+} 
+
+// 2. 캐시 미적중 시 정밀 탐색 (해시와 이름 교차 검증)
+if (!targetUid) {
     for (var id in roomData.users) {
         var u = roomData.users[id];
         if (!u) continue;
         
+        // A. 프로필 해시가 일치하는 경우 (가장 확실한 식별)
         if (currentImgHash && u.imageHash === currentImgHash) {
             targetUid = id;
-            if (u.name !== cleanSender) {
+            if (u.name !== cleanSender) { // 이름 변경 감지 시 업데이트
                 if (!data.nickHistory[id]) data.nickHistory[id] = [];
                 data.nickHistory[id].push({ old: u.name, date: getSimpleDate() });
                 u.name = cleanSender;
@@ -2596,13 +2602,19 @@ if (uidCache[cacheKey] && roomData.users[uidCache[cacheKey]]) {
             break;
         }
         
+        // B. 닉네임이 일치하는 경우 (차선책 식별)
         if (u.name === cleanSender) { 
             targetUid = id; 
-            if (currentImgHash) u.imageHash = currentImgHash; 
+            // 해시가 등록되지 않은 유저라면 현재 해시를 동기화하여 고유성 확보
+            if (currentImgHash && !u.imageHash) u.imageHash = currentImgHash; 
             break; 
         }
     }
-    if (targetUid) uidCache[cacheKey] = targetUid;
+}
+
+// 3. 식별된 UID를 캐시에 즉시 강제 바인딩 (입력 대기 유실 방지)
+if (targetUid) {
+    uidCache[cacheKey] = targetUid;
 }
 
 /* 신규 유저 등록 및 환영 메시지 (도배 방지 시스템 변수 통합 및 칭호 통계 필드 추가) */
@@ -5567,12 +5579,35 @@ function _handleGameLogic(msg, user, data, replier, roomName, targetUid, sender)
     // 1. 명령어 첫 단어 추출 (예: "/홀짝 100" -> "/홀짝")
     var cmd = msg.split(" ")[0];
 
-    // 2. 유저 명령어 레지스트리(USER_COMMANDS)에서 해당 명령어 검색
-    // 섹터 6에서 등록된 정보를 바탕으로 최적화된 탐색을 수행합니다.
+    // [v5.9 핵심: 입구 컷 가드] 
+    // 입력값이 순수 숫자라면 명령어가 아닌 '선택/수량 입력'일 확률이 높으므로 
+    // 분배기에서 처리하지 않고(false) 대기 상태 핸들러(섹터 22, 23)로 즉시 넘깁니다.
+    if (/^\d+$/.test(cmd) && !USER_COMMANDS[cmd]) {
+        return false;
+    }
+
+    // 2. 유저 명령어 레지스트리(USER_COMMANDS) 검색
     if (USER_COMMANDS[cmd] && typeof USER_COMMANDS[cmd].execute === 'function') {
         
-        // 3. 등록된 하위 로직 함수(섹터 40~44 및 로또/광산/가방 등)를 즉시 실행 및 결과 반환
-        // 실행 시 필요한 모든 컨텍스트 객체를 인자로 전달하여 위임합니다.
+        // [결투 키워드 충돌 방지 로직]
+        // 입력된 명령어가 '수락', '거절', '취소'인 경우, 실제 결투 데이터가 있는지 먼저 확인합니다.
+        if (cmd === "수락" || cmd === "거절" || cmd === "취소") {
+            var hasDuel = false;
+            // A. 내가 수락자(피신청자)인 경우
+            if (duelData[targetUid]) hasDuel = true;
+            // B. 내가 신청자인 경우 (취소용)
+            else {
+                for (var d in duelData) {
+                    if (duelData[d].challengerUid === targetUid) { hasDuel = true; break; }
+                }
+            }
+
+            // 결투 상태가 아닌데 '취소' 등을 입력했다면, 결투 로직을 태우지 않고(false)
+            // 은행이나 상점의 취소 로직이 작동할 수 있도록 순서를 양보합니다.
+            if (!hasDuel) return false;
+        }
+        
+        // 3. 검증된 명령어만 하위 로직 함수(섹터 40~44 등)로 실행 위임
         return USER_COMMANDS[cmd].execute(msg, user, data, replier, roomName, targetUid);
     }
 
@@ -6214,62 +6249,57 @@ function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [수정] 결투 취소 (신청자 본인이 철회) */
+    /* [v5.9 수정] 결투 취소 (신청자가 직접 철회) */
     if (msg === "취소") {
-        var foundDuelId = null;
-        // 내가 신청한 결투가 있는지 전체 duelData에서 탐색
+        var cancelTargetId = null;
+        // 현재 방의 결투 데이터 중 내가 신청자인 건을 탐색
         for (var tid in duelData) {
             if (duelData[tid].challengerUid === targetUid) {
-                foundDuelId = tid;
+                cancelTargetId = tid;
                 break;
             }
         }
 
-        if (foundDuelId) {
-            var d = duelData[foundDuelId];
-            util_updatePoint(user, roomData, d.point, "결투 취소 환급");
-            delete duelData[foundDuelId];
-            replier.reply(formatCommand("🚫 결투 취소", user, "결투 신청을 철회하고 베팅금을 반환받았습니다.", "내 잔액: " + fp(user.point) + "P"));
+        if (cancelTargetId) {
+            var d = duelData[cancelTargetId];
+            // [엔진 연동] 신청자에게 베팅금 즉시 환급
+            util_updatePoint(user, roomData, d.point, "결투 취소 환급", roomName);
+            delete duelData[cancelTargetId];
+            
+            replier.reply(formatCommand("🚫 결투 취소 완료", user, "결투 신청을 철회하고 베팅금을 반환받았습니다.", "내 잔액: " + fp(user.point) + "P"));
             safeSaveData(data);
             return true;
         }
-        return false; // 내가 신청한 결투가 없으면 일반 채팅으로 처리
     }
 
-    /* [수정] 결투 수락 (상대방이 승낙) */
+    /* [v5.9 수정] 결투 수락 (상대방이 승낙) */
     if (msg === "수락" && duelData[targetUid]) {
         if (data.gambleLimit) { replier.reply(formatError(user, "도박 제한", "현재 도박 기능이 제한되어 있습니다.")); return true; }
+        
         var d = duelData[targetUid];
         var challenger = roomData.users[d.challengerUid];
-        
-        if (!challenger) { 
-            delete duelData[targetUid]; 
-            replier.reply(formatError(user, "신청자 정보 없음")); 
-            return true; 
-        }
+        if (!challenger) { delete duelData[targetUid]; return true; }
 
+        // 수락자의 가용 포인트 체크
         if (Number(user.point) < d.point) {
-            // 수락자 포인트 부족 시 신청자에게 포인트 돌려주고 결투 종료
-            util_updatePoint(challenger, roomData, d.point, "상대 포인트 부족으로 인한 환급");
+            util_updatePoint(challenger, roomData, d.point, "상대 포인트 부족 환급", roomName);
             delete duelData[targetUid];
             replier.reply(formatError(user, "포인트 부족", "수락하기 위한 포인트가 부족하여 결투가 무산되었습니다."));
-            safeSaveData(data);
             return true;
         }
 
-        // 수락자 포인트 차감
-        util_updatePoint(user, roomData, -d.point, "결투 수락 베팅");
+        // [엔진 연동] 수락자 베팅금 차감
+        util_updatePoint(user, roomData, -d.point, "결투 수락 베팅", roomName);
 
-        // 승패 결정 (50:50)
+        // 승패 판정 (50:50)
         var isChallengerWin = Math.random() < 0.5;
         var winner = isChallengerWin ? challenger : user;
         var winnerId = isChallengerWin ? d.challengerUid : targetUid;
         var winPrize = d.point * 2;
 
-        /* 통합 상환 엔진 호출 및 승리금 지급 */
+        // [핵심] 상환 엔진 통과 후 게이트웨이로 최종 승리금 지급
         var res = processRepayment(winner, winPrize, winnerId, roomName);
-        winner.point = Number(winner.point) + Number(res.actualGain);
-        verifyPointTransaction(winner, winner.point - res.actualGain, Number(res.actualGain), "결투 승리 보상");
+        util_updatePoint(winner, roomData, Number(res.actualGain), "결투 승리 보상", roomName);
 
         var resBody = "⚔️ 결투 결과\n" + getDisplayName(challenger) + " VS " + getDisplayName(user) + "\n\n🏆 승자: " + getDisplayName(winner) + "\n💰 획득: " + fp(winPrize) + "P" + (res.repayMsg || "");
         replier.reply(formatCommand("⚔️ 결투 종료", winner, resBody, "내 잔액: " + fp(winner.point) + "P"));
@@ -6279,15 +6309,18 @@ function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [수정] 결투 거절 (상대방이 거부) */
+    /* [v5.9 수정] 결투 거절 (상대방이 거부) */
     if (msg === "거절" && duelData[targetUid]) {
         var d = duelData[targetUid];
         var challenger = roomData.users[d.challengerUid];
+        
         if (challenger) {
-            util_updatePoint(challenger, roomData, d.point, "결투 거절 환급");
+            // [엔진 연동] 신청자에게 베팅금 안전 환급
+            util_updatePoint(challenger, roomData, d.point, "결투 거절 환급", roomName);
         }
+        
         delete duelData[targetUid];
-        replier.reply(formatCommand("🚫 결투 거절", user, "결투 신청을 거절했습니다.", "신청자에게 베팅금이 반환되었습니다."));
+        replier.reply(formatCommand("🚫 결투 거절", user, "결투 신청을 거절했습니다.\n신청자에게 베팅금이 반환되었습니다.", "닫기: [취소]"));
         safeSaveData(data);
         return true;
     }

@@ -5270,45 +5270,6 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [시스템 자가 복원] 방별 독립 상태값 초기화 로직 보강 */
-    if (msg.trim() === "/시스템자가복원") {
-        // 전역 대기 상태 초기화
-        menuWaitState = {}; bankProcessState = {}; selectWaitState = {};
-        lottoPurchaseState = {}; activeThefts = {}; duelData = {}; miningState = {};
-
-        var fixCount = 0;
-        for (var r in data.rooms) {
-            var roomObj = data.rooms[r];
-            
-            // [핵심 추가] 각 방의 features 내부에 숨은 상태값들 전수 초기화
-            if (roomObj.features && roomObj.features.states) {
-                var st = roomObj.features.states;
-                st.menuWait = {}; st.bankProcess = {}; st.selectWait = {};
-                st.lottoPurchase = {}; st.activeThefts = {}; st.duelData = {};
-                st.mining = {}; st.loanRegister = {}; st.loanContractWait = {};
-            }
-
-            if (roomObj.bankReserve === undefined) roomObj.bankReserve = 10000;
-            roomObj.lastBankAlert = "normal";
-
-            for (var id in roomObj.users) {
-                var u = roomObj.users[id];
-                if (!u) continue;
-                u.point = Math.floor(Number(u.point || 0));
-                u.bank = Math.floor(Number(u.bank || 0));
-                u.creditScore = Math.min(1000, Math.max(0, Number(u.creditScore || 600)));
-                fixCount++;
-            }
-        }
-
-        if (lock.isLocked()) { try { lock.unlock(); } catch(e) {} }
-        if (typeof uidCache !== 'undefined') { for (var k in uidCache) delete uidCache[k]; }
-
-        safeSaveData(data);
-        replier.reply(formatAdmin("⚙️ 시스템 자가 복원 완료", "방별 독립 대기 상태를 포함하여 유저 " + fixCount + "명의 데이터를 정규화했습니다."));
-        return true;
-    }
-
     /* [1] 은행 가용 재원 수동 수정 (강제 설정) */
     if (msg.indexOf("/재원수정 ") === 0) {
         var val = parseInt(msg.split(" ")[1].replace(/,/g, ""));
@@ -5705,7 +5666,6 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [13] 시스템 자가 복원 (딥 옵티마이징 버전) */
     if (msg.trim() === "/시스템자가복원") {
         // 1. 휘발성 상태값 및 활동 락(Lock) 일괄 해제
         lottoPurchaseState = {}; 
@@ -5719,20 +5679,28 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         feverData = { active: false, endTime: 0, scheduled: [] }; // 피버타임 상태 초기화
 
         // 2. UID 캐시 초기화 (메모리 정리)
-        if (typeof uidCache !== 'undefined') uidCache = {};
+        if (typeof uidCache !== 'undefined') {
+            for (var k in uidCache) delete uidCache[k];
+        }
 
         // 3. 시스템 핵심 경제 지표 복구
         if (!data.marketOpenPrice || data.marketOpenPrice <= 0) data.marketOpenPrice = 1000;
         marketOpenPrice = data.marketOpenPrice; // 전역 변수 동기화
 
-        // 4. 전 유저 데이터 수치 정규화 및 필수 필드 복구
+        // 4. 전 유저 데이터 수치 정규화 및 방별 독립 상태 초기화
         var fixCount = 0;
         for (var r in data.rooms) {
             var roomObj = data.rooms[r];
             
+            // [핵심 해결] /서버진단 수치에 반영되는 방별 states 주머니 강제 비우기
+            if (roomObj.features && roomObj.features.states) {
+                var st = roomObj.features.states;
+                for (var sKey in st) { st[sKey] = {}; }
+            }
+            
             // 중앙은행 재원 누락 시 복구
             if (roomObj.bankReserve === undefined || roomObj.bankReserve === null) {
-                roomObj.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
+                roomObj.bankReserve = (SYSTEM_CONFIG && SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE) ? SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE : 10000;
             }
             // 위기 알림 상태 리셋
             roomObj.lastBankAlert = "normal";
@@ -5757,7 +5725,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
 
         safeSaveData(data);
         replier.reply(formatAdmin("⚙️ 시스템 자가 복원 완료", 
-            "1. 모든 입력 대기 및 활동 상태 초기화\n" +
+            "1. 모든 입력 대기 및 활동 상태 초기화 (방별 독립 상태 포함)\n" +
             "2. 중앙은행 재원 및 주식 시세 지표 복구\n" +
             "3. 국가 위기 알림 엔진 리셋\n" +
             "4. 유저 " + fixCount + "명의 데이터 정수화 완료"));

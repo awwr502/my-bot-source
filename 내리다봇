@@ -2415,27 +2415,61 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 
                 var rFeatures = roomData.features;
 
-                /* [마이그레이션] 기존 전역 데이터를 현재 방으로 이사 (최초 1회) */
-                if (data.lotto && !rFeatures.lotto.round) {
+                /* [환경 설정] 로또 데이터 마이그레이션 */
+                if (data.lotto && rFeatures.lotto && !rFeatures.lotto.round) {
                     rFeatures.lotto = data.lotto;
                 }
 
-                /* [데이터 격리] 하위 로직 호출 시 rFeatures를 인자로 전달하여 혼선 방지 */
-                if (typeof _handleGameLogic === 'function') {
-                    if (_handleGameLogic(msg, user, data, replier, roomName, targetUid, sender, rFeatures)) return;
-                }
+                /* 이미지 해시 준비 */
+                var currentImgHash = null;
+                try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
 
-                if (isAdmin(sender, data)) {
-                    if (typeof _handleAdminLogic === 'function') {
-                        if (_handleAdminLogic(msg, user, data, replier, roomName, targetUid, sender, rFeatures)) return;
+//==========섹터20-1==========
+
+/* [v6.0] 통합 유저 식별 엔진 */
+                var targetUid = null;
+                var cacheKey = roomName + "_" + cleanSender + (currentImgHash ? "_" + currentImgHash : "");
+
+                // 1. 유저 식별 (캐시 우선 탐색)
+                if (uidCache[cacheKey] && roomData.users[uidCache[cacheKey]]) {
+                    targetUid = uidCache[cacheKey];
+                } else {
+                    for (var id in roomData.users) {
+                        var u = roomData.users[id];
+                        if (!u) continue;
+                        if ((currentImgHash && u.imageHash === currentImgHash) || u.name === cleanSender) {
+                            targetUid = id;
+                            uidCache[cacheKey] = id;
+                            break;
+                        }
                     }
                 }
 
-                /**
-                 * [Gemini 요청 사항] 상태 관리 엔진 독립화 (Bug Fix)
-                 * 설명: 모든 상태를 rFeatures.states 하나에 넣으면 '변수 충돌'이 발생하여 숫자가 작동하지 않습니다.
-                 * 섹터 1의 TEMPLATE 구조에 맞게 각각의 독립된 주머니로 정확히 매핑합니다.
-                 */
+                // 2. 신규 유저 등록 (최초 채팅 시)
+                if (!targetUid) {
+                    targetUid = generateUUID();
+                    roomData.users[targetUid] = { 
+                        name: cleanSender, point: 3000, tier: 0, creditScore: 600, totalAttendance: 0, 
+                        loan: { debt: 0, items: [] }, lastDate: "", icon: "", title: "", 
+                        inventory: [], imageHash: currentImgHash, chatCount: 0, dailyGambleCount: 0,
+                        bank: 0, jailReleaseTime: 0, stockHoldings: {}, stockAvg: {}, 
+                        dailyPromotionAttempts: 1, purchasedPromotionAttempts: 0, lastBonusTriggeredCount: -1,
+                        gameAuthCount: 0, purchasedAuthCount: 0, chatLog: [], timeoutEndTime: 0,
+                        artifactPieces: 0, totalGambleCount: 0, totalGambleWins: 0,
+                        totalTheftSuccess: 0, totalInvestAmount: 0, totalMiningTime: 0,
+                        totalDonation: 0, boxFragments: 0, boxTickets: 0, collectedIcons: [],
+                        dailyCreditRestoreCount: 0, boughtWarningRemoval: false 
+                    };
+                    uidCache[cacheKey] = targetUid;
+                    
+                    var welcomeMsg = "🎊 [" + cleanSender + "]님 환영합니다!\n━━━━━━━━━━━━━━━\n🎁 입장 축하 보너스: 3,000P 지급!\n💳 신용 등급: 4등급 부여\n📖 '/도움말'을 확인해주세요!";
+                    replier.reply(welcomeMsg);
+                    safeSaveData(data);
+                }
+
+                // 3. 유저 객체 확정 및 상태 바인딩
+                var user = roomData.users[targetUid];
+
                 menuWaitState = rFeatures.states.menuWait; 
                 bankProcessState = rFeatures.states.bankProcess;
                 selectWaitState = rFeatures.states.selectWait;
@@ -2443,191 +2477,94 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 activeThefts = rFeatures.states.activeThefts;
                 duelData = rFeatures.states.duelData;
                 miningState = rFeatures.states.mining;
-                loanRegisterState = rFeatures.states.loanRegister;
-                loanContractWaitState = rFeatures.states.loanContractWait;
 
-                /* [신규] 도배 방지 및 타임아웃 체크 엔진 */
-                var user = null;
-                var currentImgHash = null;
-                try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
-
-                // 유저 객체 선제 탐색 (도배 체크용)
-                for (var id in roomData.users) {
-                    var u = roomData.users[id];
-                    if ((currentImgHash && u.imageHash === currentImgHash) || u.name === cleanSender) {
-                        user = u;
-                        break;
+                // 4. 명령어 실행부 (유저 데이터가 확실히 존재함)
+                if (typeof _handleGameLogic === 'function') {
+                    if (_handleGameLogic(msg, user, data, replier, roomName, targetUid, sender, rFeatures)) return;
+                }
+                if (isAdmin(sender, data, targetUid)) {
+                    if (typeof _handleAdminLogic === 'function') {
+                        if (_handleAdminLogic(msg, user, data, replier, roomName, targetUid, sender, rFeatures)) return;
                     }
                 }
 
+/* [사후 처리 1] 도배 방지 엔진 */
                 if (user) {
                     var now = Date.now();
                     var conf = SYSTEM_CONFIG.SPAM;
 
-                    // 1. 이미 타임아웃 상태인 경우 즉시 종료 (무응답)
-                    if (user.timeoutEndTime && now < user.timeoutEndTime) {
-                        return;
-                    }
+                    if (user.timeoutEndTime && now < user.timeoutEndTime) return;
 
-                    // 2. 채팅 로그 기록 및 슬라이딩 윈도우 필터링
                     if (!user.chatLog) user.chatLog = [];
                     user.chatLog.push(now);
                     user.chatLog = user.chatLog.filter(function(time) {
                         return now - time < conf.LIMIT_WINDOW;
                     });
 
-                    // 3. 도배 기준 초과 시 타임아웃 부여
                     if (user.chatLog.length > conf.LIMIT_COUNT) {
                         user.timeoutEndTime = now + conf.TIMEOUT_MS;
-                        user.chatLog = []; // 로그 초기화
-                        
                         var expireTime = new Date(user.timeoutEndTime).toLocaleTimeString();
-                        var timeoutMsg = "🔇 [도배 감지: 이용 제한]\n" +
-                                         "━━━━━━━━━━━━━━━\n" +
-                                         "대상: " + getDisplayName(user) + "님\n" +
-                                         "사유: 단시간 과도한 채팅 발송\n" +
-                                         "제한: " + Math.floor(conf.TIMEOUT_MS / 60000) + "분간 봇 이용 불가\n" +
-                                         "━━━━━━━━━━━━━━━\n" +
-                                         "💡 해제 시각: " + expireTime;
-                        
-                        replier.reply(timeoutMsg);
+                        replier.reply("🔇 [도배 감지: 이용 제한]\n" + 
+                                     "━━━━━━━━━━━━━━━\n" +
+                                     "대상: " + getDisplayName(user) + "님\n" +
+                                     "제한: 5분간 봇 이용 불가\n" +
+                                     "━━━━━━━━━━━━━━━\n" +
+                                     "💡 해제 시각: " + expireTime);
                         safeSaveData(data);
                         return;
                     }
                 }
 
-                /* [핵심] 버그 제보 및 진실 판별 시스템 */
+                /* [사후 처리 2] 버그 제보 시스템 */
                 if (msg.startsWith("/버그제보 ")) {
                     var content = msg.substring(6).trim();
                     if (content.length < 2) return replier.reply("내용을 상세히 적어주세요.");
                     
-                    if(user) { 
+                    if (user) { 
                         var lastAct = user.lastAction;
                         var timeDiff = lastAct ? (Date.now() - lastAct.time) : 99999999;
                         var diagnosis = "";
                         var isConfirmed = false;
 
                         if (lastAct && timeDiff < 300000) { 
-                            if (lastAct.status === "PENDING") { diagnosis = "⚠️ 로직 중단됨(응답없음)"; isConfirmed = true; }
-                            else if (lastAct.status === "CRASH") { diagnosis = "🚫 시스템 에러(Crash)"; isConfirmed = true; }
-                            else if (lastAct.status === "FAIL") { diagnosis = "📉 데이터 불일치(계산오류)"; isConfirmed = true; }
+                            if (lastAct.status === "PENDING") { diagnosis = "⚠️ 로직 중단됨"; isConfirmed = true; }
+                            else if (lastAct.status === "CRASH") { diagnosis = "🚫 시스템 에러"; isConfirmed = true; }
+                            else if (lastAct.status === "FAIL") { diagnosis = "📉 데이터 불일치"; isConfirmed = true; }
                             else if (lastAct.status === "SUCCESS") { 
-                                replier.reply("🤖 [시스템 진단: 정상]\n직전 작업(" + lastAct.cmd + ")이 성공적으로 완료되었습니다.\n오류가 발견되지 않았습니다.");
+                                replier.reply("🤖 [시스템 진단: 정상]\n직전 작업(" + lastAct.cmd + ")이 성공적으로 완료되었습니다.");
                                 return;
                             }
                         } else { 
-                            diagnosis = "❓ 실행 기록 없음(로직 미진입/오타)"; isConfirmed = true; 
+                            diagnosis = "❓ 실행 기록 없음"; isConfirmed = true; 
                         }
 
                         var logTime = new Date().toLocaleString();
                         var logTxt = "[" + logTime + "] " + cleanSender + ": " + content + "\n    ㄴ 판독: " + diagnosis + "\n";
                         FileStream.append(BUG_LOG_PATH, logTxt);
                         
-                        if(isConfirmed) replier.reply("✅ [제보 접수]\n판독 결과: " + diagnosis + "\n분석 내용이 버그 리스트에 등록되었습니다.");
+                        if(isConfirmed) replier.reply("✅ [제보 접수]\n판독 결과: " + diagnosis + "\n분석 내용이 등록되었습니다.");
                         else replier.reply("📝 제보가 접수되었습니다.");
                     }
                     return;
                 }
 
-                /* 관리자용 시스템 제어 */
-                if (isAdmin(sender, data)) {
-                    if (msg === "/강제재가동") {
-                        if (lock.isLocked()) lock.unlock(); 
-                        globalData = getDatabase(); 
-                        if (globalData) { globalData.botActive = true; safeSaveData(globalData); }
-                        replier.reply(formatAdmin("🔄 시스템 재가동", "결과: 락 해제 및 메모리 동기화 완료"));
-                        return;
+                /* [사후 처리 3] 관리자 강제재가동 */
+                if (isAdmin(sender, data, targetUid) && msg === "/강제재가동") {
+                    if (lock.isLocked()) lock.unlock(); 
+                    globalData = getDatabase(); 
+                    if (globalData) { 
+                        globalData.botActive = true; 
+                        safeSaveData(globalData); 
                     }
+                    replier.reply(formatAdmin("🔄 시스템 재가동", "결과: 락 해제 및 메모리 동기화 완료"));
+                    return;
                 }
 
-//==========섹터20-1==========
-
-if (!data) return;
-var roomData = data.rooms[roomName] || { users: {} };
-data.rooms[roomName] = roomData;
-
-/* [최적화] 전역 UID 캐시 객체 체크 */
-if (typeof uidCache === 'undefined') var uidCache = {};
-
-/* 유저 식별 로직 (캐시 우선 검색 방식 적용) */
-var currentImgHash = null;
-try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) { currentImgHash = null; }
-
-var targetUid = null;
-var cacheKey = roomName + "_" + cleanSender + (currentImgHash ? "_" + currentImgHash : "");
-
-// 1. 캐시에서 먼저 찾기
-if (uidCache[cacheKey] && roomData.users[uidCache[cacheKey]]) {
-    targetUid = uidCache[cacheKey];
-} else {
-    // 2. 루프 탐색 (최초 1회 실행)
-    for (var id in roomData.users) {
-        var u = roomData.users[id];
-        if (!u) continue;
-        
-        if (currentImgHash && u.imageHash === currentImgHash) {
-            targetUid = id;
-            if (u.name !== cleanSender) {
-                if (!data.nickHistory[id]) data.nickHistory[id] = [];
-                data.nickHistory[id].push({ old: u.name, date: getSimpleDate() });
-                u.name = cleanSender;
+            } catch (e) {
+                Log.error("Sector 19/20-1 Critical Error: " + e);
             }
-            break;
         }
-        
-        if (u.name === cleanSender) { 
-            targetUid = id; 
-            if (currentImgHash) u.imageHash = currentImgHash; 
-            break; 
-        }
-    }
-    if (targetUid) uidCache[cacheKey] = targetUid;
-}
-
-/* 신규 유저 등록 및 환영 메시지 (도배 방지 시스템 변수 통합 및 칭호 통계 필드 추가) */
-if (!targetUid) {
-    targetUid = generateUUID();
-    roomData.users[targetUid] = { 
-        name: cleanSender, point: 1000, tier: 0, creditScore: 600, totalAttendance: 0, 
-        loan: { debt: 0, items: [] }, lastDate: "", icon: "", title: "", 
-        inventory: [], tierGuard: 0,
-        imageHash: currentImgHash, chatCount: 0, dailyGambleCount: 0,
-        bank: 0, jailReleaseTime: 0, stockHoldings: {}, stockAvg: {}, 
-        dailyPromotionAttempts: 1, purchasedPromotionAttempts: 0, lastBonusTriggeredCount: -1,
-        /* [신규] 게임 판수 인증 시스템 변수 */
-        gameAuthCount: 0,      // 현재 인증 완료 횟수
-        purchasedAuthCount: 0, // 이번 시즌 인증권 구매 횟수
-        /* [신규] 도배 방지 및 타임아웃 데이터 */
-        chatLog: [],           // 채팅 발송 시각 기록 배열
-        timeoutEndTime: 0,     // 타임아웃 종료 시각 (0이면 정상 상태)
-        /* [신규] 유물 시스템 데이터 초기화 */
-        artifactPieces: 0,     // 보유 중인 유물 조각 수
-        /* [신규] 칭호 시스템용 누적 통계 데이터 */
-        totalGambleCount: 0,   // 홀짝 총 판수
-        totalGambleWins: 0,    // 홀짝 총 승리수
-        totalTheftSuccess: 0,  // 도둑질 총 성공 횟수
-        totalInvestAmount: 0,  // 주식 총 누적 매수액
-        totalMiningTime: 0,    // 광산 총 누적 채굴 시간(분)
-        totalDonation: 0,      // 누적 기부 금액 기록 필드
-        /* [개편] 랜덤박스 조각 및 이용권 시스템 */
-        boxFragments: 0,       // 분해 시 획득하는 조각
-        boxTickets: 0,         // 조각 5개가 모여 변환된 랜덤박스 이용권
-        collectedIcons: [],     // [신규] 한 번이라도 뽑았던 아이콘 기록 (분해해도 유지됨)
-        dailyCreditRestoreCount: 0, // 신용 회복제 일일 사용량
-        /* [신규: Gemini 요청 사항] 경고삭제권 평생 구매 기록 */
-        boughtWarningRemoval: false 
-    };
-    
-    uidCache[cacheKey] = targetUid;
-    
-    var welcomeMsg = "🎊 [" + cleanSender + "]님 환영합니다!\n━━━━━━━━━━━━━━━\n" +
-                     "🎁 입장 축하 보너스: " + fP(3000) + "P 지급!\n" + 
-                     "🕹️ 미니게임 및 출석체크 기능 제공\n" +
-                     "💳 신용 등급: 4등급 (600점) 부여\n\n" + 
-                     "📖 이용 전 반드시 '/도움말'을 확인해주세요!";
-                     
-    replier.reply(welcomeMsg); 
-    safeSaveData(data);
+    }));
 }
 
 //==========섹터20-2==========

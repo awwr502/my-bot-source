@@ -4425,57 +4425,83 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
     
     // 1. 랜덤 아이콘 박스 처리 (메시지 테이블 및 중복 조각 지급 포함)
     if (item.effect === "randomBox") {
-        var rand = Math.random();
-        var cumulative = 0;
-        var resultIdx = 0; 
-
-        var msgTable = {
-            0: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "\"에고... 먼지만 쌓인 창고에서 쓸모없는 물건을 발견했습니다.\"", guide: "가방에 저장되었습니다. [/가방]" },
-            1: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "\"나쁘지 않네요! 싱그러운 아이콘을 획득했습니다.\"", guide: "장착 시 [/장착 번호]를 입력하세요." },
-            2: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "\"오! 빛나는 아이템입니다. 희귀한 가치가 느껴지네요!\"", guide: "가방에서 확인 가능합니다. [/가방]" },
-            3: { title: "🎊 에픽 아이템 획득! 🎊", desc: "\"와우! 대단한 운입니다. 화려한 에픽 아이콘을 손에 넣었습니다!\"", guide: "가방에 안전하게 보관되었습니다." },
-            4: { title: "✨ [전설급] 유니크 등장! ✨", desc: "\"믿기지 않는 행운! 신화 속에서나 보던 유니크 아이템입니다!\"", guide: "즉시 장착하여 자랑해보세요! [/가방]" },
-            5: { title: "🔥 [초비상] 레전더리 강림! 🔥", desc: "\"축하합니다! 서버 최상위 2%의 확률을 뚫고 전설을 획득했습니다!\"", guide: "이 아이콘은 상점에서 절대 구할 수 없습니다." }
+        var resSummary = {
+            newIcons: [],
+            duplicates: 0,
+            earnedFrags: 0,
+            earnedTickets: 0,
+            highestIdx: -1,
+            counts: {} // 등급별 카운트
         };
 
-        for (var g = 0; g < RANDOM_BOX_CONFIG.PROBS.length; g++) {
-            cumulative += RANDOM_BOX_CONFIG.PROBS[g].prob;
-            if (rand < cumulative) { resultIdx = g; break; }
+        var msgTable = {
+            0: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "먼지만 쌓인 창고에서 잡동사니를 발견했습니다." },
+            1: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "나쁘지 않네요! 싱그러운 아이콘들이 보입니다." },
+            2: { title: "🎁 랜덤 아이콘 박스 개봉", desc: "오! 빛나는 아이템입니다. 희귀한 가치가 느껴지네요!" },
+            3: { title: "🎊 에픽 아이템 획득! 🎊", desc: "와우! 대단한 운입니다. 화려한 에픽 아이콘이 포함되었습니다!" },
+            4: { title: "✨ [전설급] 유니크 등장! ✨", desc: "믿기지 않는 행운! 신화 속에서나 보던 유니크가 등장했습니다!" },
+            5: { title: "🔥 [초비상] 레전더리 강림! 🔥", desc: "축하합니다! 서버 최상위 확률을 뚫고 레전더리를 획득했습니다!" }
+        };
+
+        // 구매 수량(qty)만큼 반복 실행
+        for (var i = 0; i < qty; i++) {
+            var rand = Math.random();
+            var cumulative = 0;
+            var resultIdx = 0;
+
+            for (var g = 0; g < RANDOM_BOX_CONFIG.PROBS.length; g++) {
+                cumulative += RANDOM_BOX_CONFIG.PROBS[g].prob;
+                if (rand < cumulative) { resultIdx = g; break; }
+            }
+
+            if (resultIdx > resSummary.highestIdx) resSummary.highestIdx = resultIdx;
+            var resGrade = RANDOM_BOX_CONFIG.PROBS[resultIdx];
+            resSummary.counts[resGrade.grade] = (resSummary.counts[resGrade.grade] || 0) + 1;
+
+            var winIcon = resGrade.items[Math.floor(Math.random() * resGrade.items.length)];
+            if (!user.collectedIcons) user.collectedIcons = [];
+            var isDuplicate = (user.collectedIcons.indexOf(winIcon) !== -1);
+
+            if (isDuplicate) {
+                resSummary.duplicates++;
+                user.boxFragments = (user.boxFragments || 0) + 1;
+                resSummary.earnedFrags++;
+                if (user.boxFragments >= 5) {
+                    user.boxFragments -= 5;
+                    user.boxTickets = (user.boxTickets || 0) + 1;
+                    resSummary.earnedTickets++;
+                }
+            } else {
+                user.inventory.push({ id: 900 + resultIdx, name: resGrade.grade.split(" ")[0] + " 아이콘", icon: winIcon, effect: "icon", title: "" });
+                user.collectedIcons.push(winIcon);
+                resSummary.newIcons.push("[" + winIcon + "]");
+            }
         }
 
-        var resGrade = RANDOM_BOX_CONFIG.PROBS[resultIdx];
-        var winIcon = resGrade.items[Math.floor(Math.random() * resGrade.items.length)];
+        // 메시지 구성
+        var mData = msgTable[Math.max(0, resSummary.highestIdx)];
+        var body = (qty > 1) ? "📦 랜덤박스 " + qty + "개 일괄 개봉 결과\n" : "등급: " + RANDOM_BOX_CONFIG.PROBS[resSummary.highestIdx].icon + " " + RANDOM_BOX_CONFIG.PROBS[resSummary.highestIdx].grade + "\n";
         
-        if (!user.collectedIcons) user.collectedIcons = [];
-        var isDuplicate = (user.collectedIcons.indexOf(winIcon) !== -1);
-        var mData = msgTable[resultIdx] || msgTable[0];
+        if (resSummary.newIcons.length > 0) {
+            body += "\n✨ [신규 획득]\n" + resSummary.newIcons.join(", ") + "\n";
+        }
+        
+        if (resSummary.duplicates > 0) {
+            body += "\n♻️ [중복 당첨]: " + resSummary.duplicates + "회\n" +
+                    "🧩 조각 획득: +" + resSummary.earnedFrags + "개\n";
+            if (resSummary.earnedTickets > 0) body += "🎫 이용권 변환: +" + resSummary.earnedTickets + "매\n";
+            body += "📊 현재 조각: " + user.boxFragments + " / 5 개\n";
+        }
 
-        if (isDuplicate) {
-            // [Gemini 요청 사항] 중복 시 분해 조각 +1 지급
-            user.boxFragments = (user.boxFragments || 0) + 1;
-            var ticketConverted = false;
-            if (user.boxFragments >= 5) {
-                user.boxFragments -= 5;
-                user.boxTickets = (user.boxTickets || 0) + 1;
-                ticketConverted = true;
-            }
-            
-            var dupContent = "등급: " + resGrade.icon + " " + resGrade.grade + "\n" +
-                             "결과: [" + winIcon + "]\n\n" +
-                             "⚠️ 중복 아이콘 당첨!\n(이미 도감에 등록된 아이콘입니다)\n\n" +
-                             "🧩 보상: 분해 조각 +1개 지급\n" +
-                             "📊 현재 조각: " + user.boxFragments + " / 5 개";
-            if (ticketConverted) dupContent += "\n🎫 조각이 모여 [랜덤박스 이용권] 1매 자동 지급!";
-            
-            replier.reply(formatCommand("🎁 박스 개봉 결과", user, dupContent, "내 잔액: " + fp(user.point) + "P"));
-        } else {
-            // 신규 아이콘 획득 시 가방 추가 및 도감 등록
-            user.inventory.push({ id: 900 + resultIdx, name: resGrade.grade.split(" ")[0] + " 아이콘", icon: winIcon, effect: "icon", title: "" });
-            user.collectedIcons.push(winIcon);
-            
-            var newContent = "등급: " + resGrade.icon + " " + resGrade.grade + "\n" +
-                             "결과: [" + winIcon + "]\n\n" + mData.desc;
-            replier.reply(formatCommand(mData.title, user, newContent, mData.guide + "\n내 잔액: " + fp(user.point) + "P"));
+        if (qty > 1) {
+            body += "\n[등급별 상세 내역]";
+            for (var gName in resSummary.counts) { body += "\n• " + gName + ": " + resSummary.counts[gName] + "회"; }
+        } else if (resSummary.newIcons.length > 0) {
+            body += "\n결과: " + resSummary.newIcons[0];
+        }
+
+        replier.reply(formatCommand(mData.title, user, body + "\n\n\"" + mData.desc + "\"", "내 잔액: " + fp(user.point) + "P"));
+        checkCollectionMaster();
 
             /* [신규 수집 발생] 칭호 판정 호출 (Gemini 요청 사항 반영) */
             checkCollectionMaster();

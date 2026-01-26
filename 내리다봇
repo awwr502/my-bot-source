@@ -6067,7 +6067,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // [기능 2] 계정 연동 및 데이터 복구 (완전 자동화 버전)
+    // [기능 2] 계정 연동 및 데이터 복구 (완전 결함 제거 버전)
     if (msg.indexOf("/계정연동") === 0) {
         var parts = msg.split(" ");
         if (parts.length < 2) {
@@ -6075,16 +6075,15 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 입력값 정규화 (하이픈 제거 및 소문자화) - 정규식 대신 split/join 사용으로 안전성 확보
+        // 입력값 정규화 (하이픈 제거 및 소문자화)
         var inputCode = parts[1].split("-").join("").toLowerCase().trim();
         var oldUser = null;
         var oldUid = null;
 
         // 1. 전체 데이터베이스에서 해당 코드 탐색
-        for (var r in data.rooms) {
-            var roomUsers = data.rooms[r].users;
+        for (var rName in data.rooms) {
+            var roomUsers = data.rooms[rName].users;
             for (var uid in roomUsers) {
-                // 저장된 UID도 하이픈을 제거하고 비교
                 var savedUid = String(uid).split("-").join("").toLowerCase();
                 if (savedUid === inputCode) {
                     oldUser = roomUsers[uid];
@@ -6097,21 +6096,30 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
 
         // 2. 검증 및 실행
         if (!oldUser) {
-            replier.reply(formatError(user, "연동 실패", "일치하는 복구 코드를 찾을 수 없습니다.\n코드가 정확한지 다시 확인해주세요."));
+            replier.reply(formatError(user, "연동 실패", "일치하는 복구 코드를 찾을 수 없습니다."));
         } else if (oldUid === targetUid) {
             replier.reply(formatError(user, "연동 불가", "현재 이미 사용 중인 계정 코드입니다."));
         } else {
             try {
-                // [핵심] 기존 데이터를 현재 방의 유저 목록으로 강제 전입
-                oldUser.name = user.name;
-                if (user.imageHash) oldUser.imageHash = user.imageHash;
+                // [해결] 외부 변수(cleanSender, cacheKey 등)를 사용하지 않고 내부 인자로 재정의
+                var currentRoom = data.rooms[roomName];
+                var senderName = user.name; 
+                var currentHash = user.imageHash;
+
+                // 데이터 동기화: 기존 데이터에 현재의 이름과 프사 정보 이식
+                oldUser.name = senderName;
+                if (currentHash) oldUser.imageHash = currentHash;
                 
-                // 현재 생성된 임시 계정(껍데기) 삭제
-                delete roomData.users[targetUid];
+                // 현재 생성된 빈 껍데기 계정 삭제
+                delete currentRoom.users[targetUid];
                 
-                // 현재 방에 예전 UID로 데이터 복사 및 캐시 바인딩
-                roomData.users[oldUid] = oldUser;
-                uidCache[cacheKey] = oldUid; 
+                // 현재 방의 유저 목록에 복구된 유저를 기존 UID로 등록
+                currentRoom.users[oldUid] = oldUser;
+                
+                // 캐시 시스템 강제 업데이트 (변수 직접 조합)
+                if (typeof uidCache !== 'undefined') {
+                    uidCache[roomName + "_" + senderName] = oldUid; 
+                }
                 
                 safeSaveData(data);
                 
@@ -6121,7 +6129,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
                 
                 replier.reply(formatCommand("✅ 계정 연동 성공", oldUser, successMsg, "복구된 코드로 접속되었습니다."));
             } catch (e) {
-                replier.reply(formatError(user, "시스템 오류", "연동 과정에서 에러가 발생했습니다: " + e));
+                replier.reply(formatError(user, "시스템 오류", "연동 최종 단계 에러: " + e));
             }
         }
         return true;

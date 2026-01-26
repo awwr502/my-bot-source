@@ -5253,46 +5253,59 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
                   "• 파일 쓰기: " + ioStatus + "\n" +
                   "• 데이터 로드: " + (data.rooms ? "성공 (JSON 연동)" : "❗데이터 유실") + "\n\n";
 
-        // 2. 스케줄러 및 엔진 상태
-        var activeEngines = 0;
-        if (java.lang.System.getProperty("kakaobot_scheduler_v5")) activeEngines++;
-        if (typeof Executor !== 'undefined' && !Executor.isShutdown()) activeEngines++;
-        if (typeof SaveExecutor !== 'undefined' && !SaveExecutor.isShutdown()) activeEngines++;
+        // 2. 방별 독립 가동률 및 엔진 상태 체크 (17개 핵심 객체 검사)
+        var activeTasks = 0;
+        var totalTasks = 17;
+        var rF = roomData.features || {};
+        var rS = rF.states || {};
+
+        // 필수 객체 존재 여부 체크 리스트
+        var checkList = [
+            rF.racing, rF.lotto, rF.stockMarket, rF.feverData, rF.sprinkleData,
+            rS.menuWait, rS.bankProcess, rS.selectWait, rS.lottoPurchase,
+            rS.activeThefts, rS.duelData, rS.mining, rS.loanRegister, rS.loanContractWait,
+            roomData.loanPools, roomData.loanContracts, roomData.bankReserve
+        ];
+
+        checkList.forEach(function(item) { if (item !== undefined && item !== null) activeTasks++; });
+
+        var schedulerActive = (java.lang.System.getProperty("kakaobot_scheduler_v5")) ? "가동 중" : "❗중단";
         
         report += "[🔒 프로세스 및 스레드]\n" +
                   "• 메모리 락: " + (lock.isLocked() ? "❗잠김 (교착위험)" : "정상 (Unlocked)") + "\n" +
-                  "• 스케줄러: 가동 중 (" + activeEngines + " / 3)\n" +
-                  "• 자동화 태스크: 활성 상태 (17 / 17)\n" +
-                  "• 저장 엔진: " + (SaveExecutor.isTerminated() ? "❗중단됨" : "정상 가동 중") + "\n\n";
+                  "• 스케줄러: " + schedulerActive + "\n" +
+                  "• 방별 가동률: [" + activeTasks + " / " + totalTasks + "]\n" +
+                  "• 저장 엔진: " + (SaveExecutor.isTerminated() ? "❗중단됨" : "정상 가동") + "\n\n";
 
-        // 3. 데이터베이스 및 병목 현상
-        var totalUsers = 0, waitMenu = 0, waitBank = 0, waitSelect = 0;
-        for (var r in data.rooms) {
-            var rObj = data.rooms[r];
-            totalUsers += Object.keys(rObj.users || {}).length;
-            var st = (rObj.features && rObj.features.states) ? rObj.features.states : null;
-            if (st) {
-                waitMenu += Object.keys(st.menuWait || {}).length;
-                waitBank += Object.keys(st.bankProcess || {}).length;
-                waitSelect += Object.keys(st.selectWait || {}).length;
-            }
+        // 3. 방별 데이터베이스 건강도
+        var roomUsers = Object.keys(roomData.users || {}).length;
+        var roomCacheCount = 0;
+        if (typeof uidCache !== 'undefined') {
+            for (var k in uidCache) { if (k.startsWith(roomName)) roomCacheCount++; }
         }
-        var cacheSize = typeof uidCache !== 'undefined' ? Object.keys(uidCache).length : 0;
 
         report += "[📊 데이터베이스 건강도]\n" +
-                  "• 전체 유저: " + totalUsers + "명 등록\n" +
-                  "• 닉네임 캐시: " + cacheSize + "개 활성\n\n" +
+                  "• 방 유저수: " + roomUsers + "명 등록\n" +
+                  "• 식별 캐시: " + roomCacheCount + "개 활성\n\n" +
                   "[⏳ 병목 현상 감지]\n" +
-                  "• 메뉴 대기: " + waitMenu + "명\n" +
-                  "• 입력 대기: " + waitBank + "명\n" +
-                  "• 중복 선택: " + waitSelect + "명\n\n";
+                  "• 메뉴 대기: " + Object.keys(rS.menuWait || {}).length + "명\n" +
+                  "• 입력 대기: " + Object.keys(rS.bankProcess || {}).length + "명\n" +
+                  "• 중복 선택: " + Object.keys(rS.selectWait || {}).length + "명\n\n";
 
-        // 4. 장애 정밀 진단 결과부
+        // 4. 명령어 장애 정밀 진단
+        var diagnosticMsg = "- 슬래시(/) 명령어: [정상]";
+        if (activeTasks < totalTasks) {
+            diagnosticMsg = "❗ 로직 결함 발견: ";
+            if (!rF.lotto) diagnosticMsg += "[로또 엔진 누락] ";
+            if (!rF.racing) diagnosticMsg += "[경마 엔진 누락] ";
+            if (!roomData.bankReserve) diagnosticMsg += "[국고 데이터 파손]";
+        }
+
         report += "━━━━━━━━━━━━━━━\n💡 명령어 장애 정밀 진단:\n" +
-                  "- 슬래시(/) 명령어: [정상]\n" +
-                  "- 숫자 입력 응답: [정상]\n" +
-                  "- 한글 키워드: [정상]\n\n" +
-                  "※ 현재 장애 요인이 발견되지 않았습니다.";
+                  diagnosticMsg + "\n" +
+                  "- 숫자 입력 응답: " + (Object.keys(rS.bankProcess || {}).length > 10 ? "❗지연됨" : "[정상]") + "\n\n" +
+                  "※ 가동률이 낮을 경우 '/시스템자가복원'을 실행하세요.";
+        // =====요청사항 끝=====
 
         replier.reply(report);
         return true;

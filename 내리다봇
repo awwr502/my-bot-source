@@ -816,11 +816,13 @@ function stock_calculateNextPrice(currentPrice) {
     var cfg = SYSTEM_CONFIG.ECO.STOCK.SETTINGS;
     var growthRate = (currentPrice - marketOpenPrice) / marketOpenPrice;
     var change = (Math.random() * 2.4 - 1.2) / 100;
+
     if (growthRate > cfg.RESISTANCE_START) {
         var now = new Date();
-        var elapsed = (now.getHours() - cfg.OPEN_HOUR) * 60 + now.getMinutes();
-        var total = (cfg.CLOSE_HOUR - cfg.OPEN_HOUR) * 60;
-        var timeWeight = Math.min(Math.max(elapsed / total, 0), 1.0); 
+        // 오픈 시간 전 계산 시 마이너스 방지
+        var elapsed = Math.max(0, (now.getHours() - cfg.OPEN_HOUR) * 60 + now.getMinutes());
+        var total = Math.max(1, (cfg.CLOSE_HOUR - cfg.OPEN_HOUR) * 60);
+        var timeWeight = Math.min(Math.max(elapsed / total, 0), 1.0);
         var resistance = (growthRate - cfg.RESISTANCE_START) * cfg.GRAVITY * (1 + timeWeight);
         change -= resistance;
         if (growthRate >= (cfg.CLOSING_LIMIT - 0.01) && change > 0) {
@@ -2012,16 +2014,28 @@ function _runSector16Logic(data, ctx) {
     }
 
     // B. 배팅 마감 알림 (매시 49:59)
-    if (racingData.isOperating && currentMin === 49 && !racingData.isDeadlineNotified) {
-        racingData.isDeadlineNotified = true;
-        var deadlineMsg = "📢 [경마 배팅 마감 알림]\n━━━━━━━━━━━━━━━\n제 " + racingData.round + "회차 배팅이 종료되었습니다!\n\n🏦 최종 집계 포인트: " + fp(racingData.totalPool) + "P\n🏁 우승마 판독 및 정산 진행 중...\n━━━━━━━━━━━━━━━\n🏇 잠시 후 정각(00분)에 결과가 발표됩니다!";
-        Api.replyRoom(ctx.targetRoom, deadlineMsg);
+    // B. 배팅 마감 알림 (매시 49분)
+    // 판정 강화: isOperating이 true이고, 49분이며, 아직 알림이 가지 않았을 때
+    if (currentMin === 50 && !racingData.isDeadlineNotified) {
+        // 운영 시간이면 무조건 알림 시도 (상태가 꼬여도 알림 우선 발송)
+        if (currentHour >= rConf.OPEN_HOUR && currentHour <= rConf.CLOSE_HOUR) {
+            racingData.isOperating = true; 
+            racingData.isDeadlineNotified = true;
+            var deadlineMsg = "📢 [경마 배팅 마감 알림]\n━━━━━━━━━━━━━━━\n제 " + racingData.round + "회차 배팅이 종료되었습니다!\n\n🏦 최종 집계 포인트: " + fp(racingData.totalPool) + "P\n🏁 우승마 판독 및 정산 진행 중...\n━━━━━━━━━━━━━━━\n🏇 잠시 후 정각(00분)에 결과가 발표됩니다!";
+            Api.replyRoom(ctx.targetRoom, deadlineMsg);
+            ctx.isUpdated = true;
+        }
     }
 
     // C. 결과 발표 및 새 라운드 시작 (매시 00:00:00)
-    if ((racingData.isOperating || currentHour === 0) && currentMin === 0 && currentHour !== rConf.OPEN_HOUR) {
+    var isRaceTime = (currentHour >= rConf.OPEN_HOUR && currentHour <= 23) || currentHour === 0;
+
+    // 단, 9시는 개장 시간이므로 정산 로직에서는 제외 (hour !== rConf.OPEN_HOUR)
+    if (isRaceTime && currentMin === 0 && currentHour !== rConf.OPEN_HOUR) {
         if (racingData.lastProcessedHour !== currentHour) {
-            racingData.lastProcessedHour = currentHour; // 해당 시간 정산 완료 기록 (무한루프 방지)
+            // 정산 진입 시 운영 플래그 강제 정상화 (자가 치유)
+            racingData.isOperating = (currentHour >= rConf.OPEN_HOUR && currentHour <= 23);
+            racingData.lastProcessedHour = currentHour;
             
             /* --- 정산 로직 시작 --- */
             var totalW = 0; racingData.horses.forEach(function(h){ totalW += h.weight; });
@@ -2163,7 +2177,9 @@ function _runSector17Logic(data, ctx) {
     var currentHour = ctx.now.getHours();
     var currentMin = ctx.now.getMinutes();
 
-    if (currentHour === 0 && currentMin === 0) {
+    // 일일 데이터 초기화 (00:00:00 ~ 00:00:59 사이라면 무조건 체크)
+    if (currentHour === 0 && data.lastDailyReset !== ctx.today) {
+        data.lastDailyReset = ctx.today;
         /* [1] 주식 시장 종료 처리 (전역 공지) */
         if (data.lastStockClose !== ctx.today) {
             data.lastStockClose = ctx.today;

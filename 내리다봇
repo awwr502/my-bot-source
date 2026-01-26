@@ -25,17 +25,19 @@ var BACKUP_DIR = BASE_DIR + "backup/";
 /* [최적화] 전역 UID 캐시 시스템 */
 var uidCache = uidCache || {}; 
 
-/* [안정화] 전역 상태 변수 (참조 보존 및 강제 객체화) */ 
-// undefined나 null일 경우 빈 객체로 초기화하여 하단 로직에서의 크래시를 방지합니다.
-if (typeof globalData === 'undefined' || globalData === null) {
-    var globalData = { rooms: {}, botActive: true };
-}
+/* [안정화] 전역 상태 변수 (참조 보존형 - var 선언 절대 금지) */ 
+// 1. globalData 확보: 로더가 넘겨준 장부가 있다면 그것을 쓰고, 없다면 새로 만듭니다.
+// 아래 줄에서 'var'를 쓰면 호이스팅 때문에 데이터가 깨지므로 절대 'var'를 붙이지 마세요.
+globalData = (typeof globalData !== 'undefined' && globalData !== null) ? globalData : { rooms: {}, botActive: true };
 
-/* [최적화] 병렬 처리 엔진 (독립 선언 후 바인딩) */
-// 1. 명령어 처리 엔진
-var Executor = java.util.concurrent.Executors.newFixedThreadPool(6);
-// 2. 저장 전담 엔진
-var SaveExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
+/* [최적화] 병렬 처리 엔진 (중복 생성 방지 및 바인딩) */
+// 리로드 시 기존에 가동 중인 엔진이 있다면 재사용합니다.
+var Executor = (globalData && globalData.Executor) || java.util.concurrent.Executors.newFixedThreadPool(6);
+var SaveExecutor = (globalData && globalData.SaveExecutor) || java.util.concurrent.Executors.newSingleThreadExecutor();
+
+// 전역 장부에 엔진 객체 확정 연결
+globalData.Executor = Executor;
+globalData.SaveExecutor = SaveExecutor;
 
 // 전역 장부에 엔진 객체 연결 (리로드 시 로더에서 참조하기 위함)
 globalData.Executor = Executor;

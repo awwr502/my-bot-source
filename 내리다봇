@@ -2671,11 +2671,6 @@ if (!targetUid) {
 // 3. 식별된 UID를 캐시에 즉시 강제 바인딩 (입력 대기 유실 방지)
 if (targetUid) {
     uidCache[cacheKey] = targetUid;
-if (msg.startsWith("/")) {
-        var st = roomData.features.states;
-        var statesToClear = [st.menuWait, st.bankProcess, st.selectWait, st.lottoPurchase, st.loanRegister, st.loanContractWait];
-        statesToClear.forEach(function(s) { if (s && s[targetUid]) delete s[targetUid]; });
-    }
 }
 
 /* 신규 유저 등록 및 환영 메시지 (도배 방지 시스템 변수 통합 및 칭호 통계 필드 추가) */
@@ -2727,6 +2722,12 @@ if (!targetUid) {
 //==========섹터20-2==========
 
 user = roomData.users[targetUid];
+
+if (msg.startsWith("/")) {
+    var st = roomData.features.states;
+    var statesToClear = [st.menuWait, st.bankProcess, st.selectWait, st.lottoPurchase, st.loanRegister, st.loanContractWait];
+    statesToClear.forEach(function(s) { if (s && s[targetUid]) delete s[targetUid]; });
+}
 
 if (msg === "줍기") {
     var rFeatures = roomData.features;
@@ -3041,7 +3042,7 @@ if (selectWaitState[targetUid]) {
                 replier.reply(formatCommand("🎫 로또 구매 완료", user, "선택 번호: [" + nums.join(", ") + "]\n차감 금액: " + fp(actualDeducted) + "P\n추첨 시간: 매일 밤 22:00", "내 잔액: " + fP(user.point) + "P"));
                 
                 safeSaveData(data);
-                return;
+                return true;
             }
         }
 
@@ -3090,22 +3091,30 @@ if (selectWaitState[targetUid]) {
 
 /* [수정] 통합 업무 처리 핸들러 (1단계: 송금, 예금 및 기부) */
 if (bankProcessState && bankProcessState[targetUid]) {
-    if (msg.startsWith("/")) return false;
     var state = bankProcessState[targetUid];
 
-    if (Date.now() - state.time > 30000) {
-        delete bankProcessState[targetUid];
-    } 
-    else if (msg === "취소") {
-        delete bankProcessState[targetUid];
-        replier.reply(formatCommand("🚫 업무 취소", user, "요청하신 업무가 취소되었습니다."));
-    } 
-    else {
+    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 대기 상태 즉시 삭제
+    if (Date.now() - state.time > 30000 || msg === "취소") {
+        delete bankProcessState[targetUid]; // 메모리에서 유저 제거
+        
+        if (msg === "취소") {
+            replier.reply(formatCommand("🚫 업무 취소", user, "요청하신 업무가 취소되었습니다."));
+        }
+        
+        // 만약 입력값이 명령어가 아니라면 여기서 로직을 끝냄 (잡담 처리 방지)
+        if (!msg.startsWith("/")) return true; 
+    }
+
+    // 2. [명령어 통로] 명령어라면 핸들러를 종료하고 하단 명령어 로직으로 넘김
+    // (이미 위에서 타임아웃된 데이터는 삭제되었으므로 꼬이지 않음)
+    if (msg.startsWith("/")) return false;
+
         /* [기능 1] 송금 처리 */
         if (state.type === 'transfer') {
             var ps = msg.split(" ");
             if (ps.length < 2) {
                 replier.reply(formatError(user, "입력 오류", "형식: [닉네임] [금액]"));
+                return true;
             } else {
                 var am = parseInt(ps.pop().replace(/,/g, "")); 
                 var tn = ps.join(" ").trim(); 
@@ -3135,6 +3144,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                     safeSaveData(data);
                 }
             }
+            return true;
         }
 
         /* [기능 2] 예금 처리 */
@@ -3142,8 +3152,10 @@ if (bankProcessState && bankProcessState[targetUid]) {
             var amt = parseInt(msg.replace(/,/g, ""));
             if (isNaN(amt) || amt <= 0) {
                 replier.reply(formatError(user, "금액 오류", "예금할 숫자를 입력하세요."));
+                return true;
             } else if (user.point < amt) {
                 replier.reply(formatError(user, "포인트 부족", "보유하신 포인트보다 많습니다."));
+                return true;
             } else {
                 // [v5.9] 중복 차감 방지: 수동 포인트 차감 및 bankReserve 직접 가산 코드 전체 삭제
                 // 통장 잔고(bank)만 업데이트하고 나머지는 게이트웨이에 위임
@@ -3155,6 +3167,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
+            return true;
         }
 
         /* [수정] 기부 처리 (누적 기부 칭호 시스템 연동) */
@@ -3162,8 +3175,10 @@ if (bankProcessState && bankProcessState[targetUid]) {
             var amt = parseInt(msg.replace(/,/g, ""));
             if (isNaN(amt) || amt <= 0) {
                 replier.reply(formatError(user, "금액 오류", "기부할 금액을 숫자로 정확히 입력하세요."));
+                return true;
             } else if (user.point < amt) {
                 replier.reply(formatError(user, "잔액 부족", "보유하신 포인트보다 많은 금액은 기부할 수 없습니다."));
+                return true;
             } else {
                 /* 1. 중앙은행 연동 기부금 처리 */
                 util_updatePoint(user, roomData, -amt, "은행 기부", roomName);
@@ -3196,36 +3211,37 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
+            return true;
         }
     }
-}
             
 //==========섹터22-2==========
 
 /* [독립형] 통합 업무 처리 핸들러 (2단계: 출금, 대출, 상환) */
 if (bankProcessState && bankProcessState[targetUid]) {
-    if (msg.startsWith("/")) return false;
     var state = bankProcessState[targetUid];
+    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 대기 상태 즉시 삭제 (최상단 배치)
+    if (Date.now() - state.time > 30000 || msg === "취소") {
+        delete bankProcessState[targetUid]; 
+        if (msg === "취소") replier.reply(formatCommand("🚫 은행 업무 취소", user, "요청하신 업무가 취소되었습니다."));
+        
+        // 명령어 입력이 아닌 일반 텍스트/만료 시 로직 종결 (채팅 보너스 방지)
+        if (!msg.startsWith("/")) return true; 
+    }
+
+    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 핸들러를 종료하고 명령어 로직으로 이관
+    if (msg.startsWith("/")) return false;
     var roomData = data.rooms[roomName]; // 재원 관리를 위해 roomData 참조
 
     // 중앙은행 재원 초기화 (섹터 1의 설정값 사용)
     if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
-
-    // 가드 로직: 시간 초과 및 취소 처리
-    if (Date.now() - state.time > 30000) {
-        delete bankProcessState[targetUid];
-    } 
-    else if (msg === "취소") {
-        delete bankProcessState[targetUid];
-        replier.reply(formatCommand("🚫 은행 업무 취소", user, "요청하신 업무가 취소되었습니다."));
-    } 
-    else {
 
         // [v5.9] 통합 상태 가드: 징역/채굴 중에는 은행 업무(입출금/대출) 처리 불가
         var stateRes = util_checkUserState(user, targetUid);
         if (!stateRes.canAction) {
             delete bankProcessState[targetUid];
             return replier.reply(formatError(user, "업무 불가", stateRes.reason));
+            return true;
         }
 
         /* [기능 3] 출금 처리 (지급준비제도 반영: 금고 실재고 확인) */
@@ -3249,12 +3265,13 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
+            return true;
         }
 
         /* [기능 4] 은행 대출 실행 (loan) - 지급준비율 제어 적용 */
-        if (state.type === 'loan') {
-            var amt = parseInt(msg.replace(/,/g, ""));
-            var cr = getCreditInfo(user.creditScore);
+        else if (state.type === 'loan') {
+        var amt = parseInt(msg.replace(/,/g, ""));
+        var cr = getCreditInfo(user.creditScore);
             var bConf = SYSTEM_CONFIG.ECO.BANK;
             var lConf = SYSTEM_CONFIG.ECO.PRIVATE_LOAN;
 
@@ -3304,6 +3321,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
+            return true;
         }
 
         /* [기능 5] 은행 대출 상환 (repay) - 재원 복구 로직 포함 */
@@ -3325,31 +3343,34 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
+            return true;
         }
     }
-}
             
 //==========섹터22-3==========
 
 /* [독립형] 통합 업무 처리 핸들러 (3단계: 사채 등록 및 빌리기) */
 if (bankProcessState && bankProcessState[targetUid]) {
-    if (msg.startsWith("/")) return false;
     var state = bankProcessState[targetUid];
 
-    // 가드 로직: 시간 초과 및 취소 처리
-    if (Date.now() - state.time > 30000) {
+    // 1. 가드 로직: 시간 초과 및 취소 처리
+    if (Date.now() - state.time > 30000 || msg === "취소") {
         delete bankProcessState[targetUid];
-    } else if (msg === "취소") {
-        delete bankProcessState[targetUid];
-        replier.reply(formatCommand("🚫 은행 업무 취소", user, "요청하신 업무가 취소되었습니다."));
-    } 
-    else {
+        if (msg === "취소") replier.reply(formatCommand("🚫 은행 업무 취소", user, "요청하신 업무가 취소되었습니다."));
+        
+        // 취소/만료 시 명령어가 아니라면 여기서 로직 종결
+        if (!msg.startsWith("/")) return true; 
+    }
+
+    // 2. 명령어 통로: 청소 완료 후 명령어라면 이관
+    if (msg.startsWith("/")) return false;
 
         var stateRes = util_checkUserState(user, targetUid);
-        if (!stateRes.canAction) {
-            delete bankProcessState[targetUid];
-            return replier.reply(formatError(user, "업무 불가", stateRes.reason));
-        }
+    if (!stateRes.canAction) {
+        delete bankProcessState[targetUid];
+        replier.reply(formatError(user, "업무 불가", stateRes.reason));
+        return true; // 도달 불가능한 중복 return 제거 및 단일화
+    }
         
         /* [기능 6] 사채 매물 등록 처리 (p2p_reg_input) */
         if (state.type === 'p2p_reg_input') {
@@ -3388,6 +3409,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                     delete bankProcessState[targetUid];
                     safeSaveData(data);
                 }
+                return true;
             }
         }
 
@@ -3436,33 +3458,35 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
+            return true;
         }
     }
-}
 
 //==========섹터22-4==========
 
 /* [독립형] 통합 업무 처리 핸들러 (4단계: 사채 상환, 회수, 수거) */
 if (bankProcessState && bankProcessState[targetUid]) {
-    if (msg.startsWith("/")) return false;
     var state = bankProcessState[targetUid];
 
-    // [v5.9] 가드 로직: 부정 조건(타임아웃, 취소)을 먼저 처리하여 코드 깊이(Depth) 최적화
-    if (Date.now() - state.time > 30000) {
-        delete bankProcessState[targetUid];
-        return; // 타임아웃 시 조용히 종료
-    } 
-    else if (msg === "취소") {
-        delete bankProcessState[targetUid];
-        replier.reply(formatCommand("🚫 은행 업무 취소", user, "요청하신 업무가 취소되었습니다."));
-        return;
-    } 
-    else {
+    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 대기 상태 즉시 삭제 (최상단 배치)
+    if (Date.now() - state.time > 30000 || msg === "취소") {
+        delete bankProcessState[targetUid]; 
+        if (msg === "취소") replier.reply(formatCommand("🚫 사채 업무 취소", user, "요청하신 업무가 취소되었습니다."));
+        
+        // 명령어 입력이 아닌 일반 텍스트이거나 시간이 만료된 경우 여기서 로직 종결
+        if (!msg.startsWith("/")) return true; 
+    }
+
+    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소를 마친 후 명령어 로직으로 이관
+    // (기존 맨 윗줄에 있던 startsWith("/")를 이 지점으로 내렸습니다)
+    if (msg.startsWith("/")) return false;
+
         // [v5.9] 통합 상태 가드: 사채 업무 처리 직전 유저의 현재 상태(징역/채굴 등) 최종 체크
         var stateRes = util_checkUserState(user, targetUid);
         if (!stateRes.canAction) {
             delete bankProcessState[targetUid];
             return replier.reply(formatError(user, "업무 불가", stateRes.reason));
+            return true;
         }
 
         /* [기능 8] 빌린 사채 상환 처리 (p2p_repay_amt) */
@@ -3496,6 +3520,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
+            return true;
         }
 
         /* [기능 9] 등록한 사채 매물 회수 (p2p_withdraw_amt) */
@@ -3516,6 +3541,7 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
+            return true;
         }
 
         /* [기능 10] 채무자 자산 강제 수거 (p2p_collect_manual) */
@@ -3549,34 +3575,35 @@ if (bankProcessState && bankProcessState[targetUid]) {
                         safeSaveData(data);
                     }
                 }
+                delete bankProcessState[targetUid];
             }
+            return true; // 수거 처리 후 로직 종결
         }
     }
-}
 
 //==========섹터22-5==========
 
 /* [독립형] 통합 업무 처리 핸들러 (5단계: 상점 아이템 구매 처리) */
 if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUid].type === 'shop_buy') {
-    if (msg.startsWith("/")) return false;
     var state = bankProcessState[targetUid];
-    var roomData = data.rooms[roomName]; // 사채 체크를 위해 roomData 참조
 
-    // 1. 입력 대기 시간 초과 검증 (30초)
-    if (Date.now() - state.time > 30000) {
-        delete bankProcessState[targetUid];
+    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 대기 상태 즉시 삭제 (최상단 배치)
+    if (Date.now() - state.time > 30000 || msg === "취소") {
+        delete bankProcessState[targetUid]; 
+        if (msg === "취소") replier.reply(formatCommand("🚫 상점 구매 취소", user, "아이템 구매를 취소했습니다."));
+        
+        // 명령어 입력이 아닌 일반 텍스트이거나 시간이 만료된 경우 여기서 로직 종결
+        if (!msg.startsWith("/")) return true; 
     }
-    // 2. 작업 취소 처리
-    else if (msg === "취소") {
-        delete bankProcessState[targetUid];
-        replier.reply(formatCommand("🚫 상점 구매 취소", user, "아이템 구매를 취소했습니다."));
-    }
-    else {
+
+    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소를 마친 후 명령어 로직으로 이관
+    if (msg.startsWith("/")) return false;
 
         var stateRes = util_checkUserState(user, targetUid);
         if (!stateRes.canAction) {
             delete bankProcessState[targetUid];
             return replier.reply(formatError(user, "구매 불가", stateRes.reason));
+            return true;
         }
 
         /* [기능 11] 상점 아이템 구매 처리 핸들러 */
@@ -3593,6 +3620,7 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
             if (item.effect === "credit" && (user.dailyCreditRestoreCount || 0) >= 1) {
                 delete bankProcessState[targetUid];
                 return replier.reply(formatError(user, "구매 제한", "신용 점수 회복제는 하루에 1개만 사용 가능합니다."));
+                return true;
             }
 
             /* [신규: Gemini 요청 사항] 경고삭제권 구매 제한 로직 집행 */
@@ -3601,7 +3629,8 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
                 if (user.boughtWarningRemoval === true) {
                     delete bankProcessState[targetUid];
                     return replier.reply(formatError(user, "구매 불가", "경고삭제권은 평생 단 1회만 구매할 수 있는 한정 물품입니다."));
-                }
+                    return true;    
+            }
 
                 // B. 사채 보유 여부 체크 (사채 시장 연동)
                 var hasSache = false;
@@ -3616,6 +3645,7 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
                 if (hasSache) {
                     delete bankProcessState[targetUid];
                     return replier.reply(formatError(user, "구매 제한", "현재 사채(P2P 대출)를 이용 중입니다. 모든 사채를 상환한 후에만 구매가 가능합니다."));
+                    return true;
                 }
             }
             
@@ -3676,19 +3706,24 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
             }
         }
     }
+    return true;
 }
 
 /* 복수 수량 입력 처리 핸들러 (기존 유지) */
 else if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUid].type === 'shop_quantity') {
     var state = bankProcessState[targetUid];
-    var item = state.extra.item;
 
-    if (Date.now() - state.time > 30000) {
+    // 1. [메모리 청소기] 타임아웃 또는 취소 시 즉시 삭제 및 종결
+    if (Date.now() - state.time > 30000 || msg === "취소") {
         delete bankProcessState[targetUid];
-    } else if (msg === "취소") {
-        delete bankProcessState[targetUid];
-        replier.reply(formatCommand("🚫 구매 취소", user, "아이템 구매를 취소했습니다."));
-    } else {
+        if (msg === "취소") replier.reply(formatCommand("🚫 구매 취소", user, "아이템 구매를 취소했습니다."));
+        
+        // 명령어 입력이 아닌 일반 텍스트라면 여기서 로직 종결 (채팅 보너스 방지)
+        if (!msg.startsWith("/")) return true; 
+    }
+
+    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소 후 이관
+    if (msg.startsWith("/")) return false;
         var qty = parseInt(msg.replace(/[^0-9]/g, ""));
         if (isNaN(qty) || qty <= 0) {
             replier.reply(formatError(user, "입력 오류", "구매할 수량을 숫자로 정확히 입력해주세요."));
@@ -3708,8 +3743,8 @@ else if (bankProcessState && bankProcessState[targetUid] && bankProcessState[tar
                 safeSaveData(data);
             }
         }
+        return true;
     }
-}
 
 //==========섹터23-1==========
 
@@ -3717,14 +3752,16 @@ else if (bankProcessState && bankProcessState[targetUid] && bankProcessState[tar
 if (menuWaitState && menuWaitState[targetUid]) {
     var state = menuWaitState[targetUid];
 
-    // 1. 타임아웃(30초) 및 취소 체크를 최상단으로 이동 (무조건 탈출 보장)
+    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 즉시 삭제 (최상단 배치)
     if (Date.now() - state.time > 30000 || msg === "취소") {
-        delete menuWaitState[targetUid];
+        delete menuWaitState[targetUid]; 
         if (msg === "취소") replier.reply(formatCommand("🚫 메뉴 선택 취소", user, "작업이 취소되었습니다."));
-        // 취소/만료 후 새로운 명령어를 바로 처리할 수 있도록 여기서 중단하지 않음
+        
+        // 명령어 입력이 아닌 일반 텍스트이거나 시간이 만료된 경우 여기서 로직 종결
+        if (!msg.startsWith("/")) return true; 
     }
-    
-    // 2. 명령어 체크는 삭제 로직 뒤로 배치 (명령어 입력 시 이 핸들러는 무시됨)
+
+    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소를 마친 후 명령어 로직으로 이관
     if (msg.startsWith("/")) return false;
     var roomData = data.rooms[roomName];
     
@@ -3791,7 +3828,7 @@ if (menuWaitState && menuWaitState[targetUid]) {
                               "4. 📥 사채 회수 (등록 매물 회수)\n" +
                               "5. 👥 내 채무자 현황 (직접 수거 가능)";
                 replier.reply(formatCommand("🚬 사채 시장 업무 선택", user, p2pMenu, "원하시는 번호를 입력하세요."));
-                return;  
+                return true;
              }
              /* [신규] 7번 기부 메뉴 처리 */
              else if (choice === "7") {
@@ -3799,6 +3836,7 @@ if (menuWaitState && menuWaitState[targetUid]) {
                 replier.reply(formatCommand("🎁 기부 진행", user, "기부할 금액을 입력해주세요.\n(보유: " + fP(user.point) + "P)", "취소: [취소]"));
                 delete menuWaitState[targetUid];
              }
+             return true;
         }
     }
 }
@@ -3807,30 +3845,44 @@ if (menuWaitState && menuWaitState[targetUid]) {
 
 /* [2단계] 사채 시장 서브 메뉴 선택 처리 (독립형) */
 if (menuWaitState && menuWaitState[targetUid]) {
-    if (msg.startsWith("/")) return false;
+    /* =====요청사항 시작===== */
     var state = menuWaitState[targetUid];
+
+    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 대기 상태 즉시 삭제
+    if (Date.now() - state.time > 30000 || msg === "취소") {
+        delete menuWaitState[targetUid]; 
+        if (msg === "취소") replier.reply(formatCommand("🚫 사채 업무 취소", user, "작업이 취소되었습니다."));
+        if (!msg.startsWith("/")) return true; 
+    }
+
+    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소 후 명령어 로직으로 이관
+    if (msg.startsWith("/")) return false;
+
     var choice = msg.trim();
+    var roomData = data.rooms[roomName]; // roomData 참조 누락 방지
 
     if (state.type === 'p2p_loan_menu') {
         if (choice === "1") {
             bankProcessState[targetUid] = { type: 'p2p_reg_input', time: Date.now() };
             replier.reply(formatCommand("💰 사채 매물 등록", user, "등록할 [금액]과 [이율]을 입력하세요.\n(예: 10000 5)", "취소: [취소]"));
-        } 
+            delete menuWaitState[targetUid]; // 신규: 다음 단계로 넘어가므로 현재 메뉴 대기 삭제
+            return true; // 신규: 하단 잡담 로직 차단
+        }
         else if (choice === "2") {
             var pools = Object.keys(roomData.loanPools || {});
             if (pools.length === 0) { 
-                replier.reply(formatSimple("📋 사채 시장", "현재 이 방에 등록된 매물이 없습니다.", null));
+                replier.reply(formatSimple("📋 사채 시장", "현재 등록된 매물이 없습니다.", null));
             } else {
-                var list = [];
-                var tempPools = [];
+                var list = []; var tempPools = [];
                 for(var i=0; i<pools.length; i++) {
                     var p = roomData.loanPools[pools[i]];
-                    list.push((i+1) + ". [" + p.lenderName + "] 잔여: " + fp(p.remainingAmount) + "P (이자 " + p.rate + "%/3h)");
+                    list.push((i+1) + ". [" + p.lenderName + "] 잔여: " + fp(p.remainingAmount) + "P (" + p.rate + "%)");
                     tempPools.push(pools[i]);
                 }
                 menuWaitState[targetUid] = { type: 'p2p_select_pool', time: Date.now(), extra: { pools: tempPools } };
-                return replier.reply(formatCommand("📋 사채 매물 목록", user, list.join("\n"), "빌리고 싶은 매물 번호를 입력하세요."));
+                replier.reply(formatCommand("📋 사채 매물 목록", user, list.join("\n"), "빌리고 싶은 매물 번호를 입력하세요."));
             }
+            return true;
         }
         else if (choice === "3") {
             var myContracts = [];
@@ -3848,6 +3900,7 @@ if (menuWaitState && menuWaitState[targetUid]) {
             }
             menuWaitState[targetUid] = { type: 'p2p_select_repay', time: Date.now(), extra: { contracts: myContracts.map(x => x.id) } };
             return replier.reply(formatCommand("📉 사채 상환 선택", user, list.join("\n"), "갚을 사채의 번호를 선택하세요."));
+            return true;
         }
         else if (choice === "4") {
             var myPools = [];
@@ -3865,6 +3918,7 @@ if (menuWaitState && menuWaitState[targetUid]) {
             }
             menuWaitState[targetUid] = { type: 'p2p_select_withdraw', time: Date.now(), extra: { pools: myPools.map(x => x.id) } };
             return replier.reply(formatCommand("📥 사채 풀 회수", user, list.join("\n"), "회수할 사채 풀 번호를 선택하세요."));
+            return true;
         }
         else if (choice === "5") {
             var myDebtors = [];
@@ -3874,6 +3928,7 @@ if (menuWaitState && menuWaitState[targetUid]) {
                 }
             }
             if (myDebtors.length === 0) return replier.reply(formatSimple("👥 내 채무자 현황", "현재 돈을 빌려 간 유저가 없습니다.", null));
+            return true;
 
             var list = [];
             var tempContracts = [];
@@ -3885,9 +3940,10 @@ if (menuWaitState && menuWaitState[targetUid]) {
             }
             menuWaitState[targetUid] = { type: 'p2p_select_collect', time: Date.now(), extra: { contracts: tempContracts } };
             replier.reply(formatCommand("👥 내 채무자 명단", user, list.join("\n"), "강제 수거를 원하시면 유저 번호를 입력하세요."));
-            return;
+            return true;
         }
         delete menuWaitState[targetUid]; return;
+        return true;
     }
 }
 
@@ -3895,59 +3951,82 @@ if (menuWaitState && menuWaitState[targetUid]) {
 
 /* [3단계] 사채 목록 선택 처리 (독립형) */
 if (menuWaitState && menuWaitState[targetUid]) {
-    if (msg.startsWith("/")) return false;
     var state = menuWaitState[targetUid];
-    var choice = msg.trim();
 
+    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 대기 상태 즉시 삭제 (최상단 배치)
+    if (Date.now() - state.time > 30000 || msg === "취소") {
+        delete menuWaitState[targetUid]; 
+        if (msg === "취소") replier.reply(formatCommand("🚫 사채 업무 취소", user, "작업이 취소되었습니다."));
+        
+        // 명령어 입력이 아닌 일반 텍스트이거나 시간이 만료된 경우 여기서 로직 종결
+        if (!msg.startsWith("/")) return true; 
+    }
+
+    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소를 마친 후 명령어 로직으로 이관
+    if (msg.startsWith("/")) return false;
+
+    var choice = msg.trim();
+    var roomData = data.rooms[roomName];
+
+    /* [선택 분기 1] 사채 빌리기 매물 선택 */
     if (state.type === 'p2p_select_pool') {
         var idx = parseInt(choice) - 1;
-        var poolId = state.extra.pools[idx];
-        if (!poolId) return replier.reply(formatError(user, "번호 오류"));
+        var poolId = (state.extra && state.extra.pools) ? state.extra.pools[idx] : null;
         
-        bankProcessState[targetUid] = { type: 'p2p_borrow_amt', time: Date.now(), extra: { poolId: poolId } };
-        replier.reply(formatCommand("💰 사채 금액 설정", user, "선택 매물: [" + roomData.loanPools[poolId].lenderName + "]\n잔여 금액: " + fp(roomData.loanPools[poolId].remainingAmount) + "P\n\n빌릴 금액을 입력하세요.", "취소: [취소]"));
-        delete menuWaitState[targetUid]; return;
+        if (!poolId || !roomData.loanPools[poolId]) {
+            replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 정확히 입력해주세요."));
+        } else {
+            bankProcessState[targetUid] = { type: 'p2p_borrow_amt', time: Date.now(), extra: { poolId: poolId } };
+            replier.reply(formatCommand("💰 사채 금액 설정", user, "선택 매물: [" + roomData.loanPools[poolId].lenderName + "]\n잔여 금액: " + fp(roomData.loanPools[poolId].remainingAmount) + "P\n\n빌릴 금액을 입력하세요.", "취소: [취소]"));
+            delete menuWaitState[targetUid];
+        }
+        return true; 
     }
 
+    /* [선택 분기 2] 사채 상환 대상 선택 */
     else if (state.type === 'p2p_select_repay') {
         var idx = parseInt(choice) - 1;
-        var contractId = state.extra.contracts[idx];
-        if (!contractId) return replier.reply(formatError(user, "번호 오류"));
-
-        bankProcessState[targetUid] = { type: 'p2p_repay_amt', time: Date.now(), extra: { contractId: contractId } };
+        var contractId = (state.extra && state.extra.contracts) ? state.extra.contracts[idx] : null;
         
-        /* [수정] 상환 입력창에 현재 보유 포인트 표시 추가 */
-        var currentDebt = roomData.loanContracts[contractId].currentDebt;
-        var lenderName = roomData.loanContracts[contractId].lenderName;
-        
-        replier.reply(formatCommand("📉 사채 상환액 입력", user, 
-            "선택 계약: [" + lenderName + "]\n" +
-            "갚아야 할 돈: " + fp(currentDebt) + "P\n" +
-            "💰 보유 포인트: " + fp(user.point) + "P\n\n" +
-            "갚을 금액을 입력하세요.", 
-            "취소: [취소]"
-        ));
-        delete menuWaitState[targetUid]; return;
+        if (!contractId || !roomData.loanContracts[contractId]) {
+            replier.reply(formatError(user, "번호 오류", "상환할 계약 번호를 확인해주세요."));
+        } else {
+            bankProcessState[targetUid] = { type: 'p2p_repay_amt', time: Date.now(), extra: { contractId: contractId } };
+            var contract = roomData.loanContracts[contractId];
+            replier.reply(formatCommand("📉 사채 상환액 입력", user, "채권자: [" + contract.lenderName + "]\n남은 빚: " + fp(contract.currentDebt) + "P\n💰 내 잔액: " + fp(user.point) + "P\n\n갚을 금액을 입력하세요.", "취소: [취소]"));
+            delete menuWaitState[targetUid]; 
+        }
+        return true; 
     }
 
+    /* [선택 분기 3] 사채 매물 회수 대상 선택 */
     else if (state.type === 'p2p_select_withdraw') {
         var idx = parseInt(choice) - 1;
-        var poolId = state.extra.pools[idx];
-        if (!poolId) return replier.reply(formatError(user, "번호 오류"));
-
-        bankProcessState[targetUid] = { type: 'p2p_withdraw_amt', time: Date.now(), extra: { poolId: poolId, max: roomData.loanPools[poolId].remainingAmount } };
-        replier.reply(formatCommand("📥 회수 금액 입력", user, "현재 풀 잔액: " + fp(roomData.loanPools[poolId].remainingAmount) + "P\n\n회수할 금액을 입력하거나 [전액]을 입력하세요.", "취소: [취소]"));
-        delete menuWaitState[targetUid]; return;
+        var poolId = (state.extra && state.extra.pools) ? state.extra.pools[idx] : null;
+        
+        if (!poolId || !roomData.loanPools[poolId]) {
+            replier.reply(formatError(user, "번호 오류"));
+        } else {
+            bankProcessState[targetUid] = { type: 'p2p_withdraw_amt', time: Date.now(), extra: { poolId: poolId, max: roomData.loanPools[poolId].remainingAmount } };
+            replier.reply(formatCommand("📥 회수 금액 입력", user, "현재 풀 잔액: " + fp(roomData.loanPools[poolId].remainingAmount) + "P\n\n회수할 금액을 입력하거나 [전액]을 입력하세요.", "취소: [취소]"));
+            delete menuWaitState[targetUid]; 
+        }
+        return true; 
     }
 
+    /* [선택 분기 4] 채무자 강제 수거 대상 선택 */
     else if (state.type === 'p2p_select_collect') {
         var idx = parseInt(choice) - 1;
-        var contractId = state.extra.contracts[idx];
-        if (!contractId) return replier.reply(formatError(user, "번호 오류"));
-
-        bankProcessState[targetUid] = { type: 'p2p_collect_manual', time: Date.now(), extra: { contractId: contractId } };
-        replier.reply(formatCommand("🚬 사채 강제 수거 확인", user, "[" + roomData.loanContracts[contractId].borrowerName + "]님의 지갑에서 자산을 수거하시겠습니까?\n\n진행하시려면 아무 메시지나 입력해주세요.", "취소: [취소]"));
-        delete menuWaitState[targetUid]; return;
+        var contractId = (state.extra && state.extra.contracts) ? state.extra.contracts[idx] : null;
+        
+        if (!contractId || !roomData.loanContracts[contractId]) {
+            replier.reply(formatError(user, "번호 오류"));
+        } else {
+            bankProcessState[targetUid] = { type: 'p2p_collect_manual', time: Date.now(), extra: { contractId: contractId } };
+            replier.reply(formatCommand("🚬 사채 강제 수거 확인", user, "[" + roomData.loanContracts[contractId].borrowerName + "]님의 지갑에서 자산을 수거하시겠습니까?\n\n진행하시려면 아무 메시지나 입력해주세요.", "취소: [취소]"));
+            delete menuWaitState[targetUid]; 
+        }
+        return true; 
     }
 }
 
@@ -3955,42 +4034,47 @@ if (menuWaitState && menuWaitState[targetUid]) {
 
 /* [4단계] 상점 및 도움말 처리 (독립형) */
 if (menuWaitState && menuWaitState[targetUid]) {
-    if (msg.startsWith("/")) return false;
     var state = menuWaitState[targetUid];
+
+    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 즉시 삭제 (최상단 배치)
+    if (Date.now() - state.time > 30000 || msg === "취소") {
+        delete menuWaitState[targetUid]; 
+        if (msg === "취소") replier.reply(formatCommand("🚫 메뉴 선택 취소", user, "작업이 취소되었습니다."));
+        
+        // 명령어 입력이 아닌 일반 텍스트이거나 시간이 만료된 경우 여기서 로직 종결
+        if (!msg.startsWith("/")) return true; 
+    }
+
+    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소를 마친 후 명령어 로직으로 이관
+    if (msg.startsWith("/")) return false;
+
     var choice = msg.trim();
 
+    /* [선택 분기 1] 상점 카테고리 선택 처리 */
     if (state.type === 'shop_category') {
         var catId = parseInt(choice);
         if (isNaN(catId) || !SHOP_CATEGORIES[catId]) {
-            return replier.reply(formatError(user, "번호 오류", "올바른 카테고리 번호를 선택해주세요."));
+            replier.reply(formatError(user, "번호 오류", "올바른 카테고리 번호를 선택해주세요."));
+        } else {
+            var filteredItems = [];
+            for (var i = 0; i < SHOP_ITEMS.length; i++) {
+                if (SHOP_ITEMS[i].cat === catId) filteredItems.push(SHOP_ITEMS[i]);
+            }
+
+            if (filteredItems.length === 0) {
+                replier.reply(formatSimple("🛒 상점 알림", "해당 카테고리에 물품이 없습니다.", "다른 번호를 선택하세요."));
+            } else {
+                var list = [];
+                for (var j = 0; j < filteredItems.length; j++) {
+                    var item = filteredItems[j];
+                    list.push((j + 1) + ". " + item.icon + " " + item.name + " : " + fp(getItemPrice(item, user, roomName)) + "P");
+                }
+                bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: filteredItems } };
+                delete menuWaitState[targetUid];
+                replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[catId], user, list.join("\n"), "구매할 물품의 번호를 입력하세요."));
+            }
         }
-
-        // 선택된 카테고리에 해당하는 아이템만 필터링
-        var filteredItems = [];
-        for (var i = 0; i < SHOP_ITEMS.length; i++) {
-            if (SHOP_ITEMS[i].cat === catId) filteredItems.push(SHOP_ITEMS[i]);
-        }
-
-        if (filteredItems.length === 0) {
-            return replier.reply(formatSimple("🛒 상점 알림", "해당 카테고리에 준비된 물품이 없습니다.", "다른 번호를 선택하세요."));
-        }
-
-        var list = [];
-        for (var j = 0; j < filteredItems.length; j++) {
-            var item = filteredItems[j];
-            var currentPrice = getItemPrice(item, user, roomName); 
-            list.push((j + 1) + ". " + item.icon + " " + item.name + " : " + fp(currentPrice) + "P");
-        }
-
-        // 구매 대기 상태로 전이 (필터링된 리스트 전달)
-        bankProcessState[targetUid] = { 
-            type: 'shop_buy', 
-            time: Date.now(), 
-            extra: { items: filteredItems } 
-        };
-
-        delete menuWaitState[targetUid];
-        return replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[catId], user, list.join("\n"), "구매할 물품의 번호를 입력하세요."));
+        return true; // <<<< 숫자를 처리했으므로 로직 종결
     }
 
     /* 도움말 메뉴 처리 */
@@ -4026,6 +4110,7 @@ if (menuWaitState && menuWaitState[targetUid]) {
             delete menuWaitState[targetUid]; 
             return replier.reply(formatCommand("📖 상세 도움말", null, helpBody, next)); 
         }
+        return true;
     }
 
     /* [Gemini 요청 사항] 가이드 메뉴 처리 로직 추가 */
@@ -4075,6 +4160,7 @@ if (menuWaitState && menuWaitState[targetUid]) {
             delete menuWaitState[targetUid];
             return replier.reply(formatCommand("📔 " + guideTitle, null, guideBody, "닫기: [취소]"));
         }
+        return true;
     }
 }
 

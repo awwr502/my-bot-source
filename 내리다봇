@@ -2001,12 +2001,14 @@ function _runSector16Logic(data, ctx) {
     /* 2. 주식 주기적 변동 처리 (무결성 유지) */
     if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && currentMin % 10 === 0 && data.lastStockUpdateMin !== currentMin) {
         data.lastStockUpdateMin = currentMin; 
-        var mani = conf.MANIPULATION;
+        // [강화] 종목 고갈 방지 및 생성 로직 최적화
+        var currentStockCount = Object.keys(data.stockMarket || {}).length;
+        
         if (mani && mani.ACTIVE === true) {
             data.pendingSpecialEffect = { stock: mani.TARGET, factor: mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE), forceMani: true };
         } else {
-            var currentStockCount = Object.keys(data.stockMarket || {}).length;
-            if (currentStockCount < 10 && Math.random() < SYSTEM_CONFIG.PROB.STOCK_NEW_LISTING) { 
+            // 종목이 하나도 없거나 너무 적으면(3개 미만) 무조건 생성 시도, 그 외에는 확률 적용
+            if (currentStockCount < 3 || (currentStockCount < 10 && Math.random() < SYSTEM_CONFIG.PROB.STOCK_NEW_LISTING)) { 
                 data.pendingNewStock = true;
             } else if (Math.random() < SYSTEM_CONFIG.PROB.STOCK_SPECIAL) {
                 var stocks = Object.keys(data.stockMarket || {});
@@ -2046,9 +2048,8 @@ function _runSector16Logic(data, ctx) {
         }
     }
 
-    // B. 배팅 마감 알림 (매시 49:59)
-    // B. 배팅 마감 알림 (매시 49분)
-    // 판정 강화: isOperating이 true이고, 49분이며, 아직 알림이 가지 않았을 때
+    // B. 배팅 마감 알림 (매시 50분)
+    // 판정 강화: isOperating이 true이고, 40분이며, 아직 알림이 가지 않았을 때
     if (currentMin === 50 && !racingData.isDeadlineNotified) {
         // 운영 시간이면 무조건 알림 시도 (상태가 꼬여도 알림 우선 발송)
         if (currentHour >= rConf.OPEN_HOUR && currentHour <= rConf.CLOSE_HOUR) {

@@ -3109,6 +3109,17 @@ if (bankProcessState && bankProcessState[targetUid]) {
     // (이미 위에서 타임아웃된 데이터는 삭제되었으므로 꼬이지 않음)
     if (msg.startsWith("/")) return false;
 
+        // 3. [스마트 가드] 징역은 엄격히 차단, 채굴은 은행 업무 가능하도록 통과
+    if (user.jailReleaseTime && Date.now() < user.jailReleaseTime) {
+        delete bankProcessState[targetUid];
+        var diff = user.jailReleaseTime - Date.now();
+        var remainMin = Math.ceil(diff / (1000 * 60));
+        return replier.reply(formatError(user, "업무 불가", "현재 징역 중입니다. (" + remainMin + "분 남음)"));
+    }
+
+    var roomData = data.rooms[roomName];
+    if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
+
         /* [기능 1] 송금 처리 */
         if (state.type === 'transfer') {
             var ps = msg.split(" ");
@@ -3220,29 +3231,10 @@ if (bankProcessState && bankProcessState[targetUid]) {
 /* [독립형] 통합 업무 처리 핸들러 (2단계: 출금, 대출, 상환) */
 if (bankProcessState && bankProcessState[targetUid]) {
     var state = bankProcessState[targetUid];
-    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 대기 상태 즉시 삭제 (최상단 배치)
-    if (Date.now() - state.time > 30000 || msg === "취소") {
-        delete bankProcessState[targetUid]; 
-        if (msg === "취소") replier.reply(formatCommand("🚫 은행 업무 취소", user, "요청하신 업무가 취소되었습니다."));
-        
-        // 명령어 입력이 아닌 일반 텍스트/만료 시 로직 종결 (채팅 보너스 방지)
-        if (!msg.startsWith("/")) return true; 
-    }
-
-    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 핸들러를 종료하고 명령어 로직으로 이관
-    if (msg.startsWith("/")) return false;
     var roomData = data.rooms[roomName]; // 재원 관리를 위해 roomData 참조
 
     // 중앙은행 재원 초기화 (섹터 1의 설정값 사용)
     if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
-
-        // [v5.9] 통합 상태 가드: 징역/채굴 중에는 은행 업무(입출금/대출) 처리 불가
-        var stateRes = util_checkUserState(user, targetUid);
-        if (!stateRes.canAction) {
-            delete bankProcessState[targetUid];
-            return replier.reply(formatError(user, "업무 불가", stateRes.reason));
-            return true;
-        }
 
         /* [기능 3] 출금 처리 (지급준비제도 반영: 금고 실재고 확인) */
         if (state.type === 'withdraw') {
@@ -3352,26 +3344,8 @@ if (bankProcessState && bankProcessState[targetUid]) {
 /* [독립형] 통합 업무 처리 핸들러 (3단계: 사채 등록 및 빌리기) */
 if (bankProcessState && bankProcessState[targetUid]) {
     var state = bankProcessState[targetUid];
+    var roomData = data.rooms[roomName];
 
-    // 1. 가드 로직: 시간 초과 및 취소 처리
-    if (Date.now() - state.time > 30000 || msg === "취소") {
-        delete bankProcessState[targetUid];
-        if (msg === "취소") replier.reply(formatCommand("🚫 은행 업무 취소", user, "요청하신 업무가 취소되었습니다."));
-        
-        // 취소/만료 시 명령어가 아니라면 여기서 로직 종결
-        if (!msg.startsWith("/")) return true; 
-    }
-
-    // 2. 명령어 통로: 청소 완료 후 명령어라면 이관
-    if (msg.startsWith("/")) return false;
-
-        var stateRes = util_checkUserState(user, targetUid);
-    if (!stateRes.canAction) {
-        delete bankProcessState[targetUid];
-        replier.reply(formatError(user, "업무 불가", stateRes.reason));
-        return true; // 도달 불가능한 중복 return 제거 및 단일화
-    }
-        
         /* [기능 6] 사채 매물 등록 처리 (p2p_reg_input) */
         if (state.type === 'p2p_reg_input') {
             var parts = msg.split(" ");
@@ -3460,34 +3434,12 @@ if (bankProcessState && bankProcessState[targetUid]) {
             }
             return true;
         }
-    }
 
 //==========섹터22-4==========
 
 /* [독립형] 통합 업무 처리 핸들러 (4단계: 사채 상환, 회수, 수거) */
 if (bankProcessState && bankProcessState[targetUid]) {
     var state = bankProcessState[targetUid];
-
-    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 대기 상태 즉시 삭제 (최상단 배치)
-    if (Date.now() - state.time > 30000 || msg === "취소") {
-        delete bankProcessState[targetUid]; 
-        if (msg === "취소") replier.reply(formatCommand("🚫 사채 업무 취소", user, "요청하신 업무가 취소되었습니다."));
-        
-        // 명령어 입력이 아닌 일반 텍스트이거나 시간이 만료된 경우 여기서 로직 종결
-        if (!msg.startsWith("/")) return true; 
-    }
-
-    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소를 마친 후 명령어 로직으로 이관
-    // (기존 맨 윗줄에 있던 startsWith("/")를 이 지점으로 내렸습니다)
-    if (msg.startsWith("/")) return false;
-
-        // [v5.9] 통합 상태 가드: 사채 업무 처리 직전 유저의 현재 상태(징역/채굴 등) 최종 체크
-        var stateRes = util_checkUserState(user, targetUid);
-        if (!stateRes.canAction) {
-            delete bankProcessState[targetUid];
-            return replier.reply(formatError(user, "업무 불가", stateRes.reason));
-            return true;
-        }
 
         /* [기능 8] 빌린 사채 상환 처리 (p2p_repay_amt) */
         if (state.type === 'p2p_repay_amt') {
@@ -3586,25 +3538,6 @@ if (bankProcessState && bankProcessState[targetUid]) {
 /* [독립형] 통합 업무 처리 핸들러 (5단계: 상점 아이템 구매 처리) */
 if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUid].type === 'shop_buy') {
     var state = bankProcessState[targetUid];
-
-    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 대기 상태 즉시 삭제 (최상단 배치)
-    if (Date.now() - state.time > 30000 || msg === "취소") {
-        delete bankProcessState[targetUid]; 
-        if (msg === "취소") replier.reply(formatCommand("🚫 상점 구매 취소", user, "아이템 구매를 취소했습니다."));
-        
-        // 명령어 입력이 아닌 일반 텍스트이거나 시간이 만료된 경우 여기서 로직 종결
-        if (!msg.startsWith("/")) return true; 
-    }
-
-    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소를 마친 후 명령어 로직으로 이관
-    if (msg.startsWith("/")) return false;
-
-        var stateRes = util_checkUserState(user, targetUid);
-        if (!stateRes.canAction) {
-            delete bankProcessState[targetUid];
-            return replier.reply(formatError(user, "구매 불가", stateRes.reason));
-            return true;
-        }
 
         /* [기능 11] 상점 아이템 구매 처리 핸들러 */
         var idx = parseInt(msg) - 1;
@@ -3712,15 +3645,8 @@ if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUi
 /* 복수 수량 입력 처리 핸들러 (기존 유지) */
 else if (bankProcessState && bankProcessState[targetUid] && bankProcessState[targetUid].type === 'shop_quantity') {
     var state = bankProcessState[targetUid];
-
-    // 1. [메모리 청소기] 타임아웃 또는 취소 시 즉시 삭제 및 종결
-    if (Date.now() - state.time > 30000 || msg === "취소") {
-        delete bankProcessState[targetUid];
-        if (msg === "취소") replier.reply(formatCommand("🚫 구매 취소", user, "아이템 구매를 취소했습니다."));
-        
-        // 명령어 입력이 아닌 일반 텍스트라면 여기서 로직 종결 (채팅 보너스 방지)
-        if (!msg.startsWith("/")) return true; 
-    }
+    var roomData = data.rooms[roomName];
+    var qty = parseInt(msg.replace(/[^0-9]/g, ""));
 
     // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소 후 이관
     if (msg.startsWith("/")) return false;

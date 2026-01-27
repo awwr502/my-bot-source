@@ -2502,7 +2502,7 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
     Executor.execute(new java.lang.Runnable({
         run: function() {
             try {
-                var roomName = String(room).replace(/[\u200b-\u200d\ufeff\s]/g, "").normalize('NFC');
+                var roomName = room ? room.trim() : "";
                 var cleanSender = sender ? String(sender).trim() : ""; 
                 
                 if (ALLOWED_ROOMS.indexOf(roomName) === -1 || cleanSender === "오픈채팅봇") return;
@@ -2526,21 +2526,28 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                     activeThefts: {}, duelData: {}, mining: {}, loanRegister: {}, loanContractWait: {} 
                 };
 
-                // [중요] 모든 상태 변수에 var를 추가하여 전역 오염 방지 및 방별 독립성 보장
-                var racingData = rFeatures.racing;
-                var lotto = rFeatures.lotto;
-                var feverData = rFeatures.feverData;
-                var sprinkleData = rFeatures.sprinkleData;
+                /* [마이그레이션] 기존 전역 데이터를 현재 방으로 이사 (최초 1회) */
+                if (data.lotto && !rFeatures.lotto.round) {
+                    rFeatures.lotto = data.lotto;
+                }
 
-                var menuWaitState = rFeatures.states.menuWait; 
-                var bankProcessState = rFeatures.states.bankProcess;
-                var selectWaitState = rFeatures.states.selectWait;
-                var lottoPurchaseState = rFeatures.states.lottoPurchase;
-                var activeThefts = rFeatures.states.activeThefts;
-                var duelData = rFeatures.states.duelData;
-                var miningState = rFeatures.states.mining;
-                var loanRegisterState = rFeatures.states.loanRegister;
-                var loanContractWaitState = rFeatures.states.loanContractWait;
+                // [Gemini 요청 사항] 데이터 참조 지역화 (Thread-Safe)
+                if (rFeatures && rFeatures.states) {
+                    var racingData = rFeatures.racing;
+                    var lotto = rFeatures.lotto;
+                    var feverData = rFeatures.feverData;
+                    var sprinkleData = rFeatures.sprinkleData;
+
+                    var menuWaitState = rFeatures.states.menuWait; 
+                    var bankProcessState = rFeatures.states.bankProcess;
+                    var selectWaitState = rFeatures.states.selectWait;
+                    var lottoPurchaseState = rFeatures.states.lottoPurchase;
+                    var activeThefts = rFeatures.states.activeThefts;
+                    var duelData = rFeatures.states.duelData;
+                    var miningState = rFeatures.states.mining;
+                    var loanRegisterState = rFeatures.states.loanRegister;
+                    var loanContractWaitState = rFeatures.states.loanContractWait;
+                }
 
                 // [결투 로직 우선순위 가드]
                 // 수락, 거절, 취소 키워드 입력 시 다른 대기 상태가 간섭하지 못하도록 결투 데이터를 최우선 탐색합니다.
@@ -4073,10 +4080,11 @@ if (menuWaitState && menuWaitState[targetUid]) {
 
     /* [선택 분기 1] 상점 카테고리 선택 처리 */
     if (state.type === 'shop_category') {
-        delete menuWaitState[targetUid]; // 판정 시작 즉시 상태 파기 (어떤 결과든 대기열 탈출)
         var catId = parseInt(choice);
         if (isNaN(catId) || !SHOP_CATEGORIES[catId]) {
-            replier.reply(formatError(user, "번호 오류", "올바른 카테고리 번호가 아닙니다. 다시 시도해주세요."));
+            delete menuWaitState[targetUid];
+            replier.reply(formatError(user, "번호 오류", "올바른 카테고리 번호를 선택해주세요."));
+            return true;
         } else {
             var filteredItems = [];
             for (var i = 0; i < SHOP_ITEMS.length; i++) {

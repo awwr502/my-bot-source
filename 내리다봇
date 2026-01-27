@@ -3737,31 +3737,33 @@ else if (bankProcessState && bankProcessState[targetUid] && bankProcessState[tar
     // 1. 선택했던 아이템 정보 불러오기 (참조 오류 해결)
     var item = (state.extra && state.extra.item) ? state.extra.item : null;
     
-    // 아이템 정보가 유실된 경우 상태 강제 종료 (무한루프 방어)
+    // 2. 비정상 접근 시 상태 강제 종료 (무한루프 방어)
     if (!item) {
         delete bankProcessState[targetUid];
-        replier.reply(formatError(user, "데이터 유실", "아이템 정보가 올바르지 않아 구매가 취소되었습니다."));
+        replier.reply(formatError(user, "데이터 오류", "아이템 정보를 불러오지 못했습니다."));
         return true;
     }
 
+    // 3. 명령어(/) 입력 시 핸들러를 종료하여 다른 기능이 작동하도록 함
     if (msg.startsWith("/")) return false;
 
+    // 4. 수량 파싱 및 검증
     var qty = parseInt(msg.replace(/[^0-9]/g, ""));
 
     if (isNaN(qty) || qty <= 0) {
         replier.reply(formatError(user, "입력 오류", "구매하실 수량을 숫자로 정확히 입력해주세요."));
     } else {
-        // 정확히 정의된 item 객체를 사용하여 가격 산출
         var unitPrice = getItemPrice(item, user, roomName);
         var totalPrice = unitPrice * qty;
 
         if (Number(user.point) < totalPrice) {
-            replier.reply(formatError(user, "포인트 부족", "총 " + fp(totalPrice) + "P가 필요합니다. (보유: " + fp(user.point) + "P)"));
+            replier.reply(formatError(user, "포인트 부족", "총 " + fp(totalPrice) + "P가 필요합니다.\n(보유: " + fp(user.point) + "P)"));
         } else {
-            // 포인트 차입 및 상태 삭제
+            // 포인트 차감 (게이트웨이 연동)
             util_updatePoint(user, roomData, -totalPrice, "상점 구매: " + item.name + " x" + qty, roomName);
             
-            delete bankProcessState[targetUid]; // 에러가 나기 전 상태 삭제 우선순위 확보
+            // 5. 성공 시 대기 상태 삭제 (순서 중요)
+            delete bankProcessState[targetUid]; 
             
             if (typeof _handleShopEffect === 'function') {
                 _handleShopEffect(item, user, roomName, replier, data, targetUid, totalPrice, false, qty);

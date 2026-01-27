@@ -3609,6 +3609,8 @@ if (bankProcessState && bankProcessState[targetUid]) {
 
 //==========섹터22-5==========
 
+//==========섹터22-5==========
+
 /* [독립형] 통합 업무 처리 핸들러 (5단계: 상점 아이템 구매 및 수량 처리) */
 if (bankProcessState && bankProcessState[targetUid]) {
     var state = bankProcessState[targetUid];
@@ -3625,7 +3627,10 @@ if (bankProcessState && bankProcessState[targetUid]) {
         replier.reply(formatCommand("🚫 업무 취소", user, "요청하신 은행 업무가 취소되었습니다."));
         return true;
     }
-    if (msg.startsWith("/")) return false;
+    if (msg.startsWith("/")) {
+        delete bankProcessState[targetUid]; // 명령어 입력 시 대기 상태 해제 (무한루프 방지)
+        return false;
+    }
 
     /* [기능 11] 상점 아이템 구매 처리 핸들러 (shop_buy) */
     if (state.type === 'shop_buy') {
@@ -3647,20 +3652,16 @@ if (bankProcessState && bankProcessState[targetUid]) {
 
             /* [신규] 경고삭제권 구매 제한 로직 집행 */
             if (item.effect === "warnClear") {
-                // A. 평생 1회 구매 제한 체크
                 if (user.boughtWarningRemoval === true) {
                     delete bankProcessState[targetUid];
                     replier.reply(formatError(user, "구매 불가", "경고삭제권은 평생 단 1회만 구매할 수 있는 한정 물품입니다."));
                     return true;
                 }
-
-                // B. 사채 보유 여부 체크 (사채 시장 연동)
                 var hasSache = false;
                 if (roomData && roomData.loanContracts) {
                     for (var cid in roomData.loanContracts) {
                         if (roomData.loanContracts[cid].borrowerUid === targetUid) {
-                            hasSache = true;
-                            break;
+                            hasSache = true; break;
                         }
                     }
                 }
@@ -3671,12 +3672,11 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 }
             }
 
-            /* [수정] 복수 구매 가능 여부 판별 (소모성 아이템 추출) */
+            /* [수정] 복수 구매 가능 여부 판별 */
             var stackableEffects = ["promotion", "tierGuard", "randomBox"];
             var isStackable = stackableEffects.indexOf(item.effect) !== -1;
 
             if (isStackable) {
-                // 수량 입력 상태(shop_quantity)로 전환
                 bankProcessState[targetUid] = {
                     type: 'shop_quantity',
                     time: Date.now(),
@@ -3693,14 +3693,12 @@ if (bankProcessState && bankProcessState[targetUid]) {
                     delete bankProcessState[targetUid];
                     replier.reply(formatError(user, "포인트 부족", fp(finalPrice) + "P가 필요합니다."));
                 } else {
-                    // [수정] 게임 인증권 시즌 한도 체크
                     if (item.effect === "gameAuth" && (user.purchasedAuthCount || 0) >= 2) {
                         delete bankProcessState[targetUid];
                         replier.reply(formatError(user, "구매 한도 초과", "인증권은 시즌당 최대 2회까지만 구매 가능합니다."));
                         return true;
                     }
 
-                    // 3. 중복 소유 체크 (아이콘/칭호 전용)
                     var hasItem = false;
                     if (item.effect === "icon" || item.effect === "title") {
                         var inv = user.inventory || [];
@@ -3713,12 +3711,9 @@ if (bankProcessState && bankProcessState[targetUid]) {
                         delete bankProcessState[targetUid];
                         replier.reply(formatError(user, "중복 소유", "이미 보유 중인 아이템입니다."));
                     } else {
-                        // "상점 구매" 키워드로 인해 차감액이 국고(bankReserve)에 자동 적립됩니다.
                         if (!isUsingTicket) {
                             util_updatePoint(user, roomData, -finalPrice, "상점 구매: " + item.name, roomName);
                         }
-
-                        // 5. 상태 초기화 후 단권(qty:1) 효과 실행
                         delete bankProcessState[targetUid];
                         if (typeof _handleShopEffect === 'function') {
                             _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket, 1);
@@ -3734,11 +3729,8 @@ if (bankProcessState && bankProcessState[targetUid]) {
     /* [기능 12] 복수 수량 입력 처리 (shop_quantity) */
     else if (state.type === 'shop_quantity') {
         var item = (state.extra && state.extra.item) ? state.extra.item : null;
-        
-        // 데이터 유실 가드 (무한루프 방어)
         if (!item) {
             delete bankProcessState[targetUid];
-            replier.reply(formatError(user, "데이터 유실", "아이템 정보를 불러오지 못했습니다."));
             return true;
         }
 
@@ -3752,10 +3744,8 @@ if (bankProcessState && bankProcessState[targetUid]) {
             if (Number(user.point) < totalPrice) {
                 replier.reply(formatError(user, "포인트 부족", "총 " + fp(totalPrice) + "P가 필요합니다.\n(보유: " + fp(user.point) + "P)"));
             } else {
-                // 포인트 차감 및 상태 삭제
                 util_updatePoint(user, roomData, -totalPrice, "상점 구매: " + item.name + " x" + qty, roomName);
                 delete bankProcessState[targetUid]; 
-                
                 if (typeof _handleShopEffect === 'function') {
                     _handleShopEffect(item, user, roomName, replier, data, targetUid, totalPrice, false, qty);
                 }
@@ -3764,7 +3754,6 @@ if (bankProcessState && bankProcessState[targetUid]) {
         }
         return true;
     }
-}
 
 //==========섹터23-1==========
 

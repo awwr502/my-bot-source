@@ -1144,8 +1144,8 @@ function util_checkUserState(user, uid) {
         return { canAction: false, reason: "현재 징역 중입니다. (" + timeStr + " 남음)" };
     }
 
-    // 2. 광산 채굴 상태 체크
-    if (user.mining && user.mining.active) {
+    // 2. 광산 채굴 상태 체크 (allowMining이 true일 경우 통과)
+    if (!allowMining && user.mining && user.mining.active) {
         return { canAction: false, reason: "현재 광산에서 채굴 작업 중입니다." };
     }
 
@@ -3016,9 +3016,7 @@ if (selectWaitState[targetUid]) {
 //==========섹터21==========
 
         /* 로또 번호 입력 처리부 (안전 관문 통합 버전) */
-        if (lottoPurchaseState[targetUid]) {
-            var lotto = roomData.features.lotto;
-            if (Date.now() - lottoPurchaseState[targetUid].time > 30000) {
+        if (Date.now() - lottoPurchaseState[targetUid].time > 30000) {
                 delete lottoPurchaseState[targetUid];
             } 
             else if (msg === "취소") {
@@ -3027,8 +3025,8 @@ if (selectWaitState[targetUid]) {
                 return;
             }
             else {
-
-                var stateRes = util_checkUserState(user, targetUid);
+                // 구매 시 채굴 상태 허용 (true)
+                var stateRes = util_checkUserState(user, targetUid, true);
                 if (!stateRes.canAction) {
                     delete lottoPurchaseState[targetUid];
                     return replier.reply(formatError(user, "구매 불가", stateRes.reason));
@@ -3086,10 +3084,9 @@ if (selectWaitState[targetUid]) {
             }
             if (user.chatCycleCount >= user.chatBonusTarget && !user.chatBonusGiven) {
                 // [v5.9] 통합 상태 가드: 활동 중에는 채팅 보너스 당첨 제외 (무응답 종료)
-                var stateRes = util_checkUserState(user, targetUid);
+                var stateRes = util_checkUserState(user, targetUid, true);
                 if (!stateRes.canAction) return;
 
-                // [v5.9] 통합 물가 엔진 연결 (기존 10줄의 수동 계산 로직 삭제)
                 var multiplier = util_getEcoMultiplier(roomName);
 
                 var basePrize = Math.floor(Math.random() * 21) + 80;
@@ -6531,6 +6528,14 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
 
     /* [기존 로직 유지] 4. 티어 승급 (/승급) */
     if (msg === "/승급") {
+    // 승급 시 채굴 상태 허용 (true)
+        var stateRes = util_checkUserState(user, targetUid, true);
+        if (!stateRes.canAction) {
+            replier.reply(formatError(user, "승급 불가", stateRes.reason));
+            return true;
+        }
+
+        var totalAttempts = Number(user.dailyPromotionAttempts || 0) + Number(user.purchasedPromotionAttempts || 0);
         var totalAttempts = Number(user.dailyPromotionAttempts || 0) + Number(user.purchasedPromotionAttempts || 0);
         if (totalAttempts <= 0) { replier.reply(formatError(user, "기회 없음", "상점에서 승급권을 구매하세요.")); return true; }
         if (user.tier >= 9) { replier.reply(formatError(user, "최고 등급", "이미 챌린저 등급입니다.")); return true; }
@@ -7070,7 +7075,8 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
 
     /* [기능 14] 상점 메뉴 호출 */
     if (msg === "/상점") {
-        var stateRes = util_checkUserState(user, targetUid);
+        // 상점 이용 시 채굴 상태 허용 (true)
+        var stateRes = util_checkUserState(user, targetUid, true);
         if (!stateRes.canAction) {
             replier.reply(formatError(user, "상점 이용 불가", stateRes.reason));
             return true;
@@ -7087,7 +7093,7 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
 
     /* [기능 2] 출석 체크 (중앙은행 연동) */
     if (msg === "/출석") {
-        var stateRes = util_checkUserState(user, targetUid);
+        var stateRes = util_checkUserState(user, targetUid, true);
         if (!stateRes.canAction) {
             replier.reply(formatError(user, "출석 불가", stateRes.reason));
             return true;

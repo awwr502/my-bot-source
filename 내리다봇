@@ -30,6 +30,8 @@ var uidCache = uidCache || {};
 var Executor = java.util.concurrent.Executors.newFixedThreadPool(6);
 // 2. [신규] 저장 전담 엔진: 단 1개의 스레드가 순차적으로 파일 기록 (안전성 담당)
 var SaveExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
+if (globalData) {
+    globalData.SaveExecutor = SaveExecutor;
 
 /* 로그 저장 경로 및 디렉토리 설정 */ 
 var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt"; 
@@ -340,17 +342,24 @@ function getDatabase() {
                     if (!targetRoom.features.states) targetRoom.features.states = template.states;
                 }
 
-                // 2. 필수 기본 구조 보안 강화
-                if (!targetRoom.loanPools) targetRoom.loanPools = {};
-                if (!targetRoom.loanContracts) targetRoom.loanContracts = {};
-                if (targetRoom.bankReserve === undefined) {
-                    targetRoom.bankReserve = (SYSTEM_CONFIG && SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE) ? SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE : 10000; 
-                }
+                // [결함 수정] 필수 경제 객체 강제 주입 (17번째 객체 누락 방지)
+            if (!targetRoom.loanPools) targetRoom.loanPools = {};
+            if (!targetRoom.loanContracts) targetRoom.loanContracts = {};
+            if (targetRoom.bankReserve === undefined || targetRoom.bankReserve === null) {
+                targetRoom.bankReserve = 10000; // 기본금 즉시 할당
+            }
+            
+            // 진단 엔진 연동 재확인
+            if (initialData) {
+                initialData.SaveExecutor = SaveExecutor;
+                initialData.Executor = Executor;
+            }
             }
         }
         
         globalData = initialData;
         return globalData;
+    }
     } catch (e) {
         Log.error("DB Load Error: " + e);
         var stableFile = new java.io.File(BACKUP_DIR + "last_stable_backup.json");

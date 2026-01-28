@@ -5358,31 +5358,33 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
     /* [개인 복구] 4대 보안 가드가 적용된 지능형 유저 복구 (Smart User Restore v5.9.1) */
     if (msg.indexOf("/유저복원 ") === 0) {
-        var input = msg.substring(6).trim();
-        var roomData = data.rooms[roomName];
-        var targetId = "";
-        var targetName = "";
+    var params = msg.substring(6).trim().split(/\s+/); // 공백 기준 분리
+    var roomData = data.rooms[roomName];
 
-        var isUUID = (input.split("-").length >= 5 && input.length >= 36);
+    // 1. 파라미터 분석: [현재닉네임] [복구코드(옵션)]
+    var targetNick = params[0]; 
+    var sourceCode = params[1] || ""; // 이관할 과거의 고유 코드
 
-    if (isUUID) {
-        // [A] 코드를 직접 입력한 경우: 명부 대조 없이 해당 ID로 즉시 타겟팅
-        targetId = input;
-        targetName = "고유코드[" + input.substring(0, 8) + "...]";
-    } else {
-        // [B] 닉네임을 입력한 경우: 기존 이름 검색 로직 실행
-        var found = findUserByName(roomData, input);
-        if (found.length > 1) { 
-            handleUserSelection(replier, targetUid, found, "user_restore", null, user); 
-            return true; 
-        }
-        if (found.length === 0) { 
-            replier.reply(formatAdmin("🚫 복구 대상 없음", "[" + input + "] 유저를 찾을 수 없습니다.")); 
-            return true; 
-        }
-        targetId = found[0].id;
-        targetName = found[0].data.name;
+    var targetId = "";       // 데이터를 새로 담을 그릇 (현재 유저의 ID)
+    var backupSourceId = ""; // 데이터를 가져올 원본 (과거 유저의 ID)
+
+    // [A] 데이터를 받을 대상(현재 방에 있는 유저) 확인
+    var currentFound = findUserByName(roomData, targetNick);
+    if (currentFound.length > 1) { 
+        handleUserSelection(replier, targetUid, currentFound, "user_restore", null, user); 
+        return true; 
     }
+    if (currentFound.length === 0) { 
+        replier.reply(formatAdmin("🚫 대상 없음", "현재 방에서 [" + targetNick + "] 유저를 찾을 수 없습니다.")); 
+        return true; 
+    }
+    
+    targetId = currentFound[0].id; // 현재 이 유저가 사용 중인 ID
+
+    // [B] 원본 데이터 소스 결정
+    // 입력된 코드가 UUID 형식이면 그 코드를 소스로 사용, 없으면 현재 ID를 소스로 사용(일반 복구)
+    var isUUID = (sourceCode.split("-").length >= 5 && sourceCode.length >= 36);
+    backupSourceId = isUUID ? sourceCode : targetId;
 
     var stablePath = BACKUP_DIR + "last_stable_backup.json";
     
@@ -5390,15 +5392,17 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         var backupData = JSON.parse(FileStream.read(stablePath));
         var backupUser = null;
 
-        // 백업본 전역에서 해당 ID를 가진 유저 객체 탐색
+        // 백업본 전역에서 '원본 코드(backupSourceId)'를 가진 유저 객체 탐색
         for (var r in backupData.rooms) {
-            if (backupData.rooms[r].users[targetId]) {
-                backupUser = backupData.rooms[r].users[targetId];
+            if (backupData.rooms[r].users[backupSourceId]) {
+                backupUser = backupData.rooms[r].users[backupSourceId];
                 break;
             }
         }
 
-        if (!backupUser) throw new Error("백업본에 해당 유저(ID: " + targetId + ") 데이터가 존재하지 않습니다.");
+        if (!backupUser) {
+            throw new Error("백업본에서 원본 데이터(ID: " + backupSourceId.substring(0,8) + "...)를 찾을 수 없습니다.");
+        }
 
         /**
          * [가드 1] 포인트 오염 체크 (NaN/Null Guard)
@@ -5409,15 +5413,16 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
         /**
          * [가드 2] 비정상 초기화 체크 (Zero-Point Guard)
-         * 단, 신규 계정(50,000P 이하)으로 복구받는 경우는 블랙홀 구제로 간주하여 통과.
+         * 현재 유저가 이미 고액 자산가인데 0원인 데이터를 덮어쓰려 하면 차단.
          */
-        var currentP = (roomData.users[targetId]) ? Number(roomData.users[targetId].point || 0) : 0;
+        var currentP = Number(roomData.users[targetId].point || 0);
         if (currentP > 100000 && backupUser.point === 0) {
             throw new Error("대상 유저의 자산 급감(0원) 위험이 감지되어 복구를 차단했습니다.");
         }
 
         /**
          * [가드 3] 실시간 활동 병합 (Journaling Sync)
+         * 원본 코드(과거 ID)로 발생했던 최신 거래 기록까지 싹 긁어옵니다.
          */
         var journalFile = new java.io.File(JOURNAL_PATH);
         if (journalFile.exists()) {
@@ -5425,12 +5430,13 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
             var userDelta = 0;
             logs.forEach(function(line) {
                 var parts = line.split("|");
-                if (parts[0] === targetId) userDelta += Number(parts[2] || 0);
+                if (parts[0] === backupSourceId) userDelta += Number(parts[2] || 0);
             });
             backupUser.point = Number(backupUser.point) + userDelta;
         }
 
-        // 검증 완료된 데이터를 현재 방의 유저 목록에 강제 이식/갱신
+        // [핵심] 가져온 과거 데이터의 이름을 현재 유저의 이름으로 업데이트 후 이식
+        backupUser.name = targetNick;
         roomData.users[targetId] = backupUser;
 
         /**
@@ -5438,15 +5444,16 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
          */
         safeSaveData(data, false);
 
-        replier.reply(formatAdmin("✅ 지능형 정밀 복구 성공", 
-            "대상: " + targetName + "\n" +
-            "🛡️ 보안 가드: 검역소 인증 통과\n" +
-            "📝 실시간 데이터: 블랙박스 병합 완료\n" +
-            "🔗 식별 모드: " + (isUUID ? "코드 직접 매핑" : "닉네임 매핑") + "\n\n" +
+        replier.reply(formatAdmin("✅ 지능형 데이터 이관 성공", 
+            "현재 대상: " + targetNick + "\n" +
+            "원본 소스: " + (isUUID ? "고유 코드 매핑" : "닉네임 매핑") + "\n" +
+            "━━━━━━━━━━━━━━━\n" +
+            "🛡️ 보안 검역 및 실시간 병합 완료\n" +
+            "💾 물리 저장: 원자적 교체 성공\n\n" +
             "💰 최종 복구액: " + fp(backupUser.point) + "P"));
 
     } catch (e) {
-        replier.reply(formatAdmin("🚫 복구 차단됨", "데이터 보호 로직이 복구를 거부했습니다.\n사유: " + e.message));
+        replier.reply(formatAdmin("🚫 복구 차단됨", "사유: " + e.message));
     }
         return true;
     }

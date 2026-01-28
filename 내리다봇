@@ -1807,14 +1807,26 @@ function runScheduler() {
                 dashboardUrl: "https://script.google.com/macros/s/AKfycbyoURblg3-nLNgSE57Pb9RmjqK3wXyMSRpm9WrkWe3z2kyE_q_wmoabNECLNXWQ2SBZ/exec"
             };
 
-            /* [모듈 실행] 섹터 16-2 비즈니스 로직 */
-            if (typeof _runSector16Logic === 'function') {
-                _runSector16Logic(data, ctx);
+            // 1. 경제/경마 (섹터 16-2)
+            try {
+                if (typeof _runSector16Logic === 'function') _runSector16Logic(data, ctx);
+            } catch (e) {
+                Log.error("Sector 16 Logic Crash: " + e);
             }
 
-            /* [모듈 실행] 섹터 17, 18 로직 안전 호출 */
-            if (typeof _runSector17Logic === 'function') _runSector17Logic(data, ctx);
-            if (typeof _runSector18Logic === 'function') _runSector18Logic(data, ctx);
+            // 2. 일일 초기화 (섹터 17)
+            try {
+                if (typeof _runSector17Logic === 'function') _runSector17Logic(data, ctx);
+            } catch (e) {
+                Log.error("Sector 17 Logic Crash: " + e);
+            }
+
+            // 3. 로또 추첨 (섹터 18)
+            try {
+                if (typeof _runSector18Logic === 'function') _runSector18Logic(data, ctx);
+            } catch (e) {
+                Log.error("Sector 18 Logic Crash: " + e);
+            }
 
             /* [신규] 10분 주기 구글 시트 대시보드 동기화 */
             var currentMin = ctx.now.getMinutes();
@@ -1892,7 +1904,7 @@ function _runSector16Logic(data, ctx) {
     var currentMin = ctx.now.getMinutes();
     var currentSec = ctx.now.getSeconds();
     var conf = SYSTEM_CONFIG.ECO.STOCK;
-    var rConf = SYSTEM_CONFIG.ECO.RACING; // 섹터1에서 설정한 경마 상수 참조
+    var rConf = SYSTEM_CONFIG.ECO.RACING; 
     var mani = conf.MANIPULATION;
 
     // [안전장치] 스케줄러 가동 시 참조 오류 방지를 위한 독립 변수 할당
@@ -1902,329 +1914,314 @@ function _runSector16Logic(data, ctx) {
     var racingData = mainRoomData.features.racing;
     var lotto = mainRoomData.features.lotto;
 
-    var DASHBOARD_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQWUH4iH7iLI2ZAR1MC3OERD4I2LcJVX23waSW7MLhjgGwjr6hTXKSNiAD048B9K4dtr8OosHqbTsrb/pubchart?oid=121239500&format=interactive";
-
-    /* [신규] 5분 주기 오토세이브 엔진 */
-    if (currentMin % 5 === 0 && data.lastAutoSaveMin !== currentMin) {
-        data.lastAutoSaveMin = currentMin;
-        ctx.isUpdated = true;
-        ctx.isForceBackup = true; 
-    }
-
-    /* [수정] 주식 장 오픈 시가 기록 및 DB 저장 */
-    if (currentHour === conf.SETTINGS.OPEN_HOUR && currentMin === 0 && data.lastMarketOpenMin !== currentMin) {
-        data.lastMarketOpenMin = currentMin;
-        if (data.stockMarket) {
-            var stocks = Object.keys(data.stockMarket);
-            if (stocks.length > 0) {
-                marketOpenPrice = data.stockMarket[stocks[0]].price; 
-                data.marketOpenPrice = marketOpenPrice;
-                ctx.isUpdated = true;
-            }
+    /* [시스템] 5분 주기 오토세이브 & 장 오픈 시가 기록 */
+    try {
+        if (currentMin % 5 === 0 && data.lastAutoSaveMin !== currentMin) {
+            data.lastAutoSaveMin = currentMin;
+            ctx.isUpdated = true;
+            ctx.isForceBackup = true; 
         }
-    }
-
-    /* 1. 방별 유저 간 사채 시스템 및 경제 감시 엔진 (무결성 유지) */
-    for (var rName in data.rooms) {
-        var roomData = data.rooms[rName];
-        if (!roomData.loanContracts) roomData.loanContracts = {};
-
-        if (roomData.bankReserve !== undefined) {
-            var reserve = roomData.bankReserve;
-            if (!roomData.lastBankAlert) roomData.lastBankAlert = "normal";
-
-            var roomBase = roomData.economyBase || 1000000;
-            var warningLimit = Math.floor(roomBase * 0.1);
-            var disasterLimit = Math.floor(roomBase * 0.01);
-            var normalLimit = warningLimit * 2;
-
-            if (reserve < disasterLimit && roomData.lastBankAlert !== "disaster") {
-                roomData.lastBankAlert = "disaster";
-                var disasterMsg = "🚨 [국가 경제 재난 선포] 🚨\n━━━━━━━━━━━━━━━\n현 시각부로 국가 경제 재난 상태를 선포합니다.\n중앙은행 금고 자산이 임계치(" + fp(disasterLimit) + "P) 아래로 급락하여 모든 보상 및 출금이 정지될 위험이 큽니다.\n\n🏦 현재 금고: " + fp(reserve) + "P\n⚠️ 조치: 관리자의 즉각적인 재원 수혈이 필요합니다.";
-                Api.replyRoom(rName, disasterMsg);
-                ctx.isUpdated = true;
-            }
-            else if (reserve < warningLimit && reserve >= disasterLimit && roomData.lastBankAlert === "normal") {
-                roomData.lastBankAlert = "warning";
-                var warningMsg = "⚠️ [국가 경제 마비 예비 경보]\n━━━━━━━━━━━━━━━\n중앙은행 금고 잔액이 " + fp(warningLimit) + "P 미만으로 하락했습니다.\n지속적인 보상 유지를 위해 경제 활동 활성화 또는 재원 보충이 권고됩니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
-                Api.replyRoom(rName, warningMsg);
-                ctx.isUpdated = true;
-            }
-            else if (reserve >= normalLimit && (roomData.lastBankAlert === "warning" || roomData.lastBankAlert === "disaster")) {
-                roomData.lastBankAlert = "normal";
-                var normalMsg = "✅ [국가 경제 정상화 알림]\n━━━━━━━━━━━━━━━\n재원 수혈 및 유동성 확보를 통해 금고가 다시 안정권(" + fp(normalLimit) + "P 이상)에 진입했습니다.\n중단되었던 각종 경제 로직이 정상화되었습니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
-                Api.replyRoom(rName, normalMsg);
-                ctx.isUpdated = true;
-            }
-        }
-
-        for (var cid in roomData.loanContracts) {
-            var c = roomData.loanContracts[cid];
-            var periodsPassed = Math.floor((nowTs - c.startTime) / 10800000); 
-            
-            if (c.appliedPeriods === undefined) c.appliedPeriods = 0;
-            if (periodsPassed > c.appliedPeriods) {
-                var pendingPeriods = periodsPassed - c.appliedPeriods;
-                var totalNewInterest = 0;
-                for (var i = 0; i < pendingPeriods; i++) {
-                    // NaN 방지를 위한 엄격한 수치 연산
-                    var currentDebt = Number(c.currentDebt || 0);
-                    var interest = Math.floor(currentDebt * (Number(c.rate) / 100));
-                    c.currentDebt = currentDebt + interest;
-                    totalNewInterest += interest;
-                }
-                c.appliedPeriods = periodsPassed;
-                ctx.isUpdated = true;
-                try {
-                    var interestMsg = "🚬 [사채 이자 갱신]\n━━━━━━━━━━━━━━━\n" +
-                                      "👤 대상: " + c.borrowerName + "님\n" +
-                                      "🤝 채권자: " + c.lenderName + "\n" +
-                                      "🕒 경과: " + (periodsPassed * 3) + "시간\n" +
-                                      "💰 추가 이자: +" + fp(totalNewInterest) + "P\n" +
-                                      "📉 현재 채무: " + fp(c.currentDebt) + "P\n" +
-                                      "━━━━━━━━━━━━━━━";
-                    Api.replyRoom(rName, interestMsg);
-                } catch(e) {}
-            }
-
-            var duration = nowTs - c.startTime;
-            var overdueLimit = 24 * 60 * 60 * 1000;
-            var bankTakeoverLimit = 36 * 60 * 60 * 1000;
-
-            if (c.status === 'active' && duration > overdueLimit && duration <= bankTakeoverLimit) {
-                c.status = 'overdue'; 
-                ctx.isUpdated = true;
-                try {
-                    var collectionMsg = "🚨 [강제 추심 집행 알림]\n대상: " + c.borrowerName + "님\n사유: 상환 기한(24시간) 초과\n\n지금부터 수익의 50%가 채권자에게 자동 귀속됩니다.";
-                    Api.replyRoom(rName, collectionMsg);
-                } catch(e) {}
-            }
-            else if (duration > bankTakeoverLimit) {
-                var amountToPay = Number(c.currentDebt);
-                var lender = roomData.users[c.lenderUid];
-                var borrower = roomData.users[c.borrowerUid];
-
-                if (lender && borrower) {
-                    if (roomData.bankReserve === undefined) roomData.bankReserve = 10000;
-                    roomData.bankReserve -= amountToPay;
-                    var preLenderPoint = Number(lender.point);
-                    lender.point = preLenderPoint + amountToPay;
-                    verifyPointTransaction(lender, preLenderPoint, amountToPay, "사채 은행 대납 회수 (" + c.borrowerName + ")");
-                    if (!borrower.loan) borrower.loan = { debt: 0, items: [] };
-                    borrower.loan.debt = Number(borrower.loan.debt) + amountToPay;
-                    borrower.loan.items.push(amountToPay);
-                    borrower.isTransferred = true; 
-                    borrower.creditScore = Math.max(0, (borrower.creditScore || 600) - 50);
-                    checkAndHandleDefaulter(borrower, rName);
-                    var takeoverMsg = "🏛️ [중앙은행 대환 집행]\n━━━━━━━━━━━━━━━\n👤 대상: " + c.borrowerName + "님\n\n내용: 사채 연체 36시간 경과로 인해 은행이 " + fp(amountToPay) + "P를 대납 처리하였습니다.\n\n⚠️ [페널티]: 신용점수 -50점 강등\n⚠️ 해당 채무는 [은행 대환 대출]로 전환되었으며, 완납 시까지 모든 수익의 70%가 강제 상환됩니다.\n━━━━━━━━━━━━━━━";
-                    Api.replyRoom(rName, takeoverMsg);
-                    delete roomData.loanContracts[cid];
+        if (currentHour === conf.SETTINGS.OPEN_HOUR && currentMin === 0 && data.lastMarketOpenMin !== currentMin) {
+            data.lastMarketOpenMin = currentMin;
+            if (data.stockMarket) {
+                var stocks = Object.keys(data.stockMarket);
+                if (stocks.length > 0) {
+                    marketOpenPrice = data.stockMarket[stocks[0]].price; 
+                    data.marketOpenPrice = marketOpenPrice;
                     ctx.isUpdated = true;
                 }
             }
         }
-    }
+    } catch(e) { Log.error("Sys/Save Logic Error: " + e); }
 
-    /* 2. 주식 주기적 변동 처리 (무결성 유지) */
-    if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && currentMin % 10 === 0 && data.lastStockUpdateMin !== currentMin) {
-        data.lastStockUpdateMin = currentMin; 
-        // [강화] 종목 고갈 방지 및 생성 로직 최적화
-        var currentStockCount = Object.keys(data.stockMarket || {}).length;
-        
-        if (mani && mani.ACTIVE === true) {
-            data.pendingSpecialEffect = { stock: mani.TARGET, factor: mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE), forceMani: true };
-        } else {
-            // 종목이 하나도 없거나 너무 적으면(3개 미만) 무조건 생성 시도, 그 외에는 확률 적용
-            if (currentStockCount < 3 || (currentStockCount < 10 && Math.random() < SYSTEM_CONFIG.PROB.STOCK_NEW_LISTING)) { 
-                data.pendingNewStock = true;
-            } else if (Math.random() < SYSTEM_CONFIG.PROB.STOCK_SPECIAL) {
-                var stocks = Object.keys(data.stockMarket || {});
-                if (stocks.length > 0) {
-                    var target = stocks[Math.floor(Math.random() * stocks.length)];
-                    var isUp = Math.random() < SYSTEM_CONFIG.PROB.STOCK_UP_CHANCE;
-                    var randFactor = (Math.random() * 0.10) + 0.15; 
-                    data.pendingSpecialEffect = { stock: target, factor: isUp ? randFactor : -randFactor };
+    /* [1. 사채 및 경제 감시 엔진] */
+    try {
+        for (var rName in data.rooms) {
+            var roomData = data.rooms[rName];
+            if (!roomData.loanContracts) roomData.loanContracts = {};
+
+            // 국가 경제 위기 알림 로직
+            if (roomData.bankReserve !== undefined) {
+                var reserve = roomData.bankReserve;
+                if (!roomData.lastBankAlert) roomData.lastBankAlert = "normal";
+
+                var roomBase = roomData.economyBase || 1000000;
+                var warningLimit = Math.floor(roomBase * 0.1);
+                var disasterLimit = Math.floor(roomBase * 0.01);
+                var normalLimit = warningLimit * 2;
+
+                if (reserve < disasterLimit && roomData.lastBankAlert !== "disaster") {
+                    roomData.lastBankAlert = "disaster";
+                    var disasterMsg = "🚨 [국가 경제 재난 선포] 🚨\n━━━━━━━━━━━━━━━\n현 시각부로 국가 경제 재난 상태를 선포합니다.\n중앙은행 금고 자산이 임계치(" + fp(disasterLimit) + "P) 아래로 급락하여 모든 보상 및 출금이 정지될 위험이 큽니다.\n\n🏦 현재 금고: " + fp(reserve) + "P\n⚠️ 조치: 관리자의 즉각적인 재원 수혈이 필요합니다.";
+                    Api.replyRoom(rName, disasterMsg);
+                    ctx.isUpdated = true;
+                }
+                else if (reserve < warningLimit && reserve >= disasterLimit && roomData.lastBankAlert === "normal") {
+                    roomData.lastBankAlert = "warning";
+                    var warningMsg = "⚠️ [국가 경제 마비 예비 경보]\n━━━━━━━━━━━━━━━\n중앙은행 금고 잔액이 " + fp(warningLimit) + "P 미만으로 하락했습니다.\n지속적인 보상 유지를 위해 경제 활동 활성화 또는 재원 보충이 권고됩니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
+                    Api.replyRoom(rName, warningMsg);
+                    ctx.isUpdated = true;
+                }
+                else if (reserve >= normalLimit && (roomData.lastBankAlert === "warning" || roomData.lastBankAlert === "disaster")) {
+                    roomData.lastBankAlert = "normal";
+                    var normalMsg = "✅ [국가 경제 정상화 알림]\n━━━━━━━━━━━━━━━\n재원 수혈 및 유동성 확보를 통해 금고가 다시 안정권(" + fp(normalLimit) + "P 이상)에 진입했습니다.\n중단되었던 각종 경제 로직이 정상화되었습니다.\n\n🏦 현재 금고: " + fp(reserve) + "P";
+                    Api.replyRoom(rName, normalMsg);
+                    ctx.isUpdated = true;
+                }
+            }
+
+            // 사채 이자 및 추심 로직
+            for (var cid in roomData.loanContracts) {
+                var c = roomData.loanContracts[cid];
+                var periodsPassed = Math.floor((nowTs - c.startTime) / 10800000); 
+                
+                if (c.appliedPeriods === undefined) c.appliedPeriods = 0;
+                
+                if (periodsPassed > c.appliedPeriods) {
+                    var pendingPeriods = periodsPassed - c.appliedPeriods;
+                    var totalNewInterest = 0;
+                    for (var i = 0; i < pendingPeriods; i++) {
+                        var currentDebt = Number(c.currentDebt || 0);
+                        var interest = Math.floor(currentDebt * (Number(c.rate) / 100));
+                        c.currentDebt = currentDebt + interest;
+                        totalNewInterest += interest;
+                    }
+                    c.appliedPeriods = periodsPassed;
+                    ctx.isUpdated = true;
+                    
+                    try {
+                        var interestMsg = "🚬 [사채 이자 갱신]\n━━━━━━━━━━━━━━━\n" +
+                                          "👤 대상: " + c.borrowerName + "님\n" +
+                                          "🤝 채권자: " + c.lenderName + "\n" +
+                                          "🕒 경과: " + (periodsPassed * 3) + "시간\n" +
+                                          "💰 추가 이자: +" + fp(totalNewInterest) + "P\n" +
+                                          "📉 현재 채무: " + fp(c.currentDebt) + "P\n" +
+                                          "━━━━━━━━━━━━━━━";
+                        Api.replyRoom(rName, interestMsg);
+                    } catch(e) {}
+                }
+
+                var duration = nowTs - c.startTime;
+                var overdueLimit = 24 * 60 * 60 * 1000;
+                var bankTakeoverLimit = 36 * 60 * 60 * 1000;
+
+                if (c.status === 'active' && duration > overdueLimit && duration <= bankTakeoverLimit) {
+                    c.status = 'overdue'; 
+                    ctx.isUpdated = true;
+                    try { 
+                        var collectionMsg = "🚨 [강제 추심 집행 알림]\n대상: " + c.borrowerName + "님\n사유: 상환 기한(24시간) 초과\n\n지금부터 수익의 50%가 채권자에게 자동 귀속됩니다.";
+                        Api.replyRoom(rName, collectionMsg); 
+                    } catch(e){}
+                }
+                else if (duration > bankTakeoverLimit) {
+                    var amountToPay = Number(c.currentDebt);
+                    var lender = roomData.users[c.lenderUid];
+                    var borrower = roomData.users[c.borrowerUid];
+
+                    if (lender && borrower) {
+                        if (roomData.bankReserve === undefined) roomData.bankReserve = 10000;
+                        roomData.bankReserve -= amountToPay;
+                        lender.point = Number(lender.point) + amountToPay;
+                        verifyPointTransaction(lender, Number(lender.point)-amountToPay, amountToPay, "사채 은행 대납 회수 (" + c.borrowerName + ")");
+                        
+                        if (!borrower.loan) borrower.loan = { debt: 0, items: [] };
+                        borrower.loan.debt = Number(borrower.loan.debt) + amountToPay;
+                        borrower.loan.items.push(amountToPay);
+                        borrower.isTransferred = true; 
+                        borrower.creditScore = Math.max(0, (borrower.creditScore || 600) - 50);
+                        checkAndHandleDefaulter(borrower, rName);
+                        
+                        var takeoverMsg = "🏛️ [중앙은행 대환 집행]\n━━━━━━━━━━━━━━━\n👤 대상: " + c.borrowerName + "님\n\n내용: 사채 연체 36시간 경과로 인해 은행이 " + fp(amountToPay) + "P를 대납 처리하였습니다.\n\n⚠️ [페널티]: 신용점수 -50점 강등\n⚠️ 해당 채무는 [은행 대환 대출]로 전환되었으며, 완납 시까지 모든 수익의 70%가 강제 상환됩니다.\n━━━━━━━━━━━━━━━";
+                        Api.replyRoom(rName, takeoverMsg);
+                        delete roomData.loanContracts[cid];
+                        ctx.isUpdated = true;
+                    }
                 }
             }
         }
-        try { java.lang.Thread.sleep(1000); } catch(e){}
-        if (currentHour === conf.SETTINGS.CLOSE_HOUR && currentMin === 50 && typeof stock_applyClosingCorrection === 'function') {
-            for (var sName in data.stockMarket) { data.stockMarket[sName].price = stock_applyClosingCorrection(data.stockMarket[sName].price); }
-        }
-        var stockResult = updateStockPrices(data); 
-        var isMarketOpen = (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR);
-        var statusText = isMarketOpen ? "🟢 장 운영 중 (07:00 ~ 23:59)" : "🔴 장 마감";
-        var body = "📉 주식 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateStockList(data) || "시세 정보 없음"); 
-        if (stockResult.length > 0) body += "\n\n" + stockResult.join("\n");
-        body += "\n━━━━━━━━━━━━━━━";
-        try { Api.replyRoom(ctx.targetRoom, body); } catch(err) {}
-        ctx.isUpdated = true;
-        util_stamp("stockLogic");
-    }
+    } catch (e) { Log.error("Loan/Bank Logic Error: " + e); }
 
-    /* [수정] 3. 경마 시스템 통합 스케줄러 (배당 보전 및 3배 보장 로직 반영) */
-    
-    // A. 개장 알림 (09:00:00)
-    if (currentHour === rConf.OPEN_HOUR && currentMin === 0) {
-        if (racingData.lastOpenDate !== ctx.today) {
-            racingData.isOperating = true;
-            racingData.isResultProcessed = false; 
-            racingData.isDeadlineNotified = false;
-            racingData.lastOpenDate = ctx.today; // 오늘 개장 완료 기록
-            var startMsg = "🏇 [내리다 경마장 개장 알림]\n━━━━━━━━━━━━━━━\n지금부터 제 " + racingData.round + "회차 경마 배팅이 가능합니다!\n\n🕒 배팅 시간: 매시 00분 ~ 49분 59초\n🏁 결과 발표: 매시 00분 00초\n🚫 운영 종료: 23:59 (00:00 최종 결과)\n━━━━━━━━━━━━━━━\n💡 현황 확인: [/경마] 입력";
-            Api.replyRoom(ctx.targetRoom, startMsg);
-        }
-    }
-
-    // B. 배팅 마감 알림 (매시 50분)
-    // 판정 강화: isOperating이 true이고, 40분이며, 아직 알림이 가지 않았을 때
-    if (currentMin === 50 && !racingData.isDeadlineNotified) {
-        // 운영 시간이면 무조건 알림 시도 (상태가 꼬여도 알림 우선 발송)
-        if (currentHour >= rConf.OPEN_HOUR && currentHour <= rConf.CLOSE_HOUR) {
-            racingData.isOperating = true; 
-            racingData.isDeadlineNotified = true;
-            var deadlineMsg = "📢 [경마 배팅 마감 알림]\n━━━━━━━━━━━━━━━\n제 " + racingData.round + "회차 배팅이 종료되었습니다!\n\n🏦 최종 집계 포인트: " + fp(racingData.totalPool) + "P\n🏁 우승마 판독 및 정산 진행 중...\n━━━━━━━━━━━━━━━\n🏇 잠시 후 정각(00분)에 결과가 발표됩니다!";
-            Api.replyRoom(ctx.targetRoom, deadlineMsg);
-            ctx.isUpdated = true;
-        }
-    }
-
-    // C. 결과 발표 및 새 라운드 시작 (매시 00:00:00)
-    var isRaceTime = (currentHour >= rConf.OPEN_HOUR && currentHour <= 23) || currentHour === 0;
-
-    // 단, 9시는 개장 시간이므로 정산 로직에서는 제외 (hour !== rConf.OPEN_HOUR)
-    if (isRaceTime && currentMin === 0 && currentHour !== rConf.OPEN_HOUR) {
-        if (racingData.lastProcessedHour !== currentHour) {
-            // 정산 진입 시 운영 플래그 강제 정상화 (자가 치유)
-            racingData.isOperating = (currentHour >= rConf.OPEN_HOUR && currentHour <= 23);
-            racingData.lastProcessedHour = currentHour;
+    /* [2. 주식 주기적 변동 처리] */
+    try {
+        if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && currentMin % 10 === 0 && data.lastStockUpdateMin !== currentMin) {
+            data.lastStockUpdateMin = currentMin; 
+            var currentStockCount = Object.keys(data.stockMarket || {}).length;
             
-            /* --- 정산 로직 시작 --- */
-            var totalW = 0; racingData.horses.forEach(function(h){ totalW += h.weight; });
-            var rVal = Math.random() * totalW; var accum = 0; var winner = racingData.horses[0];
-            for(var i=0; i<racingData.horses.length; i++){ accum += racingData.horses[i].weight; if(rVal < accum){ winner = racingData.horses[i]; break; } }
-
-        var tax = Math.floor(racingData.totalPool * rConf.TAX_RATE);
-        var basePool = racingData.totalPool - tax + racingData.carryOver;
-        var winPool = 0; var winnerUids = [];
-        for(var uid in racingData.bets){ if(racingData.bets[uid].horseId === winner.id){ winPool += racingData.bets[uid].amount; winnerUids.push(uid); } }
-
-        var mainRoom = data.rooms[ctx.targetRoom];
-        if(mainRoom) mainRoom.bankReserve = (mainRoom.bankReserve || 0) + tax;
-
-        var resultHeader = "🏁 [제 " + racingData.round + "회 경마 결과 및 새 경기 안내]\n━━━━━━━━━━━━━━━\n[🏆 지난 경기 결과]\n\"마지막 직선 주로에서 " + winner.id + "번 " + winner.name + "가 골인!\"\n\n🥇 우승마: [" + winner.id + "번 " + winner.name + "]\n";
-        var resultBody = "";
-        
-        if(winnerUids.length > 0) {
-            /* [핵심] 3배 보전 및 지원금 계산 로직 */
-            var minDiv = 3.0; // 최소 3배 보장
-            var totalRequiredFor3x = Math.floor(winPool * minDiv);
-            var subsidyNeeded = Math.max(0, totalRequiredFor3x - basePool);
-            
-            var actualSubsidy = 0;
-            if (subsidyNeeded > 0 && mainRoom) {
-                actualSubsidy = Math.min(subsidyNeeded, mainRoom.bankReserve || 0);
-                mainRoom.bankReserve -= actualSubsidy;
-            }
-
-            var finalDistributePool = basePool + actualSubsidy;
-            var totalActuallyPaid = 0;
-
-            resultBody += "🏛️ 국고 수수료(10%): " + fp(tax) + "P 입고\n";
-            if (actualSubsidy > 0) resultBody += "🛡️ 3배 배당 보전 지원: " + fp(actualSubsidy) + "P\n";
-            else if (racingData.carryOver > 0) resultBody += "💰 잭팟 이월금 포함: " + fp(racingData.carryOver) + "P 방출!\n";
-            
-            resultBody += "\n[🎖️ 주요 당첨자]";
-
-            winnerUids.forEach(function(uId){
-                var b = racingData.bets[uId]; var u = null;
-                for(var r in data.rooms){ if(data.rooms[r].users[uId]){ u = data.rooms[r].users[uId]; break; } }
-                if(u){
-                    var share = b.amount / winPool;
-                    var prize = Math.floor(share * finalDistributePool);
-                    var maxLimit = b.amount * (rConf.MAX_PAYOUT_MULT || 10);
-                    if (prize > maxLimit) prize = maxLimit;
-
-                    var res = processRepayment(u, prize, uId, ctx.targetRoom);
-                    u.point += res.actualGain; 
-                    totalActuallyPaid += prize;
-
-                    var tag = (prize === maxLimit) ? " ⚠️최대배당" : (actualSubsidy > 0 ? " ✨3배보전" : "");
-                    resultBody += "\n• " + b.name + " (+" + fp(res.actualGain) + "P)" + tag;
+            if (mani && mani.ACTIVE === true) {
+                data.pendingSpecialEffect = { stock: mani.TARGET, factor: mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE), forceMani: true };
+            } else {
+                if (currentStockCount < 3 || (currentStockCount < 10 && Math.random() < SYSTEM_CONFIG.PROB.STOCK_NEW_LISTING)) { 
+                    data.pendingNewStock = true;
+                } else if (Math.random() < SYSTEM_CONFIG.PROB.STOCK_SPECIAL) {
+                    var stocks = Object.keys(data.stockMarket || {});
+                    if (stocks.length > 0) {
+                        var target = stocks[Math.floor(Math.random() * stocks.length)];
+                        var isUp = Math.random() < SYSTEM_CONFIG.PROB.STOCK_UP_CHANCE;
+                        var randFactor = (Math.random() * 0.10) + 0.15; 
+                        data.pendingSpecialEffect = { stock: target, factor: isUp ? randFactor : -randFactor };
+                    }
                 }
-            });
-            
-            racingData.carryOver = Math.max(0, finalDistributePool - totalActuallyPaid);
-            if (racingData.carryOver > 10) {
-                resultBody += "\n\n💰 상한 초과분 " + fp(racingData.carryOver) + "P는\n다음 회차 잭팟으로 이월되었습니다!";
             }
-        } else {
-            /**
-             * [Gemini 요청 사항: 이월금 전액 보전 로직 적용]
-             * 당첨자 없을 시:
-             * 1. 현재 판돈(racingData.totalPool - tax)에서만 30% 국고 회수
-             * 2. 기존 이월금(carryOver)은 100% 보존하여 합산 이월
-             */
-            var currentRoundNetPool = racingData.totalPool - tax; // 당기 순수 판돈
-            var toBank = Math.floor(currentRoundNetPool * rConf.WINLESS_BANK_RATE); // 당기 판돈의 30%만 회수
-            
-            // (당기 판돈 70%) + (기존 이월금 100%) = 합계 이월
-            racingData.carryOver = (currentRoundNetPool - toBank) + racingData.carryOver;
-            
-            if(mainRoom) mainRoom.bankReserve += toBank;
-            
-            resultBody += "💀 당첨 유저 없음\n💰 이월금 보전 완료: " + fp(racingData.carryOver) + "P\n🏛️ 금기 판돈 국고 귀속(30%): " + fp(toBank) + "P";
-        }
-
-        var isClosing = (currentHour === 0);
-        if (isClosing) {
-            racingData.isOperating = false;
-            resultBody += "\n━━━━━━━━━━━━━━━\n💤 금일 경마 운영이 종료되었습니다.\n다음 경기는 내일 오전 09:00에 시작됩니다.";
-        } else {
-            resultBody += "\n━━━━━━━━━━━━━━━\n✨ [제 " + (racingData.round + 1) + "회 경기 시작] ✨\n지금부터 다음 경기 배팅이 가능합니다.";
-        }
-
-        Api.replyRoom(ctx.targetRoom, resultHeader + resultBody);
-        util_stamp("racingLogic");
-
-        /* --- 새 라운드 준비 --- */
-            racingData.round++; 
-            racingData.bets = {}; 
-            racingData.totalPool = 0;
-            racingData.isDeadlineNotified = false; // 마감 알림 플래그 리셋
-            
-            var conds = [{l:"🚀 최상",w:1.5},{l:"☀️ 양호",w:1.2},{l:"☁️ 보통",w:1.0},{l:"💧 부진",w:0.7}];
-            racingData.horses.forEach(function(h){ var c=conds[Math.floor(Math.random()*conds.length)]; h.icon=c.l; h.weight=c.w; });
+            try { java.lang.Thread.sleep(1000); } catch(e){}
+            if (currentHour === conf.SETTINGS.CLOSE_HOUR && currentMin === 50 && typeof stock_applyClosingCorrection === 'function') {
+                for (var sName in data.stockMarket) { data.stockMarket[sName].price = stock_applyClosingCorrection(data.stockMarket[sName].price); }
+            }
+            var stockResult = updateStockPrices(data); 
+            var isMarketOpen = (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR);
+            var statusText = isMarketOpen ? "🟢 장 운영 중 (07:00 ~ 23:59)" : "🔴 장 마감";
+            var body = "📉 주식 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateStockList(data) || "시세 정보 없음"); 
+            if (stockResult.length > 0) body += "\n\n" + stockResult.join("\n");
+            body += "\n━━━━━━━━━━━━━━━";
+            try { Api.replyRoom(ctx.targetRoom, body); } catch(err) {}
             ctx.isUpdated = true;
-       }
-    }
-
-    /* 4. 홀짝 피버타임 및 결투 체크 (기존 로직 유지) */
-    if (!data.feverData) data.feverData = { active: false, endTime: 0, scheduled: [] };
-    var timeKey = (currentHour < 10 ? "0"+currentHour : currentHour) + ":" + (currentMin < 10 ? "0"+currentMin : currentMin);
-    if (data.feverData.scheduled.indexOf(timeKey) !== -1 && !data.feverData.active) {
-        data.feverData.active = true; data.feverData.endTime = nowTs + (5 * 60 * 1000);
-        data.feverData.scheduled.splice(data.feverData.scheduled.indexOf(timeKey), 1);
-        try { Api.replyRoom(ctx.targetRoom, "🔥 홀짝 피버타임 시작\n━━━━━━━━━━━━━━━\n지금부터 5분간 홀짝 승률이 상승합니다!"); } catch(e){}
-        ctx.isUpdated = true;
-    }
-    if (data.feverData.active && data.feverData.endTime > 0 && nowTs > Number(data.feverData.endTime)) {
-        data.feverData.active = false; data.feverData.endTime = 0;
-        try { Api.replyRoom(ctx.targetRoom, "❄️ 홀짝 피버타임 종료\n━━━━━━━━━━━━━━━\n이벤트 시간이 마감되어 승률이 정상화되었습니다."); } catch(e){}
-        ctx.isUpdated = true;
-    }
-
-    for (var dKey in duelData) {
-        var d = duelData[dKey];
-        if (nowTs > d.expire) {
-            var room = data.rooms[d.room];
-            if (room && room.users[d.challengerUid]) {
-                room.users[d.challengerUid].point += Number(d.point);
-                try { Api.replyRoom(d.room, "⏰ 결투 만료\n━━━━━━━━━━━━━━━\n상대방 응답 없음으로 " + fp(d.point) + "P 환급 완료\n내 잔액: " + fp(room.users[d.challengerUid].point) + "P"); } catch(err) {}
-            }
-            delete duelData[dKey]; ctx.isUpdated = true; 
+            util_stamp("stockLogic");
         }
-    }
+    } catch (e) { Log.error("Stock Logic Error: " + e); }
+
+    /* [3. 경마 시스템 통합 스케줄러] */
+    try {
+        // A. 개장 알림
+        if (currentHour === rConf.OPEN_HOUR && currentMin === 0) {
+            if (racingData.lastOpenDate !== ctx.today) {
+                racingData.isOperating = true;
+                racingData.isResultProcessed = false; 
+                racingData.isDeadlineNotified = false;
+                racingData.lastOpenDate = ctx.today;
+                var startMsg = "🏇 [내리다 경마장 개장 알림]\n━━━━━━━━━━━━━━━\n지금부터 제 " + racingData.round + "회차 경마 배팅이 가능합니다!\n\n🕒 배팅 시간: 매시 00분 ~ 49분 59초\n🏁 결과 발표: 매시 00분 00초\n🚫 운영 종료: 23:59 (00:00 최종 결과)\n━━━━━━━━━━━━━━━\n💡 현황 확인: [/경마] 입력";
+                Api.replyRoom(ctx.targetRoom, startMsg);
+            }
+        }
+
+        // B. 배팅 마감 알림
+        if (currentMin === 50 && !racingData.isDeadlineNotified) {
+            if (currentHour >= rConf.OPEN_HOUR && currentHour <= rConf.CLOSE_HOUR) {
+                racingData.isOperating = true; 
+                racingData.isDeadlineNotified = true;
+                var deadlineMsg = "📢 [경마 배팅 마감 알림]\n━━━━━━━━━━━━━━━\n제 " + racingData.round + "회차 배팅이 종료되었습니다!\n\n🏦 최종 집계 포인트: " + fp(racingData.totalPool) + "P\n🏁 우승마 판독 및 정산 진행 중...\n━━━━━━━━━━━━━━━\n🏇 잠시 후 정각(00분)에 결과가 발표됩니다!";
+                Api.replyRoom(ctx.targetRoom, deadlineMsg);
+                ctx.isUpdated = true;
+            }
+        }
+
+        // C. 결과 발표 및 정산
+        var isRaceTime = (currentHour >= rConf.OPEN_HOUR && currentHour <= 23) || currentHour === 0;
+        if (isRaceTime && currentMin === 0 && currentHour !== rConf.OPEN_HOUR) {
+            if (racingData.lastProcessedHour !== currentHour) {
+                racingData.isOperating = (currentHour >= rConf.OPEN_HOUR && currentHour <= 23);
+                racingData.lastProcessedHour = currentHour;
+                
+                var totalW = 0; racingData.horses.forEach(function(h){ totalW += h.weight; });
+                var rVal = Math.random() * totalW; var accum = 0; var winner = racingData.horses[0];
+                for(var i=0; i<racingData.horses.length; i++){ accum += racingData.horses[i].weight; if(rVal < accum){ winner = racingData.horses[i]; break; } }
+
+                var tax = Math.floor(racingData.totalPool * rConf.TAX_RATE);
+                var basePool = racingData.totalPool - tax + racingData.carryOver;
+                var winPool = 0; var winnerUids = [];
+                for(var uid in racingData.bets){ if(racingData.bets[uid].horseId === winner.id){ winPool += racingData.bets[uid].amount; winnerUids.push(uid); } }
+
+                var mainRoom = data.rooms[ctx.targetRoom];
+                if(mainRoom) mainRoom.bankReserve = (mainRoom.bankReserve || 0) + tax;
+
+                var resultHeader = "🏁 [제 " + racingData.round + "회 경마 결과 및 새 경기 안내]\n━━━━━━━━━━━━━━━\n[🏆 지난 경기 결과]\n\"마지막 직선 주로에서 " + winner.id + "번 " + winner.name + "가 골인!\"\n\n🥇 우승마: [" + winner.id + "번 " + winner.name + "]\n";
+                var resultBody = "";
+                
+                if(winnerUids.length > 0) {
+                    var minDiv = 3.0; 
+                    var totalRequiredFor3x = Math.floor(winPool * minDiv);
+                    var subsidyNeeded = Math.max(0, totalRequiredFor3x - basePool);
+                    var actualSubsidy = 0;
+                    if (subsidyNeeded > 0 && mainRoom) {
+                        actualSubsidy = Math.min(subsidyNeeded, mainRoom.bankReserve || 0);
+                        mainRoom.bankReserve -= actualSubsidy;
+                    }
+                    var finalDistributePool = basePool + actualSubsidy;
+                    var totalActuallyPaid = 0;
+
+                    resultBody += "🏛️ 국고 수수료(10%): " + fp(tax) + "P 입고\n";
+                    if (actualSubsidy > 0) resultBody += "🛡️ 3배 배당 보전 지원: " + fp(actualSubsidy) + "P\n";
+                    else if (racingData.carryOver > 0) resultBody += "💰 이월금 포함: " + fp(racingData.carryOver) + "P 방출!\n";
+                    
+                    resultBody += "\n[🎖️ 주요 당첨자]";
+                    winnerUids.forEach(function(uId){
+                        var b = racingData.bets[uId]; var u = null;
+                        for(var r in data.rooms){ if(data.rooms[r].users[uId]){ u = data.rooms[r].users[uId]; break; } }
+                        if(u){
+                            var share = b.amount / winPool;
+                            var prize = Math.floor(share * finalDistributePool);
+                            var maxLimit = b.amount * (rConf.MAX_PAYOUT_MULT || 10);
+                            if (prize > maxLimit) prize = maxLimit;
+
+                            var res = processRepayment(u, prize, uId, ctx.targetRoom);
+                            u.point += res.actualGain; 
+                            totalActuallyPaid += prize;
+                            
+                            var tag = (prize === maxLimit) ? " ⚠️최대배당" : (actualSubsidy > 0 ? " ✨3배보전" : "");
+                            resultBody += "\n• " + b.name + " (+" + fp(res.actualGain) + "P)" + tag;
+                        }
+                    });
+                    racingData.carryOver = Math.max(0, finalDistributePool - totalActuallyPaid);
+                    if (racingData.carryOver > 10) {
+                        resultBody += "\n\n💰 상한 초과분 " + fp(racingData.carryOver) + "P는\n다음 회차 배당으로 이월되었습니다!";
+                    }
+                } else {
+                    var currentRoundNetPool = racingData.totalPool - tax; 
+                    var toBank = Math.floor(currentRoundNetPool * rConf.WINLESS_BANK_RATE); 
+                    racingData.carryOver = (currentRoundNetPool - toBank) + racingData.carryOver;
+                    if(mainRoom) mainRoom.bankReserve += toBank;
+                    resultBody += "💀 당첨 유저 없음\n💰 이월금 보전 완료: " + fp(racingData.carryOver) + "P\n🏛️ 금기 판돈 국고 귀속(30%): " + fp(toBank) + "P";
+                }
+
+                var isClosing = (currentHour === 0);
+                if (isClosing) {
+                    racingData.isOperating = false;
+                    resultBody += "\n━━━━━━━━━━━━━━━\n💤 금일 경마 운영이 종료되었습니다.\n다음 경기는 오전 09:00에 시작됩니다.";
+                } else {
+                    resultBody += "\n━━━━━━━━━━━━━━━\n✨ [제 " + (racingData.round + 1) + "회 경기 시작] ✨\n지금부터 다음 경기 배팅이 가능합니다.";
+                }
+
+                Api.replyRoom(ctx.targetRoom, resultHeader + resultBody);
+                util_stamp("racingLogic");
+
+                racingData.round++; 
+                racingData.bets = {}; 
+                racingData.totalPool = 0;
+                racingData.isDeadlineNotified = false;
+                
+                var conds = [{l:"🚀 최상",w:1.5},{l:"☀️ 양호",w:1.2},{l:"☁️ 보통",w:1.0},{l:"💧 부진",w:0.7}];
+                racingData.horses.forEach(function(h){ var c=conds[Math.floor(Math.random()*conds.length)]; h.icon=c.l; h.weight=c.w; });
+                ctx.isUpdated = true;
+            }
+        }
+    } catch (e) { Log.error("Racing Logic Error: " + e); }
+
+    /* [4. 피버타임 및 결투 체크] */
+    try {
+        if (!data.feverData) data.feverData = { active: false, endTime: 0, scheduled: [] };
+        var timeKey = (currentHour < 10 ? "0"+currentHour : currentHour) + ":" + (currentMin < 10 ? "0"+currentMin : currentMin);
+        if (data.feverData.scheduled.indexOf(timeKey) !== -1 && !data.feverData.active) {
+            data.feverData.active = true; data.feverData.endTime = nowTs + (5 * 60 * 1000);
+            data.feverData.scheduled.splice(data.feverData.scheduled.indexOf(timeKey), 1);
+            try { Api.replyRoom(ctx.targetRoom, "🔥 홀짝 피버타임 시작\n━━━━━━━━━━━━━━━\n지금부터 5분간 홀짝 승률이 상승합니다!"); } catch(e){}
+            ctx.isUpdated = true;
+        }
+        if (data.feverData.active && data.feverData.endTime > 0 && nowTs > Number(data.feverData.endTime)) {
+            data.feverData.active = false; data.feverData.endTime = 0;
+            try { Api.replyRoom(ctx.targetRoom, "❄️ 홀짝 피버타임 종료\n━━━━━━━━━━━━━━━\n이벤트 시간이 마감되어 승률이 정상화되었습니다."); } catch(e){}
+            ctx.isUpdated = true;
+        }
+
+        for (var dKey in duelData) {
+            var d = duelData[dKey];
+            if (nowTs > d.expire) {
+                var room = data.rooms[d.room];
+                if (room && room.users[d.challengerUid]) {
+                    room.users[d.challengerUid].point += Number(d.point);
+                    try { Api.replyRoom(d.room, "⏰ 결투 만료\n━━━━━━━━━━━━━━━\n상대방 응답 없음으로 " + fp(d.point) + "P 환급 완료\n내 잔액: " + fp(room.users[d.challengerUid].point) + "P"); } catch(err) {}
+                }
+                delete duelData[dKey]; ctx.isUpdated = true; 
+            }
+        }
+    } catch (e) { Log.error("Fever/Duel Logic Error: " + e); }
 }
 // 엔진 가동
 runScheduler();

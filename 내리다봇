@@ -3673,16 +3673,19 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
 
 //==========섹터23-1==========
 
-/* [섹터 통합 수정] 도움말 및 메뉴 선택 대기 처리 (공통 핸들러 및 1단계) */
-if (menuWaitState && menuWaitState[targetUid]) {
+/* [독립형 함수] 메뉴 선택 대기 처리 1단계 (메인 메뉴 분기) */
+function _handleMenuStep1(msg, user, data, replier, roomName, targetUid) {
+    var menuWaitState = data.rooms[roomName].features.states.menuWait;
+    if (!menuWaitState || !menuWaitState[targetUid]) return false;
+
     var state = menuWaitState[targetUid];
     var now = Date.now();
 
-    // 1. [시간 초과 체크] 기존 45초에서 30초로 통일 및 안내 메시지 추가
+    // 1. [시간 초과 체크] 30초 통일
     if (now - state.time > 30000) {
-        delete menuWaitState[targetUid]; 
+        delete menuWaitState[targetUid];
         replier.reply(formatError(user, "선택 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
-        return true; 
+        return true;
     }
 
     // 2. 취소 입력 시 처리
@@ -3692,184 +3695,175 @@ if (menuWaitState && menuWaitState[targetUid]) {
         return true;
     }
 
-    // 2. [명령어 가드] 명령어(/) 입력 시 대기 상태를 삭제하지 않고 하위로 이관하여 상태 유지
+    // 3. [명령어 가드] 명령어(/) 입력 시 대기 상태를 유지하되, 처리는 하위 로직에 위임
     if (msg.startsWith("/")) {
-        return false; 
+        return false;
     }
-    var roomData = data.rooms[roomName];
-    
-    // 중앙은행 재원 초기화 (UI 출력용)
-    if (roomData.bankReserve === undefined) roomData.bankReserve = 10000;
 
-    // 1. 공통: 시간 초과 체크
-    if (Date.now() - state.time > 30000) { 
-        delete menuWaitState[targetUid]; 
-    } 
-    // 2. 공통: 취소 요청 체크
-    else if (msg === "취소") {
-        delete menuWaitState[targetUid];
-        replier.reply(formatCommand("🚫 메뉴 선택 취소", user, "작업이 취소되었습니다."));
-    }
-    // 3. 각 메뉴별 로직 처리
-    else {
-        var choice = msg.trim();
-        
-        /* [1단계] 은행 메인 메뉴 선택 처리 (v5.2 기부 선택 추가) */
-        if (state.type === 'bank_menu') {
-            delete menuWaitState[targetUid];
-             if (choice === "1") { 
-                bankProcessState[targetUid] = { type: 'deposit', time: Date.now() };
-                replier.reply(formatCommand("💰 예금 진행", user, "예금할 금액을 입력해주세요.\n(보유: " + fP(user.point) + "P)", "취소: [취소]"));
-                delete menuWaitState[targetUid];
-             } else if (choice === "2") { 
-                bankProcessState[targetUid] = { type: 'withdraw', time: Date.now() };
-                replier.reply(formatCommand("🏧 출금 진행", user, "출금할 금액을 입력해주세요.\n(잔고: " + fp(user.bank) + "P)", "취소: [취소]"));
-                delete menuWaitState[targetUid];
-             } else if (choice === "3") { 
-                bankProcessState[targetUid] = { type: 'transfer', time: Date.now() };
-                replier.reply(formatCommand("💸 송금 진행", user, "받을 사람의 [닉네임]과 [금액]을 띄어쓰기로 입력하세요.\n(예: 홍길동 5000)", "취소: [취소]"));
-                delete menuWaitState[targetUid];
-             } else if (choice === "4") { 
-                var cr = getCreditInfo(user.creditScore);
-                if (cr.limit <= 0) { 
-                    delete menuWaitState[targetUid]; 
-                    replier.reply(formatError(user, "대출 불가", "신용등급이 너무 낮습니다.")); 
-                }
-                else {
-                    bankProcessState[targetUid] = { type: 'loan', time: Date.now() };
-                    var loanMsg = "희망 대출금을 입력해주세요.\n" +
-                                  "내 한도: " + fp(cr.limit) + "P (이율: " + ((cr.rate-1)*100).toFixed(0) + "%)\n" +
-                                  "🏦 은행 가용 재원: " + fp(roomData.bankReserve) + "P";
-                    replier.reply(formatCommand("🏦 대출 진행", user, loanMsg, "취소: [취소]"));
-                    delete menuWaitState[targetUid];
-                }
-             } else if (choice === "5") { 
-                if (!user.loan || user.loan.debt <= 0) { 
-                    delete menuWaitState[targetUid]; 
-                    replier.reply(formatError(user, "상환 불가", "갚을 대출금이 없습니다.")); 
-                }
-                else {
-                    bankProcessState[targetUid] = { type: 'repay', time: Date.now() };
-                    replier.reply(formatCommand("📉 상환 진행", user, "상환할 금액을 입력해주세요.\n(대출 잔액: " + fp(user.loan.debt) + "P)\n보유 포인트: " + fp(user.point) + "P", "취소: [취소]"));
-                    delete menuWaitState[targetUid];
-                }
-             } 
-             else if (choice === "6") {
-                menuWaitState[targetUid] = { type: 'p2p_loan_menu', time: Date.now() };
-                var p2pMenu = "1. 💰 사채 등록 (매물 올리기)\n" +
-                              "2. 📋 사채 목록 (분할 대출 받기)\n" +
-                              "3. 📉 사채 상환 (빌린 돈 갚기)\n" +
-                              "4. 📥 사채 회수 (등록 매물 회수)\n" +
-                              "5. 👥 내 채무자 현황 (직접 수거 가능)";
-                replier.reply(formatCommand("🚬 사채 시장 업무 선택", user, p2pMenu, "원하시는 번호를 입력하세요."));
-                return true;
-             }
-             /* [신규] 7번 기부 메뉴 처리 */
-             else if (choice === "7") {
-                bankProcessState[targetUid] = { type: 'donate', time: Date.now() };
-                replier.reply(formatCommand("🎁 기부 진행", user, "기부할 금액을 입력해주세요.\n(보유: " + fP(user.point) + "P)", "취소: [취소]"));
-                delete menuWaitState[targetUid];
-             }
-           }
-           return true;
+    var roomData = data.rooms[roomName];
+    // 중앙은행 재원 초기화 (UI 출력용)
+    if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
+
+    var choice = msg.trim();
+    var bankProcessState = roomData.features.states.bankProcess; // 상태값 할당을 위해 참조
+
+    /* [1단계] 은행 메인 메뉴 선택 처리 (v5.2 기부 선택 추가) */
+    if (state.type === 'bank_menu') {
+        delete menuWaitState[targetUid]; // 메뉴 선택 완료 시 대기 상태 해제
+
+        if (choice === "1") {
+            bankProcessState[targetUid] = { type: 'deposit', time: Date.now() };
+            replier.reply(formatCommand("💰 예금 진행", user, "예금할 금액을 입력해주세요.\n(보유: " + fp(user.point) + "P)", "취소: [취소]"));
+        } else if (choice === "2") {
+            bankProcessState[targetUid] = { type: 'withdraw', time: Date.now() };
+            replier.reply(formatCommand("🏧 출금 진행", user, "출금할 금액을 입력해주세요.\n(잔고: " + fp(user.bank) + "P)", "취소: [취소]"));
+        } else if (choice === "3") {
+            bankProcessState[targetUid] = { type: 'transfer', time: Date.now() };
+            replier.reply(formatCommand("💸 송금 진행", user, "받을 사람의 [닉네임]과 [금액]을 띄어쓰기로 입력하세요.\n(예: 홍길동 5000)", "취소: [취소]"));
+        } else if (choice === "4") {
+            var cr = getCreditInfo(user.creditScore);
+            if (cr.limit <= 0) {
+                replier.reply(formatError(user, "대출 불가", "신용등급이 너무 낮습니다."));
+            } else {
+                bankProcessState[targetUid] = { type: 'loan', time: Date.now() };
+                var loanMsg = "희망 대출금을 입력해주세요.\n" +
+                              "내 한도: " + fp(cr.limit) + "P (이율: " + ((cr.rate - 1) * 100).toFixed(0) + "%)\n" +
+                              "🏦 은행 가용 재원: " + fp(roomData.bankReserve) + "P";
+                replier.reply(formatCommand("🏦 대출 진행", user, loanMsg, "취소: [취소]"));
+            }
+        } else if (choice === "5") {
+            if (!user.loan || user.loan.debt <= 0) {
+                replier.reply(formatError(user, "상환 불가", "갚을 대출금이 없습니다."));
+            } else {
+                bankProcessState[targetUid] = { type: 'repay', time: Date.now() };
+                replier.reply(formatCommand("📉 상환 진행", user, "상환할 금액을 입력해주세요.\n(대출 잔액: " + fp(user.loan.debt) + "P)\n보유 포인트: " + fp(user.point) + "P", "취소: [취소]"));
+            }
+        } else if (choice === "6") {
+            // [중요] 사채 메뉴 선택 시에는 bankProcess가 아닌 menuWaitState를 갱신해야 함 (서브 메뉴 이동)
+            menuWaitState[targetUid] = { type: 'p2p_loan_menu', time: Date.now() };
+            var p2pMenu = "1. 💰 사채 등록 (매물 올리기)\n" +
+                          "2. 📋 사채 목록 (분할 대출 받기)\n" +
+                          "3. 📉 사채 상환 (빌린 돈 갚기)\n" +
+                          "4. 📥 사채 회수 (등록 매물 회수)\n" +
+                          "5. 👥 내 채무자 현황 (직접 수거 가능)";
+            replier.reply(formatCommand("🚬 사채 시장 업무 선택", user, p2pMenu, "원하시는 번호를 입력하세요."));
+            return true; // 여기서 true 반환하여 종료 (다음 로직 수행 X)
+        } else if (choice === "7") {
+            bankProcessState[targetUid] = { type: 'donate', time: Date.now() };
+            replier.reply(formatCommand("🎁 기부 진행", user, "기부할 금액을 입력해주세요.\n(보유: " + fp(user.point) + "P)", "취소: [취소]"));
+        } else {
+            // 잘못된 번호 입력 시 다시 메뉴 대기 상태로 복구? 
+            // 기획 의도상 메뉴가 닫히는 게 일반적이므로 에러 메시지 후 종료 처리
+            replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 선택해주세요."));
         }
+        return true;
     }
+    return false; // 이 함수에서 처리하지 않은 state.type인 경우 (예: p2p_loan_menu 등)
+}
 
 //==========섹터23-2==========
 
-/* [2단계] 사채 시장 서브 메뉴 선택 처리 (독립형) */
-if (menuWaitState && menuWaitState[targetUid]) {
-    /* =====요청사항 시작===== */
-    var state = menuWaitState[targetUid];
+/* [독립형 함수] 메뉴 선택 대기 처리 2단계 (사채 시장 서브 메뉴) */
+function _handleMenuStep2(msg, user, data, replier, roomName, targetUid) {
+    var menuWaitState = data.rooms[roomName].features.states.menuWait;
+    if (!menuWaitState || !menuWaitState[targetUid]) return false;
 
-    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 대기 상태 즉시 삭제
+    var state = menuWaitState[targetUid];
+    // 이 함수는 'p2p_loan_menu' 타입만 처리합니다.
+    if (state.type !== 'p2p_loan_menu') return false;
+
+    // 1. [시간 초과 및 취소 가드]
     if (Date.now() - state.time > 30000 || msg === "취소") {
-        delete menuWaitState[targetUid]; 
+        delete menuWaitState[targetUid];
         if (msg === "취소") replier.reply(formatCommand("🚫 사채 업무 취소", user, "작업이 취소되었습니다."));
-        if (!msg.startsWith("/")) return true; 
+        else replier.reply(formatError(user, "선택 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
+        
+        // 명령어 입력 시에는 false를 반환하여 하위 로직으로 전달
+        if (msg.startsWith("/")) return false;
+        return true;
     }
 
-    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소 후 명령어 로직으로 이관
+    // 2. [명령어 통로]
     if (msg.startsWith("/")) {
         delete menuWaitState[targetUid];
         return false;
     }
 
     var choice = msg.trim();
-    var roomData = data.rooms[roomName]; // roomData 참조 누락 방지
+    var roomData = data.rooms[roomName];
+    var bankProcessState = roomData.features.states.bankProcess;
 
-    if (state.type === 'p2p_loan_menu') {
-        delete menuWaitState[targetUid];
-        if (choice === "1") {
-            bankProcessState[targetUid] = { type: 'p2p_reg_input', time: Date.now() };
-            replier.reply(formatCommand("💰 사채 매물 등록", user, "등록할 [금액]과 [이율]을 입력하세요.\n(예: 10000 5)", "취소: [취소]"));
-            delete menuWaitState[targetUid]; // 신규: 다음 단계로 넘어가므로 현재 메뉴 대기 삭제
-            return true; // 신규: 하단 잡담 로직 차단
-        }
-        else if (choice === "2") {
-            var pools = Object.keys(roomData.loanPools || {});
-            if (pools.length === 0) { 
-                replier.reply(formatSimple("📋 사채 시장", "현재 등록된 매물이 없습니다.", null));
-            } else {
-                var list = []; var tempPools = [];
-                for(var i=0; i<pools.length; i++) {
-                    var p = roomData.loanPools[pools[i]];
-                    list.push((i+1) + ". [" + p.lenderName + "] 잔여: " + fp(p.remainingAmount) + "P (" + p.rate + "%)");
-                    tempPools.push(pools[i]);
-                }
-                menuWaitState[targetUid] = { type: 'p2p_select_pool', time: Date.now(), extra: { pools: tempPools } };
-                replier.reply(formatCommand("📋 사채 매물 목록", user, list.join("\n"), "빌리고 싶은 매물 번호를 입력하세요."));
+    // 선택지 처리 시작 (일단 현재 대기 상태 해제)
+    delete menuWaitState[targetUid];
+
+    if (choice === "1") {
+        bankProcessState[targetUid] = { type: 'p2p_reg_input', time: Date.now() };
+        replier.reply(formatCommand("💰 사채 매물 등록", user, "등록할 [금액]과 [이율]을 입력하세요.\n(예: 10000 5)", "취소: [취소]"));
+    }
+    else if (choice === "2") {
+        var pools = Object.keys(roomData.loanPools || {});
+        if (pools.length === 0) {
+            replier.reply(formatSimple("📋 사채 시장", "현재 등록된 매물이 없습니다.", null));
+        } else {
+            var list = []; 
+            var tempPools = [];
+            for(var i=0; i<pools.length; i++) {
+                var p = roomData.loanPools[pools[i]];
+                list.push((i+1) + ". [" + p.lenderName + "] 잔여: " + fp(p.remainingAmount) + "P (" + p.rate + "%)");
+                tempPools.push(pools[i]);
             }
-            return true;
+            menuWaitState[targetUid] = { type: 'p2p_select_pool', time: Date.now(), extra: { pools: tempPools } };
+            replier.reply(formatCommand("📋 사채 매물 목록", user, list.join("\n"), "빌리고 싶은 매물 번호를 입력하세요."));
         }
-        else if (choice === "3") {
-            var myContracts = [];
-            if (roomData.loanContracts) {
-                for(var id in roomData.loanContracts) {
-                    if(roomData.loanContracts[id].borrowerUid === targetUid) myContracts.push({ id: id, data: roomData.loanContracts[id] });
-                }
+    }
+    else if (choice === "3") {
+        var myContracts = [];
+        if (roomData.loanContracts) {
+            for(var id in roomData.loanContracts) {
+                if(roomData.loanContracts[id].borrowerUid === targetUid) myContracts.push({ id: id, data: roomData.loanContracts[id] });
             }
-            if (myContracts.length === 0) return replier.reply(formatError(user, "내역 없음", "현재 이 방에서 빌려 쓰고 있는 사채가 없습니다."));
-            
+        }
+        if (myContracts.length === 0) {
+            replier.reply(formatError(user, "내역 없음", "현재 이 방에서 빌려 쓰고 있는 사채가 없습니다."));
+        } else {
             var list = [];
             for(var i=0; i<myContracts.length; i++) {
                 var c = myContracts[i].data;
                 list.push((i+1) + ". [" + c.lenderName + "] 채무액: " + fp(c.currentDebt) + "P (이율 " + c.rate + "%)");
             }
-            menuWaitState[targetUid] = { type: 'p2p_select_repay', time: Date.now(), extra: { contracts: myContracts.map(x => x.id) } };
-            return replier.reply(formatCommand("📉 사채 상환 선택", user, list.join("\n"), "갚을 사채의 번호를 선택하세요."));
-            return true;
+            menuWaitState[targetUid] = { type: 'p2p_select_repay', time: Date.now(), extra: { contracts: myContracts.map(function(x){return x.id;}) } };
+            replier.reply(formatCommand("📉 사채 상환 선택", user, list.join("\n"), "갚을 사채의 번호를 선택하세요."));
         }
-        else if (choice === "4") {
-            var myPools = [];
-            if (roomData.loanPools) {
-                for(var id in roomData.loanPools) {
-                    if(roomData.loanPools[id].lenderUid === targetUid) myPools.push({ id: id, data: roomData.loanPools[id] });
-                }
+    }
+    else if (choice === "4") {
+        var myPools = [];
+        if (roomData.loanPools) {
+            for(var id in roomData.loanPools) {
+                if(roomData.loanPools[id].lenderUid === targetUid) myPools.push({ id: id, data: roomData.loanPools[id] });
             }
-            if (myPools.length === 0) return replier.reply(formatError(user, "내역 없음", "이 방에 올려둔 사채 풀이 없습니다."));
-
+        }
+        if (myPools.length === 0) {
+            replier.reply(formatError(user, "내역 없음", "이 방에 올려둔 사채 풀이 없습니다."));
+        } else {
             var list = [];
             for(var i=0; i<myPools.length; i++) {
                 var p = myPools[i].data;
                 list.push((i+1) + ". 잔여: " + (p.remainingAmount) + "P (이율 " + p.rate + "%/3h)");
             }
-            menuWaitState[targetUid] = { type: 'p2p_select_withdraw', time: Date.now(), extra: { pools: myPools.map(x => x.id) } };
-            return replier.reply(formatCommand("📥 사채 풀 회수", user, list.join("\n"), "회수할 사채 풀 번호를 선택하세요."));
-            return true;
+            menuWaitState[targetUid] = { type: 'p2p_select_withdraw', time: Date.now(), extra: { pools: myPools.map(function(x){return x.id;}) } };
+            replier.reply(formatCommand("📥 사채 풀 회수", user, list.join("\n"), "회수할 사채 풀 번호를 선택하세요."));
         }
-        else if (choice === "5") {
-            var myDebtors = [];
-            if (roomData.loanContracts) {
-                for(var id in roomData.loanContracts) {
-                    if(roomData.loanContracts[id].lenderUid === targetUid) myDebtors.push({ id: id, data: roomData.loanContracts[id] });
-                }
+    }
+    else if (choice === "5") {
+        var myDebtors = [];
+        if (roomData.loanContracts) {
+            for(var id in roomData.loanContracts) {
+                if(roomData.loanContracts[id].lenderUid === targetUid) myDebtors.push({ id: id, data: roomData.loanContracts[id] });
             }
-            if (myDebtors.length === 0) {
-                replier.reply(formatSimple("👥 내 채무자 현황", "현재 돈을 빌려 간 유저가 없습니다.", null));
-                return true;
-            }
-
+        }
+        if (myDebtors.length === 0) {
+            replier.reply(formatSimple("👥 내 채무자 현황", "현재 돈을 빌려 간 유저가 없습니다.", null));
+        } else {
             var list = [];
             var tempContracts = [];
             for(var i=0; i<myDebtors.length; i++) {
@@ -3880,29 +3874,39 @@ if (menuWaitState && menuWaitState[targetUid]) {
             }
             menuWaitState[targetUid] = { type: 'p2p_select_collect', time: Date.now(), extra: { contracts: tempContracts } };
             replier.reply(formatCommand("👥 내 채무자 명단", user, list.join("\n"), "강제 수거를 원하시면 유저 번호를 입력하세요."));
-            return true;
         }
-        delete menuWaitState[targetUid]; return;
-        return true;
     }
+    else {
+        // 잘못된 번호 입력 처리
+        replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 선택해주세요."));
+    }
+
+    return true;
 }
 
 //==========섹터23-3==========
 
-/* [3단계] 사채 목록 선택 처리 (독립형) */
-if (menuWaitState && menuWaitState[targetUid]) {
-    var state = menuWaitState[targetUid];
+/* [독립형 함수] 메뉴 선택 대기 처리 3단계 (사채 목록 선택) */
+function _handleMenuStep3(msg, user, data, replier, roomName, targetUid) {
+    var menuWaitState = data.rooms[roomName].features.states.menuWait;
+    if (!menuWaitState || !menuWaitState[targetUid]) return false;
 
-    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 대기 상태 즉시 삭제 (최상단 배치)
+    var state = menuWaitState[targetUid];
+    // 이 함수가 처리할 타입 목록 정의 (사채 관련 선택지들)
+    var types = ['p2p_select_pool', 'p2p_select_repay', 'p2p_select_withdraw', 'p2p_select_collect'];
+    if (types.indexOf(state.type) === -1) return false;
+
+    // 1. [시간 초과 및 취소 가드]
     if (Date.now() - state.time > 30000 || msg === "취소") {
-        delete menuWaitState[targetUid]; 
+        delete menuWaitState[targetUid];
         if (msg === "취소") replier.reply(formatCommand("🚫 사채 업무 취소", user, "작업이 취소되었습니다."));
+        else replier.reply(formatError(user, "선택 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
         
-        // 명령어 입력이 아닌 일반 텍스트이거나 시간이 만료된 경우 여기서 로직 종결
-        if (!msg.startsWith("/")) return true; 
+        if (msg.startsWith("/")) return false;
+        return true;
     }
 
-    // 2. [명령어 통로] 새로운 명령어(/) 입력 시 청소를 마친 후 명령어 로직으로 이관
+    // 2. [명령어 통로]
     if (msg.startsWith("/")) {
         delete menuWaitState[targetUid];
         return false;
@@ -3910,6 +3914,7 @@ if (menuWaitState && menuWaitState[targetUid]) {
 
     var choice = msg.trim();
     var roomData = data.rooms[roomName];
+    var bankProcessState = roomData.features.states.bankProcess;
 
     /* [선택 분기 1] 사채 빌리기 매물 선택 */
     if (state.type === 'p2p_select_pool') {
@@ -3922,13 +3927,13 @@ if (menuWaitState && menuWaitState[targetUid]) {
         } else {
             bankProcessState[targetUid] = { type: 'p2p_borrow_amt', time: Date.now(), extra: { poolId: poolId } };
             replier.reply(formatCommand("💰 사채 금액 설정", user, "선택 매물: [" + roomData.loanPools[poolId].lenderName + "]\n잔여 금액: " + fp(roomData.loanPools[poolId].remainingAmount) + "P\n\n빌릴 금액을 입력하세요.", "취소: [취소]"));
-            delete menuWaitState[targetUid];
         }
-        return true; 
+        return true;
     }
 
     /* [선택 분기 2] 사채 상환 대상 선택 */
     else if (state.type === 'p2p_select_repay') {
+        delete menuWaitState[targetUid];
         var idx = parseInt(choice) - 1;
         var contractId = (state.extra && state.extra.contracts) ? state.extra.contracts[idx] : null;
         
@@ -3938,13 +3943,13 @@ if (menuWaitState && menuWaitState[targetUid]) {
             bankProcessState[targetUid] = { type: 'p2p_repay_amt', time: Date.now(), extra: { contractId: contractId } };
             var contract = roomData.loanContracts[contractId];
             replier.reply(formatCommand("📉 사채 상환액 입력", user, "채권자: [" + contract.lenderName + "]\n남은 빚: " + fp(contract.currentDebt) + "P\n💰 내 잔액: " + fp(user.point) + "P\n\n갚을 금액을 입력하세요.", "취소: [취소]"));
-            delete menuWaitState[targetUid]; 
         }
-        return true; 
+        return true;
     }
 
     /* [선택 분기 3] 사채 매물 회수 대상 선택 */
     else if (state.type === 'p2p_select_withdraw') {
+        delete menuWaitState[targetUid];
         var idx = parseInt(choice) - 1;
         var poolId = (state.extra && state.extra.pools) ? state.extra.pools[idx] : null;
         
@@ -3953,13 +3958,13 @@ if (menuWaitState && menuWaitState[targetUid]) {
         } else {
             bankProcessState[targetUid] = { type: 'p2p_withdraw_amt', time: Date.now(), extra: { poolId: poolId, max: roomData.loanPools[poolId].remainingAmount } };
             replier.reply(formatCommand("📥 회수 금액 입력", user, "현재 풀 잔액: " + fp(roomData.loanPools[poolId].remainingAmount) + "P\n\n회수할 금액을 입력하거나 [전액]을 입력하세요.", "취소: [취소]"));
-            delete menuWaitState[targetUid]; 
         }
-        return true; 
+        return true;
     }
 
     /* [선택 분기 4] 채무자 강제 수거 대상 선택 */
     else if (state.type === 'p2p_select_collect') {
+        delete menuWaitState[targetUid];
         var idx = parseInt(choice) - 1;
         var contractId = (state.extra && state.extra.contracts) ? state.extra.contracts[idx] : null;
         
@@ -3968,38 +3973,49 @@ if (menuWaitState && menuWaitState[targetUid]) {
         } else {
             bankProcessState[targetUid] = { type: 'p2p_collect_manual', time: Date.now(), extra: { contractId: contractId } };
             replier.reply(formatCommand("🚬 사채 강제 수거 확인", user, "[" + roomData.loanContracts[contractId].borrowerName + "]님의 지갑에서 자산을 수거하시겠습니까?\n\n진행하시려면 아무 메시지나 입력해주세요.", "취소: [취소]"));
-            delete menuWaitState[targetUid]; 
         }
-        return true; 
+        return true;
     }
+
+    return false;
 }
 
 //==========섹터23-4==========
 
-/* [4단계] 상점 및 도움말 처리 (독립형) */
-if (menuWaitState && menuWaitState[targetUid]) {
-    var state = menuWaitState[targetUid];
-    var choice = msg.replace(/[^0-9]/g, "").trim();
+/* [독립형 함수] 메뉴 선택 대기 처리 4단계 (상점/도움말/가이드) */
+function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
+    var menuWaitState = data.rooms[roomName].features.states.menuWait;
+    if (!menuWaitState || !menuWaitState[targetUid]) return false;
 
-    // 1. [메모리 청소기] 타임아웃(30초) 또는 취소 입력 시 즉시 삭제
+    var state = menuWaitState[targetUid];
+    var types = ['shop_category', 'help', 'guide_menu'];
+    if (types.indexOf(state.type) === -1) return false;
+
+    // 1. [시간 초과 및 취소 가드]
     if (Date.now() - state.time > 30000 || msg === "취소") {
-        delete menuWaitState[targetUid]; 
+        delete menuWaitState[targetUid];
         if (msg === "취소") replier.reply(formatCommand("🚫 메뉴 선택 취소", user, "작업이 취소되었습니다."));
-        if (!msg.startsWith("/")) return true; 
+        else replier.reply(formatError(user, "선택 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
+        
+        if (msg.startsWith("/")) return false;
+        return true;
     }
 
-    // 2. [명령어 통로] 명령어(/) 입력 시 상태를 유지하고 명령어 로직으로 이관
+    // 2. [명령어 통로]
     if (msg.startsWith("/")) {
+        delete menuWaitState[targetUid];
         return false;
     }
 
-    /* [선택 분기 1] 상점 카테고리 선택 처리 */
+    var choice = msg.replace(/[^0-9]/g, "").trim();
+    var bankProcessState = data.rooms[roomName].features.states.bankProcess;
+
+    /* [기능 1] 상점 카테고리 선택 */
     if (state.type === 'shop_category') {
         var catId = parseInt(choice);
         if (isNaN(catId) || !SHOP_CATEGORIES[catId]) {
             delete menuWaitState[targetUid];
             replier.reply(formatError(user, "번호 오류", "올바른 카테고리 번호를 선택해주세요."));
-            return true;
         } else {
             var filteredItems = [];
             for (var i = 0; i < SHOP_ITEMS.length; i++) {
@@ -4016,14 +4032,14 @@ if (menuWaitState && menuWaitState[targetUid]) {
                     list.push((j + 1) + ". " + item.icon + " " + item.name + " : " + fp(getItemPrice(item, user, roomName)) + "P");
                 }
                 bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: filteredItems } };
-                delete menuWaitState[targetUid];
+                delete menuWaitState[targetUid]; // 메뉴 대기 해제 -> 상점 구매 대기 진입
                 replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[catId], user, list.join("\n"), "구매할 물품의 번호를 입력하세요."));
             }
         }
-        return true; // <<<< 숫자를 처리했으므로 로직 종결
+        return true;
     }
 
-    /* 도움말 메뉴 처리 */
+    /* [기능 2] 도움말 메뉴 선택 */
     else if (state.type === 'help') {
         delete menuWaitState[targetUid];
         var helpBody = ""; var next = "";
@@ -4043,7 +4059,7 @@ if (menuWaitState && menuWaitState[targetUid]) {
                 if(c.cat === targetCat) list.push("• " + c.cmd + ": " + c.desc);
             }
             helpBody = list.join("\n");
-        } else if (choice === "7" && isAdmin(sender, data)) {
+        } else if (choice === "7" && isAdmin(user.name, data, targetUid)) { // isAdmin 인자 보정
             var list = [];
             for(var i=0; i<CMD_LIST.admin.length; i++) {
                 var a = CMD_LIST.admin[i];
@@ -4054,13 +4070,14 @@ if (menuWaitState && menuWaitState[targetUid]) {
         }
         
         if (helpBody !== "") { 
-            delete menuWaitState[targetUid]; 
-            return replier.reply(formatCommand("📖 상세 도움말", null, helpBody, next)); 
+            replier.reply(formatCommand("📖 상세 도움말", null, helpBody, next)); 
+        } else {
+            replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택해주세요."));
         }
         return true;
     }
 
-    /* [Gemini 요청 사항] 가이드 메뉴 처리 로직 추가 */
+    /* [기능 3] 가이드 메뉴 선택 */
     else if (state.type === 'guide_menu') {
         delete menuWaitState[targetUid];
         var guideBody = "";
@@ -4068,61 +4085,52 @@ if (menuWaitState && menuWaitState[targetUid]) {
 
         if (choice === "1") {
             guideTitle = "🏛️ 중앙은행 및 신용 경제";
-            guideBody = "• 중앙은행 재원: 상점 수익, 도박 패배금 등이 금고로 적립됩니다.\n" +
-                        "• 지급준비제도: 총 예금의 20%는 대출 불가한 준비금입니다. 금고 고갈 시 출금이 제한됩니다.\n" +
-                        "• 자동 상환: 빚 보유 시 수익의 일부가 강제 상환됩니다.\n" +
-                        "  (은행대출 30% / 신불·사채 50% / 대환 70%)";
+            guideBody = "• 중앙은행 재원: 상점 수익, 도박 패배금 등이 금고로 적립됩니다.\n" + "• 지급준비제도: 총 예금의 20%는 대출 불가한 준비금입니다. 금고 고갈 시 출금이 제한됩니다.\n" + "• 자동 상환: 빚 보유 시 수익의 일부가 강제 상환됩니다.\n" + "  (은행대출 30% / 신불·사채 50% / 대환 70%)";
         }
         else if (choice === "2") {
             guideTitle = "🏇 중앙 경마 시스템";
-            guideBody = "• 배팅: 매시 00~49분 참여, 정각에 결과 발표 및 정산.\n" +
-                        "• 당첨금: 10% 국고 수수료 제외 후 지분만큼 분할 지급.\n" +
-                        "• 하한 보장: 당첨 시 배팅액의 최소 3배 배당을 은행이 보전해드립니다.\n" +
-                        "• 상한 제한: 독점 방지를 위해 배팅액의 최대 10배까지만 수령 가능합니다.\n" +
-                        "• 이월: 무승자 발생 시 판돈의 70%가 잭팟으로 합산 이월됩니다.";
+            guideBody = "• 배팅: 매시 00~49분 참여, 정각에 결과 발표 및 정산.\n" + "• 당첨금: 10% 국고 수수료 제외 후 지분만큼 분할 지급.\n" + "• 하한 보장: 당첨 시 배팅액의 최소 3배 배당을 은행이 보전해드립니다.\n" + "• 상한 제한: 독점 방지를 위해 배팅액의 최대 10배까지만 수령 가능합니다.\n" + "• 이월: 무승자 발생 시 판돈의 70%가 잭팟으로 합산 이월됩니다.";
         }
         else if (choice === "3") {
             guideTitle = "📈 주식 및 투자";
-            guideBody = "• 운영: 07:00 ~ 23:59 (10분마다 변동)\n" +
-                        "• 세금: 매도 시 판매 금액의 5%가 국세로 자동 차감됩니다.\n" +
-                        "• 상폐: 주가가 기준가 이하로 폭락 시 ⚠️ 표시가 뜨며, 지속될 경우 상장 폐지(0P) 됩니다.";
+            guideBody = "• 운영: 07:00 ~ 23:59 (10분마다 변동)\n" + "• 세금: 매도 시 판매 금액의 5%가 국세로 자동 차감됩니다.\n" + "• 상폐: 주가가 기준가 이하로 폭락 시 ⚠️ 표시가 뜨며, 지속될 경우 상장 폐지(0P) 됩니다.";
         }
         else if (choice === "4") {
             guideTitle = "🎰 로또 및 도박";
-            guideBody = "• 로또: 1~15 중 3개 숫자. 22시 추첨. 1등 당첨금은 당첨자 없을 시 매일 무제한 이월됩니다.\n" +
-                        "• 홀짝: 기본 배당 1.9배. [피버타임] 발동 시 5분간 승률 보너스가 적용됩니다.";
+            guideBody = "• 로또: 1~15 중 3개 숫자. 22시 추첨. 1등 당첨금은 당첨자 없을 시 매일 무제한 이월됩니다.\n" + "• 홀짝: 기본 배당 1.9배. [피버타임] 발동 시 5분간 승률 보너스가 적용됩니다.";
         }
         else if (choice === "5") {
             guideTitle = "⛏️ 활동 및 수익";
-            guideBody = "• 광산: 방치형 수익형 활동. 채무 보유 시 근로 의욕 고취로 효율이 1.5배 상승합니다.\n" +
-                        "• 유물: 채굴 중 0.1% 확률로 발견. 조각 수집량에 따라 [도굴왕] 등 5단계 칭호가 부여됩니다.\n" +
-                        "• 도둑질: 타인 자산 10% 강탈. [잡았다요놈] 대응 시 벌금 및 감옥 1시간이 부과됩니다.";
+            guideBody = "• 광산: 방치형 수익형 활동. 채무 보유 시 근로 의욕 고취로 효율이 1.5배 상승합니다.\n" + "• 유물: 채굴 중 0.1% 확률로 발견. 조각 수집량에 따라 [도굴왕] 등 5단계 칭호가 부여됩니다.\n" + "• 도둑질: 타인 자산 10% 강탈. [잡았다요놈] 대응 시 벌금 및 감옥 1시간이 부과됩니다.";
         }
         else if (choice === "6") {
             guideTitle = "🎁 민생 지원 및 복지";
-            guideBody = "• 지원금: 실질 순자산이 평균의 40% 미만인 서민 유저에게 하루 한 번 지급됩니다.\n" +
-                        "• 자산가 칭호: 총 자산(가용+주식+채권-부채) 돌파 시 재벌, 거상 등 영구 소장 칭호를 획득합니다.";
+            guideBody = "• 지원금: 실질 순자산이 평균의 40% 미만인 서민 유저에게 하루 한 번 지급됩니다.\n" + "• 자산가 칭호: 총 자산(가용+주식+채권-부채) 돌파 시 재벌, 거상 등 영구 소장 칭호를 획득합니다.";
         }
 
         if (guideBody !== "") {
-            delete menuWaitState[targetUid];
-            return replier.reply(formatCommand("📔 " + guideTitle, null, guideBody, "닫기: [취소]"));
+            replier.reply(formatCommand("📔 " + guideTitle, null, guideBody, "닫기: [취소]"));
+        } else {
+            replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택해주세요."));
         }
         return true;
     }
+
+    return false;
 }
 
-/* [핵심] 도움말 명령어 (독립 실행 보장 위치) */
+/* [명령어 진입점] 도움말 및 가이드 (함수 밖 독립 실행 보장) */
 if (msg === "/도움말") {
+    var menuWaitState = data.rooms[roomName].features.states.menuWait; // 안전 참조
     menuWaitState[targetUid] = { type: 'help', time: Date.now() };
     var menu = "1. 👤 조회 및 정보\n2. 🎮 게임 및 활동\n3. 🛒 상점 및 아이템\n4. 🏦 은행 및 사채\n5. 📈 주식 투자\n6. ⛏️ 광산 채굴 (방치형)\n";
-    if (isAdmin(sender, data)) menu += "7. ⚙️ 관리자 기능\n";
+    if (isAdmin(user.name, data, targetUid)) menu += "7. ⚙️ 관리자 기능\n";
     replier.reply(formatCommand("📖 내리다봇 도움말", null, "원하시는 메뉴 번호를 입력하세요.\n\n" + menu, "입력 대기: 30초"));
     return;
 }
 
-/* [Gemini 요청 사항] 가이드 명령어 추가 */
 if (msg === "/가이드") {
+    var menuWaitState = data.rooms[roomName].features.states.menuWait; // 안전 참조
     menuWaitState[targetUid] = { type: 'guide_menu', time: Date.now() };
     var guideMenu = "1. 🏛️ 중앙은행 및 신용 경제\n2. 🏇 중앙 경마 시스템\n3. 📈 주식 및 투자\n4. 🎰 로또 및 도박\n5. ⛏️ 활동 및 수익\n6. 🎁 민생 지원 및 복지\n";
     replier.reply(formatCommand("📔 내리다봇 마스터 가이드", null, "상세 내용을 보고 싶은 항목을 선택하세요.\n\n" + guideMenu, "입력 대기: 30초"));
@@ -4132,10 +4140,23 @@ if (msg === "/가이드") {
 //==========섹터24==========
 
         /* [최적화] 게임 및 경제 활동 명령어 통합 처리 구간 */
-        /* 메인 함수의 용량 초과(64KB) 방지를 위해 외부 함수로 위임 */
-        /* 섹터 24~36에 있던 모든 로직을 _handleGameLogic 함수로 이관합니다. */
+        /* [수정] 중앙 컨트롤러 (Dispatcher) 도입: 독립 함수들을 순차적으로 호출하여 입력을 처리 */
         
-        // _handleGameLogic 함수가 존재하고, 해당 함수에서 명령어를 처리했다면(true 반환) 즉시 종료
+        // 1. 은행 및 상점 업무 (숫자 입력 등 대기 상태 처리)
+        // 각 함수는 본인이 처리할 상태가 아니면 false를 반환하고, 처리했으면 true를 반환합니다.
+        if (typeof _handleBankStep1 === 'function' && _handleBankStep1(msg, user, data, replier, roomName, targetUid)) return;
+        if (typeof _handleBankStep2 === 'function' && _handleBankStep2(msg, user, data, replier, roomName, targetUid)) return;
+        if (typeof _handleBankStep3 === 'function' && _handleBankStep3(msg, user, data, replier, roomName, targetUid)) return;
+        if (typeof _handleBankStep4 === 'function' && _handleBankStep4(msg, user, data, replier, roomName, targetUid)) return;
+        if (typeof _handleBankStep5 === 'function' && _handleBankStep5(msg, user, data, replier, roomName, targetUid)) return;
+
+        // 2. 메뉴 선택 대기 처리 (은행 메뉴, 사채 메뉴, 상점/도움말 등)
+        if (typeof _handleMenuStep1 === 'function' && _handleMenuStep1(msg, user, data, replier, roomName, targetUid)) return;
+        if (typeof _handleMenuStep2 === 'function' && _handleMenuStep2(msg, user, data, replier, roomName, targetUid)) return;
+        if (typeof _handleMenuStep3 === 'function' && _handleMenuStep3(msg, user, data, replier, roomName, targetUid)) return;
+        if (typeof _handleMenuStep4 === 'function' && _handleMenuStep4(msg, user, data, replier, roomName, targetUid)) return;
+
+        // 3. 일반 명령어 처리 (기존 로직)
         if (typeof _handleGameLogic === 'function') {
             if (_handleGameLogic(msg, user, data, replier, roomName, targetUid, sender)) return;
         }

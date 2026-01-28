@@ -433,6 +433,49 @@ function endTracking(user, isSuccess, resultMsg) {
 function safeSaveData(data, isForceBackup) {
     if (!data) return;
 
+    /**
+     * [무결성 검역소] 데이터 저장 전 정밀 검증 로직
+     * 사유: 로직 오류로 인해 포인트가 0원이 되거나 데이터가 파손된 채 저장되는 것을 원천 차단합니다.
+     */
+    try {
+        var roomCount = Object.keys(data.rooms || {}).length;
+        if (roomCount === 0) throw new Error("저장 거부: 방(rooms) 객체가 비어있습니다.");
+
+        for (var rName in data.rooms) {
+            var room = data.rooms[rName];
+            var uKeys = Object.keys(room.users || {});
+            
+            // 1. 유저 증발 체크: 유저 데이터가 갑자기 모두 사라진 경우
+            if (uKeys.length === 0 && globalData.rooms[rName] && Object.keys(globalData.rooms[rName].users).length > 0) {
+                throw new Error("[" + rName + "] 방의 유저 데이터 전량 누락 감지");
+            }
+
+            for (var uid in room.users) {
+                var u = room.users[uid];
+                // 2. 포인트 오염 체크: NaN, null, undefined 또는 숫자가 아닌 경우
+                if (isNaN(u.point) || u.point === null || typeof u.point !== 'number') {
+                    throw new Error(u.name + " 유저의 포인트 데이터 오염(NaN/Null) 감지");
+                }
+                // 3. 비정상적 초기화 체크: 기존 포인트가 많았는데(1만P 초과) 갑자기 정확히 0이 된 경우
+                // 설명: globalData(기존 메모리)와 u(저장하려는 데이터)를 비교하여 급격한 증발을 막습니다.
+                if (globalData && globalData.rooms && globalData.rooms[rName] && globalData.rooms[rName].users && globalData.rooms[rName].users[uid]) {
+                    var oldPoint = Number(globalData.rooms[rName].users[uid].point || 0);
+                    if (oldPoint > 10000 && u.point === 0) {
+                        throw new Error(u.name + " 유저의 포인트 급감(0원) 감지 [비정상 초기화 의심]");
+                    }
+                }
+            }
+        }
+    } catch (validationError) {
+        // 검증 실패 시 로그만 남기고 저장 함수 전체를 즉시 종료 (파일에 쓰지 않음)
+        Log.error("!!! [데이터 오염 방지 작동] !!!");
+        Log.error("사유: " + validationError.message);
+        try {
+            Api.replyRoom("내리다", "🚨 [데이터 보호 시스템 작동]\n심각한 데이터 오염이 감지되어 자동 저장을 차단했습니다.\n사유: " + validationError.message + "\n\n⚠️ 관리자는 즉시 시스템을 점검하십시오.");
+        } catch (e) {}
+        return; // 파일 쓰기 단계로 넘어가지 않고 종료
+    }
+
     globalData = data; // 메모리 데이터 즉시 동기화 (응답 속도 최우선)
 
     // [방어형 로직] 무거운 직렬화 및 무결성 검증은 메인 스레드에서 먼저 수행
@@ -2021,10 +2064,7 @@ function _runSector16Logic(data, ctx) {
                     var borrower = roomData.users[c.borrowerUid];
 
                     if (lender && borrower) {
-                        if (roomData.bankReserve === undefined) roomData.bankReserve = 10000;
-                        roomData.bankReserve -= amountToPay;
-                        lender.point = Number(lender.point) + amountToPay;
-                        verifyPointTransaction(lender, Number(lender.point)-amountToPay, amountToPay, "사채 은행 대납 회수 (" + c.borrowerName + ")");
+                        util_updatePoint(lender, roomData, amountToPay, "사채 은행 대납 회수 (" + c.borrowerName + ")", rName);
                         
                         if (!borrower.loan) borrower.loan = { debt: 0, items: [] };
                         borrower.loan.debt = Number(borrower.loan.debt) + amountToPay;
@@ -2154,7 +2194,7 @@ function _runSector16Logic(data, ctx) {
                             if (prize > maxLimit) prize = maxLimit;
 
                             var res = processRepayment(u, prize, uId, ctx.targetRoom);
-                            u.point += res.actualGain; 
+                            util_updatePoint(u, mainRoomData, Number(res.actualGain), "경마 당첨금", ctx.targetRoom);
                             totalActuallyPaid += prize;
                             
                             var tag = (prize === maxLimit) ? " ⚠️최대배당" : (actualSubsidy > 0 ? " ✨3배보전" : "");
@@ -2217,7 +2257,7 @@ function _runSector16Logic(data, ctx) {
             if (nowTs > d.expire) {
                 var room = data.rooms[d.room];
                 if (room && room.users[d.challengerUid]) {
-                    room.users[d.challengerUid].point += Number(d.point);
+                    util_updatePoint(room.users[d.challengerUid], room, Number(d.point), "결투 만료 환급", d.room);
                     try { Api.replyRoom(d.room, "⏰ 결투 만료\n━━━━━━━━━━━━━━━\n상대방 응답 없음으로 " + fp(d.point) + "P 환급 완료\n내 잔액: " + fp(room.users[d.challengerUid].point) + "P"); } catch(err) {}
                 }
                 delete duelData[dKey]; ctx.isUpdated = true; 
@@ -2894,9 +2934,7 @@ if (selectWaitState[targetUid]) {
                 replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(targetUser, null, 2))); 
             }
             else if (type === "admin_point_give") {
-                var preP = Number(targetUser.point);
-                targetUser.point = Number(targetUser.point) + extra.amount;
-                verifyPointTransaction(targetUser, preP, extra.amount, "관리자 지급");
+                util_updatePoint(targetUser, roomData, extra.amount, "관리자 지급", roomName);
                 replier.reply(formatAdmin("포인트 지급 완료", getDisplayName(targetUser) + "님: +" + fp(extra.amount) + "P\n(현재: " + fp(targetUser.point) + "P)"));
                 safeSaveData(data);
             }
@@ -2957,10 +2995,17 @@ if (selectWaitState[targetUid]) {
                             var lender = roomData.users[c.lenderUid];
                             if (lender) {
                                 var debtAmt = Number(c.currentDebt);
-                                lender.point = Number(lender.point) + debtAmt;
+                                
+                                /* [교정] 직접 연산(lender.point += ...)만 게이트웨이 호출로 교체 */
+                                // 이 호출을 통해 포인트 지급 + 저널링 기록이 안전하게 처리됩니다.
+                                util_updatePoint(lender, roomData, debtAmt, "사채 강제 정산", roomName);
+                                
+                                // 기존 통계 및 알림 로직은 단 한 글자도 빠짐없이 유지
                                 totalRefunded += debtAmt;
                                 refundCount++;
-                                try { Api.replyRoom(roomName, "🚬 [사채 강제 정산]\n" + tName + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); } catch(e){}
+                                try { 
+                                    Api.replyRoom(roomName, "🚬 [사채 강제 정산]\n" + tName + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); 
+                                } catch(e){}
                             }
                             delete roomData.loanContracts[cid];
                         }

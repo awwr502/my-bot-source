@@ -5361,7 +5361,6 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
     var fullInput = msg.substring(6).trim();
     var roomData = data.rooms[roomName];
 
-    // 1. 정밀 파싱: 마지막 단어가 UUID(복구코드) 형식인지 확인
     var words = fullInput.split(/\s+/);
     var lastWord = words[words.length - 1];
     var isUUID = (lastWord.split("-").length >= 5 && lastWord.length >= 36);
@@ -5370,49 +5369,63 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
     var sourceCode = "";
 
     if (isUUID) {
-        // [A] 코드가 포함된 경우: 마지막 단어(코드)를 제외한 앞부분 전체를 닉네임으로 인식
         sourceCode = lastWord;
-        targetNick = fullInput.replace(lastWord, "").trim();
+        targetNick = fullInput.substring(0, fullInput.lastIndexOf(lastWord)).trim();
     } else {
-        // [B] 코드가 없는 경우: 입력값 전체를 닉네임으로 인식 (본인 데이터 복구)
         targetNick = fullInput;
         sourceCode = ""; 
     }
 
-    // [2] 데이터를 받을 대상 확인
     var currentFound = findUserByName(roomData, targetNick);
     if (currentFound.length > 1) { 
-        handleUserSelection(replier, user.id, currentFound, "user_restore", null, user); 
+        handleUserSelection(replier, currentFound[0].id, currentFound, "user_restore", null, user); 
         return true; 
     }
     if (currentFound.length === 0) { 
-        replier.reply(formatAdmin("🚫 대상 없음", "현재 방에서 [" + targetNick + "] 유저를 찾을 수 없습니다.\n(닉네임과 띄어쓰기를 정확히 입력해주세요)")); 
+        replier.reply(formatAdmin("🚫 대상 없음", "[" + targetNick + "] 유저를 찾을 수 없습니다.")); 
         return true; 
     }
     
     var targetId = currentFound[0].id; 
     var backupSourceId = (sourceCode !== "") ? sourceCode : targetId;
 
-    var stablePath = BACKUP_DIR + "last_stable_backup.json";
-    
     try {
-        var backupData = JSON.parse(FileStream.read(stablePath));
-        var backupUser = null;
+        var backupContent = FileStream.read(BACKUP_DIR + "last_stable_backup.json");
+        if (!backupContent) throw new Error("백업 파일을 읽을 수 없습니다.");
+        
+        var backupData = JSON.parse(backupContent);
+        var rawBackupUser = null;
 
-        // 백업본 전역에서 '원본 코드'를 가진 유저 탐색
         for (var r in backupData.rooms) {
             if (backupData.rooms[r].users[backupSourceId]) {
-                backupUser = backupData.rooms[r].users[backupSourceId];
+                rawBackupUser = backupData.rooms[r].users[backupSourceId];
                 break;
             }
         }
 
-        if (!backupUser) throw new Error("백업본에서 데이터(ID: " + backupSourceId.substring(0,8) + "...)를 찾을 수 없습니다.");
+        if (!rawBackupUser) throw new Error("백업본에 해당 데이터가 없습니다.");
 
-        // [보안 가드] 오염/NaN/급감 방지 체크
-        if (isNaN(backupUser.point)) throw new Error("백업 데이터 포인트 오염(NaN)");
-        
-        // [보안 가드] 실시간 블랙박스 병합
+        // [핵심 1] 딥카피(Deep Copy)를 통해 참조 오류 방지
+        var backupUser = JSON.parse(JSON.stringify(rawBackupUser));
+
+        // [핵심 2] 구조 동기화 (구버전 데이터에 신규 필드 강제 주입)
+        // 현재 시스템에서 사용하는 기본 유저 객체 템플릿
+        var defaultSchema = {
+            chatLog: [], timeoutEndTime: 0, artifactPieces: 0, 
+            gameAuthCount: 0, purchasedAuthCount: 0, totalDonation: 0,
+            boxFragments: 0, boxTickets: 0, collectedIcons: [],
+            boughtWarningRemoval: false
+        };
+
+        // 백업 데이터에 없는 필드만 골라내어 기본값으로 채워넣음 (충돌 방지)
+        for (var key in defaultSchema) {
+            if (backupUser[key] === undefined) {
+                backupUser[key] = defaultSchema[key];
+            }
+        }
+
+        // [가드 체크 및 블랙박스 병합]
+        if (isNaN(backupUser.point)) throw new Error("포인트 데이터 오염");
         var journalFile = new java.io.File(JOURNAL_PATH);
         if (journalFile.exists()) {
             var logs = FileStream.read(JOURNAL_PATH).split("\n");
@@ -5424,21 +5437,23 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
             backupUser.point = Number(backupUser.point) + delta;
         }
 
-        // [핵심 이관] 과거 데이터를 현재 유저의 이름으로 업데이트 후 이식
+        // [이관 실행]
         backupUser.name = targetNick;
         roomData.users[targetId] = backupUser;
 
         safeSaveData(data, false);
 
-        replier.reply(formatAdmin("✅ 데이터 정밀 이관 완료", 
+        replier.reply(formatAdmin("✅ 데이터 정밀 이관 및 최적화 완료", 
             "현재 대상: " + targetNick + "\n" +
-            "원본 소스: " + (isUUID ? "외부 코드 매핑" : "본인 데이터") + "\n" +
+            "원본 소스: " + (isUUID ? "외부 코드" : "본인 데이터") + "\n" +
             "━━━━━━━━━━━━━━━\n" +
-            "🛡️ 보안 검역 및 실시간 병합 통과\n" +
-            "💰 복구 후 잔액: " + fp(backupUser.point) + "P"));
+            "🛡️ 보안 검역 및 구조 동기화 완료\n" +
+            "💰 최종 복구 잔액: " + fp(backupUser.point) + "P\n\n" +
+            "💡 구버전 데이터를 현재 시스템에 맞게 최적화했습니다."));
 
     } catch (e) {
         replier.reply(formatAdmin("🚫 복구 중단", "사유: " + e.message));
+        Log.error("Restore Error: " + e);
     }
         return true;
     }

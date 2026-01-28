@@ -6457,67 +6457,60 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
     // [기능 2] 계정 연동 및 데이터 복구 (완전 결함 제거 버전)
     if (msg.indexOf("/계정연동") === 0) {
         var parts = msg.split(" ");
-        if (parts.length < 2) {
-            replier.reply(formatError(user, "입력 오류", "/계정연동 [복구코드]"));
-            return true;
-        }
+        if (parts.length < 2) return replier.reply(formatError(user, "입력 오류", "/계정연동 [복구코드]"));
 
-        // 입력값 정규화 (하이픈 제거 및 소문자화)
         var inputCode = parts[1].split("-").join("").toLowerCase().trim();
         var oldUser = null;
-        var oldUid = null;
 
-        // 1. 전체 데이터베이스에서 해당 코드 탐색
+        // 1. 전체 데이터베이스에서 소스 계정 탐색
         for (var rName in data.rooms) {
             var roomUsers = data.rooms[rName].users;
             for (var uid in roomUsers) {
-                var savedUid = String(uid).split("-").join("").toLowerCase();
-                if (savedUid === inputCode) {
+                if (String(uid).split("-").join("").toLowerCase() === inputCode) {
                     oldUser = roomUsers[uid];
-                    oldUid = uid;
                     break;
                 }
             }
             if (oldUser) break;
         }
 
-        // 2. 검증 및 실행
-        if (!oldUser) {
-            replier.reply(formatError(user, "연동 실패", "일치하는 복구 코드를 찾을 수 없습니다."));
-        } else if (oldUid === targetUid) {
-            replier.reply(formatError(user, "연동 불가", "현재 이미 사용 중인 계정 코드입니다."));
-        } else {
-            try {
-                // [해결] 외부 변수(cleanSender, cacheKey 등)를 사용하지 않고 내부 인자로 재정의
-                var currentRoom = data.rooms[roomName];
-                var senderName = user.name; 
-                var currentHash = user.imageHash;
+        if (!oldUser) return replier.reply(formatError(user, "복구 실패", "일치하는 코드를 찾을 수 없습니다."));
+        if (inputCode === String(targetUid).split("-").join("").toLowerCase()) return replier.reply(formatError(user, "작업 무효", "현재 접속 중인 코드와 동일합니다."));
 
-                // 데이터 동기화: 기존 데이터에 현재의 이름과 프사 정보 이식
-                oldUser.name = senderName;
-                if (currentHash) oldUser.imageHash = currentHash;
-                
-                // 현재 생성된 빈 껍데기 계정 삭제
-                delete currentRoom.users[targetUid];
-                
-                // 현재 방의 유저 목록에 복구된 유저를 기존 UID로 등록
-                currentRoom.users[oldUid] = oldUser;
-                
-                // 캐시 시스템 강제 업데이트 (변수 직접 조합)
-                if (typeof uidCache !== 'undefined') {
-                    uidCache[roomName + "_" + senderName] = oldUid; 
-                }
-                
-                safeSaveData(data);
-                
-                var successMsg = "이전 자산과 티어가 현재 계정으로 완벽히 복구되었습니다.\n\n" +
-                                 "💰 잔액: " + fp(oldUser.point) + "P\n" +
-                                 "🏅 티어: " + (TIERS[oldUser.tier] || "아이언");
-                
-                replier.reply(formatCommand("✅ 계정 연동 성공", oldUser, successMsg, "복구된 코드로 접속되었습니다."));
-            } catch (e) {
-                replier.reply(formatError(user, "시스템 오류", "연동 최종 단계 에러: " + e));
-            }
+        try {
+            // 2. 데이터 정밀 복사 (Deep Copy)
+            // 현재 유저의 고유 ID(targetUid)와 이름은 유지한 채 알맹이만 과거 데이터로 교체
+            var backupData = JSON.parse(JSON.stringify(oldUser));
+            
+            // 필수 필드 선별 복사 (현재 닉네임과 ID 보존)
+            var preservedName = user.name;
+            var preservedHash = user.imageHash;
+
+            // 핵심 자산 및 스탯 덮어쓰기
+            var fields = [
+                'point', 'bank', 'tier', 'creditScore', 'totalAttendance', 'loan', 
+                'inventory', 'collectedIcons', 'stockHoldings', 'stockAvg', 
+                'artifactPieces', 'totalGambleCount', 'totalGambleWins', 'totalTheftSuccess',
+                'totalInvestAmount', 'totalMiningTime', 'totalDonation', 'boxFragments', 'boxTickets'
+            ];
+
+            fields.forEach(function(f) {
+                if (backupData[f] !== undefined) user[f] = backupData[f];
+            });
+
+            user.name = preservedName;
+            user.imageHash = preservedHash;
+
+            safeSaveData(data);
+            
+            var resBody = "과거 자산 정보를 현재 계정으로 안전하게 복사해왔습니다.\n\n" +
+                         "💰 복제 잔액: " + fp(user.point) + "P\n" +
+                         "🏅 복제 티어: " + (TIERS[user.tier] || "아이언") + "\n" +
+                         "📦 인벤토리: " + (user.inventory ? user.inventory.length : 0) + "개 항목 이관";
+
+            replier.reply(formatCommand("✅ 데이터 정밀 복제 완료", user, resBody, "고유 코드는 현재 코드를 그대로 유지합니다."));
+        } catch (e) {
+            replier.reply(formatError(user, "시스템 오류", "복제 중 기술적 결함 발생: " + e));
         }
         return true;
     }

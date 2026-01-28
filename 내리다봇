@@ -736,6 +736,7 @@ var CMD_LIST = {
         { cmd: "/재원충전", desc: "[금액] 은행 금고 자본 긴급 수혈", func: "_adminEconomyLogic" },
         { cmd: "/보안점검", desc: "데이터 보호 엔진 자가진단", func: "_adminEconomyLogic" },
         { cmd: "/명부확인", desc: "등록된 전체 유저 복구 코드 조회", func: "_adminEconomyLogic" },
+        { cmd: "/명부업데이트", desc: "등록된 전체 유저 복구 코드 업데이트", func: "_adminEconomyLogic" },
         { cmd: "/신용조정", desc: "[닉네임] [점수] 신용점수 직접 가감", func: "_adminUserManageLogic" },
         { cmd: "/칭호회수", desc: "[닉네임] [칭호명] 박탈", func: "_adminUserManageLogic" }
     ]
@@ -5660,6 +5661,37 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         } catch (e) {
             replier.reply(formatAdmin("🚫 조회 오류", "명부를 읽어오는 중 에러가 발생했습니다.\n사유: " + e));
         }
+        return true;
+    }
+
+    /* [보안] 기존 유저 데이터를 명부로 일괄 이사 (v6.0 Migration) */
+    if (msg === "/명부업데이트") {
+        var count = 0;
+        var registry = {};
+        
+        // 1. 기존 명부 파일이 있다면 먼저 읽어옴
+        try {
+            var regFile = new java.io.File(REGISTRY_PATH);
+            if (regFile.exists()) registry = JSON.parse(FileStream.read(REGISTRY_PATH));
+        } catch(e) {}
+
+        // 2. 현재 로드된 모든 방의 유저를 순회하며 명부에 등록
+        for (var rName in data.rooms) {
+            var users = data.rooms[rName].users;
+            for (var uid in users) {
+                var regKey = rName + "_" + users[uid].name;
+                if (!registry[regKey]) {
+                    registry[regKey] = uid; // 닉네임과 UID 매핑
+                    count++;
+                }
+            }
+        }
+
+        // 3. 통합된 명부를 파일에 물리적으로 저장
+        FileStream.write(REGISTRY_PATH, JSON.stringify(registry));
+        
+        replier.reply(formatAdmin("✅ 명부 업데이트 완료", 
+            "기존 데이터베이스에서 총 " + count + "명의 유저를 찾아 신분증 보관소에 등록했습니다.\n\n이제 [/명부확인]으로 전체 목록을 보실 수 있습니다."));
         return true;
     }
 

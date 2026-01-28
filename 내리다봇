@@ -1763,22 +1763,32 @@ function updateStockPrices(data) {
                 var growthRate = (stock.price - marketOpenPrice) / marketOpenPrice;
                 var sConf = conf.SETTINGS;
 
-                if (growthRate > sConf.RESISTANCE_START) {
+            // 1. 과열 상태 판정 (20% 이상 진입 시)
+                if (growthRate >= 0.20) {
+                    stock.isOverheated = true;
+                }
+
+                // 2. 과열 상태 로직 처리
+                if (stock.isOverheated) {
+                    // 20%를 넘긴 정도(overGap)에 따라 저항이 기하급수적으로 증가
+                    var overGap = Math.max(0, growthRate - 0.20);
+                    // 기본 저항(0.05) + 초과분 저항을 합쳐서 마이너스 압력 생성
+                    var resistance = (0.05 + overGap) * sConf.GRAVITY * 10;
+                    
+                    changePercent -= resistance; // 가격을 아래로 강하게 당김
+                    stock.trend = "down";        // 추세도 하락으로 고정
+                    
+                    // 3. 해제 조건: 주가가 20% 미만으로 떨어지면 저항 해제
+                    if (growthRate < 0.20) {
+                        stock.isOverheated = false;
+                    }
+                } 
+                // 기존 15% 저항 로직 (과열 전 단계)
+                else if (growthRate > sConf.RESISTANCE_START) {
                     var gap = (growthRate - sConf.RESISTANCE_START);
                     var resistance = gap * sConf.GRAVITY * (1 + (gap * 10)); 
                     changePercent -= resistance;
-
-                    // 상한가 근처(19% 이상)일 경우 무조건 하락 추세 유도
-                    if (growthRate >= (sConf.CLOSING_LIMIT - 0.01)) {
-                        var overRate = Math.max(0, growthRate - sConf.CLOSING_LIMIT); 
-                        
-                        // 기본적으로 -2% 하락에, 초과분만큼 추가 하락을 더해 자연스러운 폭락장 연출
-                        changePercent = -0.02 - (overRate * 0.15) - (Math.random() * 0.03);
-                        
-                        stock.trend = "down"; 
-                        stock.trendTick = Math.floor(Math.random() * 4) + 4; // 하락 추세 지속 시간
-                    }
-                  }
+                } 
                 }
               }
         

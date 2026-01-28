@@ -2631,26 +2631,49 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 if (user && targetUid) {
                     var isDeepHealed = false;
                     
-                    // 1. 필수 변수 및 타입 정의 (시스템 규격 동기화)
+                    // 1. [Hard-Reset] 모든 대기 상태(States) 강제 해제
+                    // 상점, 은행, 게임 등에서 입력 대기에 갇힌 유저를 즉시 구출합니다.
+                    if (rFeatures && rFeatures.states) {
+                        for (var stateName in rFeatures.states) {
+                            if (rFeatures.states[stateName][targetUid]) {
+                                delete rFeatures.states[stateName][targetUid];
+                                isDeepHealed = true;
+                                Log.info("[Hard-Healer] " + user.name + "님의 [" + stateName + "] 상태를 초기화했습니다.");
+                            }
+                        }
+                    }
+
+                    // 2. [Full-Schema] 필수 변수 및 타입 정밀 검증
+                    // 하나라도 누락되면 다른 섹터(21~44)에서 Crash가 발생하므로 전수 조사합니다.
                     var schema = [
                         { key: 'chatLog', default: [], type: 'array' },
                         { key: 'inventory', default: [], type: 'array' },
+                        { key: 'collectedIcons', default: [], type: 'array' },
                         { key: 'stockHoldings', default: {}, type: 'object' },
                         { key: 'stockAvg', default: {}, type: 'object' },
+                        { key: 'point', default: 50000, type: 'number' },
                         { key: 'timeoutEndTime', default: 0, type: 'number' },
                         { key: 'artifactPieces', default: 0, type: 'number' },
-                        { key: 'point', default: 50000, type: 'number' }
+                        { key: 'gameAuthCount', default: 0, type: 'number' },
+                        { key: 'purchasedAuthCount', default: 0, type: 'number' },
+                        { key: 'totalDonation', default: 0, type: 'number' },
+                        { key: 'boxFragments', default: 0, type: 'number' },
+                        { key: 'boxTickets', default: 0, type: 'number' },
+                        { key: 'dailyGambleCount', default: 0, type: 'number' },
+                        { key: 'dailyPromotionAttempts', default: 1, type: 'number' },
+                        { key: 'boughtWarningRemoval', default: false, type: 'boolean' }
                     ];
 
                     schema.forEach(function(item) {
                         var val = user[item.key];
                         var invalid = (val === undefined || val === null);
                         
-                        // 타입 정밀 검사 (구조 붕괴 방지)
+                        // 타입 불일치 검사 (구조적 결함 수리)
                         if (!invalid) {
                             if (item.type === 'array' && !Array.isArray(val)) invalid = true;
                             else if (item.type === 'object' && (typeof val !== 'object' || Array.isArray(val))) invalid = true;
                             else if (item.type === 'number' && typeof val !== 'number') invalid = true;
+                            else if (item.type === 'boolean' && typeof val !== 'boolean') invalid = true;
                         }
 
                         if (invalid) {
@@ -2659,18 +2682,18 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                         }
                     });
 
-                    // 2. 수리 발생 시 물리 저장 및 메모리 동기화 (전역 캐시 갱신)
+                    // 3. [Sync] 수리 발생 시 물리 저장 및 메모리(globalData) 즉시 갱신
                     if (isDeepHealed) {
-                        Log.info("[Deep-Healer] " + user.name + "님 구조 최적화 및 UID 바인딩 완료.");
+                        Log.info("[Deep-Healer] " + user.name + "님 구조 최적화 및 동기화 완료.");
                         safeSaveData(data, false);
                         
-                        // [핵심] 전역 데이터 강제 갱신으로 명령어 씹힘 방지
+                        // 전역 메모리 강제 갱신 (명령어 먹통 방지 핵심)
                         if (typeof globalData !== 'undefined') {
                             globalData = data; 
                         }
                     }
 
-                    // 3. [Spam Guard] 도배 방지 로직 (수리된 chatLog 배열 사용)
+                    // 4. [Spam Guard] 도배 방지 로직 (수리 완료 후 안전하게 실행)
                     var now = Date.now();
                     var conf = SYSTEM_CONFIG.SPAM;
 

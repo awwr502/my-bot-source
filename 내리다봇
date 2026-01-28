@@ -3010,7 +3010,7 @@ checkEconomicStimulus(user, roomName, false);
  * [독립형 함수] 중복 유저 선택 처리 엔진
  * 설명: 닉네임 검색 시 중복 발생 건에 대한 유저의 숫자 선택을 처리합니다.
  */
-function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
+function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid, imageDB) {
     var roomData = data.rooms[roomName];
     if (!roomData || !roomData.features || !roomData.features.states.selectWait) return false;
 
@@ -3033,14 +3033,26 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
     // 3. 숫자 선택 및 로직 실행
     var choice = parseInt(msg.replace(/[^0-9]/g, ""));
     if (!isNaN(choice) && choice >= 1 && choice <= selectWaitState[targetUid].results.length) {
-        var state = selectWaitState[targetUid];
         var selected = state.results[choice - 1];
         var type = state.type;
         var extra = state.extra;
         var targetUser = selected.data;
         
-        delete selectWaitState[targetUid]; // 선택 완료 시 세션 삭제
+        delete selectWaitState[targetUid]; // 세션 즉시 삭제
 
+        // [v7.0 핵심] 만능 재실행(Retrigger) 로직
+        if (type === "RETRIGGER") {
+            // 예: "/송금 광 100" -> "/송금 95 남 광어 100" 으로 글자만 바꿔치기
+            var newMsg = extra.msg.replace(extra.alias, selected.data.name);
+            
+            // 바꾼 메시지로 전역 action 함수를 다시 호출하여 명령어를 완벽한 이름으로 재실행
+            if (typeof action === 'function') {
+                action(roomName, newMsg, user.name, true, replier, imageDB);
+                return true;
+            }
+        }
+
+        /* --- 기존 레거시 타입 처리 (기존 코드와의 호환성을 위해 유지) --- */
         if (type === "info") {
             var cr = getCreditInfo(targetUser.creditScore);
             var info = "💰 포인트: " + fp(targetUser.point) + "P\n🏦 예금: " + fp(targetUser.bank) + "P\n💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n🏅 티어: " + TIERS[targetUser.tier];
@@ -3053,8 +3065,8 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             util_updatePoint(targetUser, roomData, Number(res.actualGain), "송금 받음", roomName);
             replier.reply(formatCommand("💸 송금 완료", user, getDisplayName(targetUser) + "님께 " + fp(extra.amount) + "P 보냈습니다.", "내 잔액: " + fp(user.point) + "P"));
         }
-        else if (type === "admin_userdata") { 
-            replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(targetUser, null, 2))); 
+        else if (type === "admin_userdata") {
+            replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(targetUser, null, 2)));
         }
         else if (type === "admin_point_give") {
             util_updatePoint(targetUser, roomData, extra.amount, "관리자 지급", roomName);
@@ -3156,7 +3168,7 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
         }
 
         safeSaveData(data);
-        return true; // 로직 처리 완료
+        return true; 
     }
     return false;
 }

@@ -2979,174 +2979,159 @@ user.point = Number(user.point || 0);
 /* 민생지원금 즉시 체크 */
 checkEconomicStimulus(user, roomName, false);
 
-/* 중복 유저 선택 처리부 (사채 보전 및 국고 회수 로직 통합) */
-if (selectWaitState[targetUid]) {
+/**
+ * [독립형 함수] 중복 유저 선택 처리 엔진
+ * 설명: 닉네임 검색 시 중복 발생 건에 대한 유저의 숫자 선택을 처리합니다.
+ */
+function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    if (!roomData || !roomData.features || !roomData.features.states.selectWait) return false;
+
+    var selectWaitState = roomData.features.states.selectWait;
+    if (!selectWaitState[targetUid]) return false;
+
+    // 1. 시간 초과 체크 (30초)
     if (Date.now() - selectWaitState[targetUid].timestamp > 30000) {
         delete selectWaitState[targetUid];
+        return false;
     } 
-    else if (msg === "취소") {
+
+    // 2. 취소 처리
+    if (msg === "취소") {
         delete selectWaitState[targetUid];
         replier.reply(formatCommand("🚫 선택 취소", user, "작업이 취소되었습니다."));
-        return;
+        return true;
     }
-    else {
-        var choice = parseInt(msg);
-        if (!isNaN(choice) && choice >= 1 && choice <= selectWaitState[targetUid].results.length) {
-            var selected = selectWaitState[targetUid].results[choice - 1];
-            var type = selectWaitState[targetUid].type;
-            var extra = selectWaitState[targetUid].extra;
-            var targetUser = selected.data;
-            delete selectWaitState[targetUid];
 
-            if (type === "info") {
-                var cr = getCreditInfo(targetUser.creditScore);
-                var info = "💰 포인트: " + fp(targetUser.point) + "P\n🏦 예금: " + fp(targetUser.bank) + "P\n💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n🏅 티어: " + TIERS[targetUser.tier];
-                replier.reply(formatCommand("🔍 유저 상세 정보", targetUser, info, null));
-            }
-            else if (type === "transfer") {
-                if (selected.id === targetUid) return replier.reply(formatError(user, "송금 불가", "자기 자신에게는 송금할 수 없습니다."));
-                util_updatePoint(user, roomData, -extra.amount, "송금 보냄", roomName); // 관문 통과
-                var res = processRepayment(targetUser, extra.amount, selected.id, roomName);
-                util_updatePoint(targetUser, roomData, Number(res.actualGain), "송금 받음", roomName);
-                replier.reply(formatCommand("💸 송금 완료", user, getDisplayName(targetUser) + "님께 " + fp(extra.amount) + "P 보냈습니다.", "내 잔액: " + fp(user.point) + "P"));
-            }
-            else if (type === "admin_userdata") { 
-                replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(targetUser, null, 2))); 
-            }
-            else if (type === "admin_point_give") {
-                util_updatePoint(targetUser, roomData, extra.amount, "관리자 지급", roomName);
-                replier.reply(formatAdmin("포인트 지급 완료", getDisplayName(targetUser) + "님: +" + fp(extra.amount) + "P\n(현재: " + fp(targetUser.point) + "P)"));
-                safeSaveData(data);
-            }
-            else if (type === "admin_point_take") {
-                util_updatePoint(targetUser, roomData, -extra.amount, "관리자 차감", roomName); // 관문 통과
-                replier.reply(formatAdmin("포인트 차감 완료", getDisplayName(targetUser) + "님 차감 처리됨"));
-            }
-            else if (type === "admin_attend_edit") {
-                targetUser.totalAttendance = extra.days;
-                replier.reply(formatAdmin("출석 수정 완료", getDisplayName(targetUser) + "님: " + extra.days + "일"));
-                safeSaveData(data);
-            }
-            /* [Gemini 요청 사항] 중복 닉네임 선택 시 신용 점수 조정 처리 */
-            else if (type === "admin_credit_edit") {
-                var oldScore = Number(targetUser.creditScore || 600);
-                targetUser.creditScore = Math.min(1000, Math.max(0, oldScore + extra.score));
-                if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(targetUser, roomName);
-                safeSaveData(data);
-                var crInfo = getCreditInfo(targetUser.creditScore);
-                replier.reply(formatAdmin("⚙️ 신용 점수 조정 완료", "대상: " + getDisplayName(targetUser) + "\n변동: " + extra.score + "점\n현재: " + targetUser.creditScore + "점 (" + crInfo.label + ")"));
-            }
-            /* [Gemini 요청 사항] 중복 닉네임 선택 시 칭호 회수 처리 */
-            else if (type === "admin_title_take") {
-                var titleToTake = extra.title;
-                var inv = targetUser.inventory || [];
-                var removed = false;
-                targetUser.inventory = inv.filter(function(it) {
-                    if (it.effect === "title" && (it.title === titleToTake || it.name.indexOf(titleToTake) !== -1)) {
-                        removed = true;
-                        return false;
-                    }
-                    return true;
-                });
-                if (targetUser.title === titleToTake) {
-                    targetUser.title = "";
-                    removed = true;
-                }
-                if (removed) {
-                    safeSaveData(data);
-                    replier.reply(formatAdmin("🎖️ 칭호 회수 완료", getDisplayName(targetUser) + "님에게서 [" + titleToTake + "] 칭호를 박탈했습니다."));
-                } else {
-                    replier.reply(formatAdmin("회수 실패", getDisplayName(targetUser) + "님은 해당 칭호를 보유하고 있지 않습니다."));
-                }
-            }
-            /* [수정] 유저 삭제 (중복 선택 케이스) - 사채 보전 및 국고 회수 적용 */
-            else if (type === "admin_delete") {
-                var tName = targetUser.name;
-                var targetId = selected.id;
-                var refundLog = "";
-                var refundCount = 0;
-                var totalRefunded = 0;
+    // 3. 숫자 선택 및 로직 실행
+    var choice = parseInt(msg.replace(/[^0-9]/g, ""));
+    if (!isNaN(choice) && choice >= 1 && choice <= selectWaitState[targetUid].results.length) {
+        var state = selectWaitState[targetUid];
+        var selected = state.results[choice - 1];
+        var type = state.type;
+        var extra = state.extra;
+        var targetUser = selected.data;
+        
+        delete selectWaitState[targetUid]; // 선택 완료 시 세션 삭제
 
-                // 1. 모든 사채 계약 강제 정산 및 삭제 (채권자 보호)
-                if (roomData.loanContracts) {
-                    for (var cid in roomData.loanContracts) {
-                        var c = roomData.loanContracts[cid];
-                        if (c.borrowerUid === targetId) {
-                            var lender = roomData.users[c.lenderUid];
-                            if (lender) {
-                                var debtAmt = Number(c.currentDebt);
-                                
-                                /* [교정] 직접 연산(lender.point += ...)만 게이트웨이 호출로 교체 */
-                                // 이 호출을 통해 포인트 지급 + 저널링 기록이 안전하게 처리됩니다.
-                                util_updatePoint(lender, roomData, debtAmt, "사채 강제 정산", roomName);
-                                
-                                // 기존 통계 및 알림 로직은 단 한 글자도 빠짐없이 유지
-                                totalRefunded += debtAmt;
-                                refundCount++;
-                                try { 
-                                    Api.replyRoom(roomName, "🚬 [사채 강제 정산]\n" + tName + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); 
-                                } catch(e){}
-                            }
-                            delete roomData.loanContracts[cid];
-                        }
-                    }
-                }
-
-                // 2. 은행 대출금 국고 회수
-                if (targetUser.loan && Number(targetUser.loan.debt) > 0) {
-                    var bankDebt = Number(targetUser.loan.debt);
-                    roomData.bankReserve = (Number(roomData.bankReserve) || 0) + bankDebt;
-                    refundLog += "\n\n🏦 은행 대출금 " + fp(bankDebt) + "P가 국고로 자동 회수되었습니다.";
-                }
-
-                if (refundCount > 0) refundLog += "\n⚠️ 사채 보전 완료: " + refundCount + "건 (" + fp(totalRefunded) + "P)";
-
-                // 3. 데이터 삭제 처리
-                if (typeof uidCache !== 'undefined') {
-                    for (var key in uidCache) {
-                        if (uidCache[key] === targetId) delete uidCache[key];
-                    }
-                }
-                delete roomData.users[targetId];
-                safeSaveData(data);
-                replier.reply(formatAdmin("유저 삭제 완료", "[" + tName + "]님의 데이터를 영구 삭제했습니다." + refundLog));
-            }
-            else if (type === "admin_attend_reset") {
-                targetUser.lastDate = "";
-                replier.reply(formatAdmin("출석 초기화", getDisplayName(targetUser) + "님의 오늘 출석 기록을 삭제했습니다."));
-                safeSaveData(data);
-            }
-            else if (type === "user_restore") {
-                var stablePath = BASE_DIR + "backup/last_stable_backup.json";
-                if (new java.io.File(stablePath).exists()) {
-                    var backupData = JSON.parse(FileStream.read(stablePath));
-                    var backupUser = null;
-                    for (var r in backupData.rooms) { 
-                        if (backupData.rooms[r].users[selected.id]) { 
-                            backupUser = backupData.rooms[r].users[selected.id]; 
-                            break; 
-                        } 
-                    }
-                    if (backupUser) { 
-                        roomData.users[selected.id] = backupUser; 
-                        safeSaveData(data); 
-                        replier.reply(formatAdmin("유저 복구 완료", getDisplayName(backupUser) + "님 복구 성공")); 
-                    }
-                }
-            }
-            else if (type === "admin_nick_log") {
-                var hist = data.nickHistory[selected.id] || [];
-                if (hist.length === 0) {
-                    replier.reply(formatAdmin("닉네임 기록", getDisplayName(targetUser) + "님은 변경 이력이 없습니다."));
-                } else {
-                    var logMsg = [];
-                    for(var i=0; i<hist.length; i++) logMsg.push((i+1) + ". " + hist[i].old + " (" + hist[i].date + ")");
-                    replier.reply(formatAdmin("📋 닉네임 변경 이력", "현재: " + targetUser.name + "\n\n[과거 기록]\n" + logMsg.join("\n")));
-                }
-            }
-            return;
+        if (type === "info") {
+            var cr = getCreditInfo(targetUser.creditScore);
+            var info = "💰 포인트: " + fp(targetUser.point) + "P\n🏦 예금: " + fp(targetUser.bank) + "P\n💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n🏅 티어: " + TIERS[targetUser.tier];
+            replier.reply(formatCommand("🔍 유저 상세 정보", targetUser, info, null));
         }
+        else if (type === "transfer") {
+            if (selected.id === targetUid) return replier.reply(formatError(user, "송금 불가", "자기 자신에게는 송금할 수 없습니다."));
+            util_updatePoint(user, roomData, -extra.amount, "송금 보냄", roomName);
+            var res = processRepayment(targetUser, extra.amount, selected.id, roomName);
+            util_updatePoint(targetUser, roomData, Number(res.actualGain), "송금 받음", roomName);
+            replier.reply(formatCommand("💸 송금 완료", user, getDisplayName(targetUser) + "님께 " + fp(extra.amount) + "P 보냈습니다.", "내 잔액: " + fp(user.point) + "P"));
+        }
+        else if (type === "admin_userdata") { 
+            replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(targetUser, null, 2))); 
+        }
+        else if (type === "admin_point_give") {
+            util_updatePoint(targetUser, roomData, extra.amount, "관리자 지급", roomName);
+            replier.reply(formatAdmin("포인트 지급 완료", getDisplayName(targetUser) + "님: +" + fp(extra.amount) + "P\n(현재: " + fp(targetUser.point) + "P)"));
+        }
+        else if (type === "admin_point_take") {
+            util_updatePoint(targetUser, roomData, -extra.amount, "관리자 차감", roomName);
+            replier.reply(formatAdmin("포인트 차감 완료", getDisplayName(targetUser) + "님 차감 처리됨"));
+        }
+        else if (type === "admin_attend_edit") {
+            targetUser.totalAttendance = extra.days;
+            replier.reply(formatAdmin("출석 수정 완료", getDisplayName(targetUser) + "님: " + extra.days + "일"));
+        }
+        else if (type === "admin_credit_edit") {
+            var oldScore = Number(targetUser.creditScore || 600);
+            targetUser.creditScore = Math.min(1000, Math.max(0, oldScore + extra.score));
+            if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(targetUser, roomName);
+            var crInfo = getCreditInfo(targetUser.creditScore);
+            replier.reply(formatAdmin("⚙️ 신용 점수 조정 완료", "대상: " + getDisplayName(targetUser) + "\n변동: " + extra.score + "점\n현재: " + targetUser.creditScore + "점 (" + crInfo.label + ")"));
+        }
+        else if (type === "admin_title_take") {
+            var titleToTake = extra.title;
+            var inv = targetUser.inventory || [];
+            var removed = false;
+            targetUser.inventory = inv.filter(function(it) {
+                if (it.effect === "title" && (it.title === titleToTake || it.name.indexOf(titleToTake) !== -1)) {
+                    removed = true; return false;
+                }
+                return true;
+            });
+            if (targetUser.title === titleToTake) { targetUser.title = ""; removed = true; }
+            if (removed) {
+                replier.reply(formatAdmin("🎖️ 칭호 회수 완료", getDisplayName(targetUser) + "님에게서 [" + titleToTake + "] 칭호를 박탈했습니다."));
+            } else {
+                replier.reply(formatAdmin("회수 실패", getDisplayName(targetUser) + "님은 해당 칭호를 보유하고 있지 않습니다."));
+            }
+        }
+        else if (type === "admin_delete") {
+            var tName = targetUser.name;
+            var targetId = selected.id;
+            var refundLog = "";
+            var refundCount = 0;
+            var totalRefunded = 0;
+            if (roomData.loanContracts) {
+                for (var cid in roomData.loanContracts) {
+                    var c = roomData.loanContracts[cid];
+                    if (c.borrowerUid === targetId) {
+                        var lender = roomData.users[c.lenderUid];
+                        if (lender) {
+                            var debtAmt = Number(c.currentDebt);
+                            util_updatePoint(lender, roomData, debtAmt, "사채 강제 정산", roomName);
+                            totalRefunded += debtAmt;
+                            refundCount++;
+                            try { Api.replyRoom(roomName, "🚬 [사채 강제 정산]\n" + tName + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); } catch(e){}
+                        }
+                        delete roomData.loanContracts[cid];
+                    }
+                }
+            }
+            if (targetUser.loan && Number(targetUser.loan.debt) > 0) {
+                var bankDebt = Number(targetUser.loan.debt);
+                roomData.bankReserve = (Number(roomData.bankReserve) || 0) + bankDebt;
+                refundLog += "\n\n🏦 은행 대출금 " + fp(bankDebt) + "P가 국고로 자동 회수되었습니다.";
+            }
+            if (refundCount > 0) refundLog += "\n⚠️ 사채 보전 완료: " + refundCount + "건 (" + fp(totalRefunded) + "P)";
+            if (typeof uidCache !== 'undefined') {
+                for (var key in uidCache) { if (uidCache[key] === targetId) delete uidCache[key]; }
+            }
+            delete roomData.users[targetId];
+            replier.reply(formatAdmin("유저 삭제 완료", "[" + tName + "]님의 데이터를 영구 삭제했습니다." + refundLog));
+        }
+        else if (type === "admin_attend_reset") {
+            targetUser.lastDate = "";
+            replier.reply(formatAdmin("출석 초기화", getDisplayName(targetUser) + "님의 오늘 출석 기록을 삭제했습니다."));
+        }
+        else if (type === "user_restore") {
+            var stablePath = BASE_DIR + "backup/last_stable_backup.json";
+            if (new java.io.File(stablePath).exists()) {
+                var backupData = JSON.parse(FileStream.read(stablePath));
+                var backupUser = null;
+                for (var r in backupData.rooms) { 
+                    if (backupData.rooms[r].users[selected.id]) { backupUser = backupData.rooms[r].users[selected.id]; break; } 
+                }
+                if (backupUser) { 
+                    roomData.users[selected.id] = backupUser; 
+                    replier.reply(formatAdmin("유저 복구 완료", getDisplayName(backupUser) + "님 복구 성공")); 
+                }
+            }
+        }
+        else if (type === "admin_nick_log") {
+            var hist = data.nickHistory[selected.id] || [];
+            if (hist.length === 0) {
+                replier.reply(formatAdmin("닉네임 기록", getDisplayName(targetUser) + "님은 변경 이력이 없습니다."));
+            } else {
+                var logMsg = [];
+                for(var i=0; i<hist.length; i++) logMsg.push((i+1) + ". " + hist[i].old + " (" + hist[i].date + ")");
+                replier.reply(formatAdmin("📋 닉네임 변경 이력", "현재: " + targetUser.name + "\n\n[과거 기록]\n" + logMsg.join("\n")));
+            }
+        }
+
+        safeSaveData(data);
+        return true; // 로직 처리 완료
     }
+    return false;
 }
 
 //==========섹터21==========

@@ -2233,104 +2233,85 @@ runScheduler();
 
 /**
  * 섹터 17 로직 함수: 주식 장 마감, 일일 데이터 초기화 및 시즌 리셋 관리
- * 반영 사항: 방별 독립 엔진(Features) 연동 및 루프 기반 데이터 정규화 적용
+ * [수정 완료] 날짜 갱신 순서 오류 수정 및 0시 제한 해제 (안전한 초기화 보장)
  */
 function _runSector17Logic(data, ctx) {
-    var currentHour = ctx.now.getHours();
-    var currentMin = ctx.now.getMinutes();
-
-    // 일일 데이터 초기화 (00:00:00 ~ 00:00:59 사이라면 무조건 체크)
-    if (currentHour === 0 && data.lastDailyReset !== ctx.today) {
-        data.lastDailyReset = ctx.today;
-        // [신규] 자동 물가 기준점 보정 시스템
-        // 자정마다 현재 총 통화량을 분석하여 기준점(economyBase)을 부드럽게 업데이트합니다.
+    // 일일 데이터 초기화 (시간 제한 없이 날짜가 변경되었다면 즉시 실행)
+    if (data.lastDailyReset !== ctx.today) {
+        
+        // [1] 자동 물가 기준점 보정 시스템
         for (var rName in data.rooms) {
             var rObj = data.rooms[rName];
             var eco = calculateEconomy(data, rName);
             
             if (eco.total > 0) {
                 var oldBase = rObj.economyBase || eco.total;
-                // 급격한 변화를 막기 위해 현재 총자산과 기존 기준점의 기하평균으로 부드럽게 이동
                 rObj.economyBase = Math.floor(Math.sqrt(oldBase * eco.total));
                 Log.info("[" + rName + "] 경제 기준점 자동 조정 완료: " + fp(rObj.economyBase) + "P");
             }
         }
 
-        /* [1] 주식 시장 종료 처리 (전역 공지) */
-        if (data.lastStockClose !== ctx.today) {
-            data.lastStockClose = ctx.today;
+        // [2] 주식 시장 종료 처리 (전역 공지)
+        try { 
+            Api.replyRoom(ctx.targetRoom, formatAdmin("📉 장 마감 알림", "금일 주식 시장이 종료되었습니다.\n(일일 데이터가 초기화되었습니다.)")); 
+        } catch(e) {}
+
+        // [3] 전역 피버타임 스케줄 생성
+        data.feverData.scheduled = [];
+        while(data.feverData.scheduled.length < 5) {
+            var h = Math.floor(Math.random() * 15) + 9; 
+            var m = Math.floor(Math.random() * 60);
+            var tStr = (h < 10 ? "0"+h : h) + ":" + (m < 10 ? "0"+m : m);
+            if (data.feverData.scheduled.indexOf(tStr) === -1) data.feverData.scheduled.push(tStr);
+        }
+        data.feverData.active = false; 
+
+        // [4] 피버타임 요일별 공지
+        var dayOfWeek = ctx.now.getDay(); 
+        if (dayOfWeek === 0) {
+            try { Api.replyRoom(ctx.targetRoom, formatAdmin("🔥 피버타임 시작", "일요일 한정 이벤트!\n승급 확률 +5% 상승이 적용됩니다.")); } catch(e){}
+        } else if (dayOfWeek === 1) {
+            try { Api.replyRoom(ctx.targetRoom, formatAdmin("❄️ 피버타임 종료", "이벤트가 종료되어\n승급 확률이 정상화되었습니다.")); } catch(e){}
+        }
+
+        // [5] 핵심: 모든 방 유저 스탯 초기화 (승급 기회 리셋 포함)
+        for (var rName in data.rooms) {
+            var roomObj = data.rooms[rName];
+            if (!roomObj.features) continue;
+
+            if (roomObj.features.lotto) {
+                roomObj.features.lotto.entries = {}; 
+                roomObj.features.lotto.dailyPool = 0;
+            }
+
+            for (var id in roomObj.users) {
+                var u = roomObj.users[id];
+                u.dailyLoanCount = 0; 
+                u.dailyGambleCount = 0; 
+                u.dailyPromotionAttempts = 1; // [확인] 여기서 정상적으로 1로 초기화됨
+                u.dailyStimulusCount = 0; 
+                u.dailyCreditRestoreCount = 0; 
+                
+                // 은행 예금 이자 지급 (복리 2%)
+                if (Number(u.bank) > 0) {
+                    u.bank = Number(u.bank) + Math.floor(Number(u.bank) * 0.02);
+                }
+                
+                // 대출 채무 이자 가산 (일일 5%) 및 연체 관리
+                if (u.loan && Number(u.loan.debt) > 0) { 
+                    u.creditScore = Math.max(0, Number(u.creditScore) - 5); 
+                    var dailyInterest = Math.floor(Number(u.loan.debt) * 0.05);
+                    u.loan.debt = Number(u.loan.debt) + dailyInterest;
+                    if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(u, rName); 
+                }
+            }
+
             try { 
-                // 주식 시장은 전역 시스템이므로 메인 운영 방에 공지
-                Api.replyRoom(ctx.targetRoom, formatAdmin("📉 장 마감 알림", "금일 주식 시장이 종료되었습니다.")); 
+                Api.replyRoom(rName, formatAdmin("🎫 로또 판매 시작", "새로운 로또 판매가 시작되었습니다.\n매일 밤 22시 추첨!")); 
             } catch(e) {}
-            ctx.isUpdated = true;
         }
 
-        /* [2] 일일 데이터 초기화 (방별 독립 격리 로직) */
-        if (data.lastDailyReset !== ctx.today) {
-            data.lastDailyReset = ctx.today; 
-            
-            // A. 전역 피버타임 스케줄 생성 (모든 방 공통 참조)
-            data.feverData.scheduled = [];
-            while(data.feverData.scheduled.length < 5) {
-                var h = Math.floor(Math.random() * 15) + 9; 
-                var m = Math.floor(Math.random() * 60);
-                var tStr = (h < 10 ? "0"+h : h) + ":" + (m < 10 ? "0"+m : m);
-                if (data.feverData.scheduled.indexOf(tStr) === -1) data.feverData.scheduled.push(tStr);
-            }
-            data.feverData.active = false; 
-
-            // B. 피버타임 요일별 공지 설정 (일요일/월요일)
-            var dayOfWeek = ctx.now.getDay(); 
-            if (dayOfWeek === 0) {
-                try { Api.replyRoom(ctx.targetRoom, formatAdmin("🔥 피버타임 시작", "일요일 한정 이벤트!\n승급 확률 +5% 상승이 적용됩니다.")); } catch(e){}
-            } else if (dayOfWeek === 1) {
-                try { Api.replyRoom(ctx.targetRoom, formatAdmin("❄️ 피버타임 종료", "이벤트가 종료되어\n승급 확률이 정상화되었습니다.")); } catch(e){}
-            }
-
-            // C. [핵심] 모든 방을 순회하며 독립 데이터 및 유저 정보 초기화
-            for (var rName in data.rooms) {
-                var roomObj = data.rooms[rName];
-                if (!roomObj.features) continue;
-
-                // 해당 방의 로또 데이터 초기화 (Reference Error 방지)
-                if (roomObj.features.lotto) {
-                    roomObj.features.lotto.entries = {}; 
-                    roomObj.features.lotto.dailyPool = 0;
-                }
-
-                // 해당 방의 모든 유저 스탯 초기화 및 이자 계산
-                for (var id in roomObj.users) {
-                    var u = roomObj.users[id];
-                    u.dailyLoanCount = 0; 
-                    u.dailyGambleCount = 0; 
-                    u.dailyPromotionAttempts = 1; 
-                    u.dailyStimulusCount = 0; 
-                    u.dailyCreditRestoreCount = 0; 
-                    
-                    // 은행 예금 이자 지급 (복리 2%)
-                    if (Number(u.bank) > 0) {
-                        u.bank = Number(u.bank) + Math.floor(Number(u.bank) * 0.02);
-                    }
-                    
-                    // 대출 채무 이자 가산 (일일 5%) 및 연체 관리
-                    if (u.loan && Number(u.loan.debt) > 0) { 
-                        u.creditScore = Math.max(0, Number(u.creditScore) - 5); 
-                        var dailyInterest = Math.floor(Number(u.loan.debt) * 0.05);
-                        u.loan.debt = Number(u.loan.debt) + dailyInterest;
-                        if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(u, rName); 
-                    }
-                }
-
-                // D. 각 방에 개별 로또 판매 공지 (중복 발송 방지 및 격리 공지)
-                try { 
-                    Api.replyRoom(rName, formatAdmin("🎫 로또 판매 시작", "새로운 로또 판매가 시작되었습니다.\n매일 밤 22시 추첨!")); 
-                } catch(e) {}
-            }
-            ctx.isUpdated = true;
-        }
-
-        /* [3] 시즌 리셋 처리 (매월 1일) */
+        // [6] 시즌 리셋 처리 (매월 1일)
         if (ctx.now.getDate() === 1 && data.lastSeasonReset !== ctx.season) {
             data.lastSeasonReset = ctx.season;
             for (var r in data.rooms) { 
@@ -2344,8 +2325,11 @@ function _runSector17Logic(data, ctx) {
             try { 
                 Api.replyRoom(ctx.targetRoom, formatAdmin("🏆 시즌 리셋", "새로운 시즌이 시작되어 모든 티어 및 게임 인증 기록이 초기화되었습니다.")); 
             } catch(e) {}
-            ctx.isUpdated = true;
         }
+
+        // [최종] 모든 로직 수행 후 날짜 갱신 (가장 마지막에 수행해야 함)
+        data.lastDailyReset = ctx.today; 
+        ctx.isUpdated = true;
         util_stamp("dailyReset");
     }
 }

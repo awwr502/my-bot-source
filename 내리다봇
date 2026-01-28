@@ -19,6 +19,7 @@ var logLock = new Lock(); // [v5.8] 저널링(블랙박스) 전용 독립 락 �
 var SD_PATH = android.os.Environment.getExternalStorageDirectory().getAbsolutePath(); 
 var BASE_DIR = SD_PATH + "/kakaobot/data/"; 
 var FILE_PATH = BASE_DIR + "attendance.json"; 
+var REGISTRY_PATH = BASE_DIR + "user_registry.json";
 var JOURNAL_PATH = BASE_DIR + "transaction.log"; // [v5.8] 실시간 거래 기록용 블랙박스 경로
 var BACKUP_DIR = BASE_DIR + "backup/"; 
 
@@ -2769,9 +2770,32 @@ if (targetUid) {
     uidCache[cacheKey] = targetUid;
 }
 
-/* 신규 유저 등록 및 환영 메시지 (도배 방지 시스템 변수 통합 및 칭호 통계 필드 추가) */
+/* [v6.0 핵심] 고유 코드 영구 보존 및 신분 자동 복구 엔진 */
+var registry = {};
+try {
+    var regFile = new java.io.File(REGISTRY_PATH);
+    if (regFile.exists()) registry = JSON.parse(FileStream.read(REGISTRY_PATH));
+} catch(e) { Log.error("Registry Read Error"); }
+
+var regKey = roomName + "_" + cleanSender;
+var isIdentityRecovered = false;
+
+// [A] 캐시/검색 실패 시 영구 명부에서 과거 기록 조회
+if (!targetUid && registry[regKey]) {
+    targetUid = registry[regKey]; // 과거 코드가 있다면 즉시 부활
+    isIdentityRecovered = true;
+    Log.info("[Identity Restore] " + cleanSender + "님의 고유 코드를 복구했습니다.");
+}
+
+// [B] 명부에도 없는 진짜 신규 유저인 경우 코드 발급 및 명부 등록
 if (!targetUid) {
     targetUid = generateUUID();
+    registry[regKey] = targetUid;
+    FileStream.write(REGISTRY_PATH, JSON.stringify(registry));
+}
+
+// [C] UID는 확보되었으나 실제 게임 데이터(Object)가 없는 경우 초기화 실행
+if (!roomData.users[targetUid]) {
     roomData.users[targetUid] = { 
         name: cleanSender, point: 50000, tier: 0, creditScore: 600, totalAttendance: 0, 
         loan: { debt: 0, items: [] }, lastDate: "", icon: "", title: "", 
@@ -2779,34 +2803,20 @@ if (!targetUid) {
         imageHash: currentImgHash, chatCount: 0, dailyGambleCount: 0,
         bank: 0, jailReleaseTime: 0, stockHoldings: {}, stockAvg: {}, 
         dailyPromotionAttempts: 1, purchasedPromotionAttempts: 0, lastBonusTriggeredCount: -1,
-        /* [신규] 게임 판수 인증 시스템 변수 */
-        gameAuthCount: 0,      // 현재 인증 완료 횟수
-        purchasedAuthCount: 0, // 이번 시즌 인증권 구매 횟수
-        /* [신규] 도배 방지 및 타임아웃 데이터 */
-        chatLog: [],           // 채팅 발송 시각 기록 배열
-        timeoutEndTime: 0,     // 타임아웃 종료 시각 (0이면 정상 상태)
-        /* [신규] 유물 시스템 데이터 초기화 */
-        artifactPieces: 0,     // 보유 중인 유물 조각 수
-        /* [신규] 칭호 시스템용 누적 통계 데이터 */
-        totalGambleCount: 0,   // 홀짝 총 판수
-        totalGambleWins: 0,    // 홀짝 총 승리수
-        totalTheftSuccess: 0,  // 도둑질 총 성공 횟수
-        totalInvestAmount: 0,  // 주식 총 누적 매수액
-        totalMiningTime: 0,    // 광산 총 누적 채굴 시간(분)
-        totalDonation: 0,      // 누적 기부 금액 기록 필드
-        /* [개편] 랜덤박스 조각 및 이용권 시스템 */
-        boxFragments: 0,       // 분해 시 획득하는 조각
-        boxTickets: 0,         // 조각 5개가 모여 변환된 랜덤박스 이용권
-        collectedIcons: [],     // [신규] 한 번이라도 뽑았던 아이콘 기록 (분해해도 유지됨)
-        dailyCreditRestoreCount: 0, // 신용 회복제 일일 사용량
-        /* [신규: Gemini 요청 사항] 경고삭제권 평생 구매 기록 */
+        gameAuthCount: 0, purchasedAuthCount: 0, chatLog: [], timeoutEndTime: 0, 
+        artifactPieces: 0, totalGambleCount: 0, totalGambleWins: 0, totalTheftSuccess: 0, 
+        totalInvestAmount: 0, totalMiningTime: 0, totalDonation: 0, 
+        boxFragments: 0, boxTickets: 0, collectedIcons: [], dailyCreditRestoreCount: 0,
         boughtWarningRemoval: false 
     };
     
     uidCache[cacheKey] = targetUid;
     
-    var welcomeMsg = "🎊 [" + cleanSender + "]님 환영합니다!\n━━━━━━━━━━━━━━━\n" +
-                     "🎁 입장 축하 보너스: " + fP(50000) + "P 지급!\n" + 
+    var welcomeTitle = isIdentityRecovered ? "🎊 [" + cleanSender + "]님 신분 복구 완료!" : "🎊 [" + cleanSender + "]님 환영합니다!";
+    var welcomeSub = isIdentityRecovered ? "🛡️ 영구 명부에서 과거 고유 코드를 찾아 연결했습니다." : "🎁 입장 축하 보너스: " + fP(50000) + "P 지급!";
+    
+    var welcomeMsg = welcomeTitle + "\n━━━━━━━━━━━━━━━\n" +
+                     welcomeSub + "\n" +
                      "🕹️ 미니게임 및 출석체크 기능 제공\n" +
                      "💳 신용 등급: 4등급 (600점) 부여\n\n" + 
                      "📖 이용 전 반드시 '/도움말'을 확인해주세요!";

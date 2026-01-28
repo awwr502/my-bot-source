@@ -942,57 +942,58 @@ function stock_applyClosingCorrection(currentPrice) {
 //==========섹터8==========
 
 /**
- * [Gemini 요청 사항] 경제 지표 계산 함수 (중앙은행 재원 포함 및 실질 순자산 기준)
- * 기능: 섹터 7의 util_calculateNetWorth를 호출하고 중앙은행 금고 잔액을 합산하여 국가 전체 자산을 집계합니다.
- * 반영: 
- * 1. 시스템 내 총 통화량 유지를 위해 유저 자산 외에 '중앙은행 재원'을 지표에 포함함.
- * 2. 채권(빌려준 돈)을 포함한 실질 순자산을 기준으로 통계 누락을 방지함.
- */
+ * [Gemini 정밀 교정] 경제 지표 계산 함수 (시스템 판돈 완벽 통합 버전)
+ * 반영: 주식, 경마 배팅액, 로또 잭팟, 은행 재원 등을 모두 합산하여 물가 왜곡 방지
+ */
 function calculateEconomy(data, roomName) {
-    var totalAssets = 0;
-    var userCount = 0;
-    if (!data || !data.rooms) return { total: 0, count: 0, average: 0 };
+    var totalAssets = 0;
+    var userCount = 0;
+    if (!data || !data.rooms) return { total: 0, count: 0, average: 0 };
 
-    // 특정 방만 스캔할지, 전체 방을 스캔할지 결정
-    var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
-    
-    for (var i = 0; i < roomsToScan.length; i++) {
-        var r = roomsToScan[i];
-        var roomData = data.rooms[r];
-        if (!roomData) continue;
+    var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
+    
+    // [전역 자산 합산] 로또 잭팟은 방과 상관없는 공통 자산이므로 1회만 합산
+    totalAssets += Number(data.lotto_jackpot_pool || 0);
 
-        // 1. [핵심 추가] 중앙은행 금고 자산 합산
-        // 유저가 상점 이용 등으로 지출한 포인트가 금고에 있을 때, 이를 국가 자산으로 합산하여 물가 폭락을 방지합니다.
-        if (roomData.bankReserve !== undefined) {
-            totalAssets += Number(roomData.bankReserve);
-        }
+    for (var i = 0; i < roomsToScan.length; i++) {
+        var r = roomsToScan[i];
+        var roomData = data.rooms[r];
+        if (!roomData) continue;
 
-        // 2. 유저별 순자산 합산
-        for (var uid in roomData.users) {
-            var u = roomData.users[uid];
-            if (!u) continue;
+        // 1. 중앙은행 금고 자산 합산
+        if (roomData.bankReserve !== undefined) {
+            totalAssets += Number(roomData.bankReserve);
+        }
 
-            /* [핵심] 섹터 7의 통합 계산 엔진 호출 */
-            // 각 유저의 (현금 + 예금 + 주식현재가치 + 채권) - (부채)를 계산합니다.
-            // 섹터 7에서 이미 마이너스 자산은 0P로 보정되어 반환됩니다.
-            var userNetWorth = 0;
-            if (typeof util_calculateNetWorth === 'function') {
-                userNetWorth = util_calculateNetWorth(u, roomData);
-            } else {
-                // 예외 처리: 함수가 없을 경우 기본 포인트 기반 (안전장치)
-                userNetWorth = Number(u.point || 0) + Number(u.bank || 0);
-            }
+        // 2. [신규 추가] 시스템 내 대기 중인 판돈 합산 (Deflation 방지)
+        if (roomData.features) {
+            // A. 경마: 아직 정산되지 않은 현재 회차 총 배팅액 + 이월금
+            if (roomData.features.racing) {
+                totalAssets += Number(roomData.features.racing.totalPool || 0);
+                totalAssets += Number(roomData.features.racing.carryOver || 0);
+            }
+            // B. 로또: 오늘 판매된 로또 총액
+            if (roomData.features.lotto) {
+                totalAssets += Number(roomData.features.lotto.dailyPool || 0);
+            }
+        }
 
-            totalAssets += userNetWorth;
-            userCount++;
-        }
-    }
+        // 3. 유저별 순자산 합산 (현금 + 예금 + 주식가치 + 채권 - 부채)
+        for (var uid in roomData.users) {
+            var u = roomData.users[uid];
+            if (!u) continue;
 
-    return {
-        total: totalAssets,
-        count: userCount,
-        average: userCount > 0 ? Math.floor(totalAssets / userCount) : 0
-    };
+            // util_calculateNetWorth 내부에 주식 가치 계산이 포함되어 있습니다.
+            totalAssets += util_calculateNetWorth(u, roomData);
+            userCount++;
+        }
+    }
+
+    return {
+        total: Math.max(0, totalAssets),
+        count: userCount,
+        average: userCount > 0 ? Math.floor(totalAssets / userCount) : 0
+    };
 }
 
 //==========섹터6==========

@@ -5879,21 +5879,48 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    if (msg.trim() === "/전체복원") {
-        var stablePath = BACKUP_DIR + "last_stable_backup.json";
-        if (!new java.io.File(stablePath).exists()) { replier.reply(formatAdmin("오류", "백업 파일 유실")); return true; }
-        var content = FileStream.read(stablePath);
-        FileStream.write(FILE_PATH, content); // 메인 파일 교체
-        globalData = JSON.parse(content);    // 메모리 로드
-        
-        // [핵심] 복원 직후, 백업 시점~현재 사이의 실시간 거래 기록을 다시 합산
-        if (typeof recoverFromJournal === 'function') {
-            recoverFromJournal(globalData);
+    /* [긴급] 지능형 전체 데이터 복구 (Smart Restore v5.9+) */
+    if (msg.startsWith("/전체복원")) {
+        var stablePath = BACKUP_DIR + "last_stable_backup.json";
+        var stableFile = new java.io.File(stablePath);
+
+        if (!stableFile.exists() || stableFile.length() === 0) {
+            replier.reply(formatAdmin("🚫 복구 실패", "안전 백업 파일(last_stable_backup.json)을 찾을 수 없습니다."));
+            return true;
         }
-        
-        replier.reply(formatAdmin("✅ 지능형 전체 복구 성공", "1. 검증된 백업본 로드 완료\n2. 실시간 블랙박스 데이터 합산 완료\n\n결과: 오염된 데이터만 제거되고 최신 상태로 복구되었습니다."));
-        return true;
-    }
+
+        try {
+            var content = FileStream.read(stablePath);
+            if (!content) throw new Error("파일 내용이 비어있음");
+
+            // 1. 메모리 교체 및 메인 파일 물리적 동기화
+            var backupObj = JSON.parse(content);
+            globalData = backupObj;
+            FileStream.write(FILE_PATH, content);
+
+            // 2. [핵심] 실시간 블랙박스(Journal) 병합
+            // 백업 시점 이후부터 현재까지 발생한 모든 포인트 변동을 소급 적용합니다.
+            if (typeof recoverFromJournal === 'function') {
+                recoverFromJournal(globalData);
+            }
+
+            // 3. 최종 정화된 데이터를 세션에 반영하고 즉시 저장
+            safeSaveData(globalData, false);
+
+            var resBody = "✅ 지능형 데이터 복구 완료\n" +
+                          "━━━━━━━━━━━━━━━\n" +
+                          "• 소스: last_stable_backup.json\n" +
+                          "• 병합: 실시간 블랙박스 로그 통합\n" +
+                          "• 상태: 오염 데이터 정화 성공";
+
+            replier.reply(formatAdmin("🛠️ 시스템 복구 보고", resBody));
+
+        } catch (e) {
+            Log.error("Restore Logic Crash: " + e);
+            replier.reply(formatAdmin("🚫 복구 중단", "데이터 파싱 중 오류가 발생했습니다.\n사유: " + e.message));
+        }
+        return true;
+    }
 
     return false;
 }

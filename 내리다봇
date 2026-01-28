@@ -244,11 +244,10 @@ BACKUP: {
     }
 };
 
-//==========섹터2==========
-
 /**
- * [v5.8 신규] 블랙박스 복구 엔진 (Replay Journal)
- * 기능: 봇 재시작 시 JSON에 미처 저장되지 못한 최신 거래 내역을 로그 파일에서 읽어 복구함.
+ * [v8.1 개편] 블랙박스 복구 엔진 (Smart Replay Option 2)
+ * 기능: 자본금 대비 수익 필터링 로직을 도입하여 보너스 레버리지를 이용한 부당 수익을 차단합니다.
+ * [Gemini 요청 사항 반영]: 사유(Reason) 필터링 시스템 완벽 통합
  */
 function recoverFromJournal(data) {
     try {
@@ -257,26 +256,50 @@ function recoverFromJournal(data) {
 
         var logs = FileStream.read(JOURNAL_PATH).split("\n");
         var recoveryCount = 0;
+        var skipCount = 0;
+        var taintedUsers = {}; // 자본금 한도를 초과하여 베팅한 유저 태그 목록
 
         logs.forEach(function(line) {
             if (!line.trim()) return;
             var parts = line.split("|"); 
-            if (parts.length < 3) return;
+            // [교정]: 사유가 포함된 5개 항목이 모두 있는지 확인
+            if (parts.length < 5) return;
 
             var uid = parts[0];
             var room = parts[1];
             var delta = Number(parts[2]);
             var brDelta = Number(parts[3] || 0);
+            var reason = parts[4] || ""; 
 
             if (data.rooms[room] && data.rooms[room].users[uid] && !isNaN(delta)) {
-                data.rooms[room].users[uid].point = Number(data.rooms[room].users[uid].point || 0) + delta;
+                var user = data.rooms[room].users[uid];
+
+                // [필터 1]: 입장 보너스 기록은 합산에서 제외 (중복 지급 방지)
+                if (reason.indexOf("입장 축하") !== -1) {
+                    skipCount++;
+                    return;
+                }
+
+                // [필터 2]: 자본금 한도 초과 베팅 감지 (옵션 2 논리)
+                if (delta < 0 && Math.abs(delta) > Number(user.point)) {
+                    taintedUsers[uid] = true;
+                }
+
+                // [필터 3]: 태그된 유저의 수익(+) 기록 무효화
+                if (taintedUsers[uid] && delta > 0) {
+                    skipCount++;
+                    return;
+                }
+
+                // [최종 반영]: 필터를 통과한 정당한 데이터만 합산
+                user.point = Number(user.point || 0) + delta;
                 data.rooms[room].bankReserve = Number(data.rooms[room].bankReserve || 0) + brDelta;
                 recoveryCount++;
             }
         });
 
-        if (recoveryCount > 0) {
-            Log.info("[Recovery] 블랙박스 엔진이 " + recoveryCount + "건의 누락된 최신 거래를 복구했습니다.");
+        if (recoveryCount > 0 || skipCount > 0) {
+            Log.info("[Recovery] 블랙박스 엔진: " + recoveryCount + "건 복구 완료 (부당 이득 및 보너스 " + skipCount + "건 필터링)");
         }
     } catch (e) {
         Log.error("Journal Recovery Error: " + e);
@@ -285,7 +308,6 @@ function recoverFromJournal(data) {
 
 /**
  * [Gemini 정밀 교정] 데이터베이스 로드 함수
- * 반영: Syntax Error 수정 및 진단 엔진(3/3, 17/17) 연동 로직 통합
  */
 function getDatabase() {
     if (globalData !== null && globalData.rooms && Object.keys(globalData.rooms).length > 0) {
@@ -298,14 +320,9 @@ function getDatabase() {
         
         if (!file.exists()) {
             initialData = {
-                rooms: {}, 
-                admins: ["관리자"], 
-                botActive: true,
-                nickHistory: {}, 
-                adminLogs: [],
-                economyDamping: 0.5,
-                lastDailyReset: "",
-                isRecovering: false
+                rooms: {}, admins: ["관리자"], botActive: true,
+                nickHistory: {}, adminLogs: [], economyDamping: 0.5,
+                lastDailyReset: "", isRecovering: false
             };
         } else {
             var content = FileStream.read(FILE_PATH);
@@ -318,49 +335,31 @@ function getDatabase() {
         if (initialData.rooms) {
             for (var rName in initialData.rooms) {
                 var targetRoom = initialData.rooms[rName];
-                
-                // 1. 방별 독립 엔진(features) 관리
                 if (!targetRoom.features) {
                     if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
                         targetRoom.features = ROOM_FEATURE_TEMPLATE();
-                        Log.info("[" + rName + "] 방에 새로운 게임 엔진을 생성했습니다.");
                     }
                 } else {
                     var template = ROOM_FEATURE_TEMPLATE();
-                    if (!targetRoom.features.racing) {
-                        targetRoom.features.racing = template.racing;
-                    } else {
-                        if (targetRoom.features.racing.round === undefined) targetRoom.features.racing.round = 1;
-                        if (targetRoom.features.racing.carryOver === undefined) targetRoom.features.racing.carryOver = 0;
-                        if (!targetRoom.features.racing.horses) targetRoom.features.racing.horses = template.racing.horses;
-                    }
-
+                    if (!targetRoom.features.racing) targetRoom.features.racing = template.racing;
                     if (!targetRoom.features.lotto) targetRoom.features.lotto = template.lotto;
                     if (!targetRoom.features.stockMarket) targetRoom.features.stockMarket = template.stockMarket;
-                    // [정밀 수리] states 객체뿐만 아니라 그 내부의 개별 대기소 주머니들까지 전수 조사
                     if (!targetRoom.features.states) {
                         targetRoom.features.states = template.states;
                     } else {
                         var s = targetRoom.features.states;
                         var ts = template.states;
-                        // 템플릿에 정의된 모든 상태 키(menuWait, bankProcess 등)를 순회하며 누락분 보충
                         for (var key in ts) {
-                            if (!s[key] || typeof s[key] !== 'object') {
-                                s[key] = {};
-                            }
+                            if (!s[key] || typeof s[key] !== 'object') s[key] = {};
                         }
                     }
-                  }
-
-                    if (!targetRoom.loanPools) targetRoom.loanPools = {};
-                if (!targetRoom.loanContracts) targetRoom.loanContracts = {};
-                if (targetRoom.bankReserve === undefined || targetRoom.bankReserve === null) {
-                    targetRoom.bankReserve = 10000;
                 }
+                if (!targetRoom.loanPools) targetRoom.loanPools = {};
+                if (!targetRoom.loanContracts) targetRoom.loanContracts = {};
+                if (targetRoom.bankReserve === undefined) targetRoom.bankReserve = 10000;
             }
         }
 
-        // 3. [진단 엔진 연동] 스케줄러 인식 강화 (3/3 달성)
         if (initialData) {
             initialData.SaveExecutor = SaveExecutor;
             initialData.Executor = Executor;
@@ -368,7 +367,6 @@ function getDatabase() {
         
         globalData = initialData;
         return globalData;
-
     } catch (e) {
         Log.error("DB Load Error: " + e);
         var stableFile = new java.io.File(BACKUP_DIR + "last_stable_backup.json");
@@ -387,7 +385,8 @@ function startTracking(user, commandName) {
 }
 
 /**
- * [v5.8 업그레이드] 포인트 변동 검증 및 실시간 블랙박스 기록
+ * [v8.1 업그레이드] 포인트 변동 검증 및 사유 포함 블랙박스 기록
+ * [교정]: 로그 한 줄에 reason을 반드시 포함하여 저장합니다.
  */
 function verifyPointTransaction(user, prePoint, changeAmount, reason, roomName, brDelta) {
     try {
@@ -403,20 +402,19 @@ function verifyPointTransaction(user, prePoint, changeAmount, reason, roomName, 
             if (roomName) {
                 logLock.lock();
                 try {
-                    var journalEntry = user.uid + "|" + roomName + "|" + changeAmount + "|" + (brDelta || 0) + "\n";
+                    // [핵심 교정]: 로그 포맷에 reason 항목 추가 (5열 구조)
+                    var journalEntry = user.uid + "|" + roomName + "|" + changeAmount + "|" + (brDelta || 0) + "|" + reason + "\n";
                     FileStream.append(JOURNAL_PATH, journalEntry);
                 } finally {
                     logLock.unlock();
                 }
             }
-
             if (user.lastAction && user.lastAction.status !== "FAIL") {
                 user.lastAction = { cmd: reason, status: "SUCCESS", amount: changeAmount, time: Date.now(), msg: "정상 완료" };
             }
         }
     } catch(e) { 
         FileStream.append(ERROR_LOG_PATH, "검증오류: " + e + "\n"); 
-        try { Api.replyRoom("내리다", "⚠️ 포인트 검증 오류\n" + e); } catch(err){}
     }
 }
 

@@ -180,7 +180,7 @@ var SYSTEM_CONFIG = {
                 CLOSE_HOUR: 23,    // 주식 장 마감 시간
                 MANI_RATE: 0.15,   // 기본 특수 이벤트(폭등/폭락) 변동폭
                 DELIST_LIMIT: 0.20, // [상폐 기준]: 시장 평균가 대비 해당 비율 이하로 떨어지면 상장폐지 검토
-                CLOSING_LIMIT: 1.20, // [종가 제한]: 당일 시가 대비 최대 상승폭 (+20%)
+                CLOSING_LIMIT: 0.20, // [종가 제한]: 당일 시가 대비 최대 상승폭 (+20%)
                 RESISTANCE_START: 1.15, // [저항 시작]: 가격이 시가 대비 15% 상승 시 하락 압력 발생
                 GRAVITY: 0.20      // [중력 계수]: 저항 구간에서 가격을 아래로 끌어내리는 힘의 세기
             }
@@ -1749,33 +1749,27 @@ function updateStockPrices(data) {
             if (marketOpenPrice > 0) {
                 var growthRate = (stock.price - marketOpenPrice) / marketOpenPrice;
                 var sConf = conf.SETTINGS;
+                var limitThreshold = sConf.CLOSING_LIMIT - 1.0; // 1.20 -> 0.20으로 변환
 
-            // 1. 과열(저항) 시작 판정 (20% 터치 시)
-                if (growthRate >= 0.20) {
+                // 1. 과열(저항) 시작 판정 (설정된 상한선 터치 시)
+                if (growthRate >= limitThreshold) {
                     stock.isOverheated = true;
                 }
 
-                // 2. 과열 상태에서의 탄성 저항 로직
+                // 2. 과열 상태에서의 감쇠 저항 로직
                 if (stock.isOverheated) {
-                    // 20% 미만으로 내려올 때까지는 '복원력'이 작동합니다.
-                    // 20%를 초과한 정도(gap)가 클수록 아래로 당기는 힘이 강해집니다.
-                    var gap = growthRate - 0.20; 
+                    // 설정된 상한선(limitThreshold)과의 거리 계산
+                    var gap = growthRate - limitThreshold; 
                     
-                   // 금액(gap)이 줄어들수록 저항(pull)도 같이 줄어드는 수식
-                    // gap이 크면(예: 2.3) 저항이 크고, gap이 작으면(예: 0.05) 저항이 매우 작아집니다.
-                    var elasticPull = (gap * 0.01) + 0.2; 
-                    
-                    // 저항 수치를 changePercent에서 차감 (저항값이 유동적임)
+                    var elasticPull = (gap * 0.12) + 0.01; 
                     changePercent -= elasticPull;
-                    
-                    // 자연스러운 파동을 위해 최소한의 변동성 부여 (±3% 진동)
-                    changePercent += (Math.random() * 0.10 - 0.02);
+                    changePercent += (Math.random() * 0.06 - 0.03);
 
-                    // 3. 해제 조건: 주가가 20% 미만으로 완전히 내려가야 저항이 사라짐
-                    if (growthRate < 0.20) {
+                    // 3. 해제 조건: 주가가 설정된 상한선 미만으로 내려가면 해제
+                    if (growthRate < limitThreshold) {
                         stock.isOverheated = false;
                     }
-                } 
+                }
                 // 일반 저항 구간 (15% ~ 20% 사이)
                 else if (growthRate > sConf.RESISTANCE_START) {
                     var gap = (growthRate - sConf.RESISTANCE_START);

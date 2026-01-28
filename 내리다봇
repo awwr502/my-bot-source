@@ -1254,13 +1254,12 @@ function findUserByName(roomData, name) {
     return res;
 }
 
-/* 중복 유저 선택 핸들러 함수 */
+/* [기능] 중복 유저 선택 핸들러 함수 (재트리거 지원형) */
 function handleUserSelection(replier, targetUid, found, type, extra, user, roomName) {
     var data = getDatabase();
     var roomData = data.rooms[roomName];
     if (!roomData || !roomData.features) return;
 
-    // 방별 독립 저장소인 features.states.selectWait에 저장
     roomData.features.states.selectWait[targetUid] = { 
         timestamp: Date.now(), 
         results: found, 
@@ -1273,14 +1272,42 @@ function handleUserSelection(replier, targetUid, found, type, extra, user, roomN
         list.push((i + 1) + ". " + found[i].data.name);
     }
     
-    setTimeout(function() {
-        if (roomData.features.states.selectWait[targetUid]) {
-            delete roomData.features.states.selectWait[targetUid];
-            replier.reply(formatError(user, "선택 시간 초과", "중복 닉네임 선택 시간이 만료되었습니다."));
-        }
-    }, 30000);
+    // [보정] 클로저를 사용하여 타임아웃 시 정확한 방의 데이터를 삭제
+    (function(uid, rn) {
+        setTimeout(function() {
+            var d = getDatabase();
+            if (d.rooms[rn] && d.rooms[rn].features.states.selectWait[uid]) {
+                delete d.rooms[rn].features.states.selectWait[uid];
+            }
+        }, 30000);
+    })(targetUid, roomName);
 
     replier.reply(formatCommand("🔍 중복 닉네임 선택", user, "여러 유저가 검색되었습니다.\n번호를 선택해주세요.\n\n" + list.join("\n") + "\n\n(취소: [취소])", "입력 대기: 30초"));
+}
+
+/**
+ * [v7.0 신규] 통합 대상 결정 엔진 (Retrigger System)
+ * 기능: 닉네임 검색 시 0명/1명/다수 상황을 자동으로 판별하여 처리합니다.
+ */
+function util_resolveTarget(targetName, fullMsg, replier, roomData, senderUid, senderUser, roomName) {
+    var found = findUserByName(roomData, targetName);
+    
+    // 1. 대상이 한 명도 없을 때
+    if (found.length === 0) {
+        replier.reply(formatError(senderUser, "대상 없음", "[" + targetName + "]님을 찾을 수 없습니다."));
+        return null;
+    }
+    
+    // 2. 정확히 1명일 때 (유저 데이터를 바로 반환하여 다음 로직 진행)
+    if (found.length === 1) return found[0];
+
+    // 3. 중복 발생 시 (번호 선택 메뉴를 띄우고 현재 명령어 중단)
+    handleUserSelection(replier, senderUid, found, "RETRIGGER", { 
+        msg: fullMsg, 
+        alias: targetName 
+    }, senderUser, roomName);
+    
+    return null; // 중복이므로 null을 반환하여 명령어 본문이 멈추게 함
 }
 
 /* 날짜 및 시즌 유틸 함수 */

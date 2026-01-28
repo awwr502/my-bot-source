@@ -2625,26 +2625,42 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                     }
                 }
 
+                /* [v6.5 통합] 데이터 자가 치유 + 도배 방지 엔진 */
                 if (user) {
+                    // 1. [Auto-Healer] 누락된 변수 즉시 수리
+                    var essentialSchema = {
+                        chatLog: [], timeoutEndTime: 0, artifactPieces: 0, 
+                        gameAuthCount: 0, purchasedAuthCount: 0, totalDonation: 0,
+                        boxFragments: 0, boxTickets: 0, collectedIcons: [],
+                        boughtWarningRemoval: false, dailyGambleCount: 0,
+                        dailyPromotionAttempts: 1, stockHoldings: {}, stockAvg: {}
+                    };
+                    var isHealed = false;
+                    for (var key in essentialSchema) {
+                        if (user[key] === undefined) {
+                            user[key] = essentialSchema[key];
+                            isHealed = true;
+                        }
+                    }
+                    if (isHealed) Log.info("[Auto-Healer] " + user.name + "님 구조 수리 완료.");
+
+                    // 2. [Spam Guard] 도배 방지 및 타임아웃 체크 (수리된 chatLog 변수 사용)
                     var now = Date.now();
                     var conf = SYSTEM_CONFIG.SPAM;
 
-                    // 1. 이미 타임아웃 상태인 경우 즉시 종료 (무응답)
                     if (user.timeoutEndTime && now < user.timeoutEndTime) {
                         return;
                     }
 
-                    // 2. 채팅 로그 기록 및 슬라이딩 윈도우 필터링
-                    if (!user.chatLog) user.chatLog = [];
+                    if (!user.chatLog) user.chatLog = []; // 가드 차원 중복 체크
                     user.chatLog.push(now);
                     user.chatLog = user.chatLog.filter(function(time) {
                         return now - time < conf.LIMIT_WINDOW;
                     });
 
-                    // 3. 도배 기준 초과 시 타임아웃 부여
                     if (user.chatLog.length > conf.LIMIT_COUNT) {
                         user.timeoutEndTime = now + conf.TIMEOUT_MS;
-                        user.chatLog = []; // 로그 초기화
+                        user.chatLog = []; 
                         
                         var expireTime = new Date(user.timeoutEndTime).toLocaleTimeString();
                         var timeoutMsg = "🔇 [도배 감지: 이용 제한]\n" +

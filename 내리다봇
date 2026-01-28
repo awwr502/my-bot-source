@@ -3104,17 +3104,58 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatAdmin("출석 초기화", getDisplayName(targetUser) + "님의 오늘 출석 기록을 삭제했습니다."));
         }
         else if (type === "user_restore") {
+            // [Gemini 수정] 중복 선택 시에도 스마트 복구 로직(v5.9.1) 적용
             var stablePath = BASE_DIR + "backup/last_stable_backup.json";
-            if (new java.io.File(stablePath).exists()) {
-                var backupData = JSON.parse(FileStream.read(stablePath));
-                var backupUser = null;
-                for (var r in backupData.rooms) { 
-                    if (backupData.rooms[r].users[selected.id]) { backupUser = backupData.rooms[r].users[selected.id]; break; } 
+            var stableFile = new java.io.File(stablePath);
+
+            if (!stableFile.exists() || stableFile.length() === 0) {
+                replier.reply(formatAdmin("🚫 복구 실패", "안전 백업 파일(last_stable_backup.json)을 찾을 수 없습니다."));
+                return true;
+            }
+
+            try {
+                // 1. 소스 코드 결정 (입력된 UUID가 있으면 그것을, 없으면 선택된 유저의 ID를 사용)
+                var sourceCode = (extra && extra.sourceCode) ? extra.sourceCode : selected.id;
+                var targetId = selected.id;
+                var fullNick = selected.data.name; // 현재 방에 존재하는 정확한 풀네임
+
+                var backupContent = FileStream.read(stablePath);
+                var backupData = JSON.parse(backupContent);
+                var rawBackupUser = null;
+
+                // 2. 백업본에서 소스 데이터 탐색
+                for (var r in backupData.rooms) {
+                    if (backupData.rooms[r].users[sourceCode]) {
+                        rawBackupUser = backupData.rooms[r].users[sourceCode];
+                        break;
+                    }
                 }
-                if (backupUser) { 
-                    roomData.users[selected.id] = backupUser; 
-                    replier.reply(formatAdmin("유저 복구 완료", getDisplayName(backupUser) + "님 복구 성공")); 
-                }
+
+                if (!rawBackupUser) throw new Error("백업본에 해당 데이터(ID:" + sourceCode + ")가 없습니다.");
+
+                // 3. 데이터 이식 및 동기화
+                var backupUser = JSON.parse(JSON.stringify(rawBackupUser));
+                var schema = { chatLog: [], inventory: [], stockHoldings: {}, stockAvg: {}, point: 50000 };
+                for (var key in schema) { if (backupUser[key] === undefined) backupUser[key] = schema[key]; }
+
+                // [동기화] 이름은 현재 방의 풀네임으로 유지
+                backupUser.name = fullNick;
+                roomData.users[targetId] = backupUser;
+
+                safeSaveData(data, false);
+                if (typeof globalData !== 'undefined') globalData = data;
+
+                // 4. 결과 출력 (신형 포맷)
+                replier.reply(formatAdmin("✅ 데이터 정밀 이관 완료",
+                    "현재 대상: " + fullNick + "\n" +
+                    "식별 모드: 간략화 검색 지원\n" +
+                    "━━━━━━━━━━━━━━━\n" +
+                    "💰 최종 복구 잔액: " + fp(backupUser.point) + "P\n\n" +
+                    "💡 전체 닉네임과의 동기화가 완료되어 즉시 사용 가능합니다."));
+
+            } catch (e) {
+                replier.reply(formatAdmin("🚫 복구 중단", "복구 처리 중 오류가 발생했습니다.\n사유: " + e.message));
+                Log.error("Select Restore Error: " + e);
             }
         }
         else if (type === "admin_nick_log") {
@@ -5394,7 +5435,7 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
     var currentFound = findUserByName(roomData, targetNick);
     if (currentFound.length > 1) { 
-        handleUserSelection(replier, targetUid, currentFound, "user_restore", null, user, roomName);
+        handleUserSelection(replier, targetUid, currentFound, "user_restore", { sourceCode: sourceCode }, user, roomName);
         return true; 
     }
     if (currentFound.length === 0) { 

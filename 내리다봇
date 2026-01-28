@@ -5450,13 +5450,13 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         return true; 
     }
     
+    // [핵심 수정] 입력값(inputNick)이 아닌, 실제 찾은 유저의 '전체 이름'을 가져옵니다.
     var targetId = currentFound[0].id; 
+    var fullNick = currentFound[0].data.name; // "95 남 광어" 전체 이름을 확보
     var backupSourceId = (sourceCode !== "") ? sourceCode : targetId;
 
     try {
         var backupContent = FileStream.read(BACKUP_DIR + "last_stable_backup.json");
-        if (!backupContent) throw new Error("백업 파일을 읽을 수 없습니다.");
-        
         var backupData = JSON.parse(backupContent);
         var rawBackupUser = null;
 
@@ -5469,51 +5469,25 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
         if (!rawBackupUser) throw new Error("백업본에 해당 데이터가 없습니다.");
 
-        // [핵심 1] 딥카피(Deep Copy)를 통해 참조 오류 방지
         var backupUser = JSON.parse(JSON.stringify(rawBackupUser));
 
-        // [핵심 2] 구조 동기화 (구버전 데이터에 신규 필드 강제 주입)
-        // 현재 시스템에서 사용하는 기본 유저 객체 템플릿
-        var defaultSchema = {
-            chatLog: [], timeoutEndTime: 0, artifactPieces: 0, 
-            gameAuthCount: 0, purchasedAuthCount: 0, totalDonation: 0,
-            boxFragments: 0, boxTickets: 0, collectedIcons: [],
-            boughtWarningRemoval: false
-        };
+        // [구조 동기화] (이전 섹터와 동일)
+        var schema = { chatLog: [], inventory: [], stockHoldings: {}, stockAvg: {}, point: 50000 };
+        for (var key in schema) { if (backupUser[key] === undefined) backupUser[key] = schema[key]; }
 
-        // 백업 데이터에 없는 필드만 골라내어 기본값으로 채워넣음 (충돌 방지)
-        for (var key in defaultSchema) {
-            if (backupUser[key] === undefined) {
-                backupUser[key] = defaultSchema[key];
-            }
-        }
-
-        // [가드 체크 및 블랙박스 병합]
-        if (isNaN(backupUser.point)) throw new Error("포인트 데이터 오염");
-        var journalFile = new java.io.File(JOURNAL_PATH);
-        if (journalFile.exists()) {
-            var logs = FileStream.read(JOURNAL_PATH).split("\n");
-            var delta = 0;
-            logs.forEach(function(line) {
-                var parts = line.split("|");
-                if (parts[0] === backupSourceId) delta += Number(parts[2] || 0);
-            });
-            backupUser.point = Number(backupUser.point) + delta;
-        }
-
-        // [이관 실행]
-        backupUser.name = targetNick;
-        roomData.users[targetId] = backupUser;
+        // [v7.0 핵심] 가져온 데이터의 이름을 '전체 닉네임'으로 고정
+        backupUser.name = fullNick; 
+        roomData.users[targetId] = backupUser; 
 
         safeSaveData(data, false);
+        if (typeof globalData !== 'undefined') globalData = data; 
 
-        replier.reply(formatAdmin("✅ 데이터 정밀 이관 및 최적화 완료", 
-            "현재 대상: " + targetNick + "\n" +
-            "원본 소스: " + (isUUID ? "외부 코드" : "본인 데이터") + "\n" +
+        replier.reply(formatAdmin("✅ 데이터 정밀 이관 완료", 
+            "현재 대상: " + fullNick + "\n" + // 전체 이름 출력
+            "식별 모드: 간략화 검색 지원\n" +
             "━━━━━━━━━━━━━━━\n" +
-            "🛡️ 보안 검역 및 구조 동기화 완료\n" +
             "💰 최종 복구 잔액: " + fp(backupUser.point) + "P\n\n" +
-            "💡 구버전 데이터를 현재 시스템에 맞게 최적화했습니다."));
+            "💡 전체 닉네임과의 동기화가 완료되어 즉시 사용 가능합니다."));
 
     } catch (e) {
         replier.reply(formatAdmin("🚫 복구 중단", "사유: " + e.message));

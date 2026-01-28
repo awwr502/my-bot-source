@@ -1748,35 +1748,41 @@ function updateStockPrices(data) {
                 var growthRate = (stock.price - marketOpenPrice) / marketOpenPrice;
                 var sConf = conf.SETTINGS;
 
-            // 1. 과열 상태 판정 (20% 이상 진입 시)
+            // 1. 과열(저항) 시작 판정 (20% 터치 시)
                 if (growthRate >= 0.20) {
                     stock.isOverheated = true;
                 }
 
-                // 2. 과열 상태 로직 처리
+                // 2. 과열 상태에서의 탄성 저항 로직
                 if (stock.isOverheated) {
-                    // 20%를 넘긴 정도(overGap)에 따라 저항이 기하급수적으로 증가
-                    var overGap = Math.max(0, growthRate - 0.20);
-                    // 기본 저항(0.05) + 초과분 저항을 합쳐서 마이너스 압력 생성
-                    var resistance = (0.05 + overGap) * sConf.GRAVITY * 10;
+                    // 20% 미만으로 내려올 때까지는 '복원력'이 작동합니다.
+                    // 20%를 초과한 정도(gap)가 클수록 아래로 당기는 힘이 강해집니다.
+                    var gap = growthRate - 0.20; 
                     
-                    changePercent -= resistance; // 가격을 아래로 강하게 당김
-                    stock.trend = "down";        // 추세도 하락으로 고정
+                    // 탄성 계수(0.3)를 적용하여 자연스러운 저항 생성
+                    // 이 수치는 '고무줄의 강도'입니다. 0.5로 높이면 더 빨리 복귀합니다.
+                    var elasticPull = (gap + 0.05) * 0.3; 
                     
-                    // 3. 해제 조건: 주가가 20% 미만으로 떨어지면 저항 해제
+                    changePercent -= elasticPull;
+                    
+                    // 과열 상태에서는 변동성(흔들림)을 추가하여 오르락내리락 유도
+                    changePercent += (Math.random() * 0.06 - 0.03);
+
+                    // 3. 해제 조건: 주가가 20% 미만으로 완전히 내려가야 저항이 사라짐
                     if (growthRate < 0.20) {
                         stock.isOverheated = false;
                     }
                 } 
-                // 기존 15% 저항 로직 (과열 전 단계)
+                // 일반 저항 구간 (15% ~ 20% 사이)
                 else if (growthRate > sConf.RESISTANCE_START) {
                     var gap = (growthRate - sConf.RESISTANCE_START);
                     var resistance = gap * sConf.GRAVITY * (1 + (gap * 10)); 
                     changePercent -= resistance;
-                } 
                 }
-              }
+            } // if (marketOpenPrice > 0) 종료
+        } // if (isMarketOpen) 종료
         
+        // 최종 가격 반영 (중괄호 블록 밖, 루프 내부)
         var nextPrice = stock.price * (1 + changePercent);
         stock.price = Math.max(10, Math.round(nextPrice)); 
 

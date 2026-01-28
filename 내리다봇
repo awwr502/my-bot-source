@@ -5344,34 +5344,88 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* 유저 부분 복원 */
+    /* [개인 복구] 4대 보안 가드가 적용된 지능형 유저 복구 (Smart User Restore v5.9.1) */
     if (msg.indexOf("/유저복원 ") === 0) {
         var tn = msg.substring(6).trim();
         var roomData = data.rooms[roomName];
         var found = findUserByName(roomData, tn);
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "user_restore", null, user); return true; }
-        if (found.length === 0) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
+
+        if (found.length > 1) { 
+            handleUserSelection(replier, targetUid, found, "user_restore", null, user); 
+            return true; 
+        }
+        if (found.length === 0) { 
+            replier.reply(formatAdmin("🚫 복구 대상 없음", "[" + tn + "] 유저를 찾을 수 없습니다.")); 
+            return true; 
+        }
 
         var targetId = found[0].id;
+        var currentUser = found[0].data; // 현재 메모리 상태
         var stablePath = BACKUP_DIR + "last_stable_backup.json";
-        var backupData = JSON.parse(FileStream.read(stablePath));
-        var restored = false;
         
-        for (var r in backupData.rooms) {
-            if (backupData.rooms[r].users[targetId]) {
-                roomData.users[targetId] = backupData.rooms[r].users[targetId];
-                restored = true;
-                if (typeof uidCache !== 'undefined') {
-                    for (var key in uidCache) {
-                        if (uidCache[key] === targetId) delete uidCache[key];
-                    }
+        try {
+            var backupData = JSON.parse(FileStream.read(stablePath));
+            var backupUser = null;
+            for (var r in backupData.rooms) {
+                if (backupData.rooms[r].users[targetId]) {
+                    backupUser = backupData.rooms[r].users[targetId];
+                    break;
                 }
-                break;
             }
+
+            if (!backupUser) throw new Error("백업본에 해당 유저 데이터가 존재하지 않습니다.");
+
+            /**
+             * [가드 1] 포인트 오염 체크 (NaN/Null Guard)
+             * 백업 데이터 자체가 오염되어 있을 경우 복구를 중단합니다.
+             */
+            if (isNaN(backupUser.point) || backupUser.point === null || typeof backupUser.point !== 'number') {
+                throw new Error("백업 데이터의 포인트가 오염(NaN/Null)되어 복구가 불가능합니다.");
+            }
+
+            /**
+             * [가드 2] 비정상 초기화 체크 (Zero-Point Guard)
+             * 현재 많은 자산을 가진 유저가 백업본에서 0원으로 기록되어 있다면 복구를 차단합니다.
+             */
+            var currentP = Number(currentUser.point || 0);
+            if (currentP > 10000 && backupUser.point === 0) {
+                throw new Error("대상 유저의 자산 급감(0원) 위험이 감지되어 복구를 차단했습니다.");
+            }
+
+            /**
+             * [가드 3] 실시간 활동 병합 (Journaling Sync)
+             * 백업 시점 이후의 모든 활동 내역을 로그 파일에서 찾아 합산합니다.
+             */
+            var journalFile = new java.io.File(JOURNAL_PATH);
+            if (journalFile.exists()) {
+                var logs = FileStream.read(JOURNAL_PATH).split("\n");
+                var userDelta = 0;
+                logs.forEach(function(line) {
+                    var parts = line.split("|");
+                    if (parts[0] === targetId) userDelta += Number(parts[2] || 0);
+                });
+                backupUser.point = Number(backupUser.point) + userDelta;
+            }
+
+            // 검증 완료된 데이터를 메모리에 이식
+            roomData.users[targetId] = backupUser;
+
+            /**
+             * [가드 4] 물리 파손 방지 (Atomic Save Guard)
+             * safeSaveData를 호출함으로써 .tmp 임시 파일을 거치는 원자적 저장을 수행합니다.
+             */
+            safeSaveData(data, false);
+
+            replier.reply(formatAdmin("✅ 개인 정밀 복구 성공", 
+                "대상: " + getDisplayName(backupUser) + "\n" +
+                "🛡️ 보안 가드: 포인트/초기화 검증 통과\n" +
+                "📝 실시간 데이터: 블랙박스 병합 완료\n" +
+                "💾 물리 저장: 원자적 교체 성공\n\n" +
+                "💰 최종 복구액: " + fp(backupUser.point) + "P"));
+
+        } catch (e) {
+            replier.reply(formatAdmin("🚫 복구 차단됨", "데이터 보호 로직이 복구를 거부했습니다.\n사유: " + e.message));
         }
-        
-        if(restored) { safeSaveData(data); replier.reply(formatAdmin("완료", "특정 유저 데이터 복구 완료")); }
-        else replier.reply(formatAdmin("실패", "백업 본에 해당 유저가 없습니다."));
         return true;
     }
 

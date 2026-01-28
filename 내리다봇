@@ -741,6 +741,7 @@ var CMD_LIST = {
         { cmd: "/재원충전", desc: "[금액] 은행 금고 자본 긴급 수혈", func: "_adminEconomyLogic" },
         { cmd: "/보안점검", desc: "데이터 보호 엔진 자가진단", func: "_adminEconomyLogic" },
         { cmd: "/명부확인", desc: "등록된 전체 유저 복구 코드 조회", func: "_adminEconomyLogic" },
+        { cmd: "/명부삭제", desc: "[닉네임] 특정 유저 명부 강제 삭제", func: "_adminEconomyLogic" },
         { cmd: "/명부업데이트", desc: "등록된 전체 유저 복구 코드 업데이트", func: "_adminEconomyLogic" },
         { cmd: "/신용조정", desc: "[닉네임] [점수] 신용점수 직접 가감", func: "_adminUserManageLogic" },
         { cmd: "/칭호회수", desc: "[닉네임] [칭호명] 박탈", func: "_adminUserManageLogic" }
@@ -5780,34 +5781,48 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [보안] 기존 유저 데이터를 명부로 일괄 이사 (v6.0 Migration) */
-    if (msg === "/명부업데이트") {
-        var count = 0;
-        var registry = {};
-        
-        // 1. 기존 명부 파일이 있다면 먼저 읽어옴
-        try {
-            var regFile = new java.io.File(REGISTRY_PATH);
-            if (regFile.exists()) registry = JSON.parse(FileStream.read(REGISTRY_PATH));
-        } catch(e) {}
+    /* [보안] 특정 닉네임 명부 강제 삭제 */
+    if (msg.indexOf("/명부삭제 ") === 0) {
+        var targetNick = msg.substring(6).trim();
+        var regFile = new java.io.File(REGISTRY_PATH);
+        if (!regFile.exists()) return replier.reply(formatAdmin("오류", "명부 파일이 없습니다."));
 
-        // 2. 현재 로드된 모든 방의 유저를 순회하며 명부에 등록
+        var regData = JSON.parse(FileStream.read(REGISTRY_PATH));
+        var delCount = 0;
+        for (var key in regData) {
+            // '방이름_닉네임' 구조에서 뒤쪽 닉네임이 일치하는지 확인
+            if (key.endsWith("_" + targetNick)) {
+                delete regData[key];
+                delCount++;
+            }
+        }
+
+        if (delCount > 0) {
+            FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
+            replier.reply(formatAdmin("명부 삭제 완료", "[" + targetNick + "] 관련 " + delCount + "건의 식별 코드를 파기했습니다."));
+        } else {
+            replier.reply(formatAdmin("삭제 실패", "명부에서 [" + targetNick + "]님을 찾을 수 없습니다."));
+        }
+        return true;
+    }
+
+    /* [보안] 명부 일괄 최적화 (유령 데이터 전량 제거) */
+    if (msg === "/명부업데이트") {
+        var newRegistry = {};
+        var count = 0;
+        
+        // 현재 메모리에 로드된(실제 존재하는) 유저들로만 명부를 새로 만듭니다.
         for (var rName in data.rooms) {
             var users = data.rooms[rName].users;
             for (var uid in users) {
                 var regKey = rName + "_" + users[uid].name;
-                if (!registry[regKey]) {
-                    registry[regKey] = uid; // 닉네임과 UID 매핑
-                    count++;
-                }
+                newRegistry[regKey] = uid;
+                count++;
             }
         }
 
-        // 3. 통합된 명부를 파일에 물리적으로 저장
-        FileStream.write(REGISTRY_PATH, JSON.stringify(registry));
-        
-        replier.reply(formatAdmin("✅ 명부 업데이트 완료", 
-            "기존 데이터베이스에서 총 " + count + "명의 유저를 찾아 신분증 보관소에 등록했습니다.\n\n이제 [/명부확인]으로 전체 목록을 보실 수 있습니다."));
+        FileStream.write(REGISTRY_PATH, JSON.stringify(newRegistry));
+        replier.reply(formatAdmin("✅ 명부 최적화 완료", "현재 존재하는 " + count + "명의 유저 정보로 명부를 새로 고침했습니다.\n(유령 데이터 전량 제거됨)"));
         return true;
     }
 

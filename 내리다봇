@@ -213,6 +213,11 @@ var SYSTEM_CONFIG = {
         }
     },
 
+BACKUP: {
+        // 여기에 본인의 디스코드 웹후크 URL을 입력하세요. (따옴표 필수)
+        DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/1466005811594793000/LUVyScCaI88gKz4SxMUSOniTi890hRNVGvGn1SC_FoNhYU5Vy7bZD9PpjSF0mQHRUMUq"
+    },
+
     SPAM: { // [도배 방지 엔진 설정]
         LIMIT_COUNT: 5,        // 제한 시간 내 허용되는 최대 메시지 수
         LIMIT_WINDOW: 3000,    // 도배 판정 시간 범위 (3000ms = 3초)
@@ -1892,6 +1897,28 @@ function runScheduler() {
                 _sendToDashboard(data, ctx);
             }
 
+            /* [신규] 하이브리드 디스코드 원격 백업 (30분 전체 / 1분 로그) */
+            var webhookUrl = SYSTEM_CONFIG.BACKUP ? SYSTEM_CONFIG.BACKUP.DISCORD_WEBHOOK_URL : "";
+            
+            if (webhookUrl && webhookUrl.indexOf("http") === 0) {
+                
+                // A. 전체 데이터 백업 (30분 주기: 매시 00분, 30분)
+                if ((currentMin === 0 || currentMin === 30) && data.lastFullBackupMin !== currentMin) {
+                    data.lastFullBackupMin = currentMin;
+                    // 저장된 최신 파일(attendance.json) 전송
+                    _sendDiscordFile(webhookUrl, FILE_PATH, "FULL_DATA_" + ctx.today + "_" + ctx.now.getHours() + "h" + currentMin + "m.json");
+                }
+
+                // B. 블랙박스 로그 백업 (1분 주기: 매분 00초)
+                // transaction.log 파일이 존재하고 내용이 있을 때만 전송
+                if (ctx.now.getSeconds() === 0) {
+                    var logFile = new java.io.File(JOURNAL_PATH);
+                    if (logFile.exists() && logFile.length() > 0) {
+                        _sendDiscordFile(webhookUrl, JOURNAL_PATH, "LOG_" + ctx.now.getHours() + "h" + currentMin + "m.txt");
+                    }
+                }
+            }
+
             /* [최종 저장] 하이브리드 비동기 저장 처리 */
             if (ctx.isUpdated) {
                 SaveExecutor.execute(new java.lang.Runnable({
@@ -1904,6 +1931,31 @@ function runScheduler() {
         } catch (e) { Log.error("Scheduler Error: " + e); }
     }, 1000);
     java.lang.System.setProperty(SCHEDULER_KEY, String(newTimer));
+}
+
+/**
+ * [신규] 디스코드 파일 전송 헬퍼 함수
+ */
+function _sendDiscordFile(url, filePath, fileName) {
+    Executor.execute(new java.lang.Runnable({
+        run: function() {
+            try {
+                var file = new java.io.File(filePath);
+                if (!file.exists()) return;
+
+                org.jsoup.Jsoup.connect(url)
+                    .data("file", fileName, new java.io.FileInputStream(file))
+                    .ignoreContentType(true)
+                    .ignoreHttpErrors(true)
+                    .method(org.jsoup.Connection.Method.POST)
+                    .execute();
+                
+                Log.info("[Remote Backup] " + fileName + " 전송 성공");
+            } catch (e) {
+                Log.error("Discord Backup Fail: " + e);
+            }
+        }
+    }));
 }
 
 /** * [Gemini 요청 사항] 대시보드 데이터 전송 함수 (방별 데이터 분리 및 격리)

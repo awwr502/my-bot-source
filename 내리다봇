@@ -3287,7 +3287,7 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
         if (found.length === 0) {
             replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다."));
         } else if (found.length > 1) {
-            handleUserSelection(replier, targetUid, found, "transfer", { amount: am }, user);
+            handleUserSelection(replier, targetUid, found, "transfer", { amount: am }, user, roomName);
         } else if (found[0].id === targetUid) {
             replier.reply(formatError(user, "본인 송금 불가", "자신에게는 보낼 수 없습니다."));
         } else if (isNaN(am) || am <= 0) {
@@ -5139,7 +5139,7 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         var roomData = data.rooms[roomName];
         var found = findUserByName(roomData, tn);
         if (!found.length) replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
-        else if (found.length > 1) handleUserSelection(replier, targetUid, found, "admin_userdata", null, user);
+        else if (found.length > 1) handleUserSelection(replier, targetUid, found, "admin_userdata", null, user, roomName);
         else replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(found[0].data, null, 2)));
         return true;
     }
@@ -5150,7 +5150,7 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         var roomData = data.rooms[roomName];
         var found = findUserByName(roomData, tn);
         if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_nick_log", null, user); return true; }
+        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_nick_log", null, user, roomName); return true; }
         var targetId = found[0].id;
         var history = data.nickHistory[targetId] || [];
         if (history.length === 0) { replier.reply(formatAdmin("닉네임 기록", getDisplayName(found[0].data) + "님은 변경 이력이 없습니다.")); return true; }
@@ -5175,7 +5175,7 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         if (isNaN(scoreChange)) { replier.reply(formatAdmin("오류", "조정할 점수를 숫자로 입력하세요.")); return true; }
         if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
         if (found.length > 1) { 
-            handleUserSelection(replier, targetUid, found, "admin_credit_edit", { score: scoreChange }, user); 
+            handleUserSelection(replier, targetUid, found, "admin_credit_edit", { score: scoreChange }, user, roomName);
             return true; 
         }
 
@@ -5211,7 +5211,7 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
         if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
         if (found.length > 1) {
-            handleUserSelection(replier, targetUid, found, "admin_title_take", { title: titleToTake }, user);
+            handleUserSelection(replier, targetUid, found, "admin_title_take", { title: titleToTake }, user, roomName);
             return true;
         }
 
@@ -5243,50 +5243,13 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [신규] 신용 점수 직접 조정 (v5.2) */
-    if (msg.indexOf("/신용조정 ") === 0) {
-        var ps = msg.split(" ");
-        if (ps.length < 3) {
-            replier.reply(formatAdmin("오류", "형식: /신용조정 [닉네임] [점수]\n예) /신용조정 홍길동 -50"));
-            return true;
-        }
-        var scoreChange = parseInt(ps.pop());
-        var targetName = ps.slice(1).join(" ").trim();
-        var roomData = data.rooms[roomName];
-        var found = findUserByName(roomData, targetName);
-
-        if (isNaN(scoreChange)) { replier.reply(formatAdmin("오류", "조정할 점수를 숫자로 입력하세요.")); return true; }
-        if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { 
-            handleUserSelection(replier, targetUid, found, "admin_credit_edit", { score: scoreChange }, user); 
-            return true; 
-        }
-
-        var targetUser = found[0].data;
-        var oldScore = Number(targetUser.creditScore || 600);
-        targetUser.creditScore = Math.min(1000, Math.max(0, oldScore + scoreChange));
-        
-        if (typeof checkAndHandleDefaulter === 'function') {
-            checkAndHandleDefaulter(targetUser, roomName);
-        }
-
-        safeSaveData(data);
-        var crInfo = getCreditInfo(targetUser.creditScore);
-        var resText = "대상: " + getDisplayName(targetUser) + "님\n" +
-                      "변동: " + (scoreChange > 0 ? "+" : "") + scoreChange + "점\n" +
-                      "현재: " + targetUser.creditScore + "점 (" + crInfo.label + ")";
-        
-        replier.reply(formatAdmin("⚙️ 신용 점수 조정 완료", resText));
-        return true;
-    }
-
     /* 출석 초기화 */
     if (msg.indexOf("/출석초기화 ") === 0) {
         var tn = msg.substring(7).trim();
         var roomData = data.rooms[roomName];
         var found = findUserByName(roomData, tn);
         if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_attend_reset", null, user); return true; }
+        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_attend_reset", null, user, roomName); return true; }
         found[0].data.lastDate = "";
         safeSaveData(data);
         replier.reply(formatAdmin("출석 초기화 완료", getDisplayName(found[0].data) + "님의 오늘 출석 기록을 삭제했습니다."));
@@ -5363,7 +5326,7 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         var roomData = data.rooms[roomName];
         var found = findUserByName(roomData, tn);
         if (!found.length) { replier.reply(formatAdmin("오류", "대상 없음")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_delete", null, user); return true; }
+        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_delete", null, user, roomName); return true; }
         
         var targetId = found[0].id;
         var targetData = found[0].data;
@@ -5431,7 +5394,7 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
     var currentFound = findUserByName(roomData, targetNick);
     if (currentFound.length > 1) { 
-        handleUserSelection(replier, currentFound[0].id, currentFound, "user_restore", null, user); 
+        handleUserSelection(replier, targetUid, currentFound, "user_restore", null, user, roomName);
         return true; 
     }
     if (currentFound.length === 0) { 

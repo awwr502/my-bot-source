@@ -3245,12 +3245,16 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
             
 //==========섹터22-2==========
 
-/* [독립형] 통합 업무 처리 핸들러 (2단계: 출금, 대출, 상환) */
-if (bankProcessState && bankProcessState[targetUid]) {
-    var state = bankProcessState[targetUid];
-    var roomData = data.rooms[roomName]; // 재원 관리를 위해 roomData 참조
+/* [독립형 함수] 통합 업무 처리 핸들러 2단계: 출금, 대출, 상환 */
+function _handleBankStep2(msg, user, data, replier, roomName, targetUid) {
+    var bankProcessState = data.rooms[roomName].features.states.bankProcess;
+    if (!bankProcessState || !bankProcessState[targetUid]) return false;
 
-    // 1. 시간 초과 및 취소 안내 가드 (30초 통일)
+    var state = bankProcessState[targetUid];
+    var types = ['withdraw', 'loan', 'repay'];
+    if (types.indexOf(state.type) === -1) return false;
+
+    // 공통 가드
     if (Date.now() - state.time > 30000) {
         delete bankProcessState[targetUid];
         replier.reply(formatError(user, "시간 초과", "입력 시간이 30초를 초과하여 은행 업무가 자동 취소되었습니다."));
@@ -3261,355 +3265,308 @@ if (bankProcessState && bankProcessState[targetUid]) {
         replier.reply(formatCommand("🚫 업무 취소", user, "요청하신 은행 업무가 취소되었습니다."));
         return true;
     }
+    if (msg.startsWith("/")) return false;
 
-    // 중앙은행 재원 초기화 (섹터 1의 설정값 사용)
+    var roomData = data.rooms[roomName];
     if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
 
-        /* [기능 3] 출금 처리 (지급준비제도 반영: 금고 실재고 확인) */
-        if (state.type === 'withdraw') {
-            var amt = parseInt(msg.replace(/,/g, ""));
-            if (isNaN(amt) || amt <= 0) {
-                replier.reply(formatError(user, "금액 오류", "출금할 숫자를 정확히 입력하세요."));
-            } else if (user.bank < amt) {
-                replier.reply(formatError(user, "잔고 부족", "통장 잔고보다 많은 금액은 출금할 수 없습니다."));
-            } else if (roomData.bankReserve < amt) {
-                /* [신규] 뱅크런 방지: 은행 실자산이 부족할 경우 출금 제한 */
-                replier.reply(formatError(user, "은행 지급 불능", "죄송합니다. 현재 은행의 현금 유동성(실재고)이 부족하여 출금이 일시 제한됩니다.\n대출금 회수 및 수수료 적립 시까지 기다려주세요.\n\n🏦 현재 은행 금고: " + fp(roomData.bankReserve) + "P"));
-            } else {
-                // [v5.9] 중복 연산 방지: 수동 bankReserve 차감 및 verifyPointTransaction 삭제
-                user.bank -= amt;
-                
-                // 게이트웨이가 포인트 가산과 국고(bankReserve) 차감을 동시에 처리
-                util_updatePoint(user, roomData, amt, "은행 출금", roomName);
-
-                replier.reply(formatCommand("🏧 출금 완료", user, fp(amt) + "P를 현금으로 출금했습니다.", "보유 포인트: " + fp(user.point) + "P"));
-                delete bankProcessState[targetUid];
-                safeSaveData(data);
-            }
-            return true;
+    /* [기능 1] 출금 처리 */
+    if (state.type === 'withdraw') {
+        var amt = parseInt(msg.replace(/,/g, ""));
+        if (isNaN(amt) || amt <= 0) {
+            replier.reply(formatError(user, "금액 오류", "출금할 숫자를 정확히 입력하세요."));
+        } else if (user.bank < amt) {
+            replier.reply(formatError(user, "잔고 부족", "통장 잔고보다 많은 금액은 출금할 수 없습니다."));
+        } else if (roomData.bankReserve < amt) {
+            replier.reply(formatError(user, "은행 지급 불능", "죄송합니다. 현재 은행의 현금 유동성(실재고)이 부족하여 출금이 일시 제한됩니다.\n대출금 회수 및 수수료 적립 시까지 기다려주세요.\n\n🏦 현재 은행 금고: " + fp(roomData.bankReserve) + "P"));
+        } else {
+            user.bank -= amt;
+            util_updatePoint(user, roomData, amt, "은행 출금", roomName);
+            replier.reply(formatCommand("🏧 출금 완료", user, fp(amt) + "P를 현금으로 출금했습니다.", "보유 포인트: " + fp(user.point) + "P"));
+            delete bankProcessState[targetUid];
+            safeSaveData(data);
         }
+        return true;
+    }
 
-        /* [기능 4] 은행 대출 실행 (loan) - 지급준비율 제어 적용 */
-        else if (state.type === 'loan') {
+        /* [기능 2] 대출 실행 */
+    else if (state.type === 'loan') {
         var amt = parseInt(msg.replace(/,/g, ""));
         var cr = getCreditInfo(user.creditScore);
-            var bConf = SYSTEM_CONFIG.ECO.BANK;
-            var lConf = SYSTEM_CONFIG.ECO.PRIVATE_LOAN;
+        var bConf = SYSTEM_CONFIG.ECO.BANK;
+        var lConf = SYSTEM_CONFIG.ECO.PRIVATE_LOAN;
 
-            /* [핵심] 지급준비제도 기반 가용 대출 자산 계산 */
-            var totalDeposits = 0;
-            for (var id in roomData.users) { totalDeposits += (roomData.users[id].bank || 0); }
-            
-            var requiredReserve = Math.floor(totalDeposits * bConf.RESERVE_RATIO);
-            var lendableAmount = roomData.bankReserve - requiredReserve;
+        var totalDeposits = 0;
+        for (var id in roomData.users) { totalDeposits += (roomData.users[id].bank || 0); }
+        var requiredReserve = Math.floor(totalDeposits * bConf.RESERVE_RATIO);
+        var lendableAmount = roomData.bankReserve - requiredReserve;
 
-            if (isNaN(amt) || amt <= 0) {
-                replier.reply(formatError(user, "금액 오류", "대출받을 숫자를 입력하세요."));
-            } 
-            else if (amt > lendableAmount) {
-                var reserveInfo = "현재 은행의 대출 가능 한도를 초과했습니다.\n(지급준비율 " + (bConf.RESERVE_RATIO * 100) + "% 준수 중)\n\n" +
-                                  "🏦 현재 금고: " + fp(roomData.bankReserve) + "P\n" +
-                                  "🛡️ 법정 준비금: " + fp(requiredReserve) + "P\n" +
-                                  "💰 실제 대출 가능액: " + fp(Math.max(0, lendableAmount)) + "P";
-                replier.reply(formatError(user, "은행 자금 동결", reserveInfo));
+        if (isNaN(amt) || amt <= 0) {
+            replier.reply(formatError(user, "금액 오류", "대출받을 숫자를 입력하세요."));
+        } else if (amt > lendableAmount) {
+            var reserveInfo = "현재 은행의 대출 가능 한도를 초과했습니다.\n(지급준비율 " + (bConf.RESERVE_RATIO * 100) + "% 준수 중)\n\n" + "🏦 현재 금고: " + fp(roomData.bankReserve) + "P\n" + "🛡️ 법정 준비금: " + fp(requiredReserve) + "P\n" + "💰 실제 대출 가능액: " + fp(Math.max(0, lendableAmount)) + "P";
+            replier.reply(formatError(user, "은행 자금 동결", reserveInfo));
+        } else if ((user.dailyLoanCount || 0) >= lConf.DAILY_LIMIT) {
+            delete bankProcessState[targetUid];
+            replier.reply(formatError(user, "대출 제한", "대출은 하루에 최대 " + lConf.DAILY_LIMIT + "회까지만 가능합니다."));
+        } else if (amt > cr.limit) {
+            replier.reply(formatError(user, "한도 초과", cr.label + "의 최대 한도는 " + fp(cr.limit) + "P입니다."));
+        } else {
+            user.dailyLoanCount = (user.dailyLoanCount || 0) + 1;
+            if (user.dailyLoanCount >= 2) {
+                user.creditScore = Math.max(0, Number(user.creditScore || 600) - 20);
+                checkAndHandleDefaulter(user, roomName);
             }
-            else if ((user.dailyLoanCount || 0) >= lConf.DAILY_LIMIT) {
-                delete bankProcessState[targetUid];
-                replier.reply(formatError(user, "대출 제한", "대출은 하루에 최대 " + lConf.DAILY_LIMIT + "회까지만 가능합니다."));
-            } 
-            else if (amt > cr.limit) {
-                replier.reply(formatError(user, "한도 초과", cr.label + "의 최대 한도는 " + fp(cr.limit) + "P입니다."));
-            } 
-            else {
-                user.dailyLoanCount = (user.dailyLoanCount || 0) + 1;
-                if (user.dailyLoanCount >= 2) {
-                    user.creditScore = Math.max(0, Number(user.creditScore || 600) - 20);
-                    checkAndHandleDefaulter(user, roomName);
-                }
-
-                var total = Math.floor(amt * cr.rate);
-                if (!user.loan || typeof user.loan !== 'object') user.loan = { debt: 0, items: [] };
-                if (!user.loan.items) user.loan.items = [];
-
-                user.loan.debt = Number(user.loan.debt || 0) + Number(total);
-                user.loan.items.push(Number(total));
-
-                // [v5.9] 중복 연산 방지: 수동 포인트 합산, 금고 차감, 검증 함수 삭제
-                // 게이트웨이 호출로 모든 포인트 흐름 통합
-                util_updatePoint(user, roomData, amt, "은행 대출 실행", roomName);
-
-                replier.reply(formatCommand("🏦 대출 승인", user, fp(amt) + "P 입금 완료\n(상환 예정액: " + fp(total) + "P)\n\n🏛️ 남은 가용 재원: " + fp(roomData.bankReserve - requiredReserve) + "P", "보유 포인트: " + fp(user.point) + "P"));
-                delete bankProcessState[targetUid];
-                safeSaveData(data);
-            }
-            return true;
+            var total = Math.floor(amt * cr.rate);
+            if (!user.loan || typeof user.loan !== 'object') user.loan = { debt: 0, items: [] };
+            if (!user.loan.items) user.loan.items = [];
+            user.loan.debt = Number(user.loan.debt || 0) + Number(total);
+            user.loan.items.push(Number(total));
+            util_updatePoint(user, roomData, amt, "은행 대출 실행", roomName);
+            replier.reply(formatCommand("🏦 대출 승인", user, fp(amt) + "P 입금 완료\n(상환 예정액: " + fp(total) + "P)\n\n🏛️ 남은 가용 재원: " + fp(roomData.bankReserve - requiredReserve) + "P", "보유 포인트: " + fp(user.point) + "P"));
+            delete bankProcessState[targetUid];
+            safeSaveData(data);
         }
-
-        /* [기능 5] 은행 대출 상환 (repay) - 재원 복구 로직 포함 */
-        if (state.type === 'repay') {
-            var amt = parseInt(msg.replace(/,/g, ""));
-            if (isNaN(amt) || amt <= 0) {
-                replier.reply(formatError(user, "금액 오류", "상환할 숫자를 입력하세요."));
-            } else if (user.point < amt) {
-                replier.reply(formatError(user, "포인트 부족", "보유하신 포인트가 상환액보다 적습니다."));
-            } else {
-                // [v5.9] 중복 연산 방지: 수동 포인트 차감 및 금고 합산 삭제
-                var res = distributeRepayment(user, amt);
-                
-                // 게이트웨이가 포인트 차감 및 국고 복구를 자동 처리
-                util_updatePoint(user, roomData, -Number(res.actualRepay), "대출 상환", roomName);
-
-                var currentDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
-                replier.reply(formatCommand("📉 상환 완료", user, fp(res.actualRepay) + "P 상환되었습니다.\n\n🏦 은행 재원 충전: +" + fp(res.actualRepay) + "P", "남은 대출금: " + fp(currentDebt) + "P"));
-                delete bankProcessState[targetUid];
-                safeSaveData(data);
-            }
-            return true;
-        }
+        return true;
     }
+
+        /* [기능 3] 상환 처리 */
+    else if (state.type === 'repay') {
+        var amt = parseInt(msg.replace(/,/g, ""));
+        if (isNaN(amt) || amt <= 0) {
+            replier.reply(formatError(user, "금액 오류", "상환할 숫자를 입력하세요."));
+        } else if (user.point < amt) {
+            replier.reply(formatError(user, "포인트 부족", "보유하신 포인트가 상환액보다 적습니다."));
+        } else {
+            var res = distributeRepayment(user, amt);
+            util_updatePoint(user, roomData, -Number(res.actualRepay), "대출 상환", roomName);
+            var currentDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
+            replier.reply(formatCommand("📉 상환 완료", user, fp(res.actualRepay) + "P 상환되었습니다.\n\n🏦 은행 재원 충전: +" + fp(res.actualRepay) + "P", "남은 대출금: " + fp(currentDebt) + "P"));
+            delete bankProcessState[targetUid];
+            safeSaveData(data);
+        }
+        return true;
+    }
+    return false;
+}
             
 //==========섹터22-3==========
 
-/* [독립형] 통합 업무 처리 핸들러 (3단계: 사채 등록 및 빌리기) */
-if (bankProcessState && bankProcessState[targetUid]) {
+/* [독립형 함수] 통합 업무 처리 핸들러 3단계: 사채 등록 및 빌리기 */
+function _handleBankStep3(msg, user, data, replier, roomName, targetUid) {
+    var bankProcessState = data.rooms[roomName].features.states.bankProcess;
+    if (!bankProcessState || !bankProcessState[targetUid]) return false;
+
     var state = bankProcessState[targetUid];
+    var types = ['p2p_reg_input', 'p2p_borrow_amt'];
+    if (types.indexOf(state.type) === -1) return false;
+
+    if (Date.now() - state.time > 30000) {
+        delete bankProcessState[targetUid];
+        replier.reply(formatError(user, "시간 초과", "입력 시간이 30초를 초과했습니다."));
+        return true;
+    }
+    if (msg === "취소") {
+        delete bankProcessState[targetUid];
+        replier.reply(formatCommand("🚫 업무 취소", user, "업무가 취소되었습니다."));
+        return true;
+    }
+
     var roomData = data.rooms[roomName];
 
-// 1. 시간 초과 및 취소 안내 가드 (30초 통일)
-    if (Date.now() - state.time > 30000) {
-        delete bankProcessState[targetUid];
-        replier.reply(formatError(user, "시간 초과", "입력 시간이 30초를 초과하여 은행 업무가 자동 취소되었습니다."));
-        return true;
-    }
-    if (msg === "취소") {
-        delete bankProcessState[targetUid];
-        replier.reply(formatCommand("🚫 업무 취소", user, "요청하신 은행 업무가 취소되었습니다."));
-        return true;
-    }
-
-        /* [기능 6] 사채 매물 등록 처리 (p2p_reg_input) */
-        if (state.type === 'p2p_reg_input') {
-            var parts = msg.split(" ");
-            if (parts.length < 2) {
-                replier.reply(formatError(user, "입력 오류", "형식: [금액] [이율]\n예) 10000 5"));
-            } else {
-                var amt = parseInt(parts[0]);
-                var rate = parseInt(parts[1]);
-                var conf = SYSTEM_CONFIG.ECO.PRIVATE_LOAN;
-
-                // 1. 등록 조건 검증 (최소 금액, 법정 이율 범위)
-                if (isNaN(amt) || amt < conf.MIN_AMOUNT) {
-                    replier.reply(formatError(user, "금액 오류", "최소 " + fp(conf.MIN_AMOUNT) + "P 이상 등록 가능합니다."));
-                } else if (isNaN(rate) || rate < 5 || rate > conf.MAX_RATE) {
-                    replier.reply(formatError(user, "이율 오류", "이율은 5% ~ " + conf.MAX_RATE + "% 사이로 설정하세요."));
-                } else if (user.point < amt) {
-                    replier.reply(formatError(user, "포인트 부족", "등록하려는 포인트가 보유 자산보다 많습니다."));
-                } else {
-                    // "사채" 키워드를 통해 차감액이 국고(bankReserve)로 안전하게 입고됩니다.
-                    util_updatePoint(user, roomData, -amt, "사채 풀 등록", roomName);
-
-                    // 3. 매물 데이터 생성 및 저장
-                    var poolId = generateUUID();
-                    if (!roomData.loanPools) roomData.loanPools = {};
-                    roomData.loanPools[poolId] = {
-                        lenderUid: targetUid,
-                        lenderName: cleanSender,
-                        totalAmount: amt,
-                        remainingAmount: amt,
-                        rate: rate,
-                        time: Date.now()
-                    };
-
-                    replier.reply(formatCommand("💰 사채 등록 완료", user, fp(amt) + "P (이자 " + rate + "%/3h) 매물을 시장에 올렸습니다.", "남은 잔액: " + fp(user.point) + "P"));
-                    delete bankProcessState[targetUid];
-                    safeSaveData(data);
-                }
-                return true;
-            }
-        }
-
-        /* [기능 7] 사채 빌리기 신청 처리 (p2p_borrow_amt) */
-        if (state.type === 'p2p_borrow_amt') {
-            var amt = parseInt(msg);
-            var pool = roomData.loanPools[state.extra.poolId];
+    /* [기능 1] 사채 등록 */
+    if (state.type === 'p2p_reg_input') {
+        var parts = msg.split(" ");
+        if (parts.length < 2) {
+            replier.reply(formatError(user, "입력 오류", "형식: [금액] [이율]\n예) 10000 5"));
+        } else {
+            var amt = parseInt(parts[0]);
+            var rate = parseInt(parts[1]);
             var conf = SYSTEM_CONFIG.ECO.PRIVATE_LOAN;
 
-            // 1. 매물 및 금액 유효성 검증
-            if (!pool) {
-                replier.reply(formatError(user, "매물 정보 없음", "해당 사채 매물이 이미 삭제되었거나 유효하지 않습니다."));
-            } else if (isNaN(amt) || amt < conf.MIN_BORROW) {
-                replier.reply(formatError(user, "금액 오류", "최소 " + fp(conf.MIN_BORROW) + "P 이상 빌려야 합니다."));
-            } else if (amt > pool.remainingAmount) {
-                replier.reply(formatError(user, "금액 초과", "해당 매물의 잔여 금액(" + fp(pool.remainingAmount) + "P)까지만 가능합니다."));
-            } else if (pool.lenderUid === targetUid) {
-                replier.reply(formatError(user, "계약 불가", "본인이 등록한 사채는 직접 빌릴 수 없습니다."));
+            if (isNaN(amt) || amt < conf.MIN_AMOUNT) {
+                replier.reply(formatError(user, "금액 오류", "최소 " + fp(conf.MIN_AMOUNT) + "P 이상 등록 가능합니다."));
+            } else if (isNaN(rate) || rate < 5 || rate > conf.MAX_RATE) {
+                replier.reply(formatError(user, "이율 오류", "이율은 5% ~ " + conf.MAX_RATE + "% 사이로 설정하세요."));
+            } else if (user.point < amt) {
+                replier.reply(formatError(user, "포인트 부족", "보유 포인트가 부족합니다."));
             } else {
-                // 2. 매물 잔액 차감 및 소진 시 삭제
-                pool.remainingAmount -= amt;
-                if (pool.remainingAmount <= 0) delete roomData.loanPools[state.extra.poolId];
-
-                // 3. [핵심] 즉시 이자 10% 가산 로직 적용
-                var initialDebt = Math.floor(amt * 1.1);
-
-                // 4. 계약서 생성 및 저장
-                var contractId = generateUUID();
-                if (!roomData.loanContracts) roomData.loanContracts = {};
-                roomData.loanContracts[contractId] = {
-                    lenderUid: pool.lenderUid,
-                    lenderName: pool.lenderName,
-                    borrowerUid: targetUid,
-                    borrowerName: cleanSender,
-                    principal: amt,
-                    currentDebt: initialDebt, // 10% 선이자 포함 채무 시작
-                    rate: pool.rate,
-                    startTime: Date.now(),
-                    status: 'active'
+                util_updatePoint(user, roomData, -amt, "사채 풀 등록", roomName);
+                var poolId = generateUUID();
+                if (!roomData.loanPools) roomData.loanPools = {};
+                roomData.loanPools[poolId] = {
+                    lenderUid: targetUid, lenderName: user.name, totalAmount: amt,
+                    remainingAmount: amt, rate: rate, time: Date.now()
                 };
-
-                // "사채" 및 "회수" 키워드를 통해 국고에서 자금이 방출됩니다.
-                util_updatePoint(user, roomData, amt, "사채 빌림 회수 승인", roomName);
-
-                replier.reply(formatCommand("📝 사채 계약 체결", user, pool.lenderName + "님으로부터 " + fp(amt) + "P를 빌렸습니다.\n(즉시 이자 10% 포함 채무: " + fp(initialDebt) + "P)", "내 잔액: " + fp(user.point) + "P"));
+                replier.reply(formatCommand("💰 사채 등록 완료", user, fp(amt) + "P (이자 " + rate + "%/3h) 매물을 올렸습니다.", "남은 잔액: " + fp(user.point) + "P"));
                 delete bankProcessState[targetUid];
                 safeSaveData(data);
             }
-            return true;
         }
+        return true;
     }
+
+        /* [기능 2] 사채 빌리기 */
+    else if (state.type === 'p2p_borrow_amt') {
+        var amt = parseInt(msg);
+        var pool = roomData.loanPools[state.extra.poolId];
+        var conf = SYSTEM_CONFIG.ECO.PRIVATE_LOAN;
+
+        if (!pool) {
+            replier.reply(formatError(user, "매물 정보 없음", "유효하지 않은 매물입니다."));
+        } else if (isNaN(amt) || amt < conf.MIN_BORROW) {
+            replier.reply(formatError(user, "금액 오류", "최소 " + fp(conf.MIN_BORROW) + "P 이상 빌려야 합니다."));
+        } else if (amt > pool.remainingAmount) {
+            replier.reply(formatError(user, "금액 초과", "잔여 금액(" + fp(pool.remainingAmount) + "P)까지만 가능합니다."));
+        } else if (pool.lenderUid === targetUid) {
+            replier.reply(formatError(user, "계약 불가", "본인 사채는 빌릴 수 없습니다."));
+        } else {
+            pool.remainingAmount -= amt;
+            if (pool.remainingAmount <= 0) delete roomData.loanPools[state.extra.poolId];
+            var initialDebt = Math.floor(amt * 1.1);
+            var contractId = generateUUID();
+            if (!roomData.loanContracts) roomData.loanContracts = {};
+            roomData.loanContracts[contractId] = {
+                lenderUid: pool.lenderUid, lenderName: pool.lenderName,
+                borrowerUid: targetUid, borrowerName: user.name,
+                principal: amt, currentDebt: initialDebt, rate: pool.rate,
+                startTime: Date.now(), status: 'active'
+            };
+            util_updatePoint(user, roomData, amt, "사채 빌림 회수 승인", roomName);
+            replier.reply(formatCommand("📝 사채 계약 체결", user, pool.lenderName + "님으로부터 " + fp(amt) + "P를 빌렸습니다.\n(선이자 10% 포함 채무: " + fp(initialDebt) + "P)", "내 잔액: " + fp(user.point) + "P"));
+            delete bankProcessState[targetUid];
+            safeSaveData(data);
+        }
+        return true;
+    }
+    return false;
+}
+
 //==========섹터22-4==========
 
-/* [독립형] 통합 업무 처리 핸들러 (4단계: 사채 상환, 회수, 수거) */
-if (bankProcessState && bankProcessState[targetUid]) {
+/* [독립형 함수] 통합 업무 처리 핸들러 4단계: 사채 상환/회수/수거 */
+function _handleBankStep4(msg, user, data, replier, roomName, targetUid) {
+    var bankProcessState = data.rooms[roomName].features.states.bankProcess;
+    if (!bankProcessState || !bankProcessState[targetUid]) return false;
+
     var state = bankProcessState[targetUid];
+    var types = ['p2p_repay_amt', 'p2p_withdraw_amt', 'p2p_collect_manual'];
+    if (types.indexOf(state.type) === -1) return false;
 
-// 1. 시간 초과 및 취소 안내 가드 (30초 통일)
-    if (Date.now() - state.time > 30000) {
+    if (Date.now() - state.time > 30000 || msg === "취소") {
         delete bankProcessState[targetUid];
-        replier.reply(formatError(user, "시간 초과", "입력 시간이 30초를 초과하여 은행 업무가 자동 취소되었습니다."));
-        return true;
-    }
-    if (msg === "취소") {
-        delete bankProcessState[targetUid];
-        replier.reply(formatCommand("🚫 업무 취소", user, "요청하신 은행 업무가 취소되었습니다."));
+        if (msg === "취소") replier.reply(formatCommand("🚫 업무 취소", user, "업무가 취소되었습니다."));
+        else replier.reply(formatError(user, "시간 초과", "입력 시간이 초과되었습니다."));
         return true;
     }
 
-        /* [기능 8] 빌린 사채 상환 처리 (p2p_repay_amt) */
-        if (state.type === 'p2p_repay_amt') {
-            var amt = parseInt(msg);
-            var contract = roomData.loanContracts[state.extra.contractId];
-            if (!contract) {
-                replier.reply(formatError(user, "계약 정보 없음"));
-            } else if (isNaN(amt) || amt <= 0 || user.point < amt) {
-                replier.reply(formatError(user, "금액/포인트 오류"));
-            } else {
-                var actualRepay = Math.min(amt, contract.currentDebt);
-                // [v5.9] 게이트웨이 통합: 채무자 포인트 차감 (수동 연산 및 개별 검증 함수 삭제)
-                util_updatePoint(user, roomData, -actualRepay, "사채 상환 지불", roomName);
+    var roomData = data.rooms[roomName];
 
-                var lender = roomData.users[contract.lenderUid];
-                if (lender) {
-                    // [v5.9] 게이트웨이 통합: 채권자에게 이자 수익 지급
-                    util_updatePoint(lender, roomData, actualRepay, "사채 이자 수입", roomName);
-                }
-
-                // 부채 차감 및 완납 체크 로직
-                contract.currentDebt -= actualRepay;
-                var footerMsg = "남은 빚: " + fp(contract.currentDebt) + "P";
-                if (contract.currentDebt <= 0) {
-                    delete roomData.loanContracts[state.extra.contractId];
-                    footerMsg = "모든 채무가 변제되었습니다.";
-                }
-
-                replier.reply(formatCommand("📉 사채 상환 완료", user, contract.lenderName + "님께 " + fp(actualRepay) + "P를 갚았습니다.\n" + footerMsg, "내 잔액: " + fp(user.point) + "P"));
-                delete bankProcessState[targetUid];
-                safeSaveData(data);
+    /* [기능 1] 사채 상환 */
+    if (state.type === 'p2p_repay_amt') {
+        var amt = parseInt(msg);
+        var contract = roomData.loanContracts[state.extra.contractId];
+        if (!contract) {
+            replier.reply(formatError(user, "계약 정보 없음"));
+        } else if (isNaN(amt) || amt <= 0 || user.point < amt) {
+            replier.reply(formatError(user, "금액/포인트 오류"));
+        } else {
+            var actualRepay = Math.min(amt, contract.currentDebt);
+            util_updatePoint(user, roomData, -actualRepay, "사채 상환 지불", roomName);
+            var lender = roomData.users[contract.lenderUid];
+            if (lender) util_updatePoint(lender, roomData, actualRepay, "사채 이자 수입", roomName);
+            
+            contract.currentDebt -= actualRepay;
+            var footerMsg = "남은 빚: " + fp(contract.currentDebt) + "P";
+            if (contract.currentDebt <= 0) {
+                delete roomData.loanContracts[state.extra.contractId];
+                footerMsg = "모든 채무가 변제되었습니다.";
             }
-            return true;
+            replier.reply(formatCommand("📉 사채 상환 완료", user, contract.lenderName + "님께 " + fp(actualRepay) + "P를 갚았습니다.\n" + footerMsg, "내 잔액: " + fp(user.point) + "P"));
+            delete bankProcessState[targetUid];
+            safeSaveData(data);
         }
+        return true;
+    }
 
-        /* [기능 9] 등록한 사채 매물 회수 (p2p_withdraw_amt) */
-        if (state.type === 'p2p_withdraw_amt') {
-            var amt = (msg === "전액") ? state.extra.max : parseInt(msg);
-            var pool = roomData.loanPools[state.extra.poolId];
-            if (!pool) {
-                replier.reply(formatError(user, "매물 정보 없음"));
-            } else if (isNaN(amt) || amt <= 0 || amt > pool.remainingAmount) {
-                replier.reply(formatError(user, "금액 오류"));
-            } else {
-                pool.remainingAmount -= amt;
-                // [v5.9] 게이트웨이 통합: "수거" 키워드로 국고(임시보관소)에서 유저에게 자산 반환
-                util_updatePoint(user, roomData, amt, "사채 풀 직접 수거", roomName);
-
-                if (pool.remainingAmount <= 0) delete roomData.loanPools[state.extra.poolId];
-                replier.reply(formatCommand("✅ 사채 회수 완료", user, fp(amt) + "P를 시장에서 회수했습니다.", "내 잔액: " + fp(user.point) + "P"));
-                delete bankProcessState[targetUid];
-                safeSaveData(data);
-            }
-            return true;
+        /* [기능 2] 사채 매물 회수 */
+    else if (state.type === 'p2p_withdraw_amt') {
+        var amt = (msg === "전액") ? state.extra.max : parseInt(msg);
+        var pool = roomData.loanPools[state.extra.poolId];
+        if (!pool) {
+            replier.reply(formatError(user, "매물 정보 없음"));
+        } else if (isNaN(amt) || amt <= 0 || amt > pool.remainingAmount) {
+            replier.reply(formatError(user, "금액 오류"));
+        } else {
+            pool.remainingAmount -= amt;
+            util_updatePoint(user, roomData, amt, "사채 풀 직접 수거", roomName);
+            if (pool.remainingAmount <= 0) delete roomData.loanPools[state.extra.poolId];
+            replier.reply(formatCommand("✅ 사채 회수 완료", user, fp(amt) + "P를 회수했습니다.", "내 잔액: " + fp(user.point) + "P"));
+            delete bankProcessState[targetUid];
+            safeSaveData(data);
         }
+        return true;
+    }
 
-        /* [기능 10] 채무자 자산 강제 수거 (p2p_collect_manual) */
-        if (state.type === 'p2p_collect_manual') {
-            var contract = roomData.loanContracts[state.extra.contractId];
-            if (!contract) {
-                replier.reply(formatError(user, "계약 정보 없음"));
+        /* [기능 3] 채무자 강제 수거 */
+    else if (state.type === 'p2p_collect_manual') {
+        var contract = roomData.loanContracts[state.extra.contractId];
+        if (!contract) {
+            replier.reply(formatError(user, "계약 정보 없음"));
+        } else {
+            var debtor = roomData.users[contract.borrowerUid];
+            if (!debtor) {
+                replier.reply(formatError(user, "채무자 정보 없음"));
             } else {
-                var debtor = roomData.users[contract.borrowerUid];
-                if (!debtor) {
-                    replier.reply(formatError(user, "채무자 정보 없음"));
+                var collectAmt = Math.min(Number(debtor.point), contract.currentDebt);
+                if (collectAmt <= 0) {
+                    replier.reply(formatError(user, "수거 실패", "채무자의 지갑이 비어있습니다."));
                 } else {
-                    var collectAmt = Math.min(Number(debtor.point), contract.currentDebt);
-                    if (collectAmt <= 0) {
-                        delete bankProcessState[targetUid];
-                        replier.reply(formatError(user, "수거 실패", debtor.name + "님의 지갑이 비어있어 수거할 포인트가 없습니다."));
-                    } else {
-                        // [v5.9] 강제 수거 시 이중 포인트 변동을 게이트웨이로 안전하게 집행
-                        util_updatePoint(debtor, roomData, -collectAmt, "사채 강제 수거 당함", roomName);
-                        util_updatePoint(user, roomData, collectAmt, "사채 직접 수거 수익", roomName);
-
-                        contract.currentDebt -= collectAmt;
-                        var footer = "남은 빚: " + fp(contract.currentDebt) + "P";
-                        if (contract.currentDebt <= 0) {
-                            delete roomData.loanContracts[state.extra.contractId];
-                            footer = "해당 유저의 모든 채무가 변제되었습니다.";
-                        }
-
-                        replier.reply(formatCommand("🚬 사채 직접 수거 완료", user, debtor.name + "님의 지갑에서 " + fp(collectAmt) + "P를 수거했습니다.\n" + footer, "내 잔액: " + fp(user.point) + "P"));
-                        delete bankProcessState[targetUid];
-                        safeSaveData(data);
+                    util_updatePoint(debtor, roomData, -collectAmt, "사채 강제 수거 당함", roomName);
+                    util_updatePoint(user, roomData, collectAmt, "사채 직접 수거 수익", roomName);
+                    contract.currentDebt -= collectAmt;
+                    var footer = "남은 빚: " + fp(contract.currentDebt) + "P";
+                    if (contract.currentDebt <= 0) {
+                        delete roomData.loanContracts[state.extra.contractId];
+                        footer = "모든 채무가 변제되었습니다.";
                     }
+                    replier.reply(formatCommand("🚬 강제 수거 완료", user, debtor.name + "님에게서 " + fp(collectAmt) + "P를 수거했습니다.\n" + footer, "내 잔액: " + fp(user.point) + "P"));
+                    safeSaveData(data);
                 }
             }
-                delete bankProcessState[targetUid];
-            return true; // 수거 처리 후 로직 종결
         }
+        delete bankProcessState[targetUid];
+        return true;
     }
+    return false;
+}
 
 //==========섹터22-5==========
 
-/* [독립형] 통합 업무 처리 핸들러 (5단계: 상점 아이템 구매 및 수량 처리) */
-if (bankProcessState && bankProcessState[targetUid]) {
-    var state = bankProcessState[targetUid];
-    var roomData = data.rooms[roomName];
+/* [독립형 함수] 통합 업무 처리 핸들러 5단계: 상점 아이템 구매 및 수량 처리 */
+function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
+    var bankProcessState = data.rooms[roomName].features.states.bankProcess;
+    if (!bankProcessState || !bankProcessState[targetUid]) return false;
 
-    // 1. [공통 가드] 시간 초과 및 취소 안내 가드 (30초 통일)
-    if (Date.now() - state.time > 30000) {
+    var state = bankProcessState[targetUid];
+    var types = ['shop_buy', 'shop_quantity'];
+    if (types.indexOf(state.type) === -1) return false;
+
+    // 1. 공통 가드 (시간 초과 및 취소)
+    if (Date.now() - state.time > 30000 || msg === "취소") {
         delete bankProcessState[targetUid];
-        replier.reply(formatError(user, "시간 초과", "입력 시간이 30초를 초과하여 은행 업무가 자동 취소되었습니다."));
-        return true;
-    }
-    if (msg === "취소") {
-        delete bankProcessState[targetUid];
-        replier.reply(formatCommand("🚫 업무 취소", user, "요청하신 은행 업무가 취소되었습니다."));
+        if (msg === "취소") replier.reply(formatCommand("🚫 업무 취소", user, "업무가 취소되었습니다."));
+        else replier.reply(formatError(user, "시간 초과", "입력 시간이 초과되었습니다."));
         return true;
     }
     if (msg.startsWith("/")) {
-        delete bankProcessState[targetUid]; // 명령어 입력 시 대기 상태 해제 (무한루프 방지)
+        delete bankProcessState[targetUid];
         return false;
     }
 
-    /* [기능 11] 상점 아이템 구매 처리 핸들러 (shop_buy) */
+    var roomData = data.rooms[roomName];
+
+    /* [기능 1] 상점 아이템 번호 선택 처리 */
     if (state.type === 'shop_buy') {
         var idx = parseInt(msg.replace(/[^0-9]/g, "")) - 1;
         var filteredItems = (state.extra && state.extra.items) ? state.extra.items : [];
@@ -3619,14 +3576,14 @@ if (bankProcessState && bankProcessState[targetUid]) {
         } else {
             var item = filteredItems[idx];
 
-            /* 신용 점수 회복제 일일 제한 */
+            /* 예외 처리 1: 신용 점수 회복제 일일 제한 */
             if (item.effect === "credit" && (user.dailyCreditRestoreCount || 0) >= 1) {
                 delete bankProcessState[targetUid];
                 replier.reply(formatError(user, "구매 제한", "신용 점수 회복제는 하루에 1개만 사용 가능합니다."));
                 return true;
             }
 
-            /* 경고삭제권 제한 로직 */
+            /* 예외 처리 2: 경고삭제권 제한 로직 (평생 1회 + 사채 보유 시 불가) */
             if (item.effect === "warnClear") {
                 if (user.boughtWarningRemoval === true) {
                     delete bankProcessState[targetUid];
@@ -3646,14 +3603,20 @@ if (bankProcessState && bankProcessState[targetUid]) {
                 }
             }
 
-            var stackableEffects = ["promotion", "tierGuard", "randomBox"];
-            var isStackable = stackableEffects.indexOf(item.effect) !== -1;
+            /* 예외 처리 3: 게임 인증권 시즌 2회 제한 */
+            if (item.effect === "gameAuth" && (user.purchasedAuthCount || 0) >= 2) {
+                delete bankProcessState[targetUid];
+                replier.reply(formatError(user, "구매 한도 초과", "인증권은 시즌당 최대 2회까지만 구매 가능합니다."));
+                return true;
+            }
 
-            if (isStackable) {
+            // 수량 입력이 필요한 아이템인지 확인 (중복 구매 가능 여부)
+            var stackableEffects = ["promotion", "tierGuard", "randomBox"];
+            if (stackableEffects.indexOf(item.effect) !== -1) {
                 bankProcessState[targetUid] = { type: 'shop_quantity', time: Date.now(), extra: { item: item } };
                 replier.reply(formatCommand("🔢 수량 입력", user, "구매하실 [" + item.name + "]의 수량을 입력해주세요.", "취소: [취소]"));
             } else {
-                /* 단권 구매 로직 복구 */
+                /* 단권 구매 로직 */
                 var finalPrice = getItemPrice(item, user, roomName);
                 var isUsingTicket = (item.effect === "randomBox" && (user.boxTickets || 0) > 0);
 
@@ -3661,12 +3624,6 @@ if (bankProcessState && bankProcessState[targetUid]) {
                     delete bankProcessState[targetUid];
                     replier.reply(formatError(user, "포인트 부족", fp(finalPrice) + "P가 필요합니다."));
                 } else {
-                    if (item.effect === "gameAuth" && (user.purchasedAuthCount || 0) >= 2) {
-                        delete bankProcessState[targetUid];
-                        replier.reply(formatError(user, "구매 한도 초과", "인증권은 시즌당 최대 2회까지만 구매 가능합니다."));
-                        return true;
-                    }
-
                     var hasItem = false;
                     if (item.effect === "icon" || item.effect === "title") {
                         var inv = user.inventory || [];
@@ -3683,12 +3640,12 @@ if (bankProcessState && bankProcessState[targetUid]) {
                         safeSaveData(data);
                     }
                 }
+            }
+        }
+        return true;
     }
-}
-return true;
-}
 
-    /* [기능 12] 복수 수량 입력 처리 */
+    /* [기능 2] 수량 입력 처리 */
     else if (state.type === 'shop_quantity') {
         var item = (state.extra && state.extra.item) ? state.extra.item : null;
         if (!item) { delete bankProcessState[targetUid]; return true; }
@@ -3704,13 +3661,14 @@ return true;
                 replier.reply(formatError(user, "포인트 부족", "총 " + fp(totalPrice) + "P가 필요합니다."));
             } else {
                 util_updatePoint(user, roomData, -totalPrice, "상점 구매: " + item.name + " x" + qty, roomName);
-                delete bankProcessState[targetUid]; 
+                delete bankProcessState[targetUid];
                 if (typeof _handleShopEffect === 'function') _handleShopEffect(item, user, roomName, replier, data, targetUid, totalPrice, false, qty);
                 safeSaveData(data);
             }
         }
         return true;
     }
+    return false;
 }
 
 //==========섹터23-1==========

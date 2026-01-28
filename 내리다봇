@@ -1255,22 +1255,28 @@ function findUserByName(roomData, name) {
 }
 
 /* 중복 유저 선택 핸들러 함수 */
-function handleUserSelection(replier, targetUid, found, type, extra, user) {
-    selectWaitState[targetUid] = { 
+function handleUserSelection(replier, targetUid, found, type, extra, user, roomName) {
+    var data = getDatabase();
+    var roomData = data.rooms[roomName];
+    if (!roomData || !roomData.features) return;
+
+    // 방별 독립 저장소인 features.states.selectWait에 저장
+    roomData.features.states.selectWait[targetUid] = { 
         timestamp: Date.now(), 
         results: found, 
         type: type, 
         extra: extra 
     };
+    
     var list = [];
     for(var i=0; i<found.length; i++) {
         list.push((i + 1) + ". " + found[i].data.name);
     }
     
     setTimeout(function() {
-        if (selectWaitState[targetUid]) {
-            delete selectWaitState[targetUid];
-            replier.reply(formatError(user, "선택 시간이 초과되었습니다."));
+        if (roomData.features.states.selectWait[targetUid]) {
+            delete roomData.features.states.selectWait[targetUid];
+            replier.reply(formatError(user, "선택 시간 초과", "중복 닉네임 선택 시간이 만료되었습니다."));
         }
     }, 30000);
 
@@ -4267,6 +4273,9 @@ if (msg === "/가이드") {
         
         // 1. 유저의 상태(status)가 존재하는지 먼저 확인 (숫자/문자 입력 대기 공통)
         if (rFeatures && rFeatures.states) {
+
+            // 0. 중복 유저 선택 처리 (최우선 순위로 배치)
+            if (typeof _handleSelectionLogic === 'function' && _handleSelectionLogic(msg, user, data, replier, roomName, targetUid)) return;
             
             // A. 은행 업무 처리 (Step 1~5) - sender 인자 추가
             if (typeof _handleBankStep1 === 'function' && _handleBankStep1(msg, user, data, replier, roomName, targetUid)) return;

@@ -439,6 +439,9 @@ function endTracking(user, isSuccess, resultMsg) {
 function safeSaveData(data, isForceBackup) {
     if (!data) return;
 
+    var isHealed = false; // 치유 발생 여부
+    var healReports = []; // 치유 내역 보고서
+
     /**
      * [무결성 검역소] 데이터 저장 전 정밀 검증 로직
      * 사유: 로직 오류로 인해 포인트가 0원이 되거나 데이터가 파손된 채 저장되는 것을 원천 차단합니다.
@@ -454,9 +457,7 @@ function safeSaveData(data, isForceBackup) {
                 var dbContent = FileStream.read(FILE_PATH);
                 if (dbContent) DB_DATA = JSON.parse(dbContent);
             }
-        } catch(e) {
-            Log.error("DB File Read Error for Guard: " + e);
-        }
+        } catch(e) { Log.error("DB Read for Healing Fail: " + e); }
 
         for (var rName in data.rooms) {
             var room = data.rooms[rName];
@@ -479,20 +480,45 @@ function safeSaveData(data, isForceBackup) {
                 var u = room.users[uid];
                 // 2. 포인트 오염 체크: NaN, null, undefined 또는 숫자가 아닌 경우
                 if (isNaN(u.point) || u.point === null || typeof u.point !== 'number') {
-                    throw new Error(u.name + " 유저의 포인트 데이터 오염(NaN/Null) 감지");
+                    if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
+                        u.point = Number(DB_DATA.rooms[rName].users[uid].point || 0);
+                        isHealed = true;
+                        healReports.push(u.name + " (NaN/Null 수리)");
+                    } else {
+                        throw new Error(u.name + " 유저의 포인트 데이터 오염(NaN/Null) 감지 및 복구 실패");
+                    }
+                    continue;
                 }
                 
                 // 3. 비정상적 초기화 체크 (강화 버전)
                 // 메모리(globalData)가 아닌 파일 데이터(DB_DATA)와 비교하여 차감 직후의 0원화를 정확히 포착합니다.
                 if (DB_DATA && DB_DATA.rooms && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users && DB_DATA.rooms[rName].users[uid]) {
                     var lastSavedPoint = Number(DB_DATA.rooms[rName].users[uid].point || 0);
-                    // 파일상에 1만P 이상 있었는데, 저장하려는 값이 0P라면 차단
-                    if (lastSavedPoint > 10000 && u.point === 0) {
-                        throw new Error(u.name + " 유저의 포인트 급감(0원) 감지 [비정상 초기화 의심]");
+                    
+                    if (lastSavedPoint > 10000) {
+                        var dropRatio = (lastSavedPoint - u.point) / lastSavedPoint;
+                        
+                        if (dropRatio >= 0.95) {
+                            // 오염된 메모리 값을 파일에 저장된 정상 값으로 강제 치유
+                            u.point = lastSavedPoint; 
+                            isHealed = true;
+                            healReports.push(u.name + " (95% 급감 감지 및 복구)");
+                        }
                     }
                 }
             }
         }
+
+       if (isHealed && healReports.length > 0) {
+            try {
+                var reportMsg = "🚨 [데이터 자가 치유 작동]\n" +
+                                "손상 의심 데이터를 제외하고 정상 저장되었습니다.\n\n" +
+                                "[치유 내역]\n• " + healReports.join("\n• ") + "\n\n" +
+                                "⚠️ 관리자는 해당 유저의 활동을 점검하십시오.";
+                Api.replyRoom("내리다", reportMsg);
+            } catch(e) {}
+        }
+
     } catch (validationError) {
         // 검증 실패 시 로그만 남기고 저장 함수 전체를 즉시 종료 (파일에 쓰지 않음)
         Log.error("!!! [데이터 오염 방지 작동] !!!");

@@ -2625,39 +2625,55 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                     }
                 }
 
-                /* [v6.5 통합] 데이터 자가 치유 + 도배 방지 엔진 */
+                /* [v6.6 딥 헬러] 타입 검증형 자가 치유 엔진 (Deep Healing & Memory Sync) */
                 if (user) {
-                    // 1. [Auto-Healer] 누락된 변수 즉시 수리
-                    var essentialSchema = {
-                        chatLog: [], timeoutEndTime: 0, artifactPieces: 0, 
-                        gameAuthCount: 0, purchasedAuthCount: 0, totalDonation: 0,
-                        boxFragments: 0, boxTickets: 0, collectedIcons: [],
-                        boughtWarningRemoval: false, dailyGambleCount: 0,
-                        dailyPromotionAttempts: 1, stockHoldings: {}, stockAvg: {}
-                    };
-                    var isHealed = false;
-                    for (var key in essentialSchema) {
-                        if (user[key] === undefined) {
-                            user[key] = essentialSchema[key];
-                            isHealed = true;
+                    var isDeepHealed = false;
+                    
+                    // 1. 필수 변수 및 타입 정의
+                    var schema = [
+                        { key: 'chatLog', default: [], type: 'array' },
+                        { key: 'inventory', default: [], type: 'array' },
+                        { key: 'stockHoldings', default: {}, type: 'object' },
+                        { key: 'stockAvg', default: {}, type: 'object' },
+                        { key: 'timeoutEndTime', default: 0, type: 'number' },
+                        { key: 'artifactPieces', default: 0, type: 'number' },
+                        { key: 'point', default: 50000, type: 'number' }
+                    ];
+
+                    schema.forEach(function(item) {
+                        // 필드가 아예 없거나(undefined), 타입이 일치하지 않는 경우(예: 배열이어야 하는데 아님)
+                        var val = user[item.key];
+                        var invalid = (val === undefined || val === null);
+                        
+                        if (!invalid) {
+                            if (item.type === 'array' && !Array.isArray(val)) invalid = true;
+                            else if (item.type === 'object' && (typeof val !== 'object' || Array.isArray(val))) invalid = true;
+                            else if (item.type === 'number' && typeof val !== 'number') invalid = true;
+                        }
+
+                        if (invalid) {
+                            user[item.key] = item.default;
+                            isDeepHealed = true;
+                        }
+                    });
+
+                    // 2. 수리 발생 시 물리 저장 및 전역 메모리(globalData) 강제 동기화
+                    if (isDeepHealed) {
+                        Log.info("[Deep-Healer] " + user.name + "님 타입 변조 및 누락 수리 완료.");
+                        safeSaveData(data, false);
+                        
+                        // [중요] 수정된 데이터를 전역 메모리에 즉시 갱신 (명령어 먹통 방지 핵심)
+                        if (typeof globalData !== 'undefined') {
+                            globalData = data; 
                         }
                     }
 
-                    // [수정] 수리가 발생했다면 즉시 물리 파일에 저장하여 영구 보존
-                    if (isHealed) {
-                        Log.info("[Auto-Healer] " + user.name + "님 구조 수리 및 물리 저장 완료.");
-                        safeSaveData(data, false); // 즉시 저장 로직 추가
-                    }
-
-                    // 2. [Spam Guard] 도배 방지 및 타임아웃 체크
+                    // 3. [Spam Guard] 도배 방지 (수리된 안전한 구조에서 실행)
                     var now = Date.now();
                     var conf = SYSTEM_CONFIG.SPAM;
+                    if (user.timeoutEndTime && now < user.timeoutEndTime) return;
 
-                    if (user.timeoutEndTime && now < user.timeoutEndTime) {
-                        return;
-                    }
-
-                    if (!user.chatLog) user.chatLog = []; // 가드 차원 중복 체크
+                    // chatLog가 배열임을 100% 보장한 상태에서 실행
                     user.chatLog.push(now);
                     user.chatLog = user.chatLog.filter(function(time) {
                         return now - time < conf.LIMIT_WINDOW;

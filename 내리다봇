@@ -2616,20 +2616,22 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 var currentImgHash = null;
                 try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
 
-                // 유저 객체 선제 탐색 (도배 체크용)
+                // [v6.7 통합] 유저 객체 및 UID 동시 탐색 엔진
                 for (var id in roomData.users) {
                     var u = roomData.users[id];
+                    // 해시값(프사) 또는 닉네임이 일치하는지 검사
                     if ((currentImgHash && u.imageHash === currentImgHash) || u.name === cleanSender) {
                         user = u;
+                        targetUid = id; // 찾은 유저의 고유 코드(ID)를 즉시 바인딩
                         break;
                     }
                 }
 
                 /* [v6.6 딥 헬러] 타입 검증형 자가 치유 엔진 (Deep Healing & Memory Sync) */
-                if (user) {
+                if (user && targetUid) {
                     var isDeepHealed = false;
                     
-                    // 1. 필수 변수 및 타입 정의
+                    // 1. 필수 변수 및 타입 정의 (시스템 규격 동기화)
                     var schema = [
                         { key: 'chatLog', default: [], type: 'array' },
                         { key: 'inventory', default: [], type: 'array' },
@@ -2641,10 +2643,10 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                     ];
 
                     schema.forEach(function(item) {
-                        // 필드가 아예 없거나(undefined), 타입이 일치하지 않는 경우(예: 배열이어야 하는데 아님)
                         var val = user[item.key];
                         var invalid = (val === undefined || val === null);
                         
+                        // 타입 정밀 검사 (구조 붕괴 방지)
                         if (!invalid) {
                             if (item.type === 'array' && !Array.isArray(val)) invalid = true;
                             else if (item.type === 'object' && (typeof val !== 'object' || Array.isArray(val))) invalid = true;
@@ -2657,23 +2659,25 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                         }
                     });
 
-                    // 2. 수리 발생 시 물리 저장 및 전역 메모리(globalData) 강제 동기화
+                    // 2. 수리 발생 시 물리 저장 및 메모리 동기화 (전역 캐시 갱신)
                     if (isDeepHealed) {
-                        Log.info("[Deep-Healer] " + user.name + "님 타입 변조 및 누락 수리 완료.");
+                        Log.info("[Deep-Healer] " + user.name + "님 구조 최적화 및 UID 바인딩 완료.");
                         safeSaveData(data, false);
                         
-                        // [중요] 수정된 데이터를 전역 메모리에 즉시 갱신 (명령어 먹통 방지 핵심)
+                        // [핵심] 전역 데이터 강제 갱신으로 명령어 씹힘 방지
                         if (typeof globalData !== 'undefined') {
                             globalData = data; 
                         }
                     }
 
-                    // 3. [Spam Guard] 도배 방지 (수리된 안전한 구조에서 실행)
+                    // 3. [Spam Guard] 도배 방지 로직 (수리된 chatLog 배열 사용)
                     var now = Date.now();
                     var conf = SYSTEM_CONFIG.SPAM;
-                    if (user.timeoutEndTime && now < user.timeoutEndTime) return;
 
-                    // chatLog가 배열임을 100% 보장한 상태에서 실행
+                    if (user.timeoutEndTime && now < user.timeoutEndTime) {
+                        return;
+                    }
+
                     user.chatLog.push(now);
                     user.chatLog = user.chatLog.filter(function(time) {
                         return now - time < conf.LIMIT_WINDOW;

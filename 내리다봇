@@ -4297,27 +4297,73 @@ if (msg === "/가이드") {
             if (_handleGameLogic(msg, user, data, replier, roomName, targetUid, sender)) return;
         }
 
-//==========섹터25==========
+// 1. [상태 관제] 숫자가 입력되었을 때 '선택 대기' 중인지 확인
+        if (selectWaitState[targetUid]) {
+            var state = selectWaitState[targetUid];
+            var choice = Number(msg);
 
-        /* [최적화] 관리자 명령어 통합 처리 구간 */
-        /* 메인 함수의 용량 초과(64KB) 방지를 위해 외부 함수로 위임 */
+            // 유효한 숫자 선택 시 처리
+            if (!isNaN(choice) && choice > 0 && choice <= state.list.length) {
+                var selected = state.list[choice - 1];
+                var sId = selected.id;
+                var sNick = selected.data.name;
+
+                // 상태 즉시 해제 (중복 실행 및 무한 루프 방지)
+                delete selectWaitState[targetUid];
+
+                switch (state.type) {
+                    case "user_restore": // 유저 복원 선택
+                        try {
+                            var sourceCode = state.extra || sId;
+                            var backupData = JSON.parse(FileStream.read(BACKUP_DIR + "last_stable_backup.json"));
+                            var rawBackupUser = null;
+                            for (var r in backupData.rooms) {
+                                if (backupData.rooms[r].users[sourceCode]) {
+                                    rawBackupUser = backupData.rooms[r].users[sourceCode];
+                                    break;
+                                }
+                            }
+                            if (!rawBackupUser) throw new Error("백업 데이터 없음");
+                            var backupUser = JSON.parse(JSON.stringify(rawBackupUser));
+                            backupUser.name = sNick;
+                            roomData.users[sId] = backupUser;
+                            safeSaveData(data, false);
+                            if (typeof globalData !== 'undefined') globalData = data;
+                            replier.reply(formatAdmin("✅ 복구 완료", "대상: " + sNick));
+                        } catch (e) { replier.reply(formatAdmin("🚫 실패", e.message)); }
+                        break;
+
+                    case "user_info": // 유저 정보 선택
+                        if (typeof _handleUserInfo === 'function') _handleUserInfo(replier, selected.data, sId);
+                        break;
+
+                    case "remit": // 송금 대상 선택
+                        if (typeof _handleRemitLogic === 'function') _handleRemitLogic(replier, user, selected.data, state.amount);
+                        break;
+                }
+                return true; // 로직 성공 시 함수 종료 (알 수 없는 명령어로 가지 않음)
+            } 
+            // 숫자만 쳤는데 목록에 없는 번호인 경우
+            else if (!isNaN(choice)) {
+                replier.reply("⚠️ 목록에 있는 번호(1~" + state.list.length + ")를 입력해주세요.");
+                return true;
+            }
+        }
+
+        /* 2. [관리자 로직] 위임 처리 */
         if (isAdmin(sender, data)) {
             if (typeof _handleAdminLogic === 'function') {
-                // 관리자 로직 함수가 true를 반환하면(명령어 처리됨) 함수 종료
                 if (_handleAdminLogic(msg, user, data, replier, roomName, targetUid, sender)) return;
             }
         }
 
-/**
-         * [알 수 없는 명령어 예외 처리]
-         * 설명: 유저 및 관리자 레지스트리를 모두 스캔했음에도 매칭되는 명령어가 없고,
-         * 메시지가 '/'로 시작하는 경우 '알 수 없는 명령어' 메시지를 출력합니다.
-         */
+        /* 3. [예외 처리] 알 수 없는 명령어 (최종 도달) */
         var cmdKey = msg.split(" ")[0];
-if (msg.startsWith("/") && !USER_COMMANDS[cmdKey] && !ADMIN_COMMANDS[cmdKey]) {
-    var unknownCmdMsg = "'" + cmdKey + "'은(는) 등록되지 않은 명령어입니다.";
-    replier.reply(formatError(user, "알 수 없는 명령어", unknownCmdMsg + "\n'/도움말'을 입력하여 전체 명령어 목록을 확인하세요."));
-}
+        if (msg.startsWith("/") && !USER_COMMANDS[cmdKey] && !ADMIN_COMMANDS[cmdKey]) {
+            var unknownCmdMsg = "'" + cmdKey + "'은(는) 등록되지 않은 명령어입니다.";
+            replier.reply(formatError(user, "알 수 없는 명령어", unknownCmdMsg + "\n'/도움말'을 참고하세요."));
+            return true;
+        }
 
 
 //==========섹터26==========

@@ -3322,13 +3322,14 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
         }
         var am = parseInt(ps.pop().replace(/,/g, ""));
         var tn = ps.join(" ").trim();
-        var found = findUserByName(roomData, tn);
+        var targetObj = util_resolveTarget(tn, msg, replier, roomData, targetUid, user, roomName);
+    
+    // 타겟이 없거나(null) 중복 처리 중이면 여기서 로직 종료
+    if (!targetObj) return true; 
 
-        if (found.length === 0) {
-            replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다."));
-        } else if (found.length > 1) {
-            handleUserSelection(replier, targetUid, found, "transfer", { amount: am }, user, roomName);
-        } else if (found[0].id === targetUid) {
+    // 결정된 단일 대상
+    var rc = targetObj.data;
+    var rcId = targetObj.id;
             replier.reply(formatError(user, "본인 송금 불가", "자신에게는 보낼 수 없습니다."));
         } else if (isNaN(am) || am <= 0) {
             replier.reply(formatError(user, "금액 오류", "정확한 숫자를 입력하세요."));
@@ -5112,16 +5113,11 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
     if (msg.indexOf("/진단 ") === 0) {
         var tn = msg.substring(4).trim();
-        var roomData = data.rooms[roomName];
-        var found = findUserByName(roomData, tn);
+        var targetObj = util_resolveTarget(tn, msg, replier, roomData, targetUid, user, roomName);
+        if (!targetObj) return true;
 
-        if (found.length === 0) {
-            replier.reply("❌ [" + tn + "] 유저를 찾을 수 없습니다.");
-            return true;
-        }
-
-        var t = found[0].data;
-        var tId = found[0].id;
+        var t = targetObj.data;
+        var tId = targetObj.id;
         var rFeatures = roomData.features;
         var st = rFeatures.states;
         var now = Date.now();
@@ -5177,21 +5173,20 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
     if (msg.indexOf("/유저데이터 ") === 0) {
         var tn = msg.substring(7).trim();
         var roomData = data.rooms[roomName];
-        var found = findUserByName(roomData, tn);
-        if (!found.length) replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
-        else if (found.length > 1) handleUserSelection(replier, targetUid, found, "admin_userdata", null, user, roomName);
-        else replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(found[0].data, null, 2)));
+        var targetObj = util_resolveTarget(tn, msg, replier, roomData, targetUid, user, roomName);
+        if (!targetObj) return true;
+        
+        replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(targetObj.data, null, 2)));
         return true;
     }
 
     /* 닉네임 변경 이력 */
     if (msg.indexOf("/닉네임기록 ") === 0) {
         var tn = msg.substring(7).trim();
-        var roomData = data.rooms[roomName];
-        var found = findUserByName(roomData, tn);
-        if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_nick_log", null, user, roomName); return true; }
-        var targetId = found[0].id;
+        var targetObj = util_resolveTarget(tn, msg, replier, roomData, targetUid, user, roomName);
+        if (!targetObj) return true;
+        
+        var targetId = targetObj.id;
         var history = data.nickHistory[targetId] || [];
         if (history.length === 0) { replier.reply(formatAdmin("닉네임 기록", getDisplayName(found[0].data) + "님은 변경 이력이 없습니다.")); return true; }
         var logMsg = [];
@@ -5213,9 +5208,10 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         var found = findUserByName(roomData, targetName);
 
         if (isNaN(scoreChange)) { replier.reply(formatAdmin("오류", "조정할 점수를 숫자로 입력하세요.")); return true; }
-        if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { 
-            handleUserSelection(replier, targetUid, found, "admin_credit_edit", { score: scoreChange }, user, roomName);
+        var targetObj = util_resolveTarget(targetName, msg, replier, roomData, targetUid, user, roomName);
+        if (!targetObj) return true;
+
+        var targetUser = targetObj.data;
             return true; 
         }
 
@@ -5247,11 +5243,10 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         var titleToTake = ps.pop().trim();
         var targetName = ps.slice(1).join(" ").trim();
         var roomData = data.rooms[roomName];
-        var found = findUserByName(roomData, targetName);
+        var targetObj = util_resolveTarget(targetName, msg, replier, roomData, targetUid, user, roomName);
+        if (!targetObj) return true;
 
-        if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) {
-            handleUserSelection(replier, targetUid, found, "admin_title_take", { title: titleToTake }, user, roomName);
+        var targetUser = targetObj.data;
             return true;
         }
 
@@ -5364,12 +5359,11 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
     if (msg.indexOf("/유저삭제 ") === 0) {
         var tn = msg.substring(6).trim();
         var roomData = data.rooms[roomName];
-        var found = findUserByName(roomData, tn);
-        if (!found.length) { replier.reply(formatAdmin("오류", "대상 없음")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_delete", null, user, roomName); return true; }
-        
-        var targetId = found[0].id;
-        var targetData = found[0].data;
+        var targetObj = util_resolveTarget(tn, msg, replier, roomData, targetUid, user, roomName);
+        if (!targetObj) return true;
+
+        var targetId = targetObj.id;
+        var targetData = targetObj.data;
         var refundLog = "";
         var refundCount = 0;
         var totalRefunded = 0;
@@ -5822,11 +5816,10 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         var am = parseInt(parts.pop());
         var tn = parts.slice(1).join(" ").trim();
         var roomData = data.rooms[roomName];
-        var found = findUserByName(roomData, tn);
-        if (found.length === 0) { replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_give", { amount: am }, user, roomName); return true; }
-    
-    var targetUser = found[0].data;
+        var targetObj = util_resolveTarget(tn, msg, replier, roomData, targetUid, user, roomName);
+    if (!targetObj) return true;
+
+    var targetUser = targetObj.data;
     util_updatePoint(targetUser, roomData, am, "관리자 직접 지급", roomName);
         replier.reply(formatAdmin("포인트 지급 완료", getDisplayName(targetUser) + "님: +" + fp(am) + "P"));
         safeSaveData(data);
@@ -5840,12 +5833,10 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         var requestedAmount = parseInt(parts.pop());
         var tn = parts.slice(1).join(" ").trim();
         var roomData = data.rooms[roomName];
-        var found = findUserByName(roomData, tn);
+        var targetObj = util_resolveTarget(tn, msg, replier, roomData, targetUid, user, roomName);
+    if (!targetObj) return true;
 
-        if (found.length === 0) { replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_take", { amount: requestedAmount }, user, roomName); return true; }
-        
-        var targetUser = found[0].data;
+    var targetUser = targetObj.data;
         var currentPoint = Number(targetUser.point);
         
         // 실제로 가져갈 수 있는 양 계산
@@ -6501,14 +6492,12 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatError(user, "입력 오류", "조회할 유저의 닉네임을 입력하세요."));
             return true;
         }
-        var found = findUserByName(roomData, tn);
-        if (found.length === 0) { 
-            replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); 
-            return true; 
-        }
-        if (found.length === 1) {
-            var targetUser = found[0].data;
-            var targetIdInside = found[0].id;
+        var targetObj = util_resolveTarget(tn, msg, replier, roomData, targetUid, user, roomName);
+    if (!targetObj) return true; // 중복이거나 없으면 종료 (중복 시 자동 메뉴 뜸)
+
+    // 단일 대상 확정
+    var targetUser = targetObj.data;
+    var targetIdInside = targetObj.id;
             var cr = getCreditInfo(targetUser.creditScore);
             
             var sDebt = 0;
@@ -6852,10 +6841,10 @@ function _gameActionLogic_Part2(msg, user, data, replier, roomName, targetUid) {
         if (isNaN(am) || am < minBet) { replier.reply(formatError(user, "금액 오류", "최소 " + fp(minBet) + "P 이상 결투 가능합니다.")); return true; }
         if (Number(user.point) < am) { replier.reply(formatError(user, "포인트 부족", "베팅할 포인트가 부족합니다.")); return true; }
         
-        var found = findUserByName(roomData, tn);
-        if (found.length === 0) { replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "duel", { bet: am }, user, roomName); return true; }
-        var target = found[0];
+        var targetObj = util_resolveTarget(tn, msg, replier, roomData, targetUid, user, roomName);
+        if (!targetObj) return true; // 중복이거나 대상이 없으면 종료
+
+        var target = targetObj; // 결정된 단일 대상
         if (target.id === targetUid) { replier.reply(formatError(user, "결투 불가", "자신과는 싸울 수 없습니다.")); return true; }
         if (isUserBusy(target.id)) { replier.reply(formatError(user, "대상 활동 중", "상대방이 현재 다른 활동을 하고 있습니다.")); return true; }
 
@@ -6975,11 +6964,10 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         }
 
         var tn = msg.substring(5).trim();
-        var found = findUserByName(roomData, tn);
-        if (found.length === 0) { replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "theft", null, user, roomName); return true; }
-        
-        var victim = found[0];
+        var victimObj = util_resolveTarget(tn, msg, replier, roomData, targetUid, user, roomName);
+        if (!victimObj) return true;
+
+        var victim = victimObj;
 
         // 대상 상태 확인
         if (victim.data.mining && victim.data.mining.active) {

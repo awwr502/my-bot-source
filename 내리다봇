@@ -37,7 +37,9 @@ var USER_SCHEMA = [
     { key: 'dailyPromotionAttempts', default: 1, type: 'number' },
     { key: 'dailyGambleCount', default: 0, type: 'number' },
     { key: 'boughtWarningRemoval', default: false, type: 'boolean' },
-    { key: 'hasVotedToday', default: false, type: 'boolean' }
+    { key: 'hasVotedToday', default: false, type: 'boolean' },
+    { key: 'lastFishingTime', default: 0, type: 'number' },    // 낚시 쿨타임 관리용 (Timestamp)
+    { key: 'totalSpittoBought', default: 0, type: 'number' }  // 스피또 누적 구매량 (통계용)
 ];
 
 /* 파일 및 데이터 동기화 객체 */
@@ -187,6 +189,30 @@ var SYSTEM_CONFIG = {
         ATTEND_MAX: 2000, // [출석 최대 지급]: 출석 체크 시 무작위로 지급되는 포인트의 상한선
         GAMBLE_MIN: 500,  // [홀짝 최소 베팅]: 홀짝 게임 진행 시 입력 가능한 최소 포인트 단위
         GAMBLE_MAX: 3000, // [홀짝 최대 베팅]: 홀짝 게임의 1회당 최대 베팅 한도 (사행성 조절)
+
+        /* [신규] 스피또 및 생산형 컨텐츠 설정 */
+        SPITTO: {
+            PRICE: 1000,           // 복권 가격
+            RTP: 0.8,              // 기대 수익률 (80%)
+            PROBS: {
+                RANK1: 0.0008,     // 1등 확률 (0.08%)
+                RANK2: 0.01,       // 2등 확률 (1%)
+                RANK3: 0.06,       // 3등 확률 (6%)
+                RANK4: 0.4         // 4등 확률 (40%)
+            },
+            PRIZES: {
+                RANK1: 200000,     // 1등 상금
+                RANK2: 20000,      // 2등 상금
+                RANK3: 4000,       // 3등 상금
+                RANK4: 500         // 4등 상금
+            }
+        },
+        FISHING: {
+            COOLDOWN: 600000,      // 쿨타임 (10분 = 600,000ms)
+            MIN_REWARD: 200,       // 최소 보상
+            MAX_REWARD: 300,       // 최대 보상
+            FAIL_PROB: 0.3         // 꽝 확률 (20%)
+        },
         
         /* [신규] 중앙은행 지급준비제도 설정 */
         BANK: {
@@ -733,7 +759,8 @@ var SHOP_ITEMS = [
     /* [신규] 경고삭제권: 기본가 500,000P 설정 */
     { id: 13, name: "경고삭제권", icon: "🎫", price: 500000, effect: "warnClear", cat: 3 },
     { id: 12, name: "랜덤 아이콘 박스", icon: "🎁", price: 3000, effect: "randomBox", cat: 4 },
-    { id: 7, name: "로또 구매", icon: "🎟️", price: 1000, effect: "lotto", cat: 5 }
+    { id: 7, name: "로또 구매", icon: "🎟️", price: 1000, effect: "lotto", cat: 5 },
+    { id: 14, name: "스피또 복권", icon: "🧧", price: 1000, effect: "spitto", cat: 5 }
 ];
 
 /* [신규] 랜덤 아이콘 박스 상세 구성 및 확률 설정 */
@@ -822,7 +849,9 @@ var CMD_LIST = {
         { cmd: "/광산종료", desc: "채굴 완료 및 포인트 정산", cat: "광산", func: "_handleMiningLogic" },
         { cmd: "/유물도감", desc: "유물 조각 수집 현황 확인", cat: "광산", func: "_gameInfoLogic" },
         { cmd: "/의회", desc: "현재 정책 및 안건 조회", cat: "정부", func: "_gameGovernmentLogic" },
-        { cmd: "/투표", desc: "[찬성|반대] 안건 투표 참여", cat: "정부", func: "_gameGovernmentLogic" }
+        { cmd: "/투표", desc: "[찬성|반대] 안건 투표 참여", cat: "정부", func: "_gameGovernmentLogic" },
+        { cmd: "/스피또", desc: "즉석복권 구매 (1,000P)", cat: "게임", func: "_gameLotteryLogic" },
+        { cmd: "/낚시", desc: "강가에서 물고기 낚기 (10분 쿨타임)", cat: "활동", func: "_gameActivityLogic" }
     ],
     admin: [
         { cmd: "/봇구동", desc: "[온|오프] 시스템 제어", func: "_adminSystemLogic" },
@@ -1278,7 +1307,7 @@ function calculateEconomy(data, roomName) {
     };
 }
 
-//==========섹터6==========
+//==========섹터9==========
 
 /**
  * [공통 함수: 물가 배율 통합 엔진] v5.9
@@ -4218,7 +4247,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             }
 
             // 수량 입력이 필요한 아이템인지 확인 (중복 구매 가능 여부)
-            var stackableEffects = ["promotion", "tierGuard", "randomBox"];
+            var stackableEffects = ["promotion", "tierGuard", "randomBox", "spitto"];
             if (stackableEffects.indexOf(item.effect) !== -1) {
                 bankProcessState[targetUid] = { type: 'shop_quantity', time: Date.now(), extra: { item: item } };
                 replier.reply(formatCommand("🔢 수량 입력", user, "구매하실 [" + item.name + "]의 수량을 입력해주세요.", "취소: [취소]"));
@@ -4595,7 +4624,8 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     if (!menuWaitState || !menuWaitState[targetUid]) return false;
 
     var state = menuWaitState[targetUid];
-    var types = ['shop_category', 'help', 'guide_menu'];
+    // 처리 가능 타입에 'shop_detail' 추가
+    var types = ['shop_category', 'shop_detail', 'help', 'guide_menu'];
     if (types.indexOf(state.type) === -1) return false;
 
     // 1. [시간 초과 및 취소 가드]
@@ -4623,7 +4653,19 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         if (isNaN(catId) || !SHOP_CATEGORIES[catId]) {
             delete menuWaitState[targetUid];
             replier.reply(formatError(user, "번호 오류", "올바른 카테고리 번호를 선택해주세요."));
-        } else {
+
+            // 5번(특수/복권) 카테고리 선택 시 서브 메뉴로 분기
+        else if (catId === 5) {
+            menuWaitState[targetUid] = { type: 'shop_detail', category: '5', time: Date.now() };
+            
+            var lotteryMenu = "원하시는 복권 번호를 입력하세요.\n\n" +
+                              "1. 로또 (추첨식: 22:00 발표)\n" +
+                              "2. 스피또 (즉석식: 1,000P)\n" +
+                              "3. 내 로또 정보 확인";
+            
+            replier.reply(formatCommand("🎫 특수/복권 상점", user, lotteryMenu, "취소: [취소] / 입력 대기: 30초"));
+        }
+          else {
             var filteredItems = [];
             for (var i = 0; i < SHOP_ITEMS.length; i++) {
                 if (SHOP_ITEMS[i].cat === catId) filteredItems.push(SHOP_ITEMS[i]);
@@ -4641,6 +4683,36 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
                 bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: filteredItems } };
                 delete menuWaitState[targetUid]; // 메뉴 대기 해제 -> 상점 구매 대기 진입
                 replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[catId], user, list.join("\n"), "구매할 물품의 번호를 입력하세요."));
+            }
+        }
+        return true;
+    }
+
+/* [기능 1-1] 상점 상세 선택 (복권 카테고리 내 번호 선택 처리) */
+    else if (state.type === 'shop_detail') {
+        delete menuWaitState[targetUid]; // 상세 선택 진입 시 메뉴 대기 해제
+        
+        if (state.category === '5') { // 복권 카테고리인 경우
+            if (choice === "1") { // 로또 선택 시
+                var lottoItem = null;
+                for(var i=0; i<SHOP_ITEMS.length; i++) { 
+                    if(SHOP_ITEMS[i].effect === "lotto") { lottoItem = SHOP_ITEMS[i]; break; } 
+                }
+                // 로또는 단권 구매이므로 바로 구매 확인 단계로 이동
+                bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: [lottoItem] } };
+                _handleBankStep5("1", user, data, replier, roomName, targetUid);
+            } 
+            else if (choice === "2") { // 스피또 선택 시
+                var spittoItem = null;
+                for(var i=0; i<SHOP_ITEMS.length; i++) { 
+                    if(SHOP_ITEMS[i].effect === "spitto") { spittoItem = SHOP_ITEMS[i]; break; } 
+                }
+                // 스피또는 여러 개 구매가 가능하므로 수량 입력 단계로 이동
+                bankProcessState[targetUid] = { type: 'shop_quantity', time: Date.now(), extra: { item: spittoItem } };
+                replier.reply(formatCommand("🔢 스피또 수량 입력", user, "구매하실 [스피또 복권]의 수량을 입력해주세요.", "취소: [취소]"));
+            } 
+            else {
+                replier.reply(formatError(user, "번호 오류", "1번(로또) 또는 2번(스피또)을 선택해주세요."));
             }
         }
         return true;
@@ -5307,6 +5379,37 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
     };
 
     /* [2. 아이템 효과별 실행 로직] */
+
+    // 0. 스피또 복권 처리 로직
+    if (item.effect === "spitto") {
+        var conf = SYSTEM_CONFIG.ECO.SPITTO;
+        var totalPrize = 0;
+        var results = { rank1: 0, rank2: 0, rank3: 0, rank4: 0, fail: 0 };
+
+        for (var i = 0; i < qty; i++) {
+            var rand = Math.random();
+            if (rand < conf.PROBS.RANK1) { results.rank1++; totalPrize += conf.PRIZES.RANK1; }
+            else if (rand < conf.PROBS.RANK2) { results.rank2++; totalPrize += conf.PRIZES.RANK2; }
+            else if (rand < conf.PROBS.RANK3) { results.rank3++; totalPrize += conf.PRIZES.RANK3; }
+            else if (rand < conf.PROBS.RANK4) { results.rank4++; totalPrize += conf.PRIZES.RANK4; }
+            else { results.fail++; }
+        }
+
+        var res = processRepayment(user, totalPrize, targetUid, roomName);
+        util_updatePoint(user, roomData, Number(res.actualGain), "스피또 당첨금", roomName);
+
+        var body = "🧧 스피또 " + qty + "매 개봉 결과\n\n";
+        if (totalPrize > 0) {
+            body += "🎊 총 당첨금: " + fp(totalPrize) + "P\n";
+            if (results.rank1 > 0) body += "⭐ 1등(" + fp(conf.PRIZES.RANK1) + "P): " + results.rank1 + "회\n";
+            if (results.rank2 > 0) body += "🥈 2등(" + fp(conf.PRIZES.RANK2) + "P): " + results.rank2 + "회\n";
+            body += "🥉 기타 등수: " + (results.rank3 + results.rank4) + "회 당첨";
+        } else {
+            body += "💀 아쉽게도 모두 꽝입니다...";
+        }
+        
+        replier.reply(formatCommand("🎰 스피또 결과", user, body + (res.repayMsg || ""), "내 잔액: " + fp(user.point) + "P"));
+    }
     
     // 1. 랜덤 아이콘 박스 처리 (메시지 테이블 및 중복 조각 지급 포함)
     if (item.effect === "randomBox") {
@@ -6698,6 +6801,20 @@ function _handleGameLogic(msg, user, data, replier, roomName, targetUid, sender)
     if (cmd === "/의회" || cmd === "/투표") {
         if (typeof _gameGovernmentLogic === 'function') {
             return _gameGovernmentLogic(msg, user, data, replier, roomName, targetUid);
+        }
+    }
+
+    // 신규 스피또 로직 연결
+    if (cmd === "/스피또") {
+        if (typeof _gameLotteryLogic === 'function') {
+            return _gameLotteryLogic(msg, user, data, replier, roomName, targetUid);
+        }
+    }
+
+    // 신규 낚시 로직 연결
+    if (cmd === "/낚시") {
+        if (typeof _gameActivityLogic === 'function') {
+            return _gameActivityLogic(msg, user, data, replier, roomName, targetUid);
         }
     }
 
@@ -8195,4 +8312,68 @@ function gov_generateBill() {
         }
     ];
     return bills[Math.floor(Math.random() * bills.length)];
+}
+
+//==========섹터47==========
+/**
+ * [신설] 즉석복권 스피또 처리 엔진
+ */
+function _gameLotteryLogic(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    if (msg === "/스피또") {
+        var stateRes = util_checkUserState(user, targetUid);
+        if (!stateRes.canAction) return replier.reply(formatError(user, "구매 불가", stateRes.reason));
+
+        var price = 1000;
+        if (user.point < price) return replier.reply(formatError(user, "잔액 부족", "1,000P가 필요합니다."));
+
+        // 가상 상점 아이템 규격으로 효과 호출
+        util_updatePoint(user, roomData, -price, "스피또 구매", roomName);
+        _handleShopEffect({ effect: "spitto" }, user, roomName, replier, data, targetUid, price, false, 1);
+        return true;
+    }
+    return false;
+}
+
+//==========섹터48==========
+/**
+ * [신설] 낚시 시스템 엔진
+ * 설정: 10분 쿨타임, 보상 150~300P, 꽝 20%
+ */
+function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    if (msg === "/낚시") {
+        var stateRes = util_checkUserState(user, targetUid);
+        if (!stateRes.canAction) return replier.reply(formatError(user, "활동 불가", stateRes.reason));
+
+        var now = Date.now();
+        var conf = SYSTEM_CONFIG.ECO.FISHING;
+        var cooldown = 600000; // 10분
+
+        if (now - (user.lastFishingTime || 0) < cooldown) {
+            var remain = Math.ceil((cooldown - (now - user.lastFishingTime)) / 60000);
+            return replier.reply(formatError(user, "낚시 금지", "물고기들이 경계 중입니다.\n" + remain + "분 후 다시 시도하세요."));
+        }
+
+        user.lastFishingTime = now;
+        var rand = Math.random();
+
+        // 꽝 확률 20% (사용자 요청)
+        if (rand < 0.20) {
+            replier.reply(formatCommand("🎣 낚시 실패", user, "찌가 미동도 하지 않습니다...\n허탕을 쳤습니다.", "다음 낚시: 10분 후"));
+        } else {
+            // 보상 150~300P (사용자 요청)
+            var reward = Math.floor(Math.random() * 151) + 150;
+            var res = processRepayment(user, reward, targetUid, roomName);
+            util_updatePoint(user, roomData, Number(res.actualGain), "낚시 성공 보상", roomName);
+
+            var fishes = ["붕어", "잉어", "메기", "송어", "배스"];
+            var fish = fishes[Math.floor(Math.random() * fishes.length)];
+
+            replier.reply(formatCommand("🎣 낚시 성공!", user, "오! 묵직한 손맛!\n[" + fish + "]를 낚아 올렸습니다.\n💰 보상: +" + fp(reward) + "P" + (res.repayMsg || ""), "내 잔액: " + fp(user.point) + "P"));
+        }
+        safeSaveData(data);
+        return true;
+    }
+    return false;
 }

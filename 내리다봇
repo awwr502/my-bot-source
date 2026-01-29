@@ -211,7 +211,8 @@ var SYSTEM_CONFIG = {
             COOLDOWN: 600000,      // 쿨타임 (10분 = 600,000ms)
             MIN_REWARD: 500,       // 최소 보상
             MAX_REWARD: 1500,       // 최대 보상
-            FAIL_PROB: 0.25         // 꽝 확률 (20%)
+            FAIL_PROB: 0.25,         // 꽝 확률 (20%)
+            ARTIFACT_CHANCE: 0.005  // [신규] 유물 조각 발견 확률 (0.5%)
         },
         
         /* [신규] 중앙은행 지급준비제도 설정 */
@@ -5325,10 +5326,22 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
                          "💰 채굴 수익: " + fp(totalEarn) + "P" + repayInfo;
 
         if (artifactFound > 0) {
-            resultBody += "\n\n✨ [특별 발견] ✨\n━━━━━━━━━━━━━━━\n" +
-                           "심상치 않은 기운의 조각을 발견했습니다!\n\n" +
-                           "🧩 유물 조각 획득 (+" + artifactFound + ")\n" +
-                           "(현재 보유: " + user.artifactPieces + " 개)";
+            // 다음 칭호 목표치 계산 로직
+            var pieces = Number(user.artifactPieces || 0);
+            var targetGoal = 10;
+            if (pieces >= 50) targetGoal = 50;
+            else if (pieces >= 40) targetGoal = 50;
+            else if (pieces >= 30) targetGoal = 40;
+            else if (pieces >= 20) targetGoal = 30;
+            else if (pieces >= 10) targetGoal = 20;
+            else targetGoal = 10;
+
+            var artifactBody = "✨ [특별 발견] ✨\n" +
+                               "심상치 않은 기운의 조각을 발견했습니다!\n\n" +
+                               "🧩 유물 조각 획득 (+" + artifactFound + ")\n" +
+                               "현재 보유 " + pieces + " / " + targetGoal + " 개";
+                                   
+            replier.reply(formatCommand("🎊 [내리다 고고학 연구소: 유물 발견]", user, artifactBody, "유물 도감: [/유물도감]"));
         }
                                   
         replier.reply(formatCommand("⛏️ 채굴 결과", user, resultBody, "내 잔액: " + fP(user.point) + "P"));
@@ -8519,8 +8532,8 @@ function _gameLotteryLogic(msg, user, data, replier, roomName, targetUid) {
 
 //==========섹터48==========
 /**
- * [신설] 낚시 시스템 엔진
- * 설정: 10분 쿨타임, 보상 150~300P, 꽝 20%
+ * [업그레이드] 낚시 시스템 엔진 v2.0
+ * 설정: 10분 쿨타임, 물고기 등급제 보상 또는 유물 조각(0.5%)
  */
 function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
@@ -8533,33 +8546,69 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
 
         var conf = SYSTEM_CONFIG.ECO.FISHING;
         var now = Date.now();
-        var cooldown = conf.COOLDOWN; 
-
-        if (now - (user.lastFishingTime || 0) < cooldown) {
-            var diff = cooldown - (now - user.lastFishingTime);
-            var m = Math.floor(diff / 60000); // 분 계산
-            var s = Math.floor((diff % 60000) / 1000); // 초 계산
-            var timeStr = (m > 0 ? m + "분 " : "") + s + "초";
-            
-            replier.reply(formatError(user, "낚시 금지", "물고기들이 경계 중입니다.\n" + timeStr + " 후 다시 시도하세요."));
+        if (now - (user.lastFishingTime || 0) < conf.COOLDOWN) {
+            var diff = conf.COOLDOWN - (now - user.lastFishingTime);
+            var m = Math.floor(diff / 60000);
+            var s = Math.floor((diff % 60000) / 1000);
+            replier.reply(formatError(user, "낚시 금지", "물고기들이 경계 중입니다.\n" + (m > 0 ? m + "분 " : "") + s + "초 후 다시 시도하세요."));
             return true;
         }
 
         user.lastFishingTime = now;
         var rand = Math.random();
 
-        if (rand < conf.FAIL_PROB) { // 설정값 참조
+        // 1. 꽝 판정 (25%)
+        if (rand < conf.FAIL_PROB) {
             replier.reply(formatCommand("🎣 낚시 실패", user, "찌가 미동도 하지 않습니다...\n허탕을 쳤습니다.", "다음 낚시: 10분 후"));
-        } else {
-            var reward = Math.floor(Math.random() * (conf.MAX_REWARD - conf.MIN_REWARD + 1)) + conf.MIN_REWARD;
-            var res = processRepayment(user, reward, targetUid, roomName);
-            // [교정]: 호출 인자 및 데이터 타입 정규화 보정
-            util_updatePoint(user, roomData, Number(res.actualGain), "낚시 성공 보상", roomName);
+        } 
+        // 2. 성공 판정
+        else {
+            var successRand = Math.random(); 
 
-            var fishes = ["붕어", "잉어", "메기", "송어", "배스"];
-            var fish = fishes[Math.floor(Math.random() * fishes.length)];
+            // [A] 유물 조각 판정 (0.5% 확률)
+            if (successRand < 0.005) {
+                var nextArtifacts = Number(user.artifactPieces || 0) + 1;
+                util_setData(user, 'artifactPieces', nextArtifacts, "낚시 중 유물 발견", roomName);
+                
+                var artifactBody = "낚싯줄에 엄청난 무게감이 느껴집니다!\n\n" +
+                                   "✨ [심해의 보물] ✨\n" +
+                                   "이끼 낀 낡은 보물상자를 건져 올렸습니다!\n\n" +
+                                   "🧩 유물 조각 획득 (+1)\n" +
+                                   "(현재 보유: " + user.artifactPieces + " 개)";
+                
+                replier.reply(formatCommand("🎊 [내리다 고고학 연구소: 유물 발견]", user, artifactBody, "유물 도감: [/유물도감]"));
+            } 
+            // [B] 물가 등급 판정 (유물 실패 시 실행)
+            else {
+                var fishPool = [
+                    { name: "피라미", min: 300, max: 500, prob: 0.40, desc: "작고 귀여운" },
+                    { name: "붕어", min: 600, max: 1000, prob: 0.30, desc: "힘차게 파닥거리는" },
+                    { name: "배스", min: 1200, max: 2000, prob: 0.15, desc: "입이 아주 큰" },
+                    { name: "잉어", min: 2500, max: 4500, prob: 0.10, desc: "묵직한 무게감의" },
+                    { name: "황금쏘가리", min: 5000, max: 8000, prob: 0.05, desc: "전설 속의 영물," }
+                ];
 
-            replier.reply(formatCommand("🎣 낚시 성공!", user, "오! 묵직한 손맛!\n[" + fish + "]를 낚아 올렸습니다.\n💰 보상: +" + fp(reward) + "P" + (res.repayMsg || ""), "내 잔액: " + fp(user.point) + "P"));
+                var fishRand = Math.random();
+                var selectedFish = fishPool[0];
+                var cumulative = 0;
+                for (var i = 0; i < fishPool.length; i++) {
+                    cumulative += fishPool[i].prob;
+                    if (fishRand < cumulative) {
+                        selectedFish = fishPool[i];
+                        break;
+                    }
+                }
+
+                var reward = Math.floor(Math.random() * (selectedFish.max - selectedFish.min + 1)) + selectedFish.min;
+                var res = processRepayment(user, reward, targetUid, roomName);
+                util_updatePoint(user, roomData, Number(res.actualGain), "낚시 보상: " + selectedFish.name, roomName);
+
+                var content = "찌가 깊숙이 가라앉습니다! 영차!\n\n" +
+                              "🐟 [" + selectedFish.desc + " " + selectedFish.name + "]를 낚았습니다!\n" +
+                              "💰 판매 보상: +" + fp(reward) + "P" + (res.repayMsg || "");
+
+                replier.reply(formatCommand("🎣 낚시 성공!", user, content, "내 잔액: " + fp(user.point) + "P"));
+            }
         }
         safeSaveData(data);
         return true;

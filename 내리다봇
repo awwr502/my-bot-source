@@ -1582,9 +1582,10 @@ function processTheftResult(roomName, thiefUid, victimUid) {
     // 도둑의 포인트 증가 (이 돈은 피해자에게서 왔으므로 은행 재원 변동 0)
     util_updatePoint(thief, room, Number(res.actualGain), "도둑질 성공", roomName);
     
-    /* [신규] 도둑질 누적 통계 및 칭호 체크 */
-    if (thief.totalTheftSuccess === undefined) thief.totalTheftSuccess = 0;
-    thief.totalTheftSuccess++;
+   /* [보안 강화] 도둑질 누적 통계 게이트웨이 보호 */
+    // 기존의 undefined 체크와 ++ 연산을 util_setData 하나로 통합합니다.
+    var nextTheftSuccess = Number(thief.totalTheftSuccess || 0) + 1;
+    util_setData(thief, 'totalTheftSuccess', nextTheftSuccess, "도둑질 성공 기록", roomName);
 
     // 칭호 부여 로직 (섹터 11의 util_checkAndAwardTitle 사용)
     
@@ -5043,11 +5044,18 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         // [v5.9] 게이트웨이 통합: "채굴" 키워드로 국고(bankReserve)에서 수익금 방출 및 기록
         util_updatePoint(user, roomData, Number(res.actualGain), "광산 채굴 정산", roomName);
 
-        // [누적 시간 칭호 체크]
-        if (user.totalMiningTime === undefined) user.totalMiningTime = 0;
-        user.totalMiningTime += durationMin;
+        // 1. 통계 데이터 갱신 (게이트웨이 보호)
+        var nextMiningTime = Number(user.totalMiningTime || 0) + durationMin;
+        util_setData(user, 'totalMiningTime', nextMiningTime, "광산 채굴 시간 합산", roomName);
 
+        var nextArtifacts = Number(user.artifactPieces || 0) + artifactFound;
+        util_setData(user, 'artifactPieces', nextArtifacts, "유물 조각 획득", roomName);
+
+        // 2. 리플라이어 스텁 선언 (이후 모든 칭호 체크 로직에서 공통 사용)
+        // 여기서 한 번만 선언하면 하단에서는 다시 쓸 필요가 없습니다.
         var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
+
+        // 3. 채굴 시간 칭호 체크
 
         if (user.totalMiningTime >= 10000) {
             util_checkAndAwardTitle(user, replierStub, "채굴왕", 2903, "⛏️", "누적 채굴 10,000분", "유물 도감도 함께 확인해보세요! [/유물도감]");
@@ -5057,10 +5065,7 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
             util_checkAndAwardTitle(user, replierStub, "두더지", 2901, "⛏️", "누적 채굴 3,000분", "7,000분 달성 시 [석공]에 도전하세요!");
         }
 
-        /* [Gemini 요청 사항] 유물 조각 5단계 칭호 자동 부여 (하위는 아이콘 없음, 도굴왕만 전용아이콘) */
-        user.artifactPieces = (user.artifactPieces || 0) + artifactFound;
-
-        var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
+        // 4. 유물 조각 칭호 체크 (위에서 선언한 replierStub을 그대로 사용)
 
         if (user.artifactPieces >= 50) {
             util_checkAndAwardTitle(user, replierStub, "도굴왕", 2915, "⚜️", "유물 조각 50개 달성", "전설의 도굴왕으로 등극하셨습니다!");
@@ -7134,18 +7139,23 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             var isWin = Math.random() < winProb; 
             var result = isWin ? pick : (pick === "홀" ? "짝" : "홀");
             
-            user.dailyGambleCount = (user.dailyGambleCount || 0) + 1;
+            // 1. 도박 참여 통계 갱신 (게이트웨이 보호 - 중복 연산 ++ 제거)
+            var nextTotalGamble = Number(user.totalGambleCount || 0) + 1;
+            util_setData(user, 'totalGambleCount', nextTotalGamble, "도박 통계 갱신", roomName);
+
+            // 2. 일일 도박 횟수 갱신 (신용도 감점용)
+            var nextDailyGamble = (user.dailyGambleCount || 0) + 1;
+            util_setData(user, 'dailyGambleCount', nextDailyGamble, "홀짝 참여", roomName);
+
             if (user.dailyGambleCount > 10) {
                 user.creditScore = Math.max(0, Number(user.creditScore || 600) - 1);
                 checkAndHandleDefaulter(user, roomName);
             }
 
-            if (user.totalGambleCount === undefined) user.totalGambleCount = 0;
-            if (user.totalGambleWins === undefined) user.totalGambleWins = 0;
-            user.totalGambleCount++;
-
             if (isWin) {
-                user.totalGambleWins++;
+                // 3. 승리 횟수 갱신 (직접 연산 ++ 대신 게이트웨이 보호 적용)
+                var nextWins = Number(user.totalGambleWins || 0) + 1;
+                util_setData(user, 'totalGambleWins', nextWins, "도박 승리 기록", roomName);
                 var res = processRepayment(user, expectedPayout, targetUid, roomName);
                 // [엔진 연결] 게이트웨이 승리금 지급 (은행 자동 차감)
                 util_updatePoint(user, roomData, Number(res.actualGain), "홀짝 적중", roomName);
@@ -7607,17 +7617,21 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         /* [핵심] 중앙은행 연동: 매수 대금을 금고에 입고 */
         util_updatePoint(user, roomData, -totalPrice, "주식 매수", roomName);
 
-        if (!user.stockHoldings) user.stockHoldings = {};
-        if (!user.stockAvg) user.stockAvg = {};
+        // 1. 평단가 계산 로직 (계산은 유지하되, 데이터 구조는 딥헬러가 보장함)
         var curCount = Number(user.stockHoldings[sName] || 0);
         var curAvg = Number(user.stockAvg[sName] || 0);
+        var newAvg = Math.floor(((curAvg * curCount) + totalPrice) / (curCount + count));
         
-        user.stockAvg[sName] = Math.floor(((curAvg * curCount) + totalPrice) / (curCount + count));
+        // 평단가 업데이트 (객체 내부 키 대입)
+        user.stockAvg[sName] = newAvg; 
+        
+        // 2. 주식 수량 업데이트 (전용 보안 함수 호출)
         util_updateStock(user, sName, count, "주식 매수", roomName);
 
-        /* [신규] 누적 투자 데이터 업데이트 및 칭호 체크 */
-        if (user.totalInvestAmount === undefined) user.totalInvestAmount = 0;
-        user.totalInvestAmount += totalPrice;
+        // 3. [교체] 누적 투자 데이터 게이트웨이 보호
+        // 직접 연산(+=) 대신 안전하게 합산된 최종값을 전달합니다.
+        var nextInvestAmount = Number(user.totalInvestAmount || 0) + totalPrice;
+        util_setData(user, 'totalInvestAmount', nextInvestAmount, "주식 투자 총액 갱신", roomName);
 
         var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
 

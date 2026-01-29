@@ -54,7 +54,7 @@ if (typeof globalData === 'undefined' || globalData === null) {
 /* [안정화] 핵심 게임 엔진 및 상태 참조 전역 선언 */
 var racingData = null;      // 경마 실시간 데이터 참조용
 var lotto = null;           // 로또 실시간 데이터 참조용
-var marketOpenPrice = 0;    // 주식 시가 참조용
+var marketOpenPrice = globalData.marketOpenPrice || 0;    // 주식 시가 참조용
 var feverData = {};         // 피버타임 상태 참조용
 var sprinkleData = {};      // 뿌리기 상태 참조용
 
@@ -180,9 +180,9 @@ var SYSTEM_CONFIG = {
                 CLOSE_HOUR: 23,    // 주식 장 마감 시간
                 MANI_RATE: 0.15,   // 기본 특수 이벤트(폭등/폭락) 변동폭
                 DELIST_LIMIT: 0.20, // [상폐 기준]: 시장 평균가 대비 해당 비율 이하로 떨어지면 상장폐지 검토
-                CLOSING_LIMIT: 0.20, // [종가 제한]: 당일 시가 대비 최대 상승폭 (+20%)
-                RESISTANCE_START: 1.15, // [저항 시작]: 가격이 시가 대비 15% 상승 시 하락 압력 발생
-                GRAVITY: 0.20      // [중력 계수]: 저항 구간에서 가격을 아래로 끌어내리는 힘의 세기
+                CLOSING_LIMIT: 0.20, // [상한 저항]: 시가 대비 +20% 지점부터 하락 압력 강화
+                RESISTANCE_START: 0.15, // [저항 시작]: 시가 대비 +15% 지점부터 완만한 하락 압력 발생
+                GRAVITY: 0.18      // [중력 계수]: 저항의 세기 (수치가 높을수록 억제력이 강함)
             }
         },
         MINE: { // [광산 채굴 설정]
@@ -1785,9 +1785,11 @@ function updateStockPrices(data) {
             if (marketOpenPrice > 0) {
                 var growthRate = (stock.price - marketOpenPrice) / marketOpenPrice;
                 var sConf = conf.SETTINGS;
-                var limitThreshold = sConf.CLOSING_LIMIT - 1.0; // 1.20 -> 0.20으로 변환
 
-                // 1. 과열(저항) 시작 판정 (설정된 상한선 터치 시)
+                // [교정] 상한선 기준점을 0.20(+20%)으로 정확히 설정
+                var limitThreshold = sConf.CLOSING_LIMIT; 
+
+                // 1. 과열(저항) 시작 판정 (설정된 상한선 20% 터치 시)
                 if (growthRate >= limitThreshold) {
                     stock.isOverheated = true;
                 }
@@ -1797,8 +1799,11 @@ function updateStockPrices(data) {
                     // 설정된 상한선(limitThreshold)과의 거리 계산
                     var gap = growthRate - limitThreshold; 
                     
-                    var elasticPull = (gap * 0.12) + 0.01; 
+                    // [부드러운 압력] gap이 클수록 강해지되, 가격이 내려오면(gap 감소) 저항도 함께 약해짐
+                    var elasticPull = (gap * 0.12) + 0.001; 
                     changePercent -= elasticPull;
+                    
+                    // 저항 구간 내 자연스러운 시세 흔들림
                     changePercent += (Math.random() * 0.06 - 0.03);
 
                     // 3. 해제 조건: 주가가 설정된 상한선 미만으로 내려가면 해제
@@ -1809,7 +1814,8 @@ function updateStockPrices(data) {
                 // 일반 저항 구간 (15% ~ 20% 사이)
                 else if (growthRate > sConf.RESISTANCE_START) {
                     var gap = (growthRate - sConf.RESISTANCE_START);
-                    var resistance = gap * sConf.GRAVITY * (1 + (gap * 10)); 
+                    // 저항 계수를 소폭 하향하여 상승 에너지를 더 보존함
+                    var resistance = gap * sConf.GRAVITY * (1 + (gap * 5)); 
                     changePercent -= resistance;
                 }
             } // if (marketOpenPrice > 0) 종료

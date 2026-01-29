@@ -841,6 +841,32 @@ var sprayData = {
 //==========섹터7==========
 
 /**
+ * [신설: 범용 데이터 게이트웨이] v1.0
+ * 기능: 티어, 신용점수, 통계 등 모든 일반 변수의 수정을 감시하고 오염을 차단
+ */
+function util_setData(user, key, value, reason, roomName) {
+    if (!user || key === undefined) return;
+    
+    var preValue = user[key];
+    
+    // [감사] 기존 데이터와 새로운 데이터의 타입이 다르면 차단 (예: 숫자 자리에 문자열 주입)
+    // 단, 기존 값이 null이나 undefined인 경우는 초기화로 간주하여 통과
+    if (preValue !== undefined && preValue !== null) {
+        if (typeof preValue !== typeof value || (typeof value === 'number' && isNaN(value))) {
+            Log.error("[Universal Audit Fail] " + (user.name || "Unknown") + "의 " + key + " 데이터 오염 시도 차단");
+            return; 
+        }
+    }
+
+    user[key] = value; // 안전 검증 통과 시 값 변경
+
+    // [확장성] 특정 핵심 변수 변경 시 로그 기록이나 부수 효과 연동
+    if (key === 'tier' && preValue !== value) {
+        Log.info("[Status Change] " + user.name + " 티어 변동: " + preValue + " -> " + value);
+    }
+}
+
+/**
  * [신설: 중앙은행 국고 3중 방어막] v1.0
  * 기능: 국가 전체 재원의 NaN, 부분 증발, 비상식적 급감을 감시
  */
@@ -1593,8 +1619,8 @@ function checkAndHandleDefaulter(user, roomName) {
     var currentScore = Number(user.creditScore || 600);
     if (currentScore < 500) {
         if (!user.isDefaulter) {
-            user.isDefaulter = true;
-            user.icon = ""; 
+            util_setData(user, 'isDefaulter', true, "신용도 하락(500미만)", roomName);
+            util_setData(user, 'icon', "", "신용불량 아이콘 몰수", roomName);
             var msg = "신용 점수 500점 미만 하락\n\n1. 보유 아이콘 몰수\n2. 획득 포인트 50% 자동 상환 적용";
             try { Api.replyRoom(roomName, formatCommand("📉 신용불량자 지정", user, msg, "대출 상환을 권장합니다.")); } catch(e){}
         }
@@ -1633,10 +1659,14 @@ function distributeRepayment(user, amount) {
     var actualRepayed = initialAmount - remainingRepay;
     user.loan.items = newItems;
     user.loan.debt = 0;
-    for(var i=0; i<newItems.length; i++) user.loan.debt += Number(newItems[i]);
+    var nextScore = Math.min(1000, Number(user.creditScore || 600) + (clearedCount * 15));
+    util_setData(user, 'creditScore', nextScore, "대출 상환 가점", roomName);
 
-    user.creditScore = Math.min(1000, Number(user.creditScore || 600) + (clearedCount * 15));
-    if (user.loan.debt <= 0) { user.loan.debt = 0; user.loan.items = []; user.isTransferred = false; }
+    if (user.loan.debt <= 0) {
+        user.loan.debt = 0; 
+        user.loan.items = []; 
+        util_setData(user, 'isTransferred', false, "채무 완납", roomName);
+    }
     
     return { actualRepay: actualRepayed, creditGain: clearedCount * 15, clearedCount: clearedCount };
 }
@@ -1644,9 +1674,10 @@ function distributeRepayment(user, amount) {
 /* [기능 3] 사채(P2P) 자동 추심 처리 (수정: 추심 비율 50% 적용) */
 function processPrivateCollection(user, userUid, amount, roomName) {
     var data = getDatabase();
-    if (!roomName || !data.rooms[roomName]) return { collected: 0, msg: "" };
-
-    var roomData = data.rooms[roomName];
+    if (!user.loan || Number(user.loan.debt || 0) <= 0) {
+        // [교체] 대환 대출 상태 안전 해제
+        util_setData(user, 'isTransferred', false, "채무 부재 상태 동기화", roomName);
+    }
     
     // [설정 수정] 직접 추심 한도를 수익의 50%로 변경
     var totalLimit = Math.floor(Number(amount) * 0.5); 
@@ -7163,14 +7194,24 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         startTracking(user, "승급 도전");
 
         if (rand < prob.up) { 
-            user.tier++;
-            var successBody = "티어: [" + TIERS[user.tier] + "]\n\n";
-            if (user.tier === 9) {
-                user.challengerCount = (user.challengerCount || 0) + 1;
+            // 1. 차세대 티어 계산 및 게이트웨이 검증
+            var nextTier = Number(user.tier || 0) + 1;
+            util_setData(user, 'tier', nextTier, "승급 성공", roomName);
+
+            var successBody = "티어: [" + TIERS[nextTier] + "]\n\n";
+            
+            if (nextTier === 9) { // 챌린저 도달 판정
+                // 챌린저 횟수 통계도 게이트웨이로 보호
+                util_setData(user, 'challengerCount', (user.challengerCount || 0) + 1, "챌린저 달성", roomName);
                 user.challengerIconSeason = getSimpleSeason();
                 successBody += "🎊 축하합니다! 챌린저 등급 도달! 명예의 전당에 기록되었습니다.";
             } else {
-                if (usedDaily) user.dailyPromotionAttempts++; else user.purchasedPromotionAttempts++;
+                // 승급 성공 보너스 기회 증가도 게이트웨이로 보호
+                if (usedDaily) {
+                    util_setData(user, 'dailyPromotionAttempts', (user.dailyPromotionAttempts || 0) + 1, "승급 성공 보너스", roomName);
+                } else {
+                    util_setData(user, 'purchasedPromotionAttempts', (user.purchasedPromotionAttempts || 0) + 1, "승급 성공 보너스", roomName);
+                }
                 successBody += "🎉 승급 성공 보너스: 재도전 기회 유지!";
             }
             replier.reply(formatCommand("🎊 승급 성공!", user, successBody, "남은 기회: " + (Number(user.dailyPromotionAttempts) + Number(user.purchasedPromotionAttempts)) + "회"));

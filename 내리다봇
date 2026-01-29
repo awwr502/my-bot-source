@@ -12,6 +12,34 @@ function registerAdminCmd(cmd, desc, func) {
     ADMIN_COMMANDS[cmd] = { desc: desc, execute: func };
 }
 
+/**
+ * [전역 표준 규격] USER_SCHEMA v1.0
+ * 치유(Sector 19)와 신규가입(Sector 20-1)이 공통으로 참조하는 리스트입니다.
+ * 덮어쓰기 사고를 방지하기 위해 point 등 핵심 자산의 기본값은 0으로 설정합니다.
+ */
+var USER_SCHEMA = [
+    { key: 'point', default: 0, type: 'number' }, // 실제 지급은 20-1에서 수행
+    { key: 'bank', default: 0, type: 'number' },
+    { key: 'tier', default: 0, type: 'number' },
+    { key: 'creditScore', default: 600, type: 'number' },
+    { key: 'inventory', default: [], type: 'array' },
+    { key: 'collectedIcons', default: [], type: 'array' },
+    { key: 'stockHoldings', default: {}, type: 'object' },
+    { key: 'stockAvg', default: {}, type: 'object' },
+    { key: 'chatLog', default: [], type: 'array' },
+    { key: 'timeoutEndTime', default: 0, type: 'number' },
+    { key: 'timeoutReason', default: "", type: 'string' },
+    { key: 'totalMiningTime', default: 0, type: 'number' },
+    { key: 'artifactPieces', default: 0, type: 'number' },
+    { key: 'totalGambleCount', default: 0, type: 'number' },
+    { key: 'totalGambleWins', default: 0, type: 'number' },
+    { key: 'totalTheftSuccess', default: 0, type: 'number' },
+    { key: 'totalInvestAmount', default: 0, type: 'number' },
+    { key: 'dailyPromotionAttempts', default: 1, type: 'number' },
+    { key: 'dailyGambleCount', default: 0, type: 'number' },
+    { key: 'boughtWarningRemoval', default: false, type: 'boolean' }
+];
+
 /* 파일 및 데이터 동기화 객체 */
 var Lock = java.util.concurrent.locks.ReentrantLock; 
 var lock = new Lock(); 
@@ -2915,45 +2943,23 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 if (user && targetUid) {
                     var isDeepHealed = false;
 
-                    // 2. [Full-Schema] 필수 변수 및 타입 정밀 검증
-                    // 하나라도 누락되면 다른 섹터(21~44)에서 Crash가 발생하므로 전수 조사합니다.
-                    var schema = [
-                        { key: 'chatLog', default: [], type: 'array' },
-                        { key: 'inventory', default: [], type: 'array' },
-                        { key: 'collectedIcons', default: [], type: 'array' },
-                        { key: 'stockHoldings', default: {}, type: 'object' },
-                        { key: 'stockAvg', default: {}, type: 'object' },
-                        { key: 'title', default: "", type: 'string' },
-                        { key: 'icon', default: "", type: 'string' },
-                        { key: 'point', default: 50000, type: 'number' },
-                        { key: 'timeoutEndTime', default: 0, type: 'number' },
-                        { key: 'artifactPieces', default: 0, type: 'number' },
-                        { key: 'gameAuthCount', default: 0, type: 'number' },
-                        { key: 'purchasedAuthCount', default: 0, type: 'number' },
-                        { key: 'totalDonation', default: 0, type: 'number' },
-                        { key: 'boxFragments', default: 0, type: 'number' },
-                        { key: 'boxTickets', default: 0, type: 'number' },
-                        { key: 'dailyGambleCount', default: 0, type: 'number' },
-                        { key: 'dailyPromotionAttempts', default: 1, type: 'number' },
-                        { key: 'boughtWarningRemoval', default: false, type: 'boolean' },
-                        { key: 'totalMiningTime', default: 0, type: 'number' },
-                        { key: 'totalGambleCount', default: 0, type: 'number' },
-                        { key: 'totalGambleWins', default: 0, type: 'number' },
-                        { key: 'totalTheftSuccess', default: 0, type: 'number' },
-                        { key: 'totalInvestAmount', default: 0, type: 'number' }
-                    ];
-
-                    schema.forEach(function(item) {
+                    // [교체] 내부에 있던 긴 리스트를 지우고 섹터 1의 전역 스키마를 호출합니다.
+                    USER_SCHEMA.forEach(function(item) {
                         var val = user[item.key];
-                        var invalid = (val === undefined || val === null);
                         
-                        // 타입 불일치 검사 (구조적 결함 수리)
-                        if (!invalid) {
-                            if (item.type === 'array' && !Array.isArray(val)) invalid = true;
-                            else if (item.type === 'object' && (typeof val !== 'object' || Array.isArray(val))) invalid = true;
-                            else if (item.type === 'number' && typeof val !== 'number') invalid = true;
-                            else if (item.type === 'boolean' && typeof val !== 'boolean') invalid = true;
+                        // [보호] 데이터가 이미 존재하고 타입도 맞다면 보존 (리셋 방지 핵심)
+                        if (val !== undefined && val !== null) {
+                            if (typeof val === item.type || (item.type === 'array' && Array.isArray(val))) return;
                         }
+
+                        // [수리] 데이터가 없거나 깨졌을 때만 기본값 주입
+                        if (item.type === 'number' && val !== undefined && !isNaN(Number(val))) {
+                            user[item.key] = Number(val);
+                        } else {
+                            user[item.key] = item.default;
+                        }
+                        isDeepHealed = true;
+                    });
 
                         if (invalid) {
                             user[item.key] = item.default;

@@ -2795,10 +2795,16 @@ function _runSector17Logic(data, ctx) {
             try { Api.replyRoom(ctx.targetRoom, formatAdmin("❄️ 피버타임 종료", "이벤트가 종료되어\n승급 확률이 정상화되었습니다.")); } catch(e){}
         }
 
-        // [5] 핵심: 모든 방 유저 스탯 초기화 (승급 기회 리셋 포함)
+        // [5] 핵심: 모든 방 유저 스탯 초기화 (지능형 금리 엔진 적용)
         for (var rName in data.rooms) {
             var roomObj = data.rooms[rName];
             if (!roomObj.features) continue;
+
+            // [연동] 섹터 49의 지능형 탄력 금리 승수 호출
+            var dynMult = 1.0;
+            if (typeof util_getDynamicRateMultiplier === 'function') {
+                dynMult = util_getDynamicRateMultiplier(rName);
+            }
 
             if (roomObj.features.lotto) {
                 roomObj.features.lotto.entries = {}; 
@@ -2809,33 +2815,36 @@ function _runSector17Logic(data, ctx) {
                 var u = roomObj.users[id];
                 u.dailyLoanCount = 0; 
                 u.dailyGambleCount = 0; 
-                u.dailyPromotionAttempts = 1; // [확인] 여기서 정상적으로 1로 초기화됨
+                u.dailyPromotionAttempts = 1; 
                 u.dailyStimulusCount = 0; 
                 u.dailyCreditRestoreCount = 0; 
                 
-                // [보안강화] 은행 예금 이자 지급 (복리 2%) 및 포인트 게이트웨이 통합
+                // [보안강화] 지능형 은행 예금 이자 지급 (탄력 이율 적용)
                 var preBank = Number(u.bank || 0);
                 if (preBank > 0) {
-                    var interest = Math.floor(preBank * 0.02);
+                    // 국고가 부족하면 예금 이자를 올려서 저축을 유도함 (dynMult 비례)
+                    var savingsRate = 0.02 * dynMult; 
+                    var interest = Math.floor(preBank * savingsRate);
                     if (interest > 0) {
-                        // 기존: util_updateBank, util_updateReserve 개별 호출 (저널링 누락 위험)
-                        // 수정: 게이트웨이를 통해 예금 증가 및 국고 차감 통합 처리
                         util_updateBank(u, roomObj, interest, "은행 예금 이자 지급", rName);
                         util_updateReserve(roomObj, -interest, "은행 예금 이자 지급", rName);
                     }
                 }
                 
-                // [보안강화] 대출 채무 이자 가산 (일일 5%) 및 연체 관리
+                // [보안강화] 지능형 차등 대출 이자 가산 (신용등급별 + 탄력 승수)
                 if (u.loan && Number(u.loan.debt) > 0) { 
                     u.creditScore = Math.max(0, Number(u.creditScore) - 5); 
-                    var dailyInterest = Math.floor(Number(u.loan.debt) * 0.05);
                     
-                    // 채무액 연산 무결성 가드 (Audit)
+                    // 신용등급 정보 호출 (섹터 10 연동)
+                    var cr = getCreditInfo(u.creditScore);
+                    // 등급별 기본 이율 기준(cr.rate - 1)에 시장 승수(dynMult)를 곱함
+                    var dailyRate = (cr.rate - 1) * dynMult;
+                    var dailyInterest = Math.floor(Number(u.loan.debt) * dailyRate);
+                    
                     var preDebt = Number(u.loan.debt);
                     var expectedDebt = preDebt + dailyInterest;
                     u.loan.debt = expectedDebt;
                     
-                    // 만약 채무 연산 중 NaN 등이 발생하면 즉시 롤백하여 데이터 파손 방지
                     if (isNaN(u.loan.debt) || u.loan.debt !== expectedDebt) {
                         u.loan.debt = preDebt;
                         Log.error("[System] " + u.name + " 대출 이자 연산 오류 차단 및 복구");
@@ -8416,4 +8425,43 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
     return false;
+}
+
+//==========섹터49==========
+
+/**
+ * [신설: 지능형 금리 산출 엔진] v1.0
+ * 기능: 중앙은행의 재원 상태를 분석하여 시장 탄력 금리 승수(Multiplier)를 도출합니다.
+ * @param {String} roomName - 방 이름
+ * @returns {Number} 금리 승수 (0.5 ~ 3.0)
+ */
+function util_getDynamicRateMultiplier(roomName) {
+    var data = getDatabase();
+    var roomData = data.rooms[roomName];
+    
+    // [Safe-Fall] 데이터가 없거나 기준점이 없으면 기본 승수(1.0) 반환
+    if (!roomData || !roomData.economyBase || roomData.economyBase <= 0) return 1.0;
+
+    var reserve = Number(roomData.bankReserve || 0);
+    var base = Number(roomData.economyBase);
+    
+    /**
+     * [금리 산출 로직]
+     * 현금 보유 비율(Reserve Ratio) = 현재 금고 재원 / 경제 기준점
+     * 1. 비율이 낮을수록(금고가 빌수록) 승수 상승 (최대 3.0배) -> 대출 억제, 상환 독려
+     * 2. 비율이 높을수록(금고가 찰수록) 승수 하락 (최소 0.5배) -> 대출 권장, 투자 활성화
+     */
+    var ratio = reserve / (base * 0.1); // 기준점의 10%를 적정 금고 수준으로 가정
+    var multiplier = 1.0;
+
+    if (ratio < 1.0) {
+        // [위기 구간] 금고가 적정치 미만일 때: 승수 급격히 상승
+        multiplier = 1.0 + (1.0 - ratio) * 2.0; 
+    } else {
+        // [호황 구간] 금고가 넉넉할 때: 승수 완만하게 하락
+        multiplier = 1.0 - (ratio - 1.0) * 0.2;
+    }
+
+    // [최종 가드] 금리가 비상식적으로 변하는 것을 방지 (하한 0.5배 ~ 상한 3.0배)
+    return Math.max(0.5, Math.min(3.0, multiplier));
 }

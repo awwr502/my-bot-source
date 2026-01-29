@@ -522,7 +522,7 @@ function safeSaveData(data, isForceBackup) {
 
                 // 2. 정상 활동 플래그(skipHealing)가 켜져 있으면 급감 체크 통과
                 if (u.skipHealing === true) {
-                    u.skipHealing = false; // 플래그 초기화 후 다음 유저로
+                    u.skipHealing = false; // 사용한 플래그는 즉시 초기화
                     continue; 
                 }
                 
@@ -1015,21 +1015,20 @@ function util_calculateNetWorth(user, roomData) {
 }
 
 /**
- * [핵심: 포인트 게이트웨이 엔진] v5.9
- * 기능: 모든 포인트 변동의 단일 입구. 숫자 검증, 마이너스 방지, 국고 연동, 칭호 부여, 저널링 통합 처리.
+ * [핵심: 포인트 게이트웨이 엔진] v6.0
  */
 function util_updatePoint(user, roomData, delta, reason, roomName) {
     if (!user || isNaN(delta) || delta === 0) return;
 
+    // 정상 활동 리스트 확장 (매도, 출금, 분해 등 추가)
     var normalActivities = [
-        "매수", "상점", "구매", "예금", "송금", "배팅", 
-        "사채", "기부", "차감", "홀짝", "결투", "벌금", "상환", "패널티"
+        "매수", "매도", "상점", "구매", "예금", "출금", "송금", "배팅", 
+        "사채", "기부", "차감", "홀짝", "결투", "벌금", "상환", "패널티", "분해", "줍기"
     ];
     
+    // 정상 활동으로 인한 차감일 경우 자가치유 보호막 활성화
     if (delta < 0) {
-        var isNormal = normalActivities.some(function(act) { 
-            return reason.indexOf(act) !== -1; 
-        });
+        var isNormal = normalActivities.some(function(act) { return reason.indexOf(act) !== -1; });
         if (isNormal) user.skipHealing = true;
     }
     
@@ -4792,6 +4791,8 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
         var inv = user.inventory || [];
         if (inv.length === 0) return replier.reply(formatError(user, "분해 불가", "분해할 아이템이 없습니다."));
 
+        user.skipHealing = true;
+
         var numbers = msg.match(/\d+/g);
         if (!numbers) return replier.reply(formatError(user, "입력 오류", "/분해 [번호]"));
 
@@ -7670,7 +7671,8 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var holdings = (user.stockHoldings && user.stockHoldings[sName]) ? Number(user.stockHoldings[sName]) : 0;
 
         if (holdings < count || count <= 0) { replier.reply(formatError(user, "수량 부족", "보유 수량을 확인해주세요.")); return true; }
-        
+        user.skipHealing = true; 
+
         var stock = data.stockMarket[sName];
         var sellPrice = stock ? Math.floor(Number(stock.price)) : 0;
         var totalSell = sellPrice * count; 

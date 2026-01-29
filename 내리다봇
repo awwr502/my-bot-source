@@ -36,7 +36,8 @@ var USER_SCHEMA = [
     { key: 'totalInvestAmount', default: 0, type: 'number' },
     { key: 'dailyPromotionAttempts', default: 1, type: 'number' },
     { key: 'dailyGambleCount', default: 0, type: 'number' },
-    { key: 'boughtWarningRemoval', default: false, type: 'boolean' }
+    { key: 'boughtWarningRemoval', default: false, type: 'boolean' },
+    { key: 'hasVotedToday', default: false, type: 'boolean' }
 ];
 
 /* 파일 및 데이터 동기화 객체 */
@@ -130,6 +131,24 @@ var ROOM_FEATURE_TEMPLATE = function() {
         feverData: { active: false, endTime: 0, scheduled: [] },
         sprinkleData: { active: false, winners: [], portions: [] },
         lotto: { round: 1, entries: {}, dailyPool: 0, jackpot: 0, lastWinNums: [] },
+
+        government: {
+            activePolicy: { // 현재 시행 중인 정책 배율 (기본값)
+                stockTax: 0.05,
+                mineMult: 1.0,
+                attendMult: 1.0,
+                loanLimitMult: 1.0,
+                bankInterest: 0.02,
+                theftFineMult: 1.0,
+                policeProbAdj: 0.0
+            },
+            pendingBill: null,   // 오늘 발의된 안건 데이터
+            votes: { pro: 0, con: 0, voters: [] }, // 투표 가중치 합 및 참여자 명단
+            lastBillDate: "",
+            resultStatus: null,
+            isClosing: false
+        },
+
         /* 방별 독립 입력 대기 상태 */
         states: {
             menuWait: {}, bankProcess: {}, selectWait: {}, lottoPurchase: {},
@@ -272,6 +291,8 @@ BACKUP: {
         ERR_TIMEOUT: "도배로 인해 이용이 일시 제한되었습니다." 
     }
 };
+
+//==========섹터2==========
 
 /**
  * [v8.1 개편] 블랙박스 복구 엔진 (Smart Replay Option 2)
@@ -799,7 +820,9 @@ var CMD_LIST = {
         { cmd: "/광산시작", desc: "방치형 포인트 채굴 시작", cat: "광산", func: "_handleMiningLogic" },
         { cmd: "/광산정보", desc: "현재 채굴 현황 및 예상 수익 확인", cat: "광산", func: "_handleMiningLogic" },
         { cmd: "/광산종료", desc: "채굴 완료 및 포인트 정산", cat: "광산", func: "_handleMiningLogic" },
-        { cmd: "/유물도감", desc: "유물 조각 수집 현황 확인", cat: "광산", func: "_gameInfoLogic" }
+        { cmd: "/유물도감", desc: "유물 조각 수집 현황 확인", cat: "광산", func: "_gameInfoLogic" },
+        { cmd: "/의회", desc: "현재 정책 및 안건 조회", cat: "정부", func: "_gameGovernmentLogic" },
+        { cmd: "/투표", desc: "[찬성|반대] 안건 투표 참여", cat: "정부", func: "_gameGovernmentLogic" }
     ],
     admin: [
         { cmd: "/봇구동", desc: "[온|오프] 시스템 제어", func: "_adminSystemLogic" },
@@ -868,6 +891,26 @@ var sprayData = {
 //==========섹터7==========
 
 /**
+ * [신설: 가상 정부 정책 추출기] v1.0
+ * 기능: 해당 방의 현재 시행 중인 정책 객체를 안전하게 반환
+ */
+function util_getActivePolicy(roomData) {
+    if (roomData && roomData.features && roomData.features.government && roomData.features.government.activePolicy) {
+        return roomData.features.government.activePolicy;
+    }
+    // 정책 데이터가 없을 경우 표준 기본값 반환 (시스템 중단 방지)
+    return {
+        stockTax: 0.05,
+        mineMult: 1.0,
+        attendMult: 1.0,
+        loanLimitMult: 1.0,
+        bankInterest: 0.02,
+        theftFineMult: 1.0,
+        policeProbAdj: 0.0
+    };
+}
+
+/**
  * [신설: 범용 데이터 게이트웨이] v1.0
  * 기능: 티어, 신용점수, 통계 등 모든 일반 변수의 수정을 감시하고 오염을 차단
  */
@@ -905,7 +948,7 @@ function util_updateReserve(roomData, delta, reason, roomName) {
     roomData.bankReserve = expectedReserve;
 
     // [중요] 국고 급감 자가치유 예외 사유 (경마 당첨금, 대형 잭팟 등)
-    var normalOutflow = ["경마 당첨금", "로또 1등", "주식 매도", "은행 출금", "재원 수정", "경마 보전금 지출", "민생지원금 지급"];
+    var normalOutflow = ["경마 당첨금", "로또 1등", "주식 매도", "은행 출금", "재원 수정", "경마 보전금 지출", "민생지원금 지급", "의회 투표 거마비 지급"];
     var isNormal = normalOutflow.some(function(act) { return reason.indexOf(act) !== -1; });
 
     // [3중 감사]
@@ -1044,7 +1087,7 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     }
 
     // 3. 중앙은행(국고) 재원 변동 로직 (안전장치 패치 적용)
-    var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급", "결투 승리 보상", "뿌리기 줍기", "경마 당첨금", "은행 출금", "은행 대출 실행"];
+    var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급", "결투 승리 보상", "뿌리기 줍기", "경마 당첨금", "은행 출금", "은행 대출 실행", "의회 투표 거마비 지급"];
     var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부", "경마 배팅", "배팅 취소 수수료", "사채", "벌금", "상환"];
 
     var brDelta = 0; 
@@ -1907,15 +1950,18 @@ function assignStockType() {
     return "normal";
 }
 
-/* 주식 시세 변동 로직 함수 (정밀도 보정 및 조작 연동) */
+/* 주식 시세 변동 로직 함수 (정밀도 보정 및 정책 연동) */
 function updateStockPrices(data) {
     var conf = SYSTEM_CONFIG.ECO.STOCK;
     if (!data.stockMarket) data.stockMarket = {};
     if (!data.stockTraffic) data.stockTraffic = {}; 
 
+    // [Gemini 요청 사항] 메인 방의 정부 정책 데이터 로드
+    var mainRoom = data.rooms["내리다"];
+    var pol = util_getActivePolicy(mainRoom);
+
     var now = new Date();
     var currentHour = now.getHours();
-    var currentMin = now.getMinutes();
     var isMarketOpen = (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR);
     
     var totalSum = 0;
@@ -1988,6 +2034,12 @@ function updateStockPrices(data) {
             var traffic = data.stockTraffic[name] || { buy: 0, sell: 0 };
             var trafficImpact = Math.max(-0.15, Math.min(0.15, ((traffic.buy - traffic.sell) / (activeUserCount * 5)) * 0.01));
             changePercent += trafficImpact;
+
+            // [가상 정부] 정책에 따른 변동성(Volatility) 보정 적용
+            // 예: 시장 안정화 정책 가결 시 변동폭 0.5배 축소 등
+            if (pol.volatilityMult && pol.volatilityMult !== 1.0) {
+                changePercent *= pol.volatilityMult;
+            }
 
             if (marketOpenPrice > 0) {
                 var growthRate = (stock.price - marketOpenPrice) / marketOpenPrice;
@@ -2273,6 +2325,79 @@ function _runSector16Logic(data, ctx) {
 
     var racingData = mainRoomData.features.racing;
     var lotto = mainRoomData.features.lotto;
+
+    var gov = mainRoomData.features.government;
+
+    /* [가상 정부] 1. 안건 자동 발의 (20:00) */
+    if (currentHour === 20 && currentMin === 0 && gov.lastBillDate !== ctx.today) {
+        if (typeof gov_generateBill === 'function') {
+            gov.pendingBill = gov_generateBill(); // 안건 생성 (섹터 46 로직)
+            gov.votes = { pro: 0, con: 0, voters: [] };
+            gov.lastBillDate = ctx.today;
+            gov.isClosing = false;
+            gov.resultStatus = null;
+
+            var billMsg = "🏛️ [내리다 의회 안건 발의]\n" +
+                          "━━━━━━━━━━━━━━━\n" +
+                          "📜 안건: " + gov.pendingBill.name + "\n\n" +
+                          "✅ 혜택: " + gov.pendingBill.buffDesc + "\n" +
+                          "⚠️ 대가: " + gov.pendingBill.penaltyDesc + "\n" +
+                          "━━━━━━━━━━━━━━━\n" +
+                          "🕒 투표 시간: 20:00 ~ 23:50\n" +
+                          "🎁 참여 보상: 500P (즉시 지급)\n\n" +
+                          "💡 참여: [/투표 찬성] 또는 [/투표 반대]\n" +
+                          "(참여율 50% 미만 시 기각됩니다)";
+            Api.replyRoom(ctx.targetRoom, billMsg);
+            ctx.isUpdated = true;
+        }
+    }
+
+    /* [가상 정부] 2. 투표 마감 및 정족수 검증 (23:50) */
+    if (currentHour === 23 && currentMin === 50 && gov.pendingBill && !gov.isClosing) {
+        gov.isClosing = true;
+        
+        // 정족수 계산: 오늘 출석한 유저 기준 50%
+        var attendees = 0;
+        for (var uid in mainRoomData.users) {
+            if (mainRoomData.users[uid].lastDate === ctx.today) attendees++;
+        }
+        var quorum = Math.ceil(attendees * 0.5);
+        var participantCount = gov.votes.voters.length;
+
+        if (participantCount < quorum) {
+            gov.resultStatus = "REJECTED_QUORUM";
+            var failMsg = "📢 [의회 통보] 금일 안건이 기각되었습니다.\n" +
+                          "사유: 투표 정족수 미달\n" +
+                          "(참여: " + participantCount + "명 / 필요: " + quorum + "명)";
+            Api.replyRoom(ctx.targetRoom, failMsg);
+        } else {
+            gov.resultStatus = (gov.votes.pro > gov.votes.con) ? "PASSED" : "REJECTED_VOTE";
+            var resultText = (gov.resultStatus === "PASSED") ? "가결 (찬성 과반)" : "부결 (반대 과반)";
+            var finalMsg = "🏛️ [의회 투표 종료]\n결과: " + resultText + "\n" +
+                           "(찬성 " + gov.votes.pro + "표 / 반대 " + gov.votes.con + "표)\n\n" +
+                           "💡 가결된 정책은 00시 05분에 발효됩니다.";
+            Api.replyRoom(ctx.targetRoom, finalMsg);
+        }
+        ctx.isUpdated = true;
+    }
+
+    /* [가상 정부] 3. 정책 공식 적용 (00:05) */
+    if (currentHour === 0 && currentMin === 5 && gov.resultStatus) {
+        if (gov.resultStatus === "PASSED") {
+            // 안건의 효과를 현재 정책에 덮어쓰기
+            gov.activePolicy = JSON.parse(JSON.stringify(gov.pendingBill.effects));
+            Api.replyRoom(ctx.targetRoom, "🏛️ [정부 공보] 새로운 정책 발효!\n━━━━━━━━━━━━━━━\n안건 '" + gov.pendingBill.name + "'이 지금부터 모든 시스템에 공식 적용됩니다.");
+        }
+        
+        // 정부 상태 및 유저 투표권 리셋
+        gov.pendingBill = null;
+        gov.resultStatus = null;
+        gov.isClosing = false;
+        for (var userUid in mainRoomData.users) {
+            mainRoomData.users[userUid].hasVotedToday = false;
+        }
+        ctx.isUpdated = true;
+    }
 
     /* [시스템] 5분 주기 오토세이브 & 장 오픈 시가 기록 */
     try {
@@ -4946,8 +5071,9 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         var durationMin = Math.floor((Date.now() - user.mining.startTime) / 60000);
         var totalMin = (user.totalMiningTime || 0) + durationMin;
         
-        // [v5.9] 통합 물가 엔진 연결 (수동 계산식 삭제)
-        var multiplier = util_getEcoMultiplier(roomName);
+        // [가상 정부] 현재 정책 배율 로드
+        var pol = util_getActivePolicy(roomData);
+        var multiplier = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
 
         var hasDebt = (user.loan && Number(user.loan.debt) > 0);
         if (!hasDebt && roomData.loanContracts) {
@@ -4962,7 +5088,8 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
 
         var infoBody = "\n채굴 진행: " + durationMin + "분째...\n" +
                        "📈 누적 채굴: " + fp(totalMin) + "분 경과\n" +
-                       "예상 기본수익: +" + fp(estimatedEarn) + "P\n\n" +
+                       "💰 예상 기본수익: +" + fp(estimatedEarn) + "P\n" +
+                       "⚖️ 정책 효과: x" + (pol.mineMult || 1.0).toFixed(1) + " (적용 중)\n\n" +
                        "✨ 광물 발견 수익은 종료 시 합산됩니다.";
 
         replier.reply(formatCommand("⛏️ 광산 진행 현황", user, infoBody, "종료 및 정산은 [/광산종료]"));
@@ -4994,7 +5121,9 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        var multiplier = util_getEcoMultiplier(roomName);
+        // [가상 정부] 현재 정책 배율 로드 및 적용
+        var pol = util_getActivePolicy(roomData);
+        var multiplier = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
 
         var hasDebt = (user.loan && Number(user.loan.debt) > 0);
         if (!hasDebt && roomData.loanContracts) {
@@ -6541,6 +6670,13 @@ function _handleGameLogic(msg, user, data, replier, roomName, targetUid, sender)
     // 1. 명령어 첫 단어 추출
     var cmd = msg.split(" ")[0];
 
+    // [가상 정부 시스템] 정책 및 투표 명령어 분기 처리
+    if (cmd === "/의회" || cmd === "/투표") {
+        if (typeof _gameGovernmentLogic === 'function') {
+            return _gameGovernmentLogic(msg, user, data, replier, roomName, targetUid);
+        }
+    }
+
     // 2. 유저 명령어 레지스트리 검색
     if (USER_COMMANDS[cmd] && typeof USER_COMMANDS[cmd].execute === 'function') {
         
@@ -7688,10 +7824,15 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         if (holdings < count || count <= 0) { replier.reply(formatError(user, "수량 부족", "보유 수량을 확인해주세요.")); return true; }
         user.skipHealing = true; 
 
+        // [가상 정부] 현재 시행 중인 정책 데이터 로드
+        var pol = util_getActivePolicy(roomData);
+
         var stock = data.stockMarket[sName];
         var sellPrice = stock ? Math.floor(Number(stock.price)) : 0;
         var totalSell = sellPrice * count; 
-        var fee = Math.floor(totalSell * 0.05); 
+        // [가상 정부] 정책에 따른 유동적 세율 적용 (기본 5%)
+        var currentTax = pol.stockTax || 0.05;
+        var fee = Math.floor(totalSell * currentTax);
         var finalPrice = totalSell - fee; 
 
         /* [핵심] 은행 파산 보호 (뱅크런 방지) */
@@ -7726,7 +7867,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
               getDisplayName(user) + "님\n" +
               "종목: " + sName + " " + count + "주\n" +
               "수익 : " + fp(Math.abs(profit)) + "P (" + signIcon + Math.abs(profitRate).toFixed(1) + "%)\n" +
-              "실현손익 : " + fp(finalPrice) + "P (수수료 -5% 포함)" + (res.repayMsg || "") + "\n" +
+              "실현손익 : " + fp(finalPrice) + "P (수수료 -" + (currentTax * 100).toFixed(1) + "% 포함)" + (res.repayMsg || "") + "\n" +
               "━━━━━━━━━━━━━━━\n" +
               "💡 [가이드]: 내 잔액: " + fp(user.point) + "P";
 
@@ -7788,15 +7929,18 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatError(user, "이미 출석 완료", "출석은 하루에 한 번만 가능합니다.")); 
             return true; 
         }
-        
-        // 2. 기존 10줄의 수동 물가 계산 로직을 삭제하고 통합 물가 엔진 호출로 교체
-        var multiplier = util_getEcoMultiplier(roomName); // 물가 엔진 호출
-            var minR = SYSTEM_CONFIG.ECO.ATTEND_MIN || 1000;
-            var maxR = SYSTEM_CONFIG.ECO.ATTEND_MAX || 1500;
 
-            // 랜덤 보상 계산 및 물가 배율 적용
-            var baseReward = Math.floor(Math.random() * (maxR - minR + 1)) + minR;
-            var reward = Math.floor(baseReward * multiplier)
+       // [가상 정부] 현재 정책 데이터 로드
+        var pol = util_getActivePolicy(roomData);
+
+        var multiplier = util_getEcoMultiplier(roomName); 
+        var minR = SYSTEM_CONFIG.ECO.ATTEND_MIN || 1000;
+        var maxR = SYSTEM_CONFIG.ECO.ATTEND_MAX || 1500;
+
+        var baseReward = Math.floor(Math.random() * (maxR - minR + 1)) + minR;
+        
+        // 정책 배율(pol.attendMult)을 보상 계산에 최종 적용
+        var reward = Math.floor(baseReward * multiplier * (pol.attendMult || 1.0));
 
         /* [핵심 수정] 은행 파산 보호 로직 */
         // 은행 금고에 출석 보상을 지급할 수 있는 현금이 있는지 확인
@@ -7820,7 +7964,10 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
         user.totalAttendance = (user.totalAttendance || 0) + 1;
         user.creditScore = Math.min(1000, (user.creditScore || 600) + 2); 
         
-        var content = fp(reward) + "P가 지급되었습니다! (신용 +2)" + (res.repayMsg || "") + "\n" +
+        // 정책 효과가 기본값(1.0)이 아닐 때만 UI에 정책 태그 표시
+        var policyTag = (pol.attendMult && pol.attendMult !== 1.0) ? "\n⚖️ 정책 효과: x" + pol.attendMult.toFixed(1) + " (적용 중)" : "";
+
+        var content = fp(reward) + "P가 지급되었습니다! (신용 +2)" + (res.repayMsg || "") + policyTag + "\n" +
                       "🏦 국고 재원에서 연금이 지급되었습니다.";
 
         replier.reply(formatCommand("✅ 일일 출석 완료", user, content, "내 잔액: " + fp(user.point) + "P"));
@@ -7875,3 +8022,153 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
         Log.error("Registry Init Critical Error: " + e);
     }
 })();
+
+//==========섹터46==========
+
+/**
+ * [신설] 가상 정부 시스템 핵심 엔진
+ * 기능: 정책 안건 생성, 티어별 가중 투표 처리, 참여 보상 지급
+ */
+
+/**
+ * 1. 명령어 통합 핸들러
+ * 처리: /의회 (현황 조회), /투표 (의사 결정)
+ */
+function _gameGovernmentLogic(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    if (!roomData || !roomData.features) return false;
+    
+    var gov = roomData.features.government;
+
+    // A. [조회] /의회 : 현재 정책 및 투표 진행 상황 브리핑
+    if (msg === "/의회") {
+        var pol = gov.activePolicy || { stockTax: 0.05, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.0 };
+        
+        var currentPolicyStr = "• 주식 세금: " + (pol.stockTax * 100).toFixed(1) + "%\n" +
+                               "• 채굴 효율: x" + pol.mineMult.toFixed(1) + "\n" +
+                               "• 출석 보상: x" + pol.attendMult.toFixed(1) + "\n" +
+                               "• 대출 한도: x" + pol.loanLimitMult.toFixed(1);
+
+        var billStatus = "현재 상정된 안건이 없습니다.";
+        if (gov.pendingBill) {
+            billStatus = "📜 안건: " + gov.pendingBill.name + "\n" +
+                         "✅ 혜택: " + gov.pendingBill.buffDesc + "\n" +
+                         "⚠️ 대가: " + gov.pendingBill.penaltyDesc + "\n\n" +
+                         "🗳️ 현황: 찬성 " + gov.votes.pro + " | 반대 " + gov.votes.con + "\n" +
+                         "(참여 인원: " + gov.votes.voters.length + "명)";
+        }
+
+        replier.reply(formatCommand("🏛️ 내리다 정부 국회 의사당", user, "[현재 시행 중인 정책]\n" + currentPolicyStr + "\n\n[실시간 투표 현황]\n" + billStatus, "투표참여: [/투표 찬성/반대]"));
+        return true;
+    }
+
+    // B. [액션] /투표 : 찬반 투표권 행사
+    if (msg.indexOf("/투표 ") === 0) {
+        if (!gov.pendingBill) {
+            replier.reply(formatError(user, "투표 불가", "현재 진행 중인 의회 안건이 없습니다."));
+            return true;
+        }
+
+        // 투표 가능 시간 체크 (20:00 ~ 23:50)
+        var now = new Date();
+        var currentHour = now.getHours();
+        var currentMin = now.getMinutes();
+        var timeVal = currentHour * 100 + currentMin;
+
+        if (timeVal < 2000 || timeVal > 2350) {
+            replier.reply(formatError(user, "시간 외 투표", "투표는 매일 20:00 ~ 23:50에만 가능합니다."));
+            return true;
+        }
+
+        if (user.hasVotedToday) {
+            replier.reply(formatError(user, "중복 투표", "이미 오늘 투표에 참여하여 거마비를 수령하셨습니다."));
+            return true;
+        }
+
+        var choice = msg.substring(4).trim();
+        if (choice !== "찬성" && choice !== "반대") {
+            replier.reply(formatError(user, "입력 오류", "[/투표 찬성] 또는 [/투표 반대]를 입력하세요."));
+            return true;
+        }
+
+        // 1. 티어별 투표 가중치 계산 (Gemini 추천 사양)
+        var weight = gov_getVoteWeight(user.tier);
+        
+        // 2. 투표 결과 반영
+        if (choice === "찬성") gov.votes.pro += weight;
+        else gov.votes.con += weight;
+        
+        gov.votes.voters.push(targetUid);
+        user.hasVotedToday = true;
+
+        // 3. 참여 보상 지급 (500P 거마비 - 중앙은행 연동)
+        util_updatePoint(user, roomData, 500, "의회 투표 거마비 지급", roomName);
+
+        var resMsg = "'" + gov.pendingBill.name + "' 안건에 " + choice + "하셨습니다.\n" +
+                     "의원님의 티어에 따라 [" + weight + "표]가 행사되었습니다.\n\n" +
+                     "💰 참여 보상: +500P 지급 완료";
+
+        replier.reply(formatCommand("✅ 투표 완료", user, resMsg, "내 잔액: " + fp(user.point) + "P"));
+        safeSaveData(data);
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * 2. 티어별 투표 가중치 계산 함수
+ * 아이언(0)~실버(2): 1표 / 골드(3)~에메(5): 2표 / 다이아(6)~챌(9): 3표
+ */
+function gov_getVoteWeight(tier) {
+    var t = Number(tier || 0);
+    if (t >= 6) return 3;
+    if (t >= 3) return 2;
+    return 1;
+}
+
+/**
+ * 3. 밸런스 안건 자동 생성기
+ * 정책의 버프와 디버프를 세트로 조합하여 반환
+ */
+function gov_generateBill() {
+    var bills = [
+        {
+            name: "개미 투자자 구제법",
+            buffDesc: "주식 매도 수수료 5% ➔ 2% 인하",
+            penaltyDesc: "출석 체크 기본 보상 20% 차감",
+            effects: { stockTax: 0.02, mineMult: 1.0, attendMult: 0.8, loanLimitMult: 1.0, bankInterest: 0.02, theftFineMult: 1.0, policeProbAdj: 0.0, volatilityMult: 1.0 }
+        },
+        {
+            name: "노동의 가치 실현법",
+            buffDesc: "채굴 기본 수익 1.3배 상향",
+            penaltyDesc: "주식 매도 수수료 5% ➔ 12% 인상",
+            effects: { stockTax: 0.12, mineMult: 1.3, attendMult: 1.0, loanLimitMult: 1.0, bankInterest: 0.02, theftFineMult: 1.0, policeProbAdj: 0.0, volatilityMult: 1.0 }
+        },
+        {
+            name: "금융 대공황 극복안",
+            buffDesc: "은행 대출 한도 1.5배 확대",
+            penaltyDesc: "예금 이자 지급 일시 중단 (0%)",
+            effects: { stockTax: 0.05, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.5, bankInterest: 0.0, theftFineMult: 1.0, policeProbAdj: 0.0, volatilityMult: 1.0 }
+        },
+        {
+            name: "무법지대 선포안",
+            buffDesc: "도둑질 성공 확률 상향 (경찰 출동 지연)",
+            penaltyDesc: "체포 시 벌금 3배 및 경찰 출동 확률 80% 상향",
+            effects: { stockTax: 0.05, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.0, bankInterest: 0.02, theftFineMult: 3.0, policeProbAdj: 0.3, volatilityMult: 1.0 }
+        },
+        {
+            name: "시장 안정화 정책",
+            buffDesc: "주식 변동성 0.5배 축소 (안정적 수익)",
+            penaltyDesc: "모든 보상형 활동(출석/채굴) 수익 15% 차감",
+            effects: { stockTax: 0.05, mineMult: 0.85, attendMult: 0.85, loanLimitMult: 1.0, bankInterest: 0.02, theftFineMult: 1.0, policeProbAdj: 0.0, volatilityMult: 0.5 }
+        },
+        {
+            name: "한탕주의 장려법",
+            buffDesc: "주식 변동성 2배 증가 (폭등/폭락 유도)",
+            penaltyDesc: "은행 대출 금리 10%로 인상",
+            effects: { stockTax: 0.05, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.0, bankInterest: 0.02, theftFineMult: 1.0, policeProbAdj: 0.0, volatilityMult: 2.0 }
+        }
+    ];
+    return bills[Math.floor(Math.random() * bills.length)];
+}

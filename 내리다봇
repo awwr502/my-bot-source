@@ -478,38 +478,69 @@ function safeSaveData(data, isForceBackup) {
 
             for (var uid in room.users) {
                 var u = room.users[uid];
-                // 2. 포인트 오염 체크: NaN, null, undefined 또는 숫자가 아닌 경우
-                if (isNaN(u.point) || u.point === null || typeof u.point !== 'number') {
+                // 2. 자산 오염 체크: NaN, null, undefined 또는 숫자가 아닌 경우 (포인트 & 은행)
+                var isPointBroken = isNaN(u.point) || u.point === null || typeof u.point !== 'number';
+                var isBankBroken = isNaN(u.bank) || u.bank === null || typeof u.bank !== 'number';
+
+                if (isPointBroken || isBankBroken) {
                     if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
-                        u.point = Number(DB_DATA.rooms[rName].users[uid].point || 0);
+                        var safeU = DB_DATA.rooms[rName].users[uid];
+                        if (isPointBroken) u.point = Number(safeU.point || 0);
+                        if (isBankBroken) u.bank = Number(safeU.bank || 0);
                         isHealed = true;
-                        healReports.push(u.name + " (NaN/Null 수리)");
+                        healReports.push(u.name + " (자산 데이터 오염 수리)");
                     } else {
-                        throw new Error(u.name + " 유저의 포인트 데이터 오염(NaN/Null) 감지 및 복구 실패");
+                        throw new Error(u.name + " 유저의 핵심 자산 데이터 오염 감지 및 복구 실패");
                     }
                     continue;
                 }
 
                 if (u.skipHealing === true) {
-                    u.skipHealing = false; // 플래그 소모 후 해제
+                    u.skipHealing = false; 
                     continue; 
                 }
                 
-                // 3. 비정상적 초기화 체크 (강화 버전)
-                // 메모리(globalData)가 아닌 파일 데이터(DB_DATA)와 비교하여 차감 직후의 0원화를 정확히 포착합니다.
+                // 3. 비정상적 자산 급감 체크 (80% 기준: 포인트, 은행, 주식)
                 if (DB_DATA && DB_DATA.rooms && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users && DB_DATA.rooms[rName].users[uid]) {
-                    var lastSavedPoint = Number(DB_DATA.rooms[rName].users[uid].point || 0);
+                    var safeU = DB_DATA.rooms[rName].users[uid];
                     
-                    if (lastSavedPoint > 10000) {
-                        var dropRatio = (lastSavedPoint - u.point) / lastSavedPoint;
-                        
-                        // 자가치유 임계값을 95%에서 80%로 하향 조정
-                        if (dropRatio >= 0.8) {
-                            // 오염된 메모리 값을 파일에 저장된 정상 값으로 강제 치유
-                            u.point = lastSavedPoint; 
-                            isHealed = true;
-                            healReports.push(u.name + " (80% 급감 감지 및 복구)");
+                    // A. 포인트 급감 체크
+                    var lastPoint = Number(safeU.point || 0);
+                    if (lastPoint > 10000 && (lastPoint - u.point) / lastPoint >= 0.8) {
+                        u.point = lastPoint; isHealed = true;
+                        healReports.push(u.name + " (포인트 80%↑ 급감 복구)");
+                    }
+
+                    // B. 은행 잔고 급감 체크
+                    var lastBank = Number(safeU.bank || 0);
+                    if (lastBank > 10000 && (lastBank - u.bank) / lastBank >= 0.8) {
+                        u.bank = lastBank; isHealed = true;
+                        healReports.push(u.name + " (은행잔고 80%↑ 급감 복구)");
+                    }
+
+                    // C. 주식 보유량 증발 체크 (종목별 전수 조사)
+                    if (safeU.stockHoldings) {
+                        for (var sName in safeU.stockHoldings) {
+                            var lastQty = Number(safeU.stockHoldings[sName] || 0);
+                            var curQty = Number((u.stockHoldings || {})[sName] || 0);
+                            // 보유했던 주식이 80% 이상 사라졌을 때 (상장폐지 사유 제외)
+                            if (lastQty >= 10 && (lastQty - curQty) / lastQty >= 0.8) {
+                                if (!u.stockHoldings) u.stockHoldings = {};
+                                u.stockHoldings[sName] = lastQty;
+                                isHealed = true;
+                                healReports.push(u.name + " (" + sName + " 주식 증발 복구)");
+                            }
                         }
+                    }
+                    // D. 인벤토리(가방) 대량 유실 체크
+                    // 기존에 아이템이 5개 이상 있었는데, 현재 80% 이상 사라져서 1개 이하가 된 경우 보호
+                    var lastInvCount = Array.isArray(safeU.inventory) ? safeU.inventory.length : 0;
+                    var curInvCount = Array.isArray(u.inventory) ? u.inventory.length : 0;
+
+                    if (lastInvCount >= 5 && (curInvCount / lastInvCount) <= 0.2) {
+                        u.inventory = JSON.parse(JSON.stringify(safeU.inventory)); // 안전한 가방 데이터 전체 복사
+                        isHealed = true;
+                        healReports.push(u.name + " (가방 아이템 유실 복구)");
                     }
                 }
             }

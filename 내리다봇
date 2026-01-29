@@ -18,7 +18,7 @@ function registerAdminCmd(cmd, desc, func) {
  * 덮어쓰기 사고를 방지하기 위해 point 등 핵심 자산의 기본값은 0으로 설정합니다.
  */
 var USER_SCHEMA = [
-    { key: 'point', default: 0, type: 'number' }, // 실제 지급은 20-1에서 수행
+    { key: 'point', default: 0, type: 'number' },
     { key: 'bank', default: 0, type: 'number' },
     { key: 'tier', default: 0, type: 'number' },
     { key: 'creditScore', default: 600, type: 'number' },
@@ -28,7 +28,6 @@ var USER_SCHEMA = [
     { key: 'stockAvg', default: {}, type: 'object' },
     { key: 'chatLog', default: [], type: 'array' },
     { key: 'timeoutEndTime', default: 0, type: 'number' },
-    { key: 'timeoutReason', default: "", type: 'string' },
     { key: 'totalMiningTime', default: 0, type: 'number' },
     { key: 'artifactPieces', default: 0, type: 'number' },
     { key: 'totalGambleCount', default: 0, type: 'number' },
@@ -945,6 +944,27 @@ function util_updateStock(user, stockName, delta, reason, roomName) {
         if (safeUser && safeUser.stockHoldings) {
             user.stockHoldings[stockName] = Number(safeUser.stockHoldings[stockName] || 0);
             try { Api.replyRoom(roomName || "내리다", "🛡️ [주식 자산 자가치유]\n종목: " + stockName + "\n사유: 보유 수량 연산 오류\n상태: 안전 지점으로 롤백"); } catch(e){}
+        }
+    }
+}
+
+/**
+ * [신설: 은행 잔고 게이트웨이] v1.0
+ * 기능: 유저의 bank(예금) 변동을 감시하고 NaN 및 오염을 차단
+ */
+function util_updateBank(user, roomData, delta, reason, roomName) {
+    if (!user || isNaN(delta) || delta === 0) return;
+    var preBank = Number(user.bank || 0);
+    var expectedBank = preBank + Number(delta);
+    if (expectedBank < 0) expectedBank = 0;
+    user.bank = expectedBank;
+    if (isNaN(user.bank) || user.bank !== expectedBank) {
+        var db = getDatabase();
+        var safeUser = null;
+        for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
+        if (safeUser && !isNaN(safeUser.bank)) {
+            user.bank = Number(safeUser.bank);
+            try { Api.replyRoom(roomName || "내리다", "🛡️ [은행 자산 자가치유]\n대상: " + user.name + "\n사유: 예금 연산 오류\n상태: 안전 지점 복구 완료"); } catch(e){}
         }
     }
 }
@@ -2943,16 +2963,16 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 if (user && targetUid) {
                     var isDeepHealed = false;
 
-                    // [교체] 내부에 있던 긴 리스트를 지우고 섹터 1의 전역 스키마를 호출합니다.
+                    // [교체] 전역 표준 규격 USER_SCHEMA를 호출하여 누락 데이터 수리
                     USER_SCHEMA.forEach(function(item) {
                         var val = user[item.key];
                         
-                        // [보호] 데이터가 이미 존재하고 타입도 맞다면 보존 (리셋 방지 핵심)
+                        // 타입이 맞다면 보존
                         if (val !== undefined && val !== null) {
                             if (typeof val === item.type || (item.type === 'array' && Array.isArray(val))) return;
                         }
 
-                        // [수리] 데이터가 없거나 깨졌을 때만 기본값 주입
+                        // 수리: 숫자는 형변환 시도, 그 외는 기본값 주입
                         if (item.type === 'number' && val !== undefined && !isNaN(Number(val))) {
                             user[item.key] = Number(val);
                         } else {
@@ -2961,40 +2981,24 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                         isDeepHealed = true;
                     });
 
-                        if (invalid) {
-                            user[item.key] = item.default;
-                            isDeepHealed = true;
-                        }
-                    });
-
                     // 3. [Sync] 수리 발생 시 물리 저장 및 메모리(globalData) 즉시 갱신
                     if (isDeepHealed) {
                         Log.info("[Deep-Healer] " + user.name + "님 구조 최적화 및 동기화 완료.");
                         safeSaveData(data, false);
-                        
-                        // 전역 메모리 강제 갱신 (명령어 먹통 방지 핵심)
-                        if (typeof globalData !== 'undefined') {
-                            globalData = data; 
-                        }
+                        if (typeof globalData !== 'undefined') globalData = data; 
                     }
 
                     // 4. [Spam Guard] 도배 방지 로직 (수리 완료 후 안전하게 실행)
                     var now = Date.now();
                     var conf = SYSTEM_CONFIG.SPAM;
-
-                    if (user.timeoutEndTime && now < user.timeoutEndTime) {
-                        return;
-                    }
+                    if (user.timeoutEndTime && now < user.timeoutEndTime) return;
 
                     user.chatLog.push(now);
-                    user.chatLog = user.chatLog.filter(function(time) {
-                        return now - time < conf.LIMIT_WINDOW;
-                    });
+                    user.chatLog = user.chatLog.filter(function(time) { return now - time < conf.LIMIT_WINDOW; });
 
                     if (user.chatLog.length > conf.LIMIT_COUNT) {
                         user.timeoutEndTime = now + conf.TIMEOUT_MS;
-                        user.chatLog = []; 
-                        
+                        user.chatLog = [];
                         var expireTime = new Date(user.timeoutEndTime).toLocaleTimeString();
                         var timeoutMsg = "🔇 [도배 감지: 이용 제한]\n" +
                                          "━━━━━━━━━━━━━━━\n" +
@@ -3003,7 +3007,6 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                                          "제한: " + Math.floor(conf.TIMEOUT_MS / 60000) + "분간 봇 이용 불가\n" +
                                          "━━━━━━━━━━━━━━━\n" +
                                          "💡 해제 시각: " + expireTime;
-                        
                         replier.reply(timeoutMsg);
                         safeSaveData(data);
                         return;
@@ -3153,26 +3156,18 @@ if (!registry[regKey] && targetUid) {
 
 // [C] UID는 확보되었으나 실제 게임 데이터(Object)가 없는 경우 초기화 실행
 if (!roomData.users[targetUid]) {
-// 1. 기초 유저 객체 생성
-    var newUser = {
-        name: cleanSender,
-        imageHash: currentImgHash,
-        lastDate: ""
-    };
-// 1. 기초 유저 객체 생성
+// 1. 기초 유저 객체 생성 및 스키마 적용
     var newUser = { name: cleanSender, imageHash: currentImgHash, lastDate: "" };
 
-    // 2. [전역 스키마 적용] 표준 규격대로 모든 변수 자동 생성
     USER_SCHEMA.forEach(function(item) {
         newUser[item.key] = item.default;
     });
 
     roomData.users[targetUid] = newUser;
-    
 
-    // 3. 게이트웨이를 통한 공식 보너스 지급 (로그 기록 보장)
+    // 2. 게이트웨이를 통한 공식 보너스 지급 (로그 기록 보장)
     if (typeof util_updatePoint === 'function') {
-        util_updatePoint(roomData.users[targetUid], roomData, 0, "입장 축하 초기화", roomName);
+        util_updatePoint(roomData.users[targetUid], roomData, 50000, "입장 축하 보너스", roomName);
     }
     
     uidCache[cacheKey] = targetUid;

@@ -7118,9 +7118,44 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
     /* [기능 4] 신용 등급 및 대출 한도 조회 */
     if (msg === "/신용등급" || msg === "/대출한도") {
         var cr = getCreditInfo(user.creditScore);
-        var table = getCreditLimitTable(); 
-        var myCredit = "\n[내 신용 상태]\n점수: " + user.creditScore + "점\n등급: " + cr.label + "\n대출 가능 한도: " + fp(cr.limit) + "P";
-        replier.reply(formatCommand("💳 신용 등급 및 한도", user, table + "\n" + myCredit, "은행 이용: [/은행]"));
+        
+        // 1. 탄력 금수 승수 계산
+        var dynMult = 1.0;
+        if (typeof util_getDynamicRateMultiplier === 'function') {
+            dynMult = util_getDynamicRateMultiplier(roomName);
+        }
+
+        // 2. 시장 상황 메시지 생성
+        var marketStatus = "🟢 경제 안정";
+        if (dynMult > 1.2) marketStatus = "🚨 국고 위기 (고금리)";
+        else if (dynMult < 0.8) marketStatus = "✅ 유동성 풍부 (저금리)";
+
+        // 3. 동적 이율 테이블 생성
+        var conf = SYSTEM_CONFIG.ECO.CREDIT;
+        var dynamicTable = [];
+        for(var i=0; i<conf.SCORES.length; i++) {
+            var baseRatePct = Math.round((conf.RATES[i] - 1) * 100);
+            var appliedRate = (baseRatePct * dynMult).toFixed(1);
+            dynamicTable.push(conf.ICONS[i] + " " + conf.LABELS[i] + ": " + appliedRate + "% (한도 " + fp(conf.LIMITS[i]) + "P)");
+        }
+        
+        // 마지막 인덱스(신불자) 추가 처리
+        var lastIdx = conf.SCORES.length;
+        var lastBaseRate = Math.round((conf.RATES[lastIdx] - 1) * 100);
+        var lastApplied = (lastBaseRate * dynMult).toFixed(1);
+        dynamicTable.push(conf.ICONS[lastIdx] + " " + conf.LABELS[lastIdx] + ": " + lastApplied + "% (한도 " + fp(conf.LIMITS[lastIdx]) + "P)");
+
+        var header = "[📊 실시간 대출 금리 리포트]\n" +
+                     "🌐 시장 상황: " + marketStatus + " (x" + dynMult.toFixed(2) + ")\n" +
+                     "━━━━━━━━━━━━━━━\n" +
+                     dynamicTable.join("\n");
+
+        var myCredit = "\n\n[내 실시간 적용 상태]\n" +
+                       "• 신용점수: " + user.creditScore + "점 (" + cr.label + ")\n" +
+                       "• 적용이율: " + (Math.round((cr.rate - 1) * 100) * dynMult).toFixed(1) + "%\n" +
+                       "• 가능액수: " + fp(cr.limit) + "P";
+
+        replier.reply(formatCommand("💳 신용 등급 및 실시간 한도", user, header + myCredit, "대출 실행: [/은행]"));
         return true;
     }
 

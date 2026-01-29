@@ -155,6 +155,7 @@ var SYSTEM_CONFIG = {
             CANCEL_FEE: 0.1,     // [취소 위약금]: 배팅 취소 시 원금에서 차감되어 국고로 귀속되는 수수료 (10%)
             WINLESS_BANK_RATE: 0.3,   // [무승자 국고행]: 우승자 없을 시 판돈의 30%를 은행 금고로 즉시 회수
             WINLESS_JACKPOT_RATE: 0.7, // [무승자 이월액]: 우승자 없을 시 판돈의 70%를 다음 회차 carryOver로 누적
+            MAX_PAYOUT_MULT: 10,  // [조절 가능] 배당 상한선. 초과분은 자동으로 이월금 처리됨
             OPEN_HOUR: 9,        // 경마장 자동 개장 시각 (오전 9시)
             CLOSE_HOUR: 23,       // 경마장 마지막 배팅 마감 시각 (오후 11시 59분)
             MAX_PAYOUT_MULT: 10   // [신규: 배당 상한선]: 배팅 금액의 최대 10배까지만 당첨금 수령 가능 (독식 방지)
@@ -2322,9 +2323,11 @@ function _runSector16Logic(data, ctx) {
                 } else {
                     var currentRoundNetPool = racingData.totalPool - tax; 
                     var toBank = Math.floor(currentRoundNetPool * rConf.WINLESS_BANK_RATE); 
+                    // 이월 비율(WINLESS_JACKPOT_RATE)에 따라 이월금 누적
                     racingData.carryOver = (currentRoundNetPool - toBank) + racingData.carryOver;
                     if(mainRoom) mainRoom.bankReserve += toBank;
-                    resultBody += "💀 당첨 유저 없음\n💰 이월금 보전 완료: " + fp(racingData.carryOver) + "P\n🏛️ 금기 판돈 국고 귀속(30%): " + fp(toBank) + "P";
+                    resultBody += "💀 당첨 유저 없음\n💰 이월금 보전 완료: " + fp(racingData.carryOver) + "P\n" +
+                                 "🏛️ 금기 판돈 국고 귀속(" + (rConf.WINLESS_BANK_RATE * 100).toFixed(0) + "%): " + fp(toBank) + "P";
                 }
 
                 var isClosing = (currentHour === 0);
@@ -6083,6 +6086,23 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         }
         safeSaveData(data);
         replier.reply(formatAdmin("전체 지급 완료", "총 " + count + "명에게 " + fp(amt) + "P 지급 완료"));
+        return true;
+    }
+
+    /* [신규: Gemini 요청 사항] 경마 이월금 수동 조정 명령어 */
+    if (msg.indexOf("/이월금수정 ") === 0) {
+        var val = parseInt(msg.split(" ")[1].replace(/,/g, ""));
+        if (isNaN(val)) {
+            replier.reply(formatAdmin("오류", "수정할 이월 금액을 숫자로 입력하세요."));
+            return true;
+        }
+        // 메인 운영 방("내리다")의 경마 이월금 강제 수정
+        var targetRoom = data.rooms["내리다"];
+        if (targetRoom && targetRoom.features && targetRoom.features.racing) {
+            targetRoom.features.racing.carryOver = val;
+            safeSaveData(data);
+            replier.reply(formatAdmin("🏇 경마 이월금 수정 완료", "현재 적립된 이월금을 " + fp(val) + "P로 변경했습니다."));
+        }
         return true;
     }
 

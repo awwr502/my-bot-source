@@ -6279,23 +6279,26 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         var roomData = data.rooms[roomName];
         if (!roomData) return true;
         var pumpCount = 0;
-        var healthyPrice = 175000; // 복구 목표가 (기준점 5%)
-        var floorPrice = 52500;    // 상폐 기준선
+        var healthyPrice = 175000; // 목표 주가 (기준점 5%)
+        var floorPrice = 52500;    // 상패 기준선 (기준점 1.5%)
 
-        // 1. 시세 보정 및 유저 수량 비례 조정 (자산 가치 중립화)
         for (var sName in data.stockMarket) {
             var oldPrice = data.stockMarket[sName].price;
             if (oldPrice < floorPrice) {
-                var ratio = oldPrice / healthyPrice; // 예: 1,000 / 175,000 = 0.0057
+                var ratio = oldPrice / healthyPrice; // 병합 비율 계산
                 
-                // 모든 방의 유저를 뒤져서 해당 주식 보유량을 비율만큼 깎음
+                // 모든 방의 모든 유저를 탐색하여 수량 조절 및 헬러 방어막 가동
                 for (var r in data.rooms) {
                     for (var uid in data.rooms[r].users) {
                         var u = data.rooms[r].users[uid];
                         if (u.stockHoldings && u.stockHoldings[sName]) {
+                            // 1. 헬러(Sector 3)의 자산 급감 복구 로직을 한시적으로 무력화
+                            u.skipHealing = true; 
+                            
+                            // 2. 수량 병합 및 평단가 동기화 (부당 이득 원천 차단)
                             var oldQty = u.stockHoldings[sName];
                             u.stockHoldings[sName] = Math.max(1, Math.floor(oldQty * ratio));
-                            u.stockAvg[sName] = healthyPrice; // 평단가도 신규가로 맞춰서 0% 수익 상태로 만듦
+                            u.stockAvg[sName] = healthyPrice; 
                         }
                     }
                 }
@@ -6308,7 +6311,8 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         var resMsg = "✅ [시장 중립 복구 완료]\n" +
                      "• 보정 종목: " + pumpCount + "개\n" +
                      "• 적용 방식: 주식 병합 (가치 보존형)\n" +
-                     "• 결과: 주가는 올리고 보유 수량은 조절하여 부당 이득을 원천 차단했습니다.";
+                     "• 보안 조치: 자가 치유(Healer) 일시 예외 적용\n" +
+                     "• 결과: 주가는 정상화하고 부당 이득은 차단했습니다.";
         replier.reply(formatAdmin("경제 정상화 보고", resMsg));
         return true;
     }

@@ -810,6 +810,59 @@ var sprayData = {
 //==========섹터7==========
 
 /**
+ * [신설: 은행 잔고 3중 방어막] v1.0
+ * 기능: 예금 연산의 NaN, 부분 증발, 비정상 급감을 실시간 감시 및 복구
+ */
+function util_updateBank(user, roomData, delta, reason, roomName) {
+    if (!user || isNaN(delta) || delta === 0) return;
+    
+    var preBank = Number(user.bank || 0);
+    var expectedBank = preBank + Number(delta);
+    user.bank = expectedBank;
+
+    // [3중 감사] 1) NaN/파손 2) 연산 오차 3) 80% 이상 비정상 급감 (출금 제외)
+    var isCorrupted = isNaN(user.bank) || (user.bank === null) || (user.bank !== expectedBank);
+    var isAbnormalLoss = (delta < 0 && reason.indexOf("출금") === -1) && (expectedBank / preBank <= 0.2);
+
+    if (isCorrupted || isAbnormalLoss) {
+        var db = getDatabase();
+        var safeUser = null;
+        for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
+        
+        if (safeUser) {
+            user.bank = Number(safeUser.bank || 0);
+            var errType = isCorrupted ? "연산 오차(Audit Fail)" : "은행 잔고 비정상 급감";
+            try { Api.replyRoom(roomName || "내리다", "🛡️ [은행 자산 자가치유]\n대상: " + user.name + "\n사유: " + errType + "\n상태: 즉각 복구 완료"); } catch(e){}
+        }
+    }
+}
+
+/**
+ * [신설: 주식 보유량 정밀 감사] v1.0
+ * 기능: 종목별 수량 연산의 무결성 검증
+ */
+function util_updateStock(user, stockName, delta, reason, roomName) {
+    if (!user || !stockName || isNaN(delta)) return;
+    if (!user.stockHoldings) user.stockHoldings = {};
+    
+    var preCount = Number(user.stockHoldings[stockName] || 0);
+    var expectedCount = preCount + Number(delta);
+    user.stockHoldings[stockName] = expectedCount;
+
+    // [감사] 1P(1주)라도 오차가 나거나 수량이 음수가 되면 즉시 복구
+    if (isNaN(user.stockHoldings[stockName]) || user.stockHoldings[stockName] !== expectedCount || user.stockHoldings[stockName] < 0) {
+        var db = getDatabase();
+        var safeUser = null;
+        for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
+        
+        if (safeUser && safeUser.stockHoldings) {
+            user.stockHoldings[stockName] = Number(safeUser.stockHoldings[stockName] || 0);
+            try { Api.replyRoom(roomName || "내리다", "🛡️ [주식 자산 자가치유]\n종목: " + stockName + "\n사유: 보유 수량 연산 오류\n상태: 안전 지점으로 롤백"); } catch(e){}
+        }
+    }
+}
+
+/**
  * [시스템] 진단용 체크포인트 도장 함수
  * 설명: 스케줄러 로직의 완결성을 체크하기 위해 메모리에 타임스탬프를 기록합니다.
  */
@@ -885,7 +938,7 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     }
 
     // 3. 중앙은행(국고) 재원 변동 로직 (안전장치 패치 적용)
-    var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급", "결투 승리 보상", "뿌리기 줍기", "경마 당첨금", "채팅 보너스"];
+    var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급", "결투 승리 보상", "뿌리기 줍기", "경마 당첨금", "채팅 보너스", "은행 출금"];
     var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부", "경마 배팅", "배팅 취소 수수료", "송금 보냄", "은행 예금", "사채", "벌금", "상환"];
 
     var brDelta = 0; 
@@ -3531,7 +3584,7 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
         } else if (user.point < amt) {
             replier.reply(formatError(user, "포인트 부족", "보유하신 포인트보다 많습니다."));
         } else {
-            user.bank = (user.bank || 0) + amt;
+            util_updateBank(user, roomData, amt, "은행 예금", roomName);
             util_updatePoint(user, roomData, -amt, "은행 예금", roomName);
             replier.reply(formatCommand("💰 예금 완료", user, fp(amt) + "P를 통장에 입금했습니다.\n(중앙은행 가용 재원으로 편입됨)", "내 잔액: " + fp(user.point) + "P"));
             delete bankProcessState[targetUid];
@@ -3612,11 +3665,16 @@ function _handleBankStep2(msg, user, data, replier, roomName, targetUid) {
         } else if (roomData.bankReserve < amt) {
             replier.reply(formatError(user, "은행 지급 불능", "죄송합니다. 현재 은행의 현금 유동성(실재고)이 부족하여 출금이 일시 제한됩니다.\n대출금 회수 및 수수료 적립 시까지 기다려주세요.\n\n🏦 현재 은행 금고: " + fp(roomData.bankReserve) + "P"));
         } else {
-            user.bank -= amt;
+           // 1. 은행 잔고 감사 엔진 가동 (- 차감)
+            util_updateBank(user, roomData, -amt, "은행 출금", roomName);
+            
+            // 2. 포인트 게이트웨이 가동 (+ 지급 및 국고 차감 연동)
             util_updatePoint(user, roomData, amt, "은행 출금", roomName);
+            
             replier.reply(formatCommand("🏧 출금 완료", user, fp(amt) + "P를 현금으로 출금했습니다.", "보유 포인트: " + fp(user.point) + "P"));
-            delete bankProcessState[targetUid];
-            safeSaveData(data);
+            
+            delete bankProcessState[targetUid]; // 상태 해제
+            safeSaveData(data); // 즉시 저장
         }
         return true;
     }
@@ -7449,7 +7507,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var curAvg = Number(user.stockAvg[sName] || 0);
         
         user.stockAvg[sName] = Math.floor(((curAvg * curCount) + totalPrice) / (curCount + count));
-        user.stockHoldings[sName] = curCount + count;
+        util_updateStock(user, sName, count, "주식 매수", roomName);
 
         /* [신규] 누적 투자 데이터 업데이트 및 칭호 체크 */
         if (user.totalInvestAmount === undefined) user.totalInvestAmount = 0;
@@ -7511,7 +7569,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var profitRate = purchaseVal > 0 ? ((profit / purchaseVal) * 100).toFixed(1) : "0.0";
         var signIcon = (profit > 0) ? "🔺" : (profit < 0 ? "🔹" : "➖");
 
-        user.stockHoldings[sName] = holdings - count;
+        util_updateStock(user, sName, -count, "주식 매도", roomName);
         if (user.stockHoldings[sName] <= 0) { 
             delete user.stockHoldings[sName]; 
             if (user.stockAvg) delete user.stockAvg[sName]; 

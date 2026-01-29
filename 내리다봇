@@ -2543,16 +2543,35 @@ function _runSector17Logic(data, ctx) {
                 u.dailyStimulusCount = 0; 
                 u.dailyCreditRestoreCount = 0; 
                 
-                // 은행 예금 이자 지급 (복리 2%)
-                if (Number(u.bank) > 0) {
-                    u.bank = Number(u.bank) + Math.floor(Number(u.bank) * 0.02);
+                // [보안강화] 은행 예금 이자 지급 (복리 2%)
+                // 직접 연산 대신 util_updateBank(자산 보호)와 util_updateReserve(국고 연동)를 사용합니다.
+                var preBank = Number(u.bank || 0);
+                if (preBank > 0) {
+                    var interest = Math.floor(preBank * 0.02);
+                    if (interest > 0) {
+                        // 1. 유저의 은행 장부 업데이트 (3중 방어막 가동)
+                        util_updateBank(u, roomObj, interest, "은행 예금 이자 지급", rName);
+                        // 2. 중앙은행 금고에서 이자만큼 지출 처리
+                        util_updateReserve(roomObj, -interest, "은행 예금 이자 지급", rName);
+                    }
                 }
                 
-                // 대출 채무 이자 가산 (일일 5%) 및 연체 관리
+                // [보안강화] 대출 채무 이자 가산 (일일 5%) 및 연체 관리
                 if (u.loan && Number(u.loan.debt) > 0) { 
                     u.creditScore = Math.max(0, Number(u.creditScore) - 5); 
                     var dailyInterest = Math.floor(Number(u.loan.debt) * 0.05);
-                    u.loan.debt = Number(u.loan.debt) + dailyInterest;
+                    
+                    // 채무액 연산 무결성 가드 (Audit)
+                    var preDebt = Number(u.loan.debt);
+                    var expectedDebt = preDebt + dailyInterest;
+                    u.loan.debt = expectedDebt;
+                    
+                    // 만약 채무 연산 중 NaN 등이 발생하면 즉시 롤백하여 데이터 파손 방지
+                    if (isNaN(u.loan.debt) || u.loan.debt !== expectedDebt) {
+                        u.loan.debt = preDebt;
+                        Log.error("[System] " + u.name + " 대출 이자 연산 오류 차단 및 복구");
+                    }
+
                     if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(u, rName); 
                 }
             }

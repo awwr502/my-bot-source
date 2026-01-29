@@ -6343,40 +6343,55 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // [신규] 헬러에 의해 꼬인 주식 수량을 강제로 재병합하는 명령어
     if (msg === "/시장데이터교정") {
         var roomData = data.rooms[roomName];
         if (!roomData) return true;
         var fixUserCount = 0;
-        var healthyPrice = 175000; // 목표 주가 (이 가격 기준으로 수량 재산출)
+        var totalFixCount = 0;
 
         for (var r in data.rooms) {
             for (var uid in data.rooms[r].users) {
                 var u = data.rooms[r].users[uid];
-                if (u.stockHoldings) {
-                    var isUserFixed = false;
-                    for (var sName in u.stockHoldings) {
-                        var stock = data.stockMarket[sName];
-                        // 시장가는 이미 비싼데(175,000P), 유저의 평단가가 너무 낮다면(예: 1,000P) 헬러가 개입한 것임
-                        if (stock && stock.price >= healthyPrice && (u.stockAvg[sName] || 0) < 10000) {
-                            u.skipHealing = true; // 헬러 방어막 가동
-                            
-                            var ratio = 1000 / healthyPrice; // 1,000P 시절 기준으로 수량 재압축 (약 1/175)
-                            var oldQty = u.stockHoldings[sName];
-                            u.stockHoldings[sName] = Math.max(1, Math.floor(oldQty * ratio));
-                            u.stockAvg[sName] = stock.price; // 평단가를 현시세로 덮어씌움
-                            isUserFixed = true;
-                        }
+                if (!u.stockHoldings) continue;
+
+                var isUserFixed = false;
+                for (var sName in u.stockHoldings) {
+                    var stock = data.stockMarket[sName];
+                    // 탐지 조건 완화: 주가는 5만P 이상인데 평단가는 5천P 미만인 경우 (확실한 꼬임 상태)
+                    var currentPrice = stock ? stock.price : 0;
+                    var userAvg = u.stockAvg ? (u.stockAvg[sName] || 0) : 0;
+
+                    if (currentPrice >= 50000 && userAvg < 5000) {
+                        // 1. 헬러(Sector 3) 방어막 강제 가동 (가장 중요)
+                        u.skipHealing = true; 
+                        
+                        // 2. 수량 강제 재압축 (기존 가치를 1,000P 기준으로 가정하여 계산)
+                        var oldQty = Number(u.stockHoldings[sName]);
+                        var estimatedOldValue = oldQty * 1000; 
+                        var correctedQty = Math.max(1, Math.floor(estimatedOldValue / currentPrice));
+                        
+                        u.stockHoldings[sName] = correctedQty;
+                        if (!u.stockAvg) u.stockAvg = {};
+                        u.stockAvg[sName] = currentPrice; // 평단가 현행화 (수익률 0%로 리셋)
+                        
+                        isUserFixed = true;
+                        totalFixCount++;
                     }
-                    if (isUserFixed) fixUserCount++;
                 }
+                if (isUserFixed) fixUserCount++;
             }
         }
-        safeSaveData(data);
-        replier.reply(formatAdmin("🛠️ 주식 수량 긴급 교정 완료", 
-            "• 대상 유저: " + fixUserCount + "명\n" +
-            "• 조치 내용: 헬러에 의해 복구된 과다 수량 재병합\n" +
-            "• 결과: 부당 이득 소거 및 평단가 정상화 완료"));
+
+        // 3. 헬러가 개입하기 전에 즉시 물리적 저장 실행
+        safeSaveData(data, false); 
+        
+        var resMsg = "🚨 [긴급 자산 회수 및 교정 완료]\n" +
+                     "━━━━━━━━━━━━━━━\n" +
+                     "• 대상 유저: " + fixUserCount + "명\n" +
+                     "• 교정 종목: " + totalFixCount + "건\n\n" +
+                     "• 조치: 수량 강제 압축 및 헬러 우회 저장\n" +
+                     "• 결과: 화지여, 풀드포크바베큐 등 부당 이득 전량 회수";
+        replier.reply(formatAdmin("중앙은행 강제 집행 보고", resMsg));
         return true;
     }
 

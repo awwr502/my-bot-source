@@ -6343,11 +6343,13 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
+   // [긴급] 헬러를 무시하고 부당 수량을 강제로 압축하는 최종 집행 로직
     if (msg === "/시장데이터교정") {
         var roomData = data.rooms[roomName];
         if (!roomData) return true;
         var fixUserCount = 0;
         var totalFixCount = 0;
+        var healthyPrice = 175000; // 복구 기준가
 
         for (var r in data.rooms) {
             for (var uid in data.rooms[r].users) {
@@ -6357,22 +6359,21 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
                 var isUserFixed = false;
                 for (var sName in u.stockHoldings) {
                     var stock = data.stockMarket[sName];
-                    // 탐지 조건 완화: 주가는 5만P 이상인데 평단가는 5천P 미만인 경우 (확실한 꼬임 상태)
-                    var currentPrice = stock ? stock.price : 0;
-                    var userAvg = u.stockAvg ? (u.stockAvg[sName] || 0) : 0;
-
-                    if (currentPrice >= 50000 && userAvg < 5000) {
-                        // 1. 헬러(Sector 3) 방어막 강제 가동 (가장 중요)
+                    var curQty = Number(u.stockHoldings[sName]);
+                    
+                    // [핵심 탐지] 주가는 17.5만P인데, 수량이 5주를 초과한다면 (기존 1,000P 시절 수량임)
+                    if (stock && stock.price >= 150000 && curQty > 5) {
+                        // 1. 헬러 방어막 즉시 가동
                         u.skipHealing = true; 
                         
-                        // 2. 수량 강제 재압축 (기존 가치를 1,000P 기준으로 가정하여 계산)
-                        var oldQty = Number(u.stockHoldings[sName]);
-                        var estimatedOldValue = oldQty * 1000; 
-                        var correctedQty = Math.max(1, Math.floor(estimatedOldValue / currentPrice));
+                        // 2. 강제 병합 실행 (1,000P 시절 가치로 환산하여 재계산)
+                        // 예: 100주(10만P 가치) -> 17.5만P 주식으로는 0.57주 -> 1주로 반올림
+                        var estimatedOldValue = curQty * 1000; 
+                        var correctedQty = Math.max(1, Math.round(estimatedOldValue / stock.price));
                         
                         u.stockHoldings[sName] = correctedQty;
                         if (!u.stockAvg) u.stockAvg = {};
-                        u.stockAvg[sName] = currentPrice; // 평단가 현행화 (수익률 0%로 리셋)
+                        u.stockAvg[sName] = stock.price; // 평단가 0%로 리셋
                         
                         isUserFixed = true;
                         totalFixCount++;
@@ -6382,16 +6383,16 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             }
         }
 
-        // 3. 헬러가 개입하기 전에 즉시 물리적 저장 실행
+        // 헬러가 가동되기 전 물리 저장 강제 실행
         safeSaveData(data, false); 
         
-        var resMsg = "🚨 [긴급 자산 회수 및 교정 완료]\n" +
+        var resMsg = "🛠️ [중앙은행 강제 자산 조정 완료]\n" +
                      "━━━━━━━━━━━━━━━\n" +
-                     "• 대상 유저: " + fixUserCount + "명\n" +
-                     "• 교정 종목: " + totalFixCount + "건\n\n" +
-                     "• 조치: 수량 강제 압축 및 헬러 우회 저장\n" +
-                     "• 결과: 화지여, 풀드포크바베큐 등 부당 이득 전량 회수";
-        replier.reply(formatAdmin("중앙은행 강제 집행 보고", resMsg));
+                     "• 대상 인원: " + fixUserCount + "명\n" +
+                     "• 조정 건수: " + totalFixCount + "건\n\n" +
+                     "• 조치: 비정상 고액 수량 강제 병합\n" +
+                     "• 결과: 화지여, 풀드포크바베큐 등 부당 이득 회수 성공";
+        replier.reply(formatAdmin("데이터 정밀 수리 보고", resMsg));
         return true;
     }
 

@@ -503,11 +503,12 @@ function safeSaveData(data, isForceBackup) {
                     if (lastSavedPoint > 10000) {
                         var dropRatio = (lastSavedPoint - u.point) / lastSavedPoint;
                         
-                        if (dropRatio >= 0.95) {
+                        // 자가치유 임계값을 95%에서 80%로 하향 조정
+                        if (dropRatio >= 0.8) {
                             // 오염된 메모리 값을 파일에 저장된 정상 값으로 강제 치유
                             u.point = lastSavedPoint; 
                             isHealed = true;
-                            healReports.push(u.name + " (95% 급감 감지 및 복구)");
+                            healReports.push(u.name + " (80% 급감 감지 및 복구)");
                         }
                     }
                 }
@@ -902,8 +903,27 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     }
 
     // 4. 최종 포인트 갱신 (안전 연산)
-    var newPoint = prePoint + actualDelta;
-    if (!isNaN(newPoint)) user.point = newPoint;
+    var expectedPoint = prePoint + actualDelta; // 시스템이 예상하는 결과값
+    user.point = expectedPoint; // 데이터 반영
+
+    // [트랜잭션 무결성 검사]: 1) NaN 발생 2) 예상값과 실제값 불일치(부분 증발) 3) 80% 이상 비정상 급감
+    var lossRate = prePoint > 0 ? (prePoint - user.point) / prePoint : 0;
+    var isCorrupted = isNaN(user.point) || (user.point !== expectedPoint);
+    var isAbnormalLoss = !user.skipHealing && (lossRate >= 0.8);
+
+    if (isCorrupted || isAbnormalLoss) {
+        // [1단계: 즉각 치유] 메모리를 버리고 마지막 안전 파일 데이터(DB_DATA)에서 복구 시도
+        var db = getDatabase(); 
+        var safeUser = null;
+        // UUID 기반으로 파일 내 안전 데이터 탐색
+        for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
+
+        if (safeUser && !isNaN(safeUser.point)) {
+            user.point = Number(safeUser.point);
+            var errorType = isCorrupted ? "데이터 불일치/오염(Audit Fail)" : "비정상 급감(80%↑)";
+            try { Api.replyRoom(roomName || "내리다", "🛡️ [포인트 게이트웨이 자가치유]\n대상: " + (user.name||"유저") + "\n사유: " + errorType + "\n상태: 연산 오류 감지 즉시 복구 완료"); } catch(e){}
+        }
+    }
 
     // 5. 자산가 칭호 엔진 (실질 순자산 기준)
     var totalNetWorth = util_calculateNetWorth(user, roomData);

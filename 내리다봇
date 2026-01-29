@@ -810,30 +810,32 @@ var sprayData = {
 //==========섹터7==========
 
 /**
- * [신설: 은행 잔고 3중 방어막] v1.0
- * 기능: 예금 연산의 NaN, 부분 증발, 비정상 급감을 실시간 감시 및 복구
+ * [신설: 중앙은행 국고 3중 방어막] v1.0
+ * 기능: 국가 전체 재원의 NaN, 부분 증발, 비상식적 급감을 감시
  */
-function util_updateBank(user, roomData, delta, reason, roomName) {
-    if (!user || isNaN(delta) || delta === 0) return;
+function util_updateReserve(roomData, delta, reason, roomName) {
+    if (!roomData || isNaN(delta) || delta === 0) return;
     
-    var preBank = Number(user.bank || 0);
-    var expectedBank = preBank + Number(delta);
-    user.bank = expectedBank;
+    var preReserve = Number(roomData.bankReserve || 0);
+    var expectedReserve = preReserve + Number(delta);
+    roomData.bankReserve = expectedReserve;
 
-    // [3중 감사] 1) NaN/파손 2) 연산 오차 3) 80% 이상 비정상 급감 (출금 제외)
-    var isCorrupted = isNaN(user.bank) || (user.bank === null) || (user.bank !== expectedBank);
-    var isAbnormalLoss = (delta < 0 && reason.indexOf("출금") === -1) && (expectedBank / preBank <= 0.2);
+    // [중요] 국고 급감 자가치유 예외 사유 (경마 당첨금, 대형 잭팟 등)
+    var normalOutflow = ["경마 당첨금", "로또 1등", "주식 매도", "은행 출금", "재원 수정"];
+    var isNormal = normalOutflow.some(function(act) { return reason.indexOf(act) !== -1; });
+
+    // [3중 감사]
+    var isCorrupted = isNaN(roomData.bankReserve) || (roomData.bankReserve !== expectedReserve);
+    var isAbnormalLoss = !isNormal && (preReserve > 100000 && expectedReserve / preReserve <= 0.2);
 
     if (isCorrupted || isAbnormalLoss) {
         var db = getDatabase();
-        var safeUser = null;
-        for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
-        
-        if (safeUser) {
-            user.bank = Number(safeUser.bank || 0);
-            var errType = isCorrupted ? "연산 오차(Audit Fail)" : "은행 잔고 비정상 급감";
-            try { Api.replyRoom(roomName || "내리다", "🛡️ [은행 자산 자가치유]\n대상: " + user.name + "\n사유: " + errType + "\n상태: 즉각 복구 완료"); } catch(e){}
-        }
+        var rName = roomName || "내리다";
+        var safeReserve = (db.rooms[rName]) ? Number(db.rooms[rName].bankReserve || 0) : 10000;
+
+        roomData.bankReserve = safeReserve; // 파일 데이터로 즉시 복구
+        var errType = isCorrupted ? "국고 연산 오차(Audit Fail)" : "국고 비상식적 급감(도난/버그 의심)";
+        try { Api.replyRoom(rName, "🚨 [국가 재정 보안 엔진 작동]\n사유: " + errType + "\n상태: 국고 자산 안전 지점 복구 완료"); } catch(e){}
     }
 }
 
@@ -952,7 +954,7 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
         } else {
             if (bankInputReasons.some(function(r){ return reason.indexOf(r) !== -1; })) brDelta = Math.abs(actualDelta);
         }
-        roomData.bankReserve = Number(roomData.bankReserve) + brDelta;
+        util_updateReserve(roomData, brDelta, reason, roomName);
     }
 
     // 4. 최종 포인트 갱신 (안전 연산)

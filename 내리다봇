@@ -1380,34 +1380,43 @@ function checkEconomicStimulus(user, roomName, isManual) {
     var avgAsset = eco.average;
     var roomData = data.rooms[roomName];
 
-    /* [Gemini 요청 사항] 실질 순자산 계산 (채권 포함, 부채 차감) */
-    var myNetWorth = 0;
-    if (typeof util_calculateNetWorth === 'function') {
-        myNetWorth = util_calculateNetWorth(user, roomData);
-    } else {
-        myNetWorth = Number(user.point || 0) + Number(user.bank || 0);
-    }
+    /**
+ * [Gemini 요청 사항] 경제 부양 지원금 체크 함수 (지급액 현실화)
+ */
+function checkEconomicStimulus(user, roomName, isManual) {
+    if ((user.totalAttendance || 0) < 2) return;
+    
+    var currentCount = user.dailyStimulusCount || 0;
+    if (currentCount >= 1) return;
 
-    // 지급 기준선: 평균 순자산의 40% 미만일 때 (서민 기준)
+    var data = getDatabase();
+    if (!data) return;
+    
+    var eco = calculateEconomy(data, roomName);
+    var avgAsset = eco.average;
+    var roomData = data.rooms[roomName];
+
+    var myNetWorth = util_calculateNetWorth(user, roomData);
+
+    // 지급 기준선: 평균 순자산의 40% 미만 (자동 스케일링 유지)
     var targetLine = Math.floor(avgAsset * 0.4);
     
     if (myNetWorth < targetLine) {
-        // 공통 물가 배율 엔진 호출
         var multiplier = util_getEcoMultiplier(roomName);
 
         var gap = targetLine - myNetWorth;
-        var baseGive = Math.floor(2000 * multiplier);
+        // [수정] 기본 지급액을 2,000 -> 10,000으로 상향 (20만P 시대 대응)
+        var baseGive = Math.floor(10000 * multiplier); 
         var giveAmount = Math.min(baseGive, gap); 
         
         if (giveAmount < 100) return;
 
-        /* [연동] 섹터 7 포인트 게이트웨이를 통한 안전 지급 */
         util_updatePoint(user, roomData, giveAmount, "민생지원금 지급", roomName);
         
         user.dailyStimulusCount = currentCount + 1;
 
-        var msg = "\n경제 활성화를 위한 민생지원금이 지급되었습니다.\n" +
-                  "💰 지원금 지급: +" + fp(giveAmount) + "P";
+        var msg = "\n경제 위기 극복을 위한 긴급 민생지원금이 지급되었습니다.\n" +
+                  "💰 지원금액: +" + fp(giveAmount) + "P";
 
         Api.replyRoom(roomName, formatCommand("🎁 민생지원금 안내", user, msg, "내 잔액: " + fp(user.point) + "P"));
         safeSaveData(data);

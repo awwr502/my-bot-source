@@ -2664,6 +2664,7 @@ function _runSector16Logic(data, ctx) {
                             if (prize > maxLimit) prize = maxLimit;
 
                             var res = processRepayment(u, prize, uId, ctx.targetRoom);
+                            // [교정] mainRoomData를 인자로 전달하여 게이트웨이 국고 연동 및 저널링 보장
                             util_updatePoint(u, mainRoomData, Number(res.actualGain), "경마 당첨금", ctx.targetRoom);
                             totalActuallyPaid += prize;
                             
@@ -8231,7 +8232,8 @@ function _gameGovernmentLogic(msg, user, data, replier, roomName, targetUid) {
         gov.votes.voters.push(targetUid);
         user.hasVotedToday = true;
 
-        // 3. 참여 보상 지급 (500P 거마비 - 중앙은행 연동)
+        // 3. 참여 보상 지급 (500P 거마비 - 중앙은행 연동 인자 누락 수정)
+        // [교정]: roomData 인자를 추가하여 국고 차감 및 블랙박스 기록 활성화
         util_updatePoint(user, roomData, 500, "의회 투표 거마비 지급", roomName);
 
         var resMsg = "'" + gov.pendingBill.name + "' 안건에 " + choice + "하셨습니다.\n" +
@@ -8311,7 +8313,7 @@ function _gameLotteryLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
     if (msg === "/스피또") {
         var stateRes = util_checkUserState(user, targetUid);
-        // [수정]: canAction이 false라도 '채굴' 중인 상태라면 스피또 구매를 허용함
+        // [수정]: 채굴 중일 때도 구매 허용 (가드 완화)
         if (!stateRes.canAction && stateRes.reason.indexOf("채굴") === -1) {
             replier.reply(formatError(user, "구매 불가", stateRes.reason));
             return true; 
@@ -8319,10 +8321,17 @@ function _gameLotteryLogic(msg, user, data, replier, roomName, targetUid) {
 
         var conf = SYSTEM_CONFIG.ECO.SPITTO;
         var price = conf.PRICE;
-        if (user.point < price) return replier.reply(formatError(user, "잔액 부족", fp(price) + "P가 필요합니다."));
+        if (Number(user.point) < price) return replier.reply(formatError(user, "잔액 부족", fp(price) + "P가 필요합니다."));
 
+        // 1. 포인트 게이트웨이 호출 (구매 대금 차감 및 국고 입고)
         util_updatePoint(user, roomData, -price, "스피또 구매", roomName);
+        
+        // 2. 섹터 30의 효과 처리 엔진 호출 (여기서 복권 개봉 및 당첨금 상환 로직이 실행됨)
+        // 인자 설명: (아이템객체, 유저, 방이름, 리플라이어, 데이터, UID, 가격, 이용권여부, 수량)
         _handleShopEffect({ effect: "spitto" }, user, roomName, replier, data, targetUid, price, false, 1);
+        
+        // 3. 실시간 저장 보장
+        safeSaveData(data);
         return true;
     }
     return false;
@@ -8364,6 +8373,7 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
         } else {
             var reward = Math.floor(Math.random() * (conf.MAX_REWARD - conf.MIN_REWARD + 1)) + conf.MIN_REWARD;
             var res = processRepayment(user, reward, targetUid, roomName);
+            // [교정]: 호출 인자 및 데이터 타입 정규화 보정
             util_updatePoint(user, roomData, Number(res.actualGain), "낚시 성공 보상", roomName);
 
             var fishes = ["붕어", "잉어", "메기", "송어", "배스"];

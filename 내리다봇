@@ -42,6 +42,11 @@ var USER_SCHEMA = [
     { key: 'totalSpittoBought', default: 0, type: 'number' }  // 스피또 누적 구매량 (통계용)
 ];
 
+/* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
+if (typeof globalData !== 'undefined' && !globalData.nameToIdCache) {
+    globalData.nameToIdCache = {};
+}
+
 /* 파일 및 데이터 동기화 객체 */
 var Lock = java.util.concurrent.locks.ReentrantLock; 
 var lock = new Lock(); 
@@ -391,7 +396,8 @@ function recoverFromJournal(data) {
  * [Gemini 정밀 교정] 데이터베이스 로드 함수
  */
 function getDatabase() {
-    if (globalData !== null && globalData.rooms && Object.keys(globalData.rooms).length > 0) {
+    // 1. RAM 상주 데이터 우선 반환 (물리적 파일 읽기 생략으로 응답 속도 극대화)
+    if (globalData && globalData.rooms && Object.keys(globalData.rooms).length > 0) {
         return globalData; 
     }
 
@@ -403,7 +409,7 @@ function getDatabase() {
             initialData = {
                 rooms: {}, admins: ["관리자"], botActive: true,
                 nickHistory: {}, adminLogs: [], economyDamping: 0.5,
-                lastDailyReset: "", isRecovering: false
+                lastDailyReset: "", isRecovering: false, nameToIdCache: {}
             };
         } else {
             var content = FileStream.read(FILE_PATH);
@@ -411,8 +417,10 @@ function getDatabase() {
             initialData = JSON.parse(content);
         }
 
+        // 2. 블랙박스(Journal) 로그 즉시 복구 병합
         recoverFromJournal(initialData);
         
+        // 3. [무결성 유지] 방별 독립성 및 Feature 템플릿 강제 이식 (기존 로직 보존)
         if (initialData.rooms) {
             for (var rName in initialData.rooms) {
                 var targetRoom = initialData.rooms[rName];
@@ -441,9 +449,11 @@ function getDatabase() {
             }
         }
 
+        // 4. 시스템 엔진(Executor) 및 캐시 객체 바인딩
         if (initialData) {
             initialData.SaveExecutor = SaveExecutor;
             initialData.Executor = Executor;
+            if (!initialData.nameToIdCache) initialData.nameToIdCache = {};
         }
         
         globalData = initialData;
@@ -685,12 +695,12 @@ function safeSaveData(data, isForceBackup) {
                     if (orgFile.exists()) orgFile.delete();
                     tempFile.renameTo(orgFile);
 
-                    // [v5.8 핵심] 전체 저장이 성공했으므로 블랙박스(Journal) 로그 초기화
-                    // 데이터가 영구 파일에 안착했으므로 임시 기록된 로그들은 더 이상 필요 없음
+                    /* [v9.0 블랙박스 로테이션] 물리적 저장이 확정되었으므로 누적된 로그 파기 */
                     logLock.lock();
                     try {
                         var jFile = new java.io.File(JOURNAL_PATH);
                         if (jFile.exists()) jFile.delete();
+                        Log.info("[Blackbox] 데이터 영구 저장 확인 - 저널 로그 초기화 완료.");
                     } finally {
                         logLock.unlock();
                     }

@@ -2655,6 +2655,24 @@ function _runSector16Logic(data, ctx) {
             if (racingData.lastProcessedHour !== currentHour) {
                 racingData.isOperating = (currentHour >= rConf.OPEN_HOUR && currentHour <= 23);
                 racingData.lastProcessedHour = currentHour;
+
+                // [신규] 배팅 밀집도에 따른 확률 역보정 (배팅이 몰릴수록 우승 확률 감소)
+                if (racingData.totalPool > 0) {
+                    racingData.horses.forEach(function(h) {
+                        var horseBetAmt = 0;
+                        for (var uid in racingData.bets) {
+                            if (racingData.bets[uid].horseId === h.id) {
+                                horseBetAmt += Number(racingData.bets[uid].amount);
+                            }
+                        }
+                        var betRatio = horseBetAmt / racingData.totalPool;
+                        
+                        // 밀집도 보정 계수: 배팅 비율의 80%만큼 가중치 삭감 (역배 유도)
+                        // 예: 한 말에 100% 몰리면 우승 확률이 기존의 20% 수준으로 급락
+                        var penalty = 1 - (betRatio * 0.8);
+                        h.weight = Math.max(0.1, h.weight * penalty); 
+                    });
+                }
                 
                 var totalW = 0; racingData.horses.forEach(function(h){ totalW += h.weight; });
                 var rVal = Math.random() * totalW; var accum = 0; var winner = racingData.horses[0];

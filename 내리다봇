@@ -3677,113 +3677,125 @@ else if (type === "admin_reg_delete") {
 
 //==========섹터21==========
 
-       /* 로또 번호 입력 처리부 (안전 등록 및 결제 순서 보정) */
-        if (lottoPurchaseState[targetUid]) {
-            var lotto = roomData.features.lotto;
-            
-            // 1. 시간 초과 및 취소 가드
-            if (Date.now() - lottoPurchaseState[targetUid].time > 30000) {
-                delete lottoPurchaseState[targetUid];
-                replier.reply(formatError(user, "시간 초과", "30초가 지나 구매가 취소되었습니다."));
-                return true;
-            } 
-            if (msg === "취소") {
-                delete lottoPurchaseState[targetUid];
-                replier.reply(formatCommand("🚫 로또 구매 취소", user, "구매가 취소되었습니다."));
-                return true;
-            }
+       /**
+ * [독립형 함수] 로또 번호 입력 처리 엔진 (함수화 완료)
+ * 기능: 로또 구매 대기 상태인 유저의 번호 입력을 처리하고 결제를 진행합니다.
+ */
+function _handleLottoInput(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    // [안전 가드] 방 데이터나 기능이 로드되지 않았으면 즉시 종료
+    if (!roomData || !roomData.features) return false;
 
-            // 2. 상태 검증 (섹터 11 연동 - roomName 인자 추가)
+    // 방별 독립 상태 저장소 참조 (참조 경로 수정)
+    var lottoPurchaseState = roomData.features.states.lottoPurchase;
+    
+    // 현재 유저가 로또 구매 대기 중인지 확인
+    if (!lottoPurchaseState || !lottoPurchaseState[targetUid]) return false;
+
+    // 1. 시간 초과(30초) 및 취소 가드
+    if (Date.now() - lottoPurchaseState[targetUid].time > 30000) {
+        delete lottoPurchaseState[targetUid];
+        replier.reply(formatError(user, "시간 초과", "30초가 지나 구매가 자동 취소되었습니다."));
+        return true;
+    }
+    if (msg === "취소") {
+        delete lottoPurchaseState[targetUid];
+        replier.reply(formatCommand("🚫 구매 취소", user, "로또 구매가 취소되었습니다."));
+        return true;
+    }
+
+    // 2. 활동 상태 검증 (섹터 11 연동)
+    var stateRes = util_checkUserState(user, targetUid, roomName);
+    if (!stateRes.canAction) {
+        delete lottoPurchaseState[targetUid];
+        replier.reply(formatError(user, "구매 불가", stateRes.reason));
+        return true;
+    }
+
+    // 3. 번호 파싱 및 유효성 검증
+    var rawNums = msg.match(/\d+/g);
+    if (!rawNums || rawNums.length !== 3) {
+        replier.reply(formatError(user, "입력 오류", "숫자 3개를 입력해주세요.\n예) 1 5 10"));
+        return true;
+    }
+    
+    var nums = rawNums.map(Number).sort(function(a, b) { return a - b; });
+    var isInvalid = (nums[0] === nums[1] || nums[1] === nums[2] || nums[0] === nums[2]);
+    for (var i = 0; i < 3; i++) { if (nums[i] < 1 || nums[i] > 15) isInvalid = true; }
+    
+    if (isInvalid) {
+        replier.reply(formatError(user, "번호 오류", "1~15 사이의 중복 없는 숫자 3개를 입력하세요."));
+        return true;
+    }
+
+    // 4. 가격 확인 및 잔액 체크
+    var lottoPrice = (lottoPurchaseState[targetUid].price !== undefined) ? lottoPurchaseState[targetUid].price : 2000;
+    if (Number(user.point) < lottoPrice) {
+         delete lottoPurchaseState[targetUid];
+         replier.reply(formatError(user, "잔액 부족", fp(lottoPrice) + "P가 필요합니다.\n(현재: " + fp(user.point) + "P)"));
+         return true;
+    }
+
+    // 5. [핵심] 장부 선등록 및 객체 초기화
+    var lotto = roomData.features.lotto;
+    if (!lotto.entries) lotto.entries = {};
+    if (!lotto.entries[targetUid]) lotto.entries[targetUid] = [];
+
+    lotto.entries[targetUid].push(nums);
+    lotto.dailyPool = (Number(lotto.dailyPool) || 0) + lottoPrice;
+
+    // 6. [결제] 포인트 차감 및 국고 연동
+    var prePoint = Number(user.point);
+    util_updatePoint(user, roomData, -lottoPrice, "로또 구매", roomName);
+    var actualDeducted = prePoint - Number(user.point);
+
+    // 7. 완료 처리 및 저장
+    delete lottoPurchaseState[targetUid];
+    
+    replier.reply(formatCommand("🎫 로또 구매 완료", user, 
+        "선택 번호: [" + nums.join(", ") + "]\n" +
+        "차감 금액: " + fp(actualDeducted) + "P\n" +
+        "추첨 시간: 매일 밤 22:00", 
+        "내 잔액: " + fP(user.point) + "P"
+    ));
+
+    safeSaveData(data);
+    return true; 
+}
+
+        /* [채팅 보너스 로직 분리] */
+function _runChatBonusLogic(msg, user, data, replier, roomName, targetUid) {
+    if (msg.indexOf("/") !== 0) {
+        user.chatCount = (user.chatCount || 0) + 1;
+        user.chatCycleCount = (user.chatCycleCount || 0) + 1;
+        
+        if (user.chatCycleCount > 13 || !user.chatBonusTarget) {
+            user.chatCycleCount = 1; 
+            user.chatBonusTarget = Math.floor(Math.random() * 12) + 1;
+            user.chatBonusGiven = false; 
+        }
+        
+        if (user.chatCycleCount >= user.chatBonusTarget && !user.chatBonusGiven) {
+            // [v5.9] 통합 상태 가드
             var stateRes = util_checkUserState(user, targetUid, roomName);
-            if (!stateRes.canAction) {
-                delete lottoPurchaseState[targetUid];
-                replier.reply(formatError(user, "구매 불가", stateRes.reason));
-                return true;
-            }
+            if (!stateRes.canAction && stateRes.reason.indexOf("징역") !== -1) return;
 
-            // 3. 번호 검증 및 파싱
-            var rawNums = msg.match(/\d+/g);
-            if (!rawNums || rawNums.length !== 3) {
-                replier.reply(formatError(user, "입력 오류", "숫자 3개를 입력해주세요.\n예) 1 5 10"));
-                return true;
-            }
-            var nums = rawNums.map(Number).sort(function(a, b) { return a - b; });
-            var isInvalid = (nums[0] === nums[1] || nums[1] === nums[2] || nums[0] === nums[2]);
-            for (var i = 0; i < 3; i++) { if (nums[i] < 1 || nums[i] > 15) isInvalid = true; }
-            if (isInvalid) {
-                replier.reply(formatError(user, "번호 오류", "1~15 사이의 중복 없는 숫자 3개를 입력하세요."));
-                return true;
-            }
-
-            // 4. 가격 산출 및 잔액 체크
-            var lottoPrice = (lottoPurchaseState[targetUid].price !== undefined) ? lottoPurchaseState[targetUid].price : 2000;
-            if (Number(user.point) < lottoPrice) {
-                 delete lottoPurchaseState[targetUid];
-                 replier.reply(formatError(user, "잔액 부족", fp(lottoPrice) + "P가 필요합니다."));
-                 return true;
-            }
-
-            // 5. [핵심] 장부 선등록 및 객체 초기화 (등록 실패 시 결제 안 함)
-            if (!lotto.entries) lotto.entries = {};
-            if (!lotto.entries[targetUid]) lotto.entries[targetUid] = [];
+            var multiplier = util_getEcoMultiplier(roomName);
+            var basePrize = Math.floor(Math.random() * 201) + 300;
+            var prize = Math.floor(basePrize * multiplier);
             
-            // 등록 실행
-            lotto.entries[targetUid].push(nums);
-            lotto.dailyPool = (Number(lotto.dailyPool) || 0) + lottoPrice;
+            var res = processRepayment(user, prize, targetUid, roomName);
+            util_updatePoint(user, data.rooms[roomName], Number(res.actualGain), "채팅 보너스", roomName);
 
-            // 6. [결제] 모든 등록이 성공한 뒤에만 포인트 차감 실행 (국고 연동)
-            var prePoint = Number(user.point);
-            util_updatePoint(user, roomData, -lottoPrice, "로또 구매", roomName);
-            var actualDeducted = prePoint - Number(user.point);
-
-            // 7. 결과 출력
-            delete lottoPurchaseState[targetUid];
-            replier.reply(formatCommand("🎫 로또 구매 완료", user, "선택 번호: [" + nums.join(", ") + "]\n차감 금액: " + fp(actualDeducted) + "P\n추첨 시간: 매일 밤 22:00", "내 잔액: " + fP(user.point) + "P"));
+            user.creditScore = Math.min(1000, Number(user.creditScore || 600) + 1);
             
-            safeSaveData(data);
-            return true;
+            var output = "🎁 채팅 보너스\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n" + fp(prize) + "P를 획득했습니다!" + (res.repayMsg ? res.repayMsg : "") + "\n━━━━━━━━━━━━━━━";
+            replier.reply(output + "\n내 잔액: " + fP(user.point) + "P");
+            
+            user.chatBonusGiven = true; 
         }
-
-        /* 채팅 보너스 로직 (하이브리드 방식 적용: 실시간 저장 제거로 렉 방지) */
-        if (msg.indexOf("/") !== 0) {
-            user.chatCount = (user.chatCount || 0) + 1;
-            user.chatCycleCount = (user.chatCycleCount || 0) + 1;
-            if (user.chatCycleCount > 13 || !user.chatBonusTarget) {
-                user.chatCycleCount = 1; 
-                user.chatBonusTarget = Math.floor(Math.random() * 12) + 1;
-                user.chatBonusGiven = false; 
-            }
-            if (user.chatCycleCount >= user.chatBonusTarget && !user.chatBonusGiven) {
-                // [v5.9] 통합 상태 가드: 활동 중에는 채팅 보너스 당첨 제외 (무응답 종료)
-                var stateRes = util_checkUserState(user, targetUid);
-                if (!stateRes.canAction && stateRes.reason.indexOf("징역") !== -1) return
-
-                // [v5.9] 통합 물가 엔진 연결 (기존 10줄의 수동 계산 로직 삭제)
-                var multiplier = util_getEcoMultiplier(roomName);
-
-                var basePrize = Math.floor(Math.random() * 201) + 300;
-                var prize = Math.floor(basePrize * multiplier);
-                
-                var prePoint = Number(user.point);
-                
-                /* [핵심] 사채 추심 로직이 포함된 통합 상환 함수 호출 */
-                // targetUid를 인자로 넘겨 사채 계약자 식별 및 추심 진행
-                var res = processRepayment(user, prize, targetUid, roomName);
-                util_updatePoint(user, roomData, Number(res.actualGain), "채팅 보너스", roomName); // 관문 통과
-
-                user.creditScore = Math.min(1000, Number(user.creditScore || 600) + 1);
-                
-                // 추심 및 상환 내역이 포함된 메시지 출력
-                var output = "🎁 채팅 보너스\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n" + fp(prize) + "P를 획득했습니다!" + (res.repayMsg ? res.repayMsg : "") + "\n━━━━━━━━━━━━━━━";
-                replier.reply(output + "\n내 잔액: " + fP(user.point) + "P");
-                
-                user.chatBonusGiven = true; 
-                
-                /* [최적화] 하이브리드 방식 적용: 고빈도 작업인 채팅 보너스는 실시간 저장을 생략함 */
-                // 실제 저장은 5분 주기 스케줄러(섹터 16)가 담당하여 I/O 부하를 제거함.
-                // safeSaveData(data); 
-            }
-        }
+    }
+}
 
 //==========섹터22-1==========
 

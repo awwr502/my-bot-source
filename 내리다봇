@@ -1,10 +1,5 @@
 //==========섹터1==========
 
-/* 전역 상태 변수 */ 
-if (typeof globalData === 'undefined' || globalData === null) {
-    var globalData = { rooms: {}, botActive: true }; 
-}
-
 /* [신규] 명령어 자동 등록 시스템 (Command Registry) */
 var USER_COMMANDS = {};
 var ADMIN_COMMANDS = {};
@@ -43,12 +38,8 @@ var USER_SCHEMA = [
     { key: 'dailyGambleCount', default: 0, type: 'number' },
     { key: 'boughtWarningRemoval', default: false, type: 'boolean' },
     { key: 'hasVotedToday', default: false, type: 'boolean' },
-    { key: 'lastFishingTime', default: 0, type: 'number' },    // 낚시 쿨타임
-    { key: 'totalSpittoBought', default: 0, type: 'number' },  // 스피또 통계
-    { key: 'horseItems', default: [], type: 'array' },         // [신규] 마주 아이템
-    { key: 'stockPieces', default: 0, type: 'number' },        // [신규] 최대주주 조각
-    { key: 'luckyFragments', default: 0, type: 'number' },     // 행운의부적 파편
-    { key: 'luckyCharmEndTime', default: 0, type: 'number' }   // 행운의부적 시간
+    { key: 'lastFishingTime', default: 0, type: 'number' },    // 낚시 쿨타임 관리용 (Timestamp)
+    { key: 'totalSpittoBought', default: 0, type: 'number' }  // 스피또 누적 구매량 (통계용)
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -68,33 +59,38 @@ var JOURNAL_PATH = BASE_DIR + "transaction.log"; // [v5.8] 실시간 거래 기�
 var BACKUP_DIR = BASE_DIR + "backup/"; 
 
 /* [최적화] 전역 UID 캐시 시스템 */
-var uidCache = uidCache || {};
+var uidCache = uidCache || {}; 
 
 /* [최적화] 병렬 처리 엔진 분리 */
 // 1. 명령어 처리 엔진: 8개의 스레드가 유저와 소통 (응답 속도 담당)
 var Executor = java.util.concurrent.Executors.newFixedThreadPool(6);
 // 2. [신규] 저장 전담 엔진: 단 1개의 스레드가 순차적으로 파일 기록 (안전성 담당)
 var SaveExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
-
-/* [안전한 바인딩] 생성된 엔진을 전역 객체에 연결 */
 if (globalData) {
-    globalData.Executor = Executor;
     globalData.SaveExecutor = SaveExecutor;
 }
 
-/* 로그 저장 경로 및 디렉토리 설정 */
-var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt";
-var ERROR_LOG_PATH = BASE_DIR + "logs/error_log.txt";
-var logDir = new java.io.File(BASE_DIR + "logs/");
-if (!logDir.exists()) logDir.mkdirs();
-var dir = new java.io.File(BACKUP_DIR);
-if (!dir.exists()) dir.mkdirs();
+globalData.Executor = Executor;
+globalData.SaveExecutor = SaveExecutor;
+
+/* 로그 저장 경로 및 디렉토리 설정 */ 
+var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt"; 
+var ERROR_LOG_PATH = BASE_DIR + "logs/error_log.txt"; 
+var logDir = new java.io.File(BASE_DIR + "logs/"); 
+if (!logDir.exists()) logDir.mkdirs(); 
+var dir = new java.io.File(BACKUP_DIR); 
+if (!dir.exists()) dir.mkdirs(); 
+
+/* 전역 상태 변수 */ 
+if (typeof globalData === 'undefined' || globalData === null) {
+    var globalData = { rooms: {}, botActive: true }; 
+}
 
 /* [안정화] 핵심 게임 엔진 및 상태 참조 전역 선언 */
 var racingData = null;      // 경마 실시간 데이터 참조용
 var lotto = null;           // 로또 실시간 데이터 참조용
 var marketOpenPrice = globalData.marketOpenPrice || 0;    // 주식 시가 참조용
-var feverData = {};        // 피버타임 상태 참조용
+var feverData = {};         // 피버타임 상태 참조용
 var sprinkleData = {};      // 뿌리기 상태 참조용
 
 /* [안정화] 입력 대기 및 활동 상태 변수 초기 선언 */
@@ -200,16 +196,6 @@ var SYSTEM_CONFIG = {
         ATTEND_MAX: 6500, // [출석 최대 지급]: 출석 체크 시 무작위로 지급되는 포인트의 상한선
         GAMBLE_MIN: 2000,  // [홀짝 최소 베팅]: 홀짝 게임 진행 시 입력 가능한 최소 포인트 단위
         GAMBLE_MAX: 50000, // [홀짝 최대 베팅]: 홀짝 게임의 1회당 최대 베팅 한도 (사행성 조절)
-
-        /* [신규] 수집 및 패시브 시스템 밸런스 설정 */
-        COLLECTION: {
-            HORSE_PROB: 0.10,      // 마주 아이템 발견 확률 (10%)
-            STOCK_PROB: 0.10,      // 최대주주 조각 발견 확률 (10%)
-            LUCKY_PROB: 0.20,      // 행운의부적 파편 발견 확률 (20%)
-            STOCK_GOAL: 10,        // 최대주주 목표 개수
-            LUCKY_GOAL: 15,        // 행운의부적 목표 개수
-            LUCKY_DURATION: 3600000 // 부적 지속 시간 (1시간 = 3600000ms)
-        },
 
         /* [신규] 스피또 및 생산형 컨텐츠 설정 */
         SPITTO: {
@@ -663,13 +649,14 @@ function safeSaveData(data, isForceBackup) {
             } catch(e) {}
         }
 
-    } catch (validationError) { // 여기서 위의 BIG try { 블록이 닫히며 catch가 연결되어야 합니다.
+    } catch (validationError) {
+        // 검증 실패 시 로그만 남기고 저장 함수 전체를 즉시 종료 (파일에 쓰지 않음)
         Log.error("!!! [데이터 오염 방지 작동] !!!");
         Log.error("사유: " + validationError.message);
         try {
             Api.replyRoom("내리다", "🚨 [데이터 보호 시스템 작동]\n심각한 데이터 오염이 감지되어 자동 저장을 차단했습니다.\n사유: " + validationError.message + "\n\n⚠️ 관리자는 즉시 시스템을 점검하십시오.");
         } catch (e) {}
-        return; 
+        return; // 파일 쓰기 단계로 넘어가지 않고 종료
     }
 
     globalData = data; // 메모리 데이터 즉시 동기화 (응답 속도 최우선)
@@ -791,7 +778,7 @@ var SHOP_ITEMS = [
     { id: 11, name: "[시즌] 롤 판수 인증권", icon: "🎫", price: 100000, effect: "gameAuth", cat: 3 },
     /* [신규] 경고삭제권: 기본가 500,000P 설정 */
     { id: 13, name: "경고삭제권", icon: "🎫", price: 2000000, effect: "warnClear", cat: 3 },
-    { id: 12, name: "랜덤 아이콘 박스", icon: "🎁", price: 10000, effect: "randomBox", cat: 4 },
+    { id: 12, name: "랜덤 아이콘 박스", icon: "🎁", price: 25000, effect: "randomBox", cat: 4 },
     { id: 7, name: "로또 구매", icon: "🎟️", price: 2000, effect: "lotto", cat: 5 },
     { id: 14, name: "스피또 복권", icon: "🧧", price: 2000, effect: "spitto", cat: 5 }
 ];
@@ -803,8 +790,8 @@ var RANDOM_BOX_CONFIG = {
         { grade: "노말 (Normal)", icon: "🌱", prob: 0.20, items: ["🌱", "⚔️", "❣️", "🍀", "🎀", "🎈", "🧸", "🪁", "🍭", "🍏", "🍄", "🌻", "🐱", "🐶", "🍎"] },
         { grade: "레어 (Rare)", icon: "💎", prob: 0.10, items: ["💎", "👾", "🛡️", "🎰", "🔱", "🧿", "🎭", "🎨", "🧪", "🔭", "🎸", "🏹", "🕯️", "⛓️", "🧬"] },
         { grade: "에픽 (Epic)", icon: "🔮", prob: 0.05, items: ["👑", "☄️", "🧨", "🔮", "⛩️", "🎡", "🚁", "🌋", "🐅", "🦅", "🏹", "🏰", "🛥️", "🧿"] },
-        { grade: "유니크 (Unique)", icon: "🦄", prob: 0.03, items: ["🪐", "🏮", "🦾", "🛰️", "🦄", "🧞", "🦁", "🐋", "🦜", "🕸️", "🎃", "🎅", "🧜"] },
-        { grade: "레전더리 (Legendary)", icon: "🎰", prob: 0.02, items: ["🔥", "💫", "🌌", "⚡", "🛸", "🌈", "☀️", "❄️", "🌑", "🔱", "💮", "💠", "🎖️", "🐲" ] }
+        { grade: "유니크 (Unique)", icon: "🦄", prob: 0.03, items: ["🪐", "🏮", "🐲", "🦾", "🛰️", "🦄", "🧞", "🦁", "🐋", "🦜", "🕸️", "🎃", "🎅", "🧜"] },
+        { grade: "레전더리 (Legendary)", icon: "🎰", prob: 0.02, items: ["🔥", "💫", "🌌", "⚡", "🛸", "🌈", "☀️", "❄️", "🌑", "🔱", "💮", "💠", "🎖️" ] }
     ],
     PAYBACK: 2000 // 중복 아이콘 당첨 시 환급금
 };
@@ -1235,7 +1222,7 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
                     user.inventory.push({ id: t.id, name: "[" + t.name + "] 칭호", icon: "💰", effect: "title", title: t.name });
                     user.title = t.name;
                     var targetRoom = roomName || (roomData && roomData.roomName ? roomData.roomName : "내리다");
-                    try { Api.replyRoom(targetRoom, "🎊 [내리다 경제 위원회] " + user.name + "님 [" + t.name + "] 등극!"); } catch(e){}
+                    try { Api.replyRoom(targetRoom, "🎊 [경제 위원회] " + user.name + "님 [" + t.name + "] 등극!"); } catch(e){}
                     break; 
                 }
             }
@@ -1498,10 +1485,8 @@ function getDisplayName(user) {
     else if (user.title && user.title.length > 0) {
         var titleIcon = "";
         
-        // [Gemini 규칙]: 도굴왕, 수집대마왕, 그리고 신규 칭호(마주, 최대주주)만 아이콘을 표시합니다.
-        var specialTitles = ["도굴왕", "수집대마왕", "마주", "최대주주"];
-        
-        if (specialTitles.indexOf(user.title) !== -1) {
+        // [Gemini 규칙]: 도굴왕, 수집대마왕만 인벤토리에서 아이콘을 찾아 합칩니다.
+        if (user.title === "도굴왕" || user.title === "수집대마왕") {
             if (user.inventory && user.inventory.length > 0) {
                 for (var i = 0; i < user.inventory.length; i++) {
                     var item = user.inventory[i];
@@ -3355,8 +3340,6 @@ if (!data) return;
 var roomData = data.rooms[roomName] || { users: {} };
 data.rooms[roomName] = roomData;
 
-var isIdentityRecovered = false;
-
 /* [v9.5 초고속 엔진] 전역 통합 O(1) 식별 캐시 시스템 */
 // 로더 리로드 시에도 유지되는 globalData 캐시 사용 (I/O 병목 제거 핵심)
 var cacheKey = roomName + "_" + cleanSender;
@@ -3405,6 +3388,7 @@ if (!targetUid || !roomData.users[targetUid] || roomData.users[targetUid].name !
 }
 
 // 2. [신분 복구] 식별 실패 시 영구 명부(Registry) 대조 (데이터 부활)
+// 캐시에도 없고 루프에서도 못 찾았을 때만 파일 I/O 수행
 if (!targetUid) {
     var regKey = roomName + "_" + cleanSender;
     var registry = {};
@@ -3413,9 +3397,8 @@ if (!targetUid) {
         if (regFile.exists()) registry = JSON.parse(FileStream.read(REGISTRY_PATH));
         
         if (registry[regKey]) {
-            targetUid = registry[regKey]; 
-            isIdentityRecovered = true; // [추가] 복구 성공 플래그 설정
-            globalData.nameToIdCache[cacheKey] = targetUid;
+            targetUid = registry[regKey]; // 과거 코드가 있다면 즉시 부활
+            globalData.nameToIdCache[cacheKey] = targetUid; // 캐시 복구
             Log.info("[Identity Restore] " + cleanSender + "님 신분 복구 완료.");
         }
     } catch(e) { Log.error("Registry Read Error"); }
@@ -4006,11 +3989,10 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
             // 기부 칭호 체크
             var donation = user.totalDonation;
             
-          // ... (기부 칭호 체크 부분) ...
           if (donation >= 2000000) util_checkAndAwardTitle(user, replierStub, "기부왕", 5004, "👑", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(2000000) + "P", "국가 경제의 진정한 수호자입니다.");
-          else if (donation >= 1000000) util_checkAndAwardTitle(user, replierStub, "자선가", 5003, "✨", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(1000000) + "P", "노블레스 오블리주를 몸소 실천하고 있습니다."); // [교정] 세미콜론 추가
-          else if (donation >= 700000) util_checkAndAwardTitle(user, replierStub, "기부천사", 5002, "👼", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(700000) + "P", "어려운 이들에게 희망의 빛을 선사했습니다.");
-          else if (donation >= 300000) util_checkAndAwardTitle(user, replierStub, "선한손길", 5001, "🌱", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(300000) + "P", "당신의 따뜻한 마음이 사회의 소중한 밀알이 됩니다.");
+            else if (donation >= 1000000) util_checkAndAwardTitle(user, replierStub, "자선가", 5003, "✨", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(1000000) + "P", "노블레스 오블리주를 몸소 실천하고 있습니다.")
+            else if (donation >= 700000) util_checkAndAwardTitle(user, replierStub, "기부천사", 5002, "👼", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(700000) + "P", "어려운 이들에게 희망의 빛을 선사했습니다.");
+            else if (donation >= 300000) util_checkAndAwardTitle(user, replierStub, "선한손길", 5001, "🌱", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(300000) + "P", "당신의 따뜻한 마음이 사회의 소중한 밀알이 됩니다.");
 
                 var thanksMsg = "중앙은행에 " + fp(amt) + "P를 기부하셨습니다.\n" +
                                 "보내주신 소중한 자산은 국가 경제 위기 극복과 \n" +
@@ -4021,10 +4003,9 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
 
                 replier.reply(formatCommand("🎁 기부 완료", user, thanksMsg, "(현재 잔액: " + fp(user.point) + "P)"));
                 delete bankProcessState[targetUid];
-                safeSaveData(data);
+                safeSaveData(data)
             }
-            return true;
-        }
+        return true;
     }
     return false;
 }
@@ -4551,11 +4532,13 @@ function _handleMenuStep1(msg, user, data, replier, roomName, targetUid) {
             bankProcessState[targetUid] = { type: 'donate', time: Date.now() };
             replier.reply(formatCommand("🎁 기부 진행", user, "기부할 금액을 입력해주세요.\n(보유: " + fp(user.point) + "P)", "취소: [취소]"));
         } else {
+            // 잘못된 번호 입력 시 다시 메뉴 대기 상태로 복구? 
+            // 기획 의도상 메뉴가 닫히는 게 일반적이므로 에러 메시지 후 종료 처리
             replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 선택해주세요."));
         }
         return true;
     }
-    return false;
+    return false; // 이 함수에서 처리하지 않은 state.type인 경우 (예: p2p_loan_menu 등)
 }
 
 //==========섹터23-2==========
@@ -5065,7 +5048,7 @@ if (msg === "/가이드") {
 
 //==========섹터26==========
 
-    } catch (e) { // 이 catch는 섹터 19의 try { 와 연결됩니다.
+    } catch (e) {
         Log.error("Thread Runtime Error: " + e);
         if (lock.isLocked()) {
             try {
@@ -5075,9 +5058,10 @@ if (msg === "/가이드") {
             }
         }
     }
-} // run: function() 끝
-})); // Executor.execute 끝
+}
+}));
 };
+
 //==========섹터27==========
 
 /**
@@ -5530,18 +5514,20 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         util_setData(user, 'boxTickets', Math.max(0, (user.boxTickets || 0) - 1), "랜덤박스 이용권 사용", roomName);
     }
 
-    /* [Gemini 요청 사항] 수집대마왕 판정 함수 */
+    /* [Gemini 요청 사항] 수집대마왕 판정 함수 - 전종 수집(보유+분해) 체크 */
     var checkCollectionMaster = function() {
+        // 1. 상점 판매 아이콘 추출
         var shopIcons = SHOP_ITEMS.filter(function(it) { return it.effect === "icon"; }).map(function(it) { return it.icon; });
-        var boxIcons = [];
         
-        // 문법 교정: typeof 체크 추가
-        if (typeof RANDOM_BOX_CONFIG !== 'undefined' && RANDOM_BOX_CONFIG.PROBS) {
+        // 2. 랜덤 박스 모든 아이콘 추출
+        var boxIcons = [];
+        if (RANDOM_BOX_CONFIG && RANDOM_BOX_CONFIG.PROBS) {
             RANDOM_BOX_CONFIG.PROBS.forEach(function(grade) {
                 if (grade.items) boxIcons = boxIcons.concat(grade.items);
             });
         }
         
+        // 3. 중복 제거된 전체 고유 아이콘 목록 생성
         var allUniqueIcons = {};
         shopIcons.concat(boxIcons).forEach(function(icon) {
             if (icon) allUniqueIcons[icon] = true;
@@ -5549,7 +5535,9 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         
         var totalTargetCount = Object.keys(allUniqueIcons).length;
         
+        // 4. 유저의 누적 수집 기록(collectedIcons)과 비교 판정
         if (user.collectedIcons && user.collectedIcons.length >= totalTargetCount) {
+            
             var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
             util_checkAndAwardTitle(user, replierStub, "수집대마왕", 3001, "🏵️", "내리다 만물 상업 연합", "모든 아이콘 수집 완료", "모든 상징을 손에 넣은 전설의 수집가입니다.");
         }
@@ -5560,7 +5548,6 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
     // 0. 스피또 복권 처리 로직
     if (item.effect === "spitto") {
         var conf = SYSTEM_CONFIG.ECO.SPITTO;
-        var colConf = SYSTEM_CONFIG.ECO.COLLECTION; // [신규] 수집 설정 로드
         var totalPrize = 0;
         var results = { rank1: 0, rank2: 0, rank3: 0, rank4: 0, fail: 0 };
 
@@ -5571,29 +5558,6 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
             else if (rand < conf.PROBS.RANK3) { results.rank3++; totalPrize += conf.PRIZES.RANK3; }
             else if (rand < conf.PROBS.RANK4) { results.rank4++; totalPrize += conf.PRIZES.RANK4; }
             else { results.fail++; }
-        }
-
-        /* [신규] 행운의 부적 조각 수집 (낙첨 시 20%) */
-        var luckyMsg = "";
-        // 당첨금이 0원(완전 꽝)일 때만 발동
-        if (totalPrize === 0) {
-            // 여러 장 꽝이어도 한 번에 1개만 지급 (밸런스 조절)
-            if (Math.random() < colConf.LUCKY_PROB) {
-                user.luckyFragments = Number(user.luckyFragments || 0) + 1;
-                
-                luckyMsg = "\n\n🍀 [행운의 부적: 조각 발견]\n" +
-                           "━━━━━━━━━━━━━━━\n" +
-                           "꽝이 나온 복권 뒤에서 행운의 조각을 찾아냈습니다!\n\n" +
-                           "🧩 조각 획득 (+1)\n" +
-                           "📊 현재 보유: " + user.luckyFragments + " / " + colConf.LUCKY_GOAL + " 개";
-
-                // 목표 달성 시 즉시 발동
-                if (user.luckyFragments >= colConf.LUCKY_GOAL) {
-                    user.luckyFragments -= colConf.LUCKY_GOAL;
-                    user.luckyCharmEndTime = Date.now() + colConf.LUCKY_DURATION;
-                    luckyMsg += "\n\n🔥 [행운의 가호 발동] : 1시간 동안 홀짝 승률 3% 상승!";
-                }
-            }
         }
 
         var res = processRepayment(user, totalPrize, targetUid, roomName);
@@ -5609,8 +5573,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
             body += "💀 아쉽게도 모두 꽝입니다...";
         }
         
-        // 결과 메시지에 부적 관련 메시지 합치기
-        replier.reply(formatCommand("🎰 스피또 결과", user, body + (res.repayMsg || "") + luckyMsg, "내 잔액: " + fp(user.point) + "P"));
+        replier.reply(formatCommand("🎰 스피또 결과", user, body + (res.repayMsg || ""), "내 잔액: " + fp(user.point) + "P"));
     }
     
     // 1. 랜덤 아이콘 박스 처리 (메시지 테이블 및 중복 조각 지급 포함)
@@ -7648,8 +7611,8 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
     if (!roomData) return false;
 
     var racingData = roomData.features.racing;
+
     var rConf = SYSTEM_CONFIG.ECO.RACING; 
-    var colConf = SYSTEM_CONFIG.ECO.COLLECTION; // [신규] 수집 설정 로드
 
     /* [연결] 1. 경마 배팅 액션 (/배팅 [번호] [금액]) */
     if (msg.indexOf("/배팅 ") === 0) {
@@ -7714,31 +7677,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         racingData.bets[targetUid] = { uid: targetUid, horseId: hId, amount: betAmt, name: user.name };
         racingData.totalPool += betAmt;
 
-        /* [신규] 마주 조각(마구) 수집 로직 */
-        var collectionMsg = "";
-        if (Math.random() < colConf.HORSE_PROB) {
-            if (!user.horseItems) user.horseItems = [];
-            var allItems = ["편자", "안장", "고삐", "채찍"];
-            var newItems = allItems.filter(function(x) { return user.horseItems.indexOf(x) === -1; });
-            
-            if (newItems.length > 0) {
-                var pickItem = newItems[Math.floor(Math.random() * newItems.length)];
-                user.horseItems.push(pickItem);
-                
-                collectionMsg = "\n\n✨ [마구 발견]\n" +
-                                "획득 아이템: [" + pickItem + "]\n" +
-                                "📊 수집 현황: [" + pickItem + "] (" + user.horseItems.length + " / 4)";
-
-                if (user.horseItems.length === 4) {
-                    var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
-                    util_checkAndAwardTitle(user, rStub, "마주", 6001, "🏇", "내리다 경마장", "마구 4종 세트 완성", "이제 경마장의 모든 말들이 당신의 이름을 연호합니다.");
-                } else {
-                    collectionMsg += "\n━━━━━━━━━━━━━━━\n💡 [가이드]: 4종을 모두 모으면 [마주] 칭호가 부여됩니다!";
-                }
-            }
-        }
-
-        replier.reply(formatCommand("✅ [경마 배팅 완료]", user, "🏇 선택: " + selectedHorse.id + "번 " + selectedHorse.name + "\n💰 금액: " + fp(betAmt) + "P 배팅 성공!" + collectionMsg, "내 잔액: " + fp(user.point) + "P"));
+        replier.reply(formatCommand("✅ [경마 배팅 완료]", user, "🏇 선택: " + selectedHorse.id + "번 " + selectedHorse.name + "\n💰 금액: " + fp(betAmt) + "P 배팅 성공!", "내 잔액: " + fp(user.point) + "P"));
         safeSaveData(data);
         return true;
     }
@@ -7758,9 +7697,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        /* [신규] 마주 패시브: 취소 수수료 면제 */
-        var isHorseOwner = (user.title === "마주");
-        var fee = isHorseOwner ? 0 : Math.floor(myBet.amount * rConf.CANCEL_FEE);
+        var fee = Math.floor(myBet.amount * rConf.CANCEL_FEE);
         var refund = myBet.amount - fee;
 
         // [엔진 연결] 게이트웨이를 통한 환불 (수수료 제외)
@@ -7769,8 +7706,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         racingData.totalPool -= myBet.amount;
         delete racingData.bets[targetUid];
 
-        var passiveTag = isHorseOwner ? "\n✨ 마주 효과: 취소 수수료 0원 면제" : "\n⚖️ 취소 위약금(10%): -" + fp(fee) + "P";
-        var cancelMsg = "경마 배팅을 철회했습니다.\n\n💰 배팅 원금: " + fp(myBet.amount) + "P" + passiveTag + "\n🎁 최종 환불액: " + fp(refund) + "P";
+        var cancelMsg = "경마 배팅을 철회했습니다.\n\n💰 원래 배팅금: " + fp(myBet.amount) + "P\n⚖️ 취소 위약금(10%): -" + fp(fee) + "P\n🎁 최종 환불액: " + fp(refund) + "P";
         replier.reply(formatCommand("🚫 배팅 취소 완료", user, cancelMsg, "내 잔액: " + fp(user.point) + "P"));
         safeSaveData(data);
         return true;
@@ -7821,14 +7757,6 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             
             var isFeverActive = (data.feverData && data.feverData.active === true);
             var winProb = isFeverActive ? SYSTEM_CONFIG.PROB.ODD_EVEN_FEVER : SYSTEM_CONFIG.PROB.ODD_EVEN_WIN;
-            
-            /* [신규] 행운의 부적 버프 적용 (3% 승률 상승) */
-            var charmActive = false;
-            if (user.luckyCharmEndTime && Date.now() < user.luckyCharmEndTime) {
-                winProb += 0.03;
-                charmActive = true;
-            }
-
             var isWin = Math.random() < winProb; 
             var result = isWin ? pick : (pick === "홀" ? "짝" : "홀");
             
@@ -7845,8 +7773,6 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 checkAndHandleDefaulter(user, roomName);
             }
 
-            var charmMsg = charmActive ? "\n🔥 행운의 부적 효과 적용 중! (승률 +3%)" : "";
-
             if (isWin) {
                 // 3. 승리 횟수 갱신 (직접 연산 ++ 대신 게이트웨이 보호 적용)
                 var nextWins = Number(user.totalGambleWins || 0) + 1;
@@ -7855,7 +7781,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 // [엔진 연결] 게이트웨이 승리금 지급 (은행 자동 차감)
                 util_updatePoint(user, roomData, Number(res.actualGain), "홀짝 적중", roomName);
                 var winPrefix = isFeverActive ? "🔥 [피버] " : "🎊 ";
-                replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, "결과: [" + result + "]" + charmMsg + "\n축하합니다! " + fp(Number(res.actualGain)) + "P 획득!" + res.repayMsg, "잔액: " + fp(user.point) + "P"));
+                replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, "결과: [" + result + "]\n축하합니다! " + fp(Number(res.actualGain)) + "P 획득!" + res.repayMsg, "잔액: " + fp(user.point) + "P"));
             } else {
                 // [엔진 연결] 게이트웨이 패배금 차감 (은행 자동 입고)
                 util_updatePoint(user, roomData, -bet, "홀짝 미적중", roomName);
@@ -7863,7 +7789,7 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 replier.reply(formatCommand(losePrefix + "홀짝 미적중", user, "결과: [" + result + "]\n아쉽지만 " + fp(bet) + "P를 잃었습니다.", "잔액: " + fp(user.point) + "P"));
             }
 
-            // [엔진 연결] 칭호 자동 부여 시스템 (기존 유지)
+            // [엔진 연결] 칭호 자동 부여 시스템
             var winRate = (user.totalGambleWins / user.totalGambleCount) * 100;
             var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
 
@@ -8223,8 +8149,6 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
     if (!roomData) return false;
 
-    var colConf = SYSTEM_CONFIG.ECO.COLLECTION;
-
     // 중앙은행 재원 초기화 (안전장치)
     if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
         roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
@@ -8335,25 +8259,6 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var nextInvestAmount = Number(user.totalInvestAmount || 0) + totalPrice;
         util_setData(user, 'totalInvestAmount', nextInvestAmount, "주식 투자 총액 갱신", roomName);
 
-        /* [신규] 최대주주 의결권 조각 수집 로직 */
-        var collectionMsg = "";
-        var colConf = SYSTEM_CONFIG.ECO.COLLECTION; // <-- 이 변수가 없으면 오류남
-        
-        if (count >= 3 && Math.random() < colConf.STOCK_PROB) {
-            user.stockPieces = Number(user.stockPieces || 0) + 1;
-            
-            collectionMsg = "\n\n🏢 [의결권 확보]\n" +
-                            "🧩 기업 의결권 조각 획득 (+1)\n" +
-                            "📊 현재 보유: " + user.stockPieces + " / " + colConf.STOCK_GOAL + " 개";
-
-            if (user.stockPieces >= colConf.STOCK_GOAL) {
-                var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
-                util_checkAndAwardTitle(user, rStub, "최대주주", 6002, "🏢", "내리다 증권거래소", "의결권 10개 확보", "시장의 거대한 흐름을 스스로 결정할 자격을 얻었습니다.");
-            } else {
-                collectionMsg += "\n━━━━━━━━━━━━━━━\n💡 [가이드]: 10개를 모으면 [최대주주] 칭호가 부여됩니다!";
-            }
-        }
-
         var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
 
         if (user.totalInvestAmount >= 10000000) {
@@ -8368,7 +8273,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         if (!data.stockTraffic[sName]) data.stockTraffic[sName] = { buy: 0, sell: 0 };
         data.stockTraffic[sName].buy += count;
         
-        replier.reply(formatCommand("📈 주식 매수 완료", user, "종목: " + sName + "\n수량: " + count + "주\n매수가: " + fp(stock.price) + "P (총 " + fp(totalPrice) + "P)" + collectionMsg, "내 잔액: " + fp(user.point) + "P"));
+        replier.reply(formatCommand("📈 주식 매수 완료", user, "종목: " + sName + "\n수량: " + count + "주\n매수가: " + fp(stock.price) + "P (총 " + fp(totalPrice) + "P)", "내 잔액: " + fp(user.point) + "P"));
         safeSaveData(data);
         return true;
     }
@@ -8399,13 +8304,8 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var stock = data.stockMarket[sName];
         var sellPrice = stock ? Math.floor(Number(stock.price)) : 0;
         var totalSell = sellPrice * count; 
-        
-        /* [신규] 최대주주 패시브: 매도 세금 50% 감면 */
+        // [가상 정부] 정책에 따른 유동적 세율 적용 (기본 5%)
         var currentTax = pol.stockTax || 0.05;
-        if (user.title === "최대주주") {
-            currentTax = currentTax * 0.5; // 2.5%로 감면
-        }
-
         var fee = Math.floor(totalSell * currentTax);
         var finalPrice = totalSell - fee; 
 
@@ -8436,14 +8336,12 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         if (!data.stockTraffic[sName]) data.stockTraffic[sName] = { buy: 0, sell: 0 };
         data.stockTraffic[sName].sell += count;
         
-        var taxInfo = (user.title === "최대주주") ? "\n✨ 최대주주 효과: 세금 50% 감면 (2.5% 적용)" : "";
-
         var sellMsg = "📉 주식 매도 완료\n" +
               "━━━━━━━━━━━━━━━\n" +
               getDisplayName(user) + "님\n" +
               "종목: " + sName + " " + count + "주\n" +
               "수익 : " + fp(Math.abs(profit)) + "P (" + signIcon + Math.abs(profitRate).toFixed(1) + "%)\n" +
-              "실현손익 : " + fp(finalPrice) + "P (수수료 -" + (currentTax * 100).toFixed(1) + "% 포함)" + taxInfo + (res.repayMsg || "") + "\n" +
+              "실현손익 : " + fp(finalPrice) + "P (수수료 -" + (currentTax * 100).toFixed(1) + "% 포함)" + (res.repayMsg || "") + "\n" +
               "━━━━━━━━━━━━━━━\n" +
               "💡 [가이드]: 내 잔액: " + fp(user.point) + "P";
 
@@ -8451,6 +8349,9 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         safeSaveData(data);
         return true;
     }
+
+    return false;
+}
 
 //==========섹터44==========
 

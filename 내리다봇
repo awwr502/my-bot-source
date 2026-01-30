@@ -38,12 +38,12 @@ var USER_SCHEMA = [
     { key: 'dailyGambleCount', default: 0, type: 'number' },
     { key: 'boughtWarningRemoval', default: false, type: 'boolean' },
     { key: 'hasVotedToday', default: false, type: 'boolean' },
-    { key: 'lastFishingTime', default: 0, type: 'number' },    // 낚시 쿨타임 관리용 (Timestamp)
-    { key: 'totalSpittoBought', default: 0, type: 'number' },  // 스피또 누적 구매량 (통계용)
-    { key: 'horseItems', default: [], type: 'array' },       // 마주: 수집한 마구 목록 (편자, 안장 등)
-    { key: 'stockPieces', default: 0, type: 'number' },      // 최대주주: 의결권 조각 개수
-    { key: 'luckyFragments', default: 0, type: 'number' },   // 행운의부적: 파편 개수
-    { key: 'luckyCharmEndTime', default: 0, type: 'number' } // 행운의부적: 효과 만료 시간 (Timestamp)
+    { key: 'lastFishingTime', default: 0, type: 'number' },    // 낚시 쿨타임
+    { key: 'totalSpittoBought', default: 0, type: 'number' },  // 스피또 통계
+    { key: 'horseItems', default: [], type: 'array' },         // [신규] 마주 아이템
+    { key: 'stockPieces', default: 0, type: 'number' },        // [신규] 최대주주 조각
+    { key: 'luckyFragments', default: 0, type: 'number' },     // 행운의부적 파편
+    { key: 'luckyCharmEndTime', default: 0, type: 'number' }   // 행운의부적 시간
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -1500,7 +1500,9 @@ function getDisplayName(user) {
         var titleIcon = "";
         
         // [Gemini 규칙]: 도굴왕, 수집대마왕, 그리고 신규 칭호(마주, 최대주주)만 아이콘을 표시합니다.
-        if (["도굴왕", "수집대마왕", "마주", "최대주주"].indexOf(user.title) !== -1) {
+        var specialTitles = ["도굴왕", "수집대마왕", "마주", "최대주주"];
+        
+        if (specialTitles.indexOf(user.title) !== -1) {
             if (user.inventory && user.inventory.length > 0) {
                 for (var i = 0; i < user.inventory.length; i++) {
                     var item = user.inventory[i];
@@ -5528,20 +5530,18 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         util_setData(user, 'boxTickets', Math.max(0, (user.boxTickets || 0) - 1), "랜덤박스 이용권 사용", roomName);
     }
 
-    /* [Gemini 요청 사항] 수집대마왕 판정 함수 - 전종 수집(보유+분해) 체크 */
+    /* [Gemini 요청 사항] 수집대마왕 판정 함수 */
     var checkCollectionMaster = function() {
-        // 1. 상점 판매 아이콘 추출
         var shopIcons = SHOP_ITEMS.filter(function(it) { return it.effect === "icon"; }).map(function(it) { return it.icon; });
-        
-        // 2. 랜덤 박스 모든 아이콘 추출
         var boxIcons = [];
-        if (RANDOM_BOX_CONFIG && RANDOM_BOX_CONFIG.PROBS) {
+        
+        // 문법 교정: typeof 체크 추가
+        if (typeof RANDOM_BOX_CONFIG !== 'undefined' && RANDOM_BOX_CONFIG.PROBS) {
             RANDOM_BOX_CONFIG.PROBS.forEach(function(grade) {
                 if (grade.items) boxIcons = boxIcons.concat(grade.items);
             });
         }
         
-        // 3. 중복 제거된 전체 고유 아이콘 목록 생성
         var allUniqueIcons = {};
         shopIcons.concat(boxIcons).forEach(function(icon) {
             if (icon) allUniqueIcons[icon] = true;
@@ -5549,9 +5549,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         
         var totalTargetCount = Object.keys(allUniqueIcons).length;
         
-        // 4. 유저의 누적 수집 기록(collectedIcons)과 비교 판정
         if (user.collectedIcons && user.collectedIcons.length >= totalTargetCount) {
-            
             var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
             util_checkAndAwardTitle(user, replierStub, "수집대마왕", 3001, "🏵️", "내리다 만물 상업 연합", "모든 아이콘 수집 완료", "모든 상징을 손에 넣은 전설의 수집가입니다.");
         }
@@ -7716,14 +7714,13 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         racingData.bets[targetUid] = { uid: targetUid, horseId: hId, amount: betAmt, name: user.name };
         racingData.totalPool += betAmt;
 
-        /* [신규] 마주 조각(마구) 수집 로직 (확률 10%) */
+        /* [신규] 마주 조각(마구) 수집 로직 */
         var collectionMsg = "";
         if (Math.random() < colConf.HORSE_PROB) {
             if (!user.horseItems) user.horseItems = [];
             var allItems = ["편자", "안장", "고삐", "채찍"];
             var newItems = allItems.filter(function(x) { return user.horseItems.indexOf(x) === -1; });
             
-            // 아직 못 얻은 아이템이 있을 경우에만 획득 (중복 방지)
             if (newItems.length > 0) {
                 var pickItem = newItems[Math.floor(Math.random() * newItems.length)];
                 user.horseItems.push(pickItem);
@@ -7732,7 +7729,6 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                                 "획득 아이템: [" + pickItem + "]\n" +
                                 "📊 수집 현황: [" + pickItem + "] (" + user.horseItems.length + " / 4)";
 
-                // 4종 완성 시 [마주] 칭호 자동 수여
                 if (user.horseItems.length === 4) {
                     var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
                     util_checkAndAwardTitle(user, rStub, "마주", 6001, "🏇", "내리다 경마장", "마구 4종 세트 완성", "이제 경마장의 모든 말들이 당신의 이름을 연호합니다.");

@@ -277,7 +277,7 @@ var SYSTEM_CONFIG = {
                 MAX_COUNT: 10,     // 시장에 동시 상장 가능한 최대 종목 수
                 OPEN_HOUR: 7,      // 주식 장 개장 시간
                 CLOSE_HOUR: 23,    // 주식 장 마감 시간
-                MANI_RATE: 0.15,   // 기본 특수 이벤트(폭등/폭락) 변동폭
+                MANI_RATE: 0.25,   // 기본 특수 이벤트(폭등/폭락) 변동폭
                 DELIST_LIMIT: 0.15, // [상폐 기준]: 시장 평균가 대비 해당 비율 이하로 떨어지면 상장폐지 검토
                 CLOSING_LIMIT: 0.30, // [상한 저항]: 시가 대비 +20% 지점부터 하락 압력 강화
                 RESISTANCE_START: 0.25, // [저항 시작]: 시가 대비 +15% 지점부터 완만한 하락 압력 발생
@@ -503,13 +503,7 @@ function verifyPointTransaction(user, prePoint, changeAmount, reason, roomName, 
         if (actual !== expected) {
             var errorMsg = "[" + new Date().toLocaleString() + "] [불일치] " + (user.name||"") + ": " + reason + " (예상:" + fp(expected) + "/실제:" + fp(actual) + ")\n";
             FileStream.append(ERROR_LOG_PATH, errorMsg);
-            
-            try { 
-                Api.replyRoom("내리다", "⚠️ 포인트 불일치 발생\n" + errorMsg); 
-            } catch(e) {
-                // 전송 실패 무시
-            }
-
+            try { Api.replyRoom("내리다", "⚠️ 포인트 불일치 발생\n" + errorMsg); } catch(e){}
             user.lastAction = { cmd: reason, status: "FAIL", amount: changeAmount, time: Date.now(), msg: "데이터 불일치" };
         } else {
             if (roomName) {
@@ -568,9 +562,7 @@ function safeSaveData(data, isForceBackup) {
                 var dbContent = FileStream.read(FILE_PATH);
                 if (dbContent) DB_DATA = JSON.parse(dbContent);
             }
-        } catch (e) {
-            Log.error("DB Read for Healing Fail: " + e);
-        }
+        } catch(e) { Log.error("DB Read for Healing Fail: " + e); }
 
         for (var rName in data.rooms) {
             var room = data.rooms[rName];
@@ -661,16 +653,14 @@ function safeSaveData(data, isForceBackup) {
             }
         }
 
-        if (isHealed && healReports.length > 0) {
+       if (isHealed && healReports.length > 0) {
             try {
                 var reportMsg = "🚨 [데이터 자가 치유 작동]\n" +
                                 "손상 의심 데이터를 제외하고 정상 저장되었습니다.\n\n" +
                                 "[치유 내역]\n• " + healReports.join("\n• ") + "\n\n" +
                                 "⚠️ 관리자는 해당 유저의 활동을 점검하십시오.";
                 Api.replyRoom("내리다", reportMsg);
-            } catch (e) {
-                // 전송 실패 무시
-            }
+            } catch(e) {}
         }
 
     } catch (validationError) {
@@ -679,9 +669,7 @@ function safeSaveData(data, isForceBackup) {
         Log.error("사유: " + validationError.message);
         try {
             Api.replyRoom("내리다", "🚨 [데이터 보호 시스템 작동]\n심각한 데이터 오염이 감지되어 자동 저장을 차단했습니다.\n사유: " + validationError.message + "\n\n⚠️ 관리자는 즉시 시스템을 점검하십시오.");
-        } catch (e) {
-            // 전송 실패 무시
-        }
+        } catch (e) {}
         return; // 파일 쓰기 단계로 넘어가지 않고 종료
     }
 
@@ -700,9 +688,7 @@ function safeSaveData(data, isForceBackup) {
         Log.error("Save Guard Blocked: " + e.message);
         try {
             Api.replyRoom("내리다", "⚠️ 데이터 보호 작동: 오염된 데이터의 쓰기 시도를 차단했습니다.\n사유: " + e.message);
-        } catch (err) {
-            // 전송 실패 무시
-        }
+        } catch (err) {}
         return; // 오염된 데이터는 배경 일꾼에게 넘기지 않고 즉시 차단
     }
 
@@ -730,8 +716,6 @@ function safeSaveData(data, isForceBackup) {
                         var jFile = new java.io.File(JOURNAL_PATH);
                         if (jFile.exists()) jFile.delete();
                         Log.info("[Blackbox] 데이터 영구 저장 확인 - 저널 로그 초기화 완료.");
-                    } catch(e) {
-                        // 로그 삭제 실패는 무시 (다음 사이클에 처리)
                     } finally {
                         logLock.unlock();
                     }
@@ -755,15 +739,14 @@ function safeSaveData(data, isForceBackup) {
                 Log.error("Async File Write Error: " + e);
                 try {
                     Api.replyRoom("내리다", "⚠️ 시스템 오류: 배경 저장 실패\n" + e.message);
-                } catch (err) {
-                    // 전송 실패 무시
-                }
+                } catch (err) {}
             } finally {
                 lock.unlock(); // 작업 완료 후 락 해제
             }
         }
     }));
 }
+
 //==========섹터4==========
 
 /* 관리자 및 시스템 설정 */
@@ -807,6 +790,7 @@ var SHOP_ITEMS = [
     { id: 9, name: "강등 방어권", icon: "🛡️", price: 20000, effect: "tierGuard", cat: 2 },
     { id: 10, name: "신용 점수 회복", icon: "💊", price: 10000, effect: "credit", value: 50, cat: 3 },
     { id: 11, name: "[시즌] 롤 판수 인증권", icon: "🎫", price: 100000, effect: "gameAuth", cat: 3 },
+    /* [신규] 경고삭제권: 기본가 500,000P 설정 */
     { id: 13, name: "경고삭제권", icon: "🎫", price: 2000000, effect: "warnClear", cat: 3 },
     { id: 12, name: "랜덤 아이콘 박스", icon: "🎁", price: 10000, effect: "randomBox", cat: 4 },
     { id: 7, name: "로또 구매", icon: "🎟️", price: 2000, effect: "lotto", cat: 5 },
@@ -820,8 +804,8 @@ var RANDOM_BOX_CONFIG = {
         { grade: "노말 (Normal)", icon: "🌱", prob: 0.20, items: ["🌱", "⚔️", "❣️", "🍀", "🎀", "🎈", "🧸", "🪁", "🍭", "🍏", "🍄", "🌻", "🐱", "🐶", "🍎"] },
         { grade: "레어 (Rare)", icon: "💎", prob: 0.10, items: ["💎", "👾", "🛡️", "🎰", "🔱", "🧿", "🎭", "🎨", "🧪", "🔭", "🎸", "🏹", "🕯️", "⛓️", "🧬"] },
         { grade: "에픽 (Epic)", icon: "🔮", prob: 0.05, items: ["👑", "☄️", "🧨", "🔮", "⛩️", "🎡", "🚁", "🌋", "🐅", "🦅", "🏹", "🏰", "🛥️", "🧿"] },
-        { grade: "유니크 (Unique)", icon: "🦄", prob: 0.03, items: ["🪐", "🏮", "🦾", "🛰️", "🦄", "🧞", "🦁", "🐋", "🦜", "🕸️", "🌌", "🎃", "🎅", "🧜"] },
-        { grade: "레전더리 (Legendary)", icon: "🎰", prob: 0.02, items: ["🔥", "💫", "⚡", "🛸", "🌈", "☀️", "❄️", "🌑", "🔱", "💮", "💠", "🎖️", "🐲" ] }
+        { grade: "유니크 (Unique)", icon: "🦄", prob: 0.03, items: ["🪐", "🏮", "🦾", "🛰️", "🦄", "🧞", "🦁", "🐋", "🦜", "🕸️", "🎃", "🎅", "🧜"] },
+        { grade: "레전더리 (Legendary)", icon: "🎰", prob: 0.02, items: ["🔥", "💫", "🌌", "⚡", "🛸", "🌈", "☀️", "❄️", "🌑", "🔱", "💮", "💠", "🎖️", "🐲" ] }
     ],
     PAYBACK: 2000 // 중복 아이콘 당첨 시 환급금
 };
@@ -1328,58 +1312,58 @@ function stock_calculateNextPrice(currentPrice) {
 //==========섹터8==========
 
 /**
-* [Gemini 정밀 교정] 경제 지표 계산 함수 (시스템 판돈 완벽 통합 버전)
-* 반영: 주식, 경마 배팅액, 로또 잭팟, 은행 재원 등을 모두 합산하여 물가 왜곡 방지
-*/
+ * [Gemini 정밀 교정] 경제 지표 계산 함수 (시스템 판돈 완벽 통합 버전)
+ * 반영: 주식, 경마 배팅액, 로또 잭팟, 은행 재원 등을 모두 합산하여 물가 왜곡 방지
+ */
 function calculateEconomy(data, roomName) {
-    var totalAssets = 0;
-    var userCount = 0;
-    if (!data || !data.rooms) return { total: 0, count: 0, average: 0 };
+    var totalAssets = 0;
+    var userCount = 0;
+    if (!data || !data.rooms) return { total: 0, count: 0, average: 0 };
 
-    var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
+    var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
+    
+    // [전역 자산 합산] 로또 잭팟은 방과 상관없는 공통 자산이므로 1회만 합산
+    totalAssets += Number(data.lotto_jackpot_pool || 0);
 
-    // [전역 자산 합산] 로또 잭팟은 방과 상관없는 공통 자산이므로 1회만 합산
-    totalAssets += Number(data.lotto_jackpot_pool || 0);
+    for (var i = 0; i < roomsToScan.length; i++) {
+        var r = roomsToScan[i];
+        var roomData = data.rooms[r];
+        if (!roomData) continue;
 
-    for (var i = 0; i < roomsToScan.length; i++) {
-        var r = roomsToScan[i];
-        var roomData = data.rooms[r];
-        if (!roomData) continue;
+        // 1. 중앙은행 금고 자산 합산
+        if (roomData.bankReserve !== undefined) {
+            totalAssets += Number(roomData.bankReserve);
+        }
 
-        // 1. 중앙은행 금고 자산 합산
-        if (roomData.bankReserve !== undefined) {
-            totalAssets += Number(roomData.bankReserve);
-        }
+        // 2. [신규 추가] 시스템 내 대기 중인 판돈 합산 (Deflation 방지)
+        if (roomData.features) {
+            // A. 경마: 아직 정산되지 않은 현재 회차 총 배팅액 + 이월금
+            if (roomData.features.racing) {
+                totalAssets += Number(roomData.features.racing.totalPool || 0);
+                totalAssets += Number(roomData.features.racing.carryOver || 0);
+            }
+            // B. 로또: 오늘 판매된 로또 총액
+            if (roomData.features.lotto) {
+                totalAssets += Number(roomData.features.lotto.dailyPool || 0);
+            }
+        }
 
-        // 2. [신규 추가] 시스템 내 대기 중인 판돈 합산 (Deflation 방지)
-        if (roomData.features) {
-            // A. 경마: 아직 정산되지 않은 현재 회차 총 배팅액 + 이월금
-            if (roomData.features.racing) {
-                totalAssets += Number(roomData.features.racing.totalPool || 0);
-                totalAssets += Number(roomData.features.racing.carryOver || 0);
-            }
-            // B. 로또: 오늘 판매된 로또 총액
-            if (roomData.features.lotto) {
-                totalAssets += Number(roomData.features.lotto.dailyPool || 0);
-            }
-        }
+        // 3. 유저별 순자산 합산 (현금 + 예금 + 주식가치 + 채권 - 부채)
+        for (var uid in roomData.users) {
+            var u = roomData.users[uid];
+            if (!u) continue;
 
-        // 3. 유저별 순자산 합산 (현금 + 예금 + 주식가치 + 채권 - 부채)
-            for (var uid in roomData.users) {
-            var u = roomData.users[uid];
-            if (!u) continue;
+            // util_calculateNetWorth 내부에 주식 가치 계산이 포함되어 있습니다.
+            totalAssets += util_calculateNetWorth(u, roomData);
+            userCount++;
+        }
+    }
 
-            // util_calculateNetWorth 내부에 주식 가치 계산이 포함되어 있습니다.
-            totalAssets += util_calculateNetWorth(u, roomData);
-            userCount++;
-        }
-    }
-
-    return {
-    total: Math.max(0, totalAssets),
-    count: userCount,
-    average: userCount > 0 ? Math.floor(totalAssets / userCount) : 0
-    };
+    return {
+        total: Math.max(0, totalAssets),
+        count: userCount,
+        average: userCount > 0 ? Math.floor(totalAssets / userCount) : 0
+    };
 }
 
 //==========섹터9==========
@@ -3172,7 +3156,6 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 var roomName = room ? room.trim() : "";
                 var cleanSender = sender ? String(sender).trim() : ""; 
                 
-                // 1. 방 가드 및 기본 데이터 로드
                 if (ALLOWED_ROOMS.indexOf(roomName) === -1 || cleanSender === "오픈채팅봇") return;
 
                 var data = getDatabase(); 
@@ -3181,25 +3164,25 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
                 var roomData = data.rooms[roomName];
                 
-                // 2. 방별 피처(Features) 및 상태 저장소 초기화
                 if (!roomData.features) {
                     if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
                         roomData.features = ROOM_FEATURE_TEMPLATE();
                     }
-                } else {
-                    // 1. [실시간 패치] 누락된 템플릿 키 자동 생성 (무결성 유지)
-                    if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
-                        var template = ROOM_FEATURE_TEMPLATE();
-                        for (var key in template) {
-                            if (!roomData.features[key]) roomData.features[key] = template[key];
-                        }
-                    }
                 }
 
-                // 채팅 하이프 기록
+                // [2번] 실시간 하이프(채팅량) 기록
                 roomData.features.msgCount = (roomData.features.msgCount || 0) + 1;
-                var rFeatures = roomData.features;
 
+               /* [안전 패치] 템플릿 구조 변경 시 실시간 반영 (누락 데이터 자동 생성) */
+                // 설명: 섹터 1의 템플릿에 새로운 기능이 추가되면, 기존 방에도 즉시 해당 공간을 만들어줍니다.
+                if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
+                    var template = ROOM_FEATURE_TEMPLATE();
+                    // 1. 메인 기능 키 누락 체크 (racing, lotto 등)
+                    for (var key in template) {
+                        if (!roomData.features[key]) {
+                            roomData.features[key] = template[key];
+                        }
+                    }
                     // 2. States 내부 누락 체크 (menuWait, bankProcess 등)
                     if (!roomData.features.states) {
                         roomData.features.states = template.states;
@@ -3321,6 +3304,7 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                         safeSaveData(data);
                         return;
                     }
+                }
 
                 /* [핵심] 버그 제보 및 진실 판별 시스템 */
                 if (msg.startsWith("/버그제보 ")) {
@@ -3365,7 +3349,6 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                         return;
                     }
                 }
-            }
 
 //==========섹터20-1==========
 
@@ -3373,90 +3356,116 @@ if (!data) return;
 var roomData = data.rooms[roomName] || { users: {} };
 data.rooms[roomName] = roomData;
 
-/* [v9.5 초고속 엔진] 전역 통합 O(1) 식별 캐시 및 신분 복구 시스템 */
-                var cacheKey = roomName + "_" + cleanSender;
-                var targetUid = (globalData.nameToIdCache) ? globalData.nameToIdCache[cacheKey] : null;
-                var isIdentityRecovered = false;
+/* [v9.5 초고속 엔진] 전역 통합 O(1) 식별 캐시 시스템 */
+// 로더 리로드 시에도 유지되는 globalData 캐시 사용 (I/O 병목 제거 핵심)
+var cacheKey = roomName + "_" + cleanSender;
+var targetUid = globalData.nameToIdCache[cacheKey];
 
-                // 1. [캐시/정밀 검증] 닉네임 변경 및 프사 변경 대응
-                if (!targetUid || !roomData.users[targetUid] || roomData.users[targetUid].name !== cleanSender) {
-                    var nameMatchId = null;
-                    var hashMatchId = null;
-                    var currentImgHash = null;
-                    try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
+// 1. [캐시 검증] 캐시된 UID가 실제 유저 데이터와 일치하는지 확인 (닉변 감지)
+// 불일치 시에만 정밀 루프(O(n))를 가동하여 성능 저하 방지
+if (!targetUid || !roomData.users[targetUid] || roomData.users[targetUid].name !== cleanSender) {
+    var nameMatchId = null;
+    var hashMatchId = null;
+    var currentImgHash = null;
+    try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
 
-                    for (var id in roomData.users) {
-                        var u = roomData.users[id];
-                        if (u.name === cleanSender) nameMatchId = id;
-                        if (currentImgHash && u.imageHash === currentImgHash) hashMatchId = id;
-                        if (nameMatchId && hashMatchId) break;
-                    }
+    // 정밀 교차 식별 루프 (캐시 미적중 시 1회만 실행)
+    for (var id in roomData.users) {
+        var u = roomData.users[id];
+        var isNameEqual = (u.name === cleanSender);
+        var isHashEqual = (currentImgHash && u.imageHash === currentImgHash);
 
-                    if (nameMatchId) targetUid = nameMatchId;
-                    else if (hashMatchId) {
-                        targetUid = hashMatchId;
-                        roomData.users[targetUid].name = cleanSender; // 닉변 반영
-                    }
-                }
+        if (isNameEqual && isHashEqual) {
+            targetUid = id;
+            break; // 완벽 일치 시 즉시 종료
+        }
+        if (isNameEqual) nameMatchId = id;
+        if (isHashEqual) hashMatchId = id;
+    }
 
-               // [신분 복구 및 신규 생성 로직 흐름 유지]
-                if (!targetUid) {
-                    try {
-                        var regFile = new java.io.File(REGISTRY_PATH);
-                        if (regFile.exists()) {
-                            var registry = JSON.parse(FileStream.read(REGISTRY_PATH));
-                            if (registry[cacheKey]) {
-                                targetUid = registry[cacheKey];
-                                isIdentityRecovered = true;
-                                Log.info("[Identity] " + cleanSender + " 신분 복구됨.");
-                            }
-                        }
-                    } catch(e) { Log.error("Registry Sync Fail"); }
-                }
+    // 완벽 일치가 없을 경우 교차 판별 (닉변/프변 대응)
+    if (!targetUid) {
+        if (nameMatchId) {
+            targetUid = nameMatchId; // 프사만 바뀐 경우
+            if (currentImgHash) roomData.users[targetUid].imageHash = currentImgHash;
+        } else if (hashMatchId) {
+            targetUid = hashMatchId; // 닉네임만 바뀐 경우 (닉변)
+            var u = roomData.users[targetUid];
+            if (!data.nickHistory[targetUid]) data.nickHistory[targetUid] = [];
+            data.nickHistory[targetUid].push({ old: u.name, date: getSimpleDate() });
+            u.name = cleanSender;
+        }
+    }
 
-                if (!targetUid) {
-                    targetUid = generateUUID();
-                    try {
-                        var regFile = new java.io.File(REGISTRY_PATH);
-                        var registry = regFile.exists() ? JSON.parse(FileStream.read(REGISTRY_PATH)) : {};
-                        registry[cacheKey] = targetUid;
-                        FileStream.write(REGISTRY_PATH, JSON.stringify(registry));
-                    } catch(e) {}
-                }
+    // 찾은 결과가 있다면 캐시 최신화 (다음번엔 0ms 탐색)
+    if (targetUid) {
+        globalData.nameToIdCache[cacheKey] = targetUid;
+    }
+}
 
-                if (!globalData.nameToIdCache) globalData.nameToIdCache = {};
-                globalData.nameToIdCache[cacheKey] = targetUid;
+// 2. [신분 복구] 식별 실패 시 영구 명부(Registry) 대조 (데이터 부활)
+// 캐시에도 없고 루프에서도 못 찾았을 때만 파일 I/O 수행
+if (!targetUid) {
+    var regKey = roomName + "_" + cleanSender;
+    var registry = {};
+    try {
+        var regFile = new java.io.File(REGISTRY_PATH);
+        if (regFile.exists()) registry = JSON.parse(FileStream.read(REGISTRY_PATH));
+        
+        if (registry[regKey]) {
+            targetUid = registry[regKey]; // 과거 코드가 있다면 즉시 부활
+            globalData.nameToIdCache[cacheKey] = targetUid; // 캐시 복구
+            Log.info("[Identity Restore] " + cleanSender + "님 신분 복구 완료.");
+        }
+    } catch(e) { Log.error("Registry Read Error"); }
+}
 
-                if (!roomData.users[targetUid]) {
-                    var newUser = { uid: targetUid, name: cleanSender, lastDate: "" };
-                    try { if (imageDB) newUser.imageHash = imageDB.getProfileHash(); } catch(e) {}
+// 3. [신규 생성] 진짜 신규 유저일 경우
+if (!targetUid) {
+    targetUid = generateUUID();
+    globalData.nameToIdCache[cacheKey] = targetUid; // 신규 유저도 캐시 등록
+    
+    // 명부 자동 등록
+    try {
+        var regKey = roomName + "_" + cleanSender;
+        var regFile = new java.io.File(REGISTRY_PATH);
+        var registry = regFile.exists() ? JSON.parse(FileStream.read(REGISTRY_PATH)) : {};
+        registry[regKey] = targetUid;
+        FileStream.write(REGISTRY_PATH, JSON.stringify(registry));
+        Log.info("[Registry Auto-Sync] " + cleanSender + "님 신규 등록.");
+    } catch(e) {}
+}
 
-                    USER_SCHEMA.forEach(function(item) {
-                        newUser[item.key] = item.default;
-                    });
+// [C] UID는 확보되었으나 실제 게임 데이터(Object)가 없는 경우 초기화 실행
+if (!roomData.users[targetUid]) {
+// 1. 기초 유저 객체 생성 및 스키마 적용
+    var newUser = { uid: targetUid, name: cleanSender, imageHash: currentImgHash, lastDate: "" };
 
-                    roomData.users[targetUid] = newUser;
-                    util_updatePoint(newUser, roomData, 100000, "입장 축하 보너스", roomName);
+    USER_SCHEMA.forEach(function(item) {
+        newUser[item.key] = item.default;
+    });
 
-                   if (isIdentityRecovered) {
-                        // [신분 복구 유저 전용 메시지]
-                        var recoverMsg = "🎊 [" + cleanSender + "]님 신분 복구 완료!\n" +
-                                         "━━━━━━━━━━━━━━━\n" +
-                                         "🛡️ 과거 데이터가 안전하게 연결되었습니다.\n" +
-                                         "📖 '/도움말'을 확인해주세요!";
-                        replier.reply(recoverMsg);
-                    } else {
-                        // [완전 신입 유저 전용 메시지] - 요청하신 텍스트박스 형태 복구
-                        var welcomeMsg = "🎊 [" + cleanSender + "]님 환영합니다!\n" +
-                                         "━━━━━━━━━━━━━━━\n" +
-                                         "🎁 입장 축하 보너스: 100,000P 지급!\n" +
-                                         "🕹️ 미니게임 및 출석체크 기능 제공\n" +
-                                         "💳 신용 등급: 4등급 (600점) 부여\n\n" +
-                                         "📖 이용 전 반드시 '/도움말'을 확인해주세요!";
-                        replier.reply(welcomeMsg);
-                    }
-                    safeSaveData(data);
-                }
+    roomData.users[targetUid] = newUser;
+
+    // 2. 게이트웨이를 통한 공식 보너스 지급 (로그 기록 보장)
+    if (typeof util_updatePoint === 'function') {
+        util_updatePoint(roomData.users[targetUid], roomData, 100000, "입장 축하 보너스", roomName);
+    }
+    
+    uidCache[cacheKey] = targetUid;
+    
+    var welcomeTitle = isIdentityRecovered ? "🎊 [" + cleanSender + "]님 신분 복구 완료!" : "🎊 [" + cleanSender + "]님 환영합니다!";
+    var welcomeSub = isIdentityRecovered ? "🛡️ 영구 명부에서 과거 고유 코드를 찾아 연결했습니다." : "🎁 입장 축하 보너스: " + fP(100000) + "P 지급!";
+    
+    var welcomeMsg = welcomeTitle + "\n━━━━━━━━━━━━━━━\n" +
+                     welcomeSub + "\n" +
+                     "🕹️ 미니게임 및 출석체크 기능 제공\n" +
+                     "💳 신용 등급: 4등급 (600점) 부여\n\n" + 
+                     "📖 이용 전 반드시 '/도움말'을 확인해주세요!";
+                     
+    replier.reply(welcomeMsg); 
+    safeSaveData(data);
+}
 
 //==========섹터20-2==========
 
@@ -3467,7 +3476,7 @@ if (msg === "줍기") {
     if (rFeatures && rFeatures.sprinkleData && rFeatures.sprinkleData.active) {
         if (typeof _gameActionLogic_Part3 === 'function') {
             _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid);
-            return; 
+            return; // 줍기 처리 시 로직 종료하여 가드 우회 및 하단 로직 중복 방지
         }
     }
 }
@@ -3477,12 +3486,21 @@ if (!user.inventory) user.inventory = [];
 if (user.tierGuard === undefined) user.tierGuard = 0;
 if (user.gameAuthCount === undefined) user.gameAuthCount = 0;
 if (user.purchasedAuthCount === undefined) user.purchasedAuthCount = 0;
+
+/* [신규: Gemini 요청 사항] 경고삭제권 구매 여부 필드 마이그레이션 */
 if (user.boughtWarningRemoval === undefined) user.boughtWarningRemoval = false;
+
+/* [개편] 랜덤박스 시스템 관련 변수 안전 초기화 및 자동 마이그레이션 */
 if (user.boxFragments === undefined) user.boxFragments = 0;
 if (user.boxTickets === undefined) user.boxTickets = 0;
-if (user.collectedIcons === undefined) user.collectedIcons = [];
 
-/* [마이그레이션] 기존 보유 아이콘 기록 */
+// 1. 기록장(collectedIcons)이 없으면 생성
+if (user.collectedIcons === undefined) {
+    user.collectedIcons = [];
+}
+
+// 2. [Gemini 요청 사항] 기존 보유 아이콘 기록 자동 마이그레이션
+// 가방에 있는 아이콘들을 전수 조사하여 한 번이라도 뽑은 기록에 자동 등록합니다.
 if (user.inventory && user.inventory.length > 0) {
     user.inventory.forEach(function(it) {
         if (it.effect === "icon" && user.collectedIcons.indexOf(it.icon) === -1) {
@@ -3491,10 +3509,12 @@ if (user.inventory && user.inventory.length > 0) {
     });
 }
 
+/* [핵심] 강제 추심 플래그 초기화 및 보정 */
 if (user.isTransferred === undefined) user.isTransferred = false;
 
-/* [기능] 아이콘 및 칭호 가방 자동 마이그레이션 */
+/* [기능] 기존 아이콘 및 칭호 가방 자동 마이그레이션 */
 if (user.inventory) {
+    // 1. 아이콘 마이그레이션
     if (user.icon && user.icon !== "") {
         var hasIconInInv = false;
         for (var j = 0; j < user.inventory.length; j++) {
@@ -3507,6 +3527,7 @@ if (user.inventory) {
                         id: SHOP_ITEMS[k].id, name: SHOP_ITEMS[k].name, icon: SHOP_ITEMS[k].icon,
                         effect: "icon", title: ""
                     });
+                    // 마이그레이션 시 기록장에도 동시 등록
                     if (user.collectedIcons.indexOf(user.icon) === -1) user.collectedIcons.push(user.icon);
                     break;
                 }
@@ -3514,6 +3535,7 @@ if (user.inventory) {
         }
     }
     
+    // 2. 칭호 마이그레이션 (누락분 추가)
     if (user.title && user.title !== "") {
         var hasTitleInInv = false;
         for (var j = 0; j < user.inventory.length; j++) {
@@ -3536,12 +3558,14 @@ if (user.inventory) {
 var today = getSimpleDate();
 user.point = Number(user.point || 0);
 
+/* 민생지원금 즉시 체크 */
 if (user && user.lastDate !== today) {
     checkEconomicStimulus(user, roomName, false);
 }
 
 /**
  * [독립형 함수] 중복 유저 선택 처리 엔진
+ * 설명: 닉네임 검색 시 중복 발생 건에 대한 유저의 숫자 선택을 처리합니다.
  */
 function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
@@ -3550,17 +3574,20 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
     var selectWaitState = roomData.features.states.selectWait;
     if (!selectWaitState[targetUid]) return false;
 
+    // 1. 시간 초과 체크 (30초)
     if (Date.now() - selectWaitState[targetUid].timestamp > 30000) {
         delete selectWaitState[targetUid];
         return false;
     } 
 
+    // 2. 취소 처리
     if (msg === "취소") {
         delete selectWaitState[targetUid];
         replier.reply(formatCommand("🚫 선택 취소", user, "작업이 취소되었습니다."));
         return true;
     }
 
+    // 3. 숫자 선택 및 로직 실행
     var choice = parseInt(msg.replace(/[^0-9]/g, ""));
     if (!isNaN(choice) && choice >= 1 && choice <= selectWaitState[targetUid].results.length) {
         var state = selectWaitState[targetUid];
@@ -3569,7 +3596,7 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
         var extra = state.extra;
         var targetUser = selected.data;
         
-        delete selectWaitState[targetUid];
+        delete selectWaitState[targetUid]; // 선택 완료 시 세션 삭제
 
         if (type === "info") {
             var cr = getCreditInfo(targetUser.creditScore);
@@ -3669,34 +3696,55 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatAdmin("출석 초기화", getDisplayName(targetUser) + "님의 오늘 출석 기록을 삭제했습니다."));
         }
         else if (type === "user_restore") {
+            // [Gemini 수정] 중복 선택 시에도 스마트 복구 로직(v5.9.1) 적용
             var stablePath = BASE_DIR + "backup/last_stable_backup.json";
             var stableFile = new java.io.File(stablePath);
+
             if (!stableFile.exists() || stableFile.length() === 0) {
                 replier.reply(formatAdmin("🚫 복구 실패", "안전 백업 파일(last_stable_backup.json)을 찾을 수 없습니다."));
                 return true;
             }
+
             try {
+                // 1. 소스 코드 결정 (입력된 UUID가 있으면 그것을, 없으면 선택된 유저의 ID를 사용)
                 var sourceCode = (extra && extra.sourceCode) ? extra.sourceCode : selected.id;
                 var targetId = selected.id;
-                var fullNick = selected.data.name;
+                var fullNick = selected.data.name; // 현재 방에 존재하는 정확한 풀네임
+
                 var backupContent = FileStream.read(stablePath);
                 var backupData = JSON.parse(backupContent);
                 var rawBackupUser = null;
+
+                // 2. 백업본에서 소스 데이터 탐색
                 for (var r in backupData.rooms) {
                     if (backupData.rooms[r].users[sourceCode]) {
                         rawBackupUser = backupData.rooms[r].users[sourceCode];
                         break;
                     }
                 }
+
                 if (!rawBackupUser) throw new Error("백업본에 해당 데이터(ID:" + sourceCode + ")가 없습니다.");
+
+                // 3. 데이터 이식 및 동기화
                 var backupUser = JSON.parse(JSON.stringify(rawBackupUser));
                 var schema = { chatLog: [], inventory: [], stockHoldings: {}, stockAvg: {}, point: 50000 };
                 for (var key in schema) { if (backupUser[key] === undefined) backupUser[key] = schema[key]; }
+
+                // [동기화] 이름은 현재 방의 풀네임으로 유지
                 backupUser.name = fullNick;
                 roomData.users[targetId] = backupUser;
+
                 safeSaveData(data, false);
                 if (typeof globalData !== 'undefined') globalData = data;
-                replier.reply(formatAdmin("✅ 데이터 정밀 이관 완료", "현재 대상: " + fullNick + "\n식별 모드: 간략화 검색 지원\n━━━━━━━━━━━━━━━\n💰 최종 복구 잔액: " + fp(backupUser.point) + "P\n\n💡 전체 닉네임과의 동기화가 완료되어 즉시 사용 가능합니다."));
+
+                // 4. 결과 출력 (신형 포맷)
+                replier.reply(formatAdmin("✅ 데이터 정밀 이관 완료",
+                    "현재 대상: " + fullNick + "\n" +
+                    "식별 모드: 간략화 검색 지원\n" +
+                    "━━━━━━━━━━━━━━━\n" +
+                    "💰 최종 복구 잔액: " + fp(backupUser.point) + "P\n\n" +
+                    "💡 전체 닉네임과의 동기화가 완료되어 즉시 사용 가능합니다."));
+
             } catch (e) {
                 replier.reply(formatAdmin("🚫 복구 중단", "복구 처리 중 오류가 발생했습니다.\n사유: " + e.message));
                 Log.error("Select Restore Error: " + e);
@@ -3708,13 +3756,16 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
                 replier.reply(formatAdmin("닉네임 기록", getDisplayName(targetUser) + "님은 변경 이력이 없습니다."));
             } else {
                 var logMsg = [];
-                for (var i = 0; i < hist.length; i++) logMsg.push((i + 1) + ". " + hist[i].old + " (" + hist[i].date + ")");
+                for(var i=0; i<hist.length; i++) logMsg.push((i+1) + ". " + hist[i].old + " (" + hist[i].date + ")");
                 replier.reply(formatAdmin("📋 닉네임 변경 이력", "현재: " + targetUser.name + "\n\n[과거 기록]\n" + logMsg.join("\n")));
             }
         }
-        else if (type === "admin_reg_delete") {
-            var targetKey = selected.id; 
+
+else if (type === "admin_reg_delete") {
+            // 명부 강제 삭제 타입 처리 로직 추가
+            var targetKey = selected.id; // handleUserSelection에서 넘겨준 regKey
             var targetFullNick = selected.data.name;
+            
             try {
                 var regFile = new java.io.File(REGISTRY_PATH);
                 if (regFile.exists()) {
@@ -3727,9 +3778,9 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
         }
 
         safeSaveData(data);
-        return true;
+        return true; // 로직 처리 완료
     }
-    return false; 
+    return false;
 }
 
 //==========섹터21==========
@@ -4801,7 +4852,7 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     }
 
 /* [기능 1-1] 상점 상세 선택 (복권 카테고리 내 번호 선택 처리) */
-    if (state.type === 'shop_detail') {
+    else if (state.type === 'shop_detail') {
         delete menuWaitState[targetUid]; // 상세 선택 진입 시 메뉴 대기 해제
         
         if (state.category === '5') { // 복권 카테고리인 경우
@@ -5014,18 +5065,17 @@ if (msg === "/가이드") {
 //==========섹터26==========
 
     } catch (e) {
-                // 섹터 19에서 시작된 메인 로직의 try-catch 마감
-                Log.error("Thread Runtime Error: " + e);
-                if (typeof lock !== 'undefined' && lock.isLocked()) {
-                    try {
-                        lock.unlock();
-                    } catch(err) {
-                        Log.error("Lock Release Error: " + err);
-                    }
-                }
+        Log.error("Thread Runtime Error: " + e);
+        if (lock.isLocked()) {
+            try {
+                lock.unlock();
+            } catch(err) {
+                Log.error("Lock Release Error: " + err);
             }
-        } // run: function() 끝
-    })); // new java.lang.Runnable 끝 및 execute 괄호 닫기
+        }
+    }
+}
+}));
 };
 
 //==========섹터27==========

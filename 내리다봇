@@ -139,6 +139,8 @@ var ROOM_FEATURE_TEMPLATE = function() {
         sprinkleData: { active: false, winners: [], portions: [] },
         lotto: { round: 1, entries: {}, dailyPool: 0, jackpot: 0, lastWinNums: [] },
 
+        msgCount: 0,
+
         government: {
             activePolicy: { // 현재 시행 중인 정책 배율 (기본값)
                 stockTax: 0.05,
@@ -1135,7 +1137,7 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     var normalActivities = [
         "매수", "매도", "상점", "구매", "예금", "출금", "송금", "배팅", 
         "사채", "기부", "차감", "홀짝", "결투", "벌금", "상환", "패널티", "분해", "줍기",
-        "도둑질", "수수료", "수거", "정산"
+        "도둑질", "수수료", "수거", "정산", "환수", "징수"
     ];
     
     // 정상 활동으로 인한 차감일 경우 자가치유 보호막 활성화
@@ -1156,7 +1158,7 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
 
     // 3. 중앙은행(국고) 재원 변동 로직 (안전장치 패치 적용)
     var bankOutputReasons = ["출석 보상", "민생지원금 지급", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등 당첨", "로또 2등 당첨", "로또 3등 당첨", "아이템 분해 회수", "랜덤박스 중복 환급", "결투 승리 보상", "뿌리기 줍기", "경마 당첨금", "은행 출금", "은행 대출 실행", "의회 투표 거마비 지급"];
-    var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부", "경마 배팅", "배팅 취소 수수료", "사채", "벌금", "상환", "로또 구매"];
+    var bankInputReasons = ["주식 매수", "홀짝 미적중", "도둑질 체포 벌금", "대출 상환", "상점 구매", "경찰 체포 벌금", "경찰 벌금", "도둑질 성공", "은행 기부", "경마 배팅", "배팅 취소 수수료", "사채", "벌금", "상환", "로또 구매", "자산 보유세 징수", "장기 미접속 자산 환수"];
 
     var brDelta = 0; 
     
@@ -2080,8 +2082,11 @@ function updateStockPrices(data) {
         stock.lastPrice = Number(stock.price);
 
         if (isMarketOpen) {
+            // [2번] 채팅 하이프에 따른 변동성 증폭 (채팅 500개당 +100% 변동성)
+            var hypeFactor = 1 + ((mainRoom.features.msgCount || 0) / 500);
+            
             if (name === specStock) { 
-                changePercent = specFactor;
+                changePercent = specFactor * hypeFactor;
                 eventNews.push("🚨 [변동성 알림]\n종목: " + name + "\n내용: " + (specFactor > 0 ? "🚀 폭등" : "📉 폭락") + " (" + (Math.abs(specFactor * 100)).toFixed(0) + "%)");
             } else {
                 if (stock.trendTick <= 0) {
@@ -2822,6 +2827,39 @@ function _runSector17Logic(data, ctx) {
             try { Api.replyRoom(ctx.targetRoom, formatAdmin("❄️ 피버타임 종료", "이벤트가 종료되어\n승급 확률이 정상화되었습니다.")); } catch(e){}
         }
 
+        // [3, 4번] 유령 유저 청소 및 부유층 보유세 자동 집행 로직
+        for (var rName in data.rooms) {
+            var roomObj = data.rooms[rName];
+            var eco = calculateEconomy(data, rName);
+            var wealthyThreshold = eco.average * 3; // 평균 자산의 5배 초과 시 부유층 판정
+
+            for (var id in roomObj.users) {
+                var u = roomObj.users[id];
+                
+                // [3번] 30일 이상 미출석 유저 데이터 청소
+                var lastDateTs = u.lastDate ? new Date(u.lastDate).getTime() : 0;
+                var daysInActive = (Date.now() - lastDateTs) / (1000 * 60 * 60 * 24);
+                
+                if (u.lastDate !== "" && daysInActive > 30) {
+                    if (u.point > 0) {
+                        util_updatePoint(u, roomObj, -u.point, "장기 미접속 자산 환수", rName);
+                    }
+                    delete roomObj.users[id];
+                    continue;
+                }
+
+                // [4번] 부유층 자산 보유세 징수 (매일 보유 현금의 0.1%)
+                if (util_calculateNetWorth(u, roomObj) > wealthyThreshold && u.point > 1000) {
+                    var tax = Math.floor(u.point * 0.005);
+                    if (tax > 0) {
+                        util_updatePoint(u, roomObj, -tax, "자산 보유세 징수", rName);
+                    }
+                }
+            }
+            // [2번용] 하루가 끝나면 채팅 하이프 카운트 리셋
+            roomObj.features.msgCount = 0;
+        }
+
         // [5] 핵심: 모든 방 유저 스탯 초기화 (지능형 금리 엔진 적용)
         for (var rName in data.rooms) {
             var roomObj = data.rooms[rName];
@@ -3065,6 +3103,9 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                         roomData.features = ROOM_FEATURE_TEMPLATE();
                     }
                 }
+
+                // [2번] 실시간 하이프(채팅량) 기록
+                roomData.features.msgCount = (roomData.features.msgCount || 0) + 1;
 
                /* [안전 패치] 템플릿 구조 변경 시 실시간 반영 (누락 데이터 자동 생성) */
                 // 설명: 섹터 1의 템플릿에 새로운 기능이 추가되면, 기존 방에도 즉시 해당 공간을 만들어줍니다.

@@ -1089,34 +1089,35 @@ function util_stamp(key) {
 }
 
 /**
- * [Gemini 요청 사항] 통합 순자산 계산 엔진
- * 기능: 유저의 유동 자산, 주식 가치, 채권(빌려준돈)을 합산하고 부채를 차감한 실질 자산 산출
+ * [수정] 통합 순자산 계산 엔진 (참조 오류 완벽 방지)
  */
 function util_calculateNetWorth(user, roomData) {
     if (!user) return 0;
     var data = getDatabase(); 
     var liquidAssets = Number(user.point || 0) + Number(user.bank || 0);
     var stockAssets = 0;
-    if (user.stockHoldings && data.stockMarket) {
+
+    // [교정]: stockMarket이 data(전역) 또는 roomData.features(방별) 어디에 있든 안전하게 참조
+    var market = data.stockMarket || (roomData && roomData.features ? roomData.features.stockMarket : null);
+
+    if (user.stockHoldings && market) {
         for (var sName in user.stockHoldings) {
             var count = Number(user.stockHoldings[sName] || 0);
-            var stock = data.stockMarket[sName];
+            var stock = market[sName];
             var currentPrice = stock ? Number(stock.price) : 0;
             if (!isNaN(count) && !isNaN(currentPrice)) stockAssets += (count * currentPrice);
         }
     }
+    
     var bankDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
     var sacheDebt = 0;
     var sacheClaims = 0; 
+
     if (roomData && roomData.loanContracts) {
         for (var cid in roomData.loanContracts) {
             var c = roomData.loanContracts[cid];
-            if (c.borrowerUid === user.uid || (user.name && c.borrowerName === user.name)) {
-                sacheDebt += Number(c.currentDebt);
-            }
-            if (c.lenderUid === user.uid || (user.name && c.lenderName === user.name)) {
-                sacheClaims += Number(c.currentDebt);
-            }
+            if (c.borrowerUid === user.uid) sacheDebt += Number(c.currentDebt || 0);
+            if (c.lenderUid === user.uid) sacheClaims += Number(c.currentDebt || 0);
         }
     }
     var netWorth = (liquidAssets + stockAssets + sacheClaims) - (bankDebt + sacheDebt);

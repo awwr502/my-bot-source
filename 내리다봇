@@ -1662,16 +1662,22 @@ function util_checkAndAwardTitle(user, replier, titleName, titleId, icon, commit
 
 /* 경찰 출동 결과 처리 함수 (중앙은행 연동 및 방별 격리 보정) */
 function processPoliceResult(roomName, thiefUid, victimUid) {
-    var theftData = activeThefts[victimUid];
-    if (!theftData) return;
-    
     var data = getDatabase();
     if (!data) return;
     var room = data.rooms[roomName];
-    if (!room) return;
+    if (!room || !room.features || !room.features.states) return;
+
+    // [핵심 수정] 전역 변수가 아닌 방별 독립 상태 저장소를 참조하도록 연결
+    var activeThefts = room.features.states.activeThefts; 
+
+    var theftData = activeThefts[victimUid];
+    if (!theftData) return;
+    
     var thief = room.users[thiefUid];
     
     if (activeThefts[victimUid].successTimer) clearTimeout(activeThefts[victimUid].successTimer);
+    
+    // [상태 해제] 올바른 참조 경로에서 삭제 수행
     delete activeThefts[victimUid]; 
     
     /* [수정] 벌금 물가 배율 (완충 설정 적용) */
@@ -1706,10 +1712,13 @@ function processTheftResult(roomName, thiefUid, victimUid) {
     var data = getDatabase();
     if (!data) return;
     var room = data.rooms[roomName];
-    if (!room) return;
+    if (!room || !room.features || !room.features.states) return;
     
+    // [핵심 수정] 방별 독립 상태 저장소 참조 연결
+    var activeThefts = room.features.states.activeThefts;
+
     if (!room.users[thiefUid] || !room.users[victimUid]) { 
-        delete activeThefts[victimUid]; 
+        if (activeThefts[victimUid]) delete activeThefts[victimUid]; 
         Api.replyRoom(roomName, "⚠️ [시스템 알림]\n도둑질 진행 중 대상이 사라져 상황이 종료되었습니다.");
         return; 
     }
@@ -1749,7 +1758,8 @@ function processTheftResult(roomName, thiefUid, victimUid) {
         util_checkAndAwardTitle(thief, replierStub, "좀도둑", 1201, "🧤", "내리다 그림자 길드", "누적 도둑질 성공 10회", "남의 지갑을 가볍게 만드는 기술을 익혔습니다.");
     }
     
-    delete activeThefts[victimUid]; 
+    // [상태 해제] 올바른 참조 경로에서 삭제 수행
+    if (activeThefts[victimUid]) delete activeThefts[victimUid]; 
     
     var content = "🕵️ 도둑질 성공!\n" + getDisplayName(victim) + "님의 지갑에서\n" + fp(stealAmount) + "P를 훔쳤습니다!" + res.repayMsg;
     // [수정] 도둑질 결과에 보유 포인트 표시 추가

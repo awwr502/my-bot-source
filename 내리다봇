@@ -1526,15 +1526,15 @@ function isAdmin(sender, data, uid) {
 
 //==========섹터11==========
 
-/**
- * [공통 함수: 통합 상태 가드 엔진] v5.9
- * 기능: 유저가 현재 특정 활동(징역, 채굴, 결투 등)으로 인해 새로운 행동이 불가능한지 판별합니다.
- * @param {Object} user - 유저 객체
- * @param {String} uid - 유저 고유 ID
- * @returns {Object} { canAction: Boolean, reason: String }
- */
-function util_checkUserState(user, uid) {
+function util_checkUserState(user, uid, roomName) {
     var now = Date.now();
+    var data = getDatabase();
+    var roomData = data.rooms[roomName || "내리다"];
+    
+    // [교정]: 방별 독립 states 데이터 참조 (없을 경우 빈 객체 처리로 Crash 방지)
+    var states = (roomData && roomData.features) ? roomData.features.states : {};
+    var dData = states.duelData || {};
+    var aThefts = states.activeThefts || {};
 
     // 1. 감옥(징역) 상태 체크
     if (user.jailReleaseTime && now < user.jailReleaseTime) {
@@ -1549,30 +1549,28 @@ function util_checkUserState(user, uid) {
         return { canAction: false, reason: "현재 광산에서 채굴 작업 중입니다." };
     }
 
-    // 3. 결투 진행 상태 체크
-    if (duelData[uid]) return { canAction: false, reason: "현재 결투 신청을 받은 상태입니다." };
-    for (var dKey in duelData) {
-        if (duelData[dKey].challengerUid === uid) return { canAction: false, reason: "현재 타인에게 결투를 신청한 상태입니다." };
+    // 3. 결투 진행 상태 체크 (방별 데이터 참조형으로 교정)
+    if (dData[uid]) return { canAction: false, reason: "현재 결투 신청을 받은 상태입니다." };
+    for (var dKey in dData) {
+        if (dData[dKey].challengerUid === uid) return { canAction: false, reason: "현재 타인에게 결투를 신청한 상태입니다." };
     }
 
-    // 4. 도둑질 진행 상태 체크 (피해자 또는 가해자)
-    if (activeThefts[uid]) return { canAction: false, reason: "현재 도둑질의 표적이 되어 방어 중입니다." };
-    for (var vKey in activeThefts) {
-        if (activeThefts[vKey].thiefUid === uid) return { canAction: false, reason: "현재 다른 유저를 털고 있는 중입니다." };
+    // 4. 도둑질 진행 상태 체크 (방별 데이터 참조형으로 교정)
+    if (aThefts[uid]) return { canAction: false, reason: "현재 도둑질의 표적이 되어 방어 중입니다." };
+    for (var vKey in aThefts) {
+        if (aThefts[vKey].thiefUid === uid) return { canAction: false, reason: "현재 다른 유저를 털고 있는 중입니다." };
     }
 
     return { canAction: true, reason: "" };
 }
 
 /* 기존 호환성을 위한 단순 체크 함수 */
-function isUserBusy(uid) {
+function isUserBusy(uid, roomName) {
     var data = getDatabase();
-    // 방별 데이터 구조에서 해당 유저 찾기
-    for (var r in data.rooms) {
-        if (data.rooms[r].users[uid]) {
-            var res = util_checkUserState(data.rooms[r].users[uid], uid);
-            return !res.canAction;
-        }
+    var rName = roomName || "내리다";
+    if (data.rooms[rName] && data.rooms[rName].users[uid]) {
+        var res = util_checkUserState(data.rooms[rName].users[uid], uid, rName);
+        return !res.canAction;
     }
     return false;
 }
@@ -1624,7 +1622,7 @@ function generateUUID() { return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(
 /**
  * [공통 함수: 칭호 자동 부여 시스템] v6.0 (표준 포맷 적용)
  */
-function util_checkAndAwardTitle(user, replier, titleName, titleId, icon, committee, condition, guideText) {
+function util_checkAndAwardTitle(user, replier, titleName, titleId, icon, committee, condition, guideText, roomName) {
     if (!user.inventory) user.inventory = [];
     
     var hasTitle = false;
@@ -1656,7 +1654,16 @@ function util_checkAndAwardTitle(user, replier, titleName, titleId, icon, commit
                  "━━━━━━━━━━━━━━━\n" +
                  "💡 " + guideText;
 
-    replier.reply(winMsg);
+    // [핵심 교정]: replier가 무효한 환경(문자열 전달 등)에서도 응답이 나가도록 예외 처리
+    try {
+        if (replier && typeof replier.reply === 'function') {
+            replier.reply(winMsg);
+        } else {
+            Api.replyRoom(roomName || "내리다", winMsg);
+        }
+    } catch(e) {
+        Log.error("Award Title Reply Error: " + e);
+    }
     return true;
 }
 

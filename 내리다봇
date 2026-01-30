@@ -208,9 +208,9 @@ var SYSTEM_CONFIG = {
                 RANK4: 0.43         // 4등 확률 (43%)
             },
             PRIZES: {
-                RANK1: 300000,     // 1등 상금
+                RANK1: 500000,     // 1등 상금
                 RANK2: 100000,      // 2등 상금
-                RANK3: 15000,       // 3등 상금
+                RANK3: 30000,       // 3등 상금
                 RANK4: 1000         // 4등 상금
             }
         },
@@ -2827,37 +2827,59 @@ function _runSector17Logic(data, ctx) {
             try { Api.replyRoom(ctx.targetRoom, formatAdmin("❄️ 피버타임 종료", "이벤트가 종료되어\n승급 확률이 정상화되었습니다.")); } catch(e){}
         }
 
-        // [3, 4번] 유령 유저 청소 및 부유층 보유세 자동 집행 로직
+        // [3, 4번 통합] 유령 유저 청소 및 강력한 누진세(보유세) 집행 로직
         for (var rName in data.rooms) {
             var roomObj = data.rooms[rName];
             var eco = calculateEconomy(data, rName);
-            var wealthyThreshold = eco.average * 3; // 평균 자산의 5배 초과 시 부유층 판정
+            var wealthyThreshold = eco.average * 3; // 평균 자산의 3배 초과 시 부유층
+
+            var reportTotalTax = 0;   // 총 징수액
+            var reportTaxCount = 0;   // 납세 인원
+            var reportPurgeCount = 0; // 청소 인원
 
             for (var id in roomObj.users) {
                 var u = roomObj.users[id];
                 
-                // [3번] 30일 이상 미출석 유저 데이터 청소
+                // [3번] 30일 이상 미출석 유저 데이터 청소 및 자산 국고 귀속
                 var lastDateTs = u.lastDate ? new Date(u.lastDate).getTime() : 0;
                 var daysInActive = (Date.now() - lastDateTs) / (1000 * 60 * 60 * 24);
                 
                 if (u.lastDate !== "" && daysInActive > 30) {
-                    if (u.point > 0) {
+                    if (Number(u.point) > 0) {
                         util_updatePoint(u, roomObj, -u.point, "장기 미접속 자산 환수", rName);
                     }
                     delete roomObj.users[id];
+                    reportPurgeCount++;
                     continue;
                 }
 
-                // [4번] 부유층 자산 보유세 징수 (매일 보유 현금의 0.1%)
-                if (util_calculateNetWorth(u, roomObj) > wealthyThreshold && u.point > 1000) {
-                    var tax = Math.floor(u.point * 0.005);
+                // [4번] 강력한 누진세 징수 (대상: 평균 3배 초과자 / 세율: 현금의 $0.5\%$)
+                if (util_calculateNetWorth(u, roomObj) > wealthyThreshold && Number(u.point) > 1000) {
+                    var tax = Math.floor(Number(u.point) * 0.005); 
                     if (tax > 0) {
                         util_updatePoint(u, roomObj, -tax, "자산 보유세 징수", rName);
+                        reportTotalTax += tax;
+                        reportTaxCount++;
                     }
                 }
             }
-            // [2번용] 하루가 끝나면 채팅 하이프 카운트 리셋
-            roomObj.features.msgCount = 0;
+
+            // [자동 보고] 정산 내역이 있을 때만 결과 출력
+            if (reportTaxCount > 0 || reportPurgeCount > 0) {
+                var reportMsg = "🌙 [야간 경제 안정화 정산 보고]\n" +
+                                "━━━━━━━━━━━━━━━\n" +
+                                "✅ 보유세($0.5\%$) 징수 완료\n" +
+                                "• 납세 인원: " + reportTaxCount + "명\n" +
+                                "• 총 세수: +" + fp(reportTotalTax) + "P (국고 입고)\n\n" +
+                                "✅ 유령 유저 데이터 정리\n" +
+                                "• 청소 인원: " + reportPurgeCount + "명\n" +
+                                "━━━━━━━━━━━━━━━\n" +
+                                "🏛️ 중앙은행 금고가 최신화되었습니다.";
+                Api.replyRoom(rName, reportMsg);
+            }
+
+            // 하이프 카운트(채팅량) 초기화
+            if (roomObj.features) roomObj.features.msgCount = 0;
         }
 
         // [5] 핵심: 모든 방 유저 스탯 초기화 (지능형 금리 엔진 적용)

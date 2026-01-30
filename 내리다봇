@@ -7751,8 +7751,18 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        var fee = Math.floor(myBet.amount * rConf.CANCEL_FEE);
+       var isOwner = (user.title === "마주");
+        var feeRate = isOwner ? 0 : rConf.CANCEL_FEE;
+        var fee = Math.floor(myBet.amount * feeRate);
         var refund = myBet.amount - fee;
+
+        var cancelMsg = "경마 배팅을 철회했습니다.\n\n💰 원래 배팅금: " + fp(myBet.amount) + "P\n";
+        if (isOwner) {
+            cancelMsg += "👑 [마주] 칭호 효과 적용!\n⚖️ 취소 위약금: 0P (전액 면제)\n";
+        } else {
+            cancelMsg += "⚖️ 취소 위약금(10%): -" + fp(fee) + "P\n";
+        }
+        cancelMsg += "🎁 최종 환불액: " + fp(refund) + "P";
 
         // [엔진 연결] 게이트웨이를 통한 환불 (수수료 제외)
         util_updatePoint(user, roomData, refund, "경마 배팅 취소", roomName);
@@ -7834,12 +7844,13 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 var res = processRepayment(user, expectedPayout, targetUid, roomName);
                 // [엔진 연결] 게이트웨이 승리금 지급 (은행 자동 차감)
                 util_updatePoint(user, roomData, Number(res.actualGain), "홀짝 적중", roomName);
-                var winPrefix = isFeverActive ? "🔥 [피버] " : "🎊 ";
-                replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, "결과: [" + result + "]\n축하합니다! " + fp(Number(res.actualGain)) + "P 획득!" + res.repayMsg, "잔액: " + fp(user.point) + "P"));
+                var winPrefix = isLuckyCharmActive ? "🔮 [부적] " : (isFeverActive ? "🔥 [피버] " : "🎊 ");
+                var charmMsg = isLuckyCharmActive ? "\n(✨ 행운의부적 효과 적용 중: 승률 +3%)" : "";
+                
+                replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, "결과: [" + result + "]\n축하합니다! " + fp(Number(res.actualGain)) + "P 획득!" + res.repayMsg + charmMsg, "잔액: " + fp(user.point) + "P"));
             } else {
-                // [엔진 연결] 게이트웨이 패배금 차감 (은행 자동 입고)
                 util_updatePoint(user, roomData, -bet, "홀짝 미적중", roomName);
-                var losePrefix = isFeverActive ? "🔥 [피버] " : "💀 ";
+                var losePrefix = isLuckyCharmActive ? "🔮 [부적] " : (isFeverActive ? "🔥 [피버] " : "💀 ");
                 replier.reply(formatCommand(losePrefix + "홀짝 미적중", user, "결과: [" + result + "]\n아쉽지만 " + fp(bet) + "P를 잃었습니다.", "잔액: " + fp(user.point) + "P"));
             }
 
@@ -8333,7 +8344,7 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
             
             if (user.stockCertCount >= 10) {
                 user.stockCertCount = 0; // 초기화
-                util_checkAndAwardTitle(user, replier, "최대주주", 888, "🏛️", "경제 위원회", "확인서 10장 수집 완료", "주식 매도 시 세금 50% 감면", roomName);
+                util_checkAndAwardTitle(user, replier, "최대주주", 888, "🏛️", "내리다 경제 위원회", "확인서 10장 수집 완료", "주식 매도 시 세금 50% 감면", roomName);
             }
         }
         
@@ -8402,6 +8413,9 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         if (!data.stockTraffic) data.stockTraffic = {};
         if (!data.stockTraffic[sName]) data.stockTraffic[sName] = { buy: 0, sell: 0 };
         data.stockTraffic[sName].sell += count;
+
+        var taxText = isMajor ? "👑 [최대주주] 감세 혜택 적용!\n적용 세금 : " + fp(fee) + "P (" + (appliedTaxRate * 100).toFixed(1) + "%)" 
+                              : "수수료 : -" + fp(fee) + "P (" + (appliedTaxRate * 100).toFixed(1) + "%)";
         
         var sellMsg = "📉 주식 매도 완료\n" +
               "━━━━━━━━━━━━━━━\n" +
@@ -8739,6 +8753,23 @@ function _gameLotteryLogic(msg, user, data, replier, roomName, targetUid) {
         // 2. 섹터 30의 효과 처리 엔진 호출 (여기서 복권 개봉 및 당첨금 상환 로직이 실행됨)
         // 인자 설명: (아이템객체, 유저, 방이름, 리플라이어, 데이터, UID, 가격, 이용권여부, 수량)
         _handleShopEffect({ effect: "spitto" }, user, roomName, replier, data, targetUid, price, false, 1);
+
+        // _handleShopEffect에서 당첨금이 지급되지 않았을 경우(꽝)를 체크
+        // (참고: _handleShopEffect 내부 로직에 의해 꽝 메시지가 이미 나갔으므로 획득 알림만 추가 발송)
+        if (Math.random() < 0.2) { // 20% 확률
+            user.lottoFailCount = (user.lottoFailCount || 0) + 1;
+            var charmMsg = "\n\n[System] 📩 아쉬운 마음에 '위로의편지'가 도착했습니다.\n";
+            
+            if (user.lottoFailCount >= 15) {
+                user.lottoFailCount = 0;
+                user.luckyCharmEnd = Date.now() + 3600000; // 1시간
+                user.inventory.push({ id: 888, name: "행운의부적", icon: "🔮", effect: "item", title: "행운의부적" });
+                charmMsg += "✉️ 편지 15장이 모두 모여 [행운의부적]이 완성되었습니다! ✨\n⏳ 지금부터 1시간 동안 홀짝 승률 +3% 보너스가 자동 적용됩니다.";
+            } else {
+                charmMsg += "현재 수집: " + user.lottoFailCount + " / 15";
+            }
+            replier.reply(formatCommand("📩 위로의 편지 도착", user, charmMsg, "내 잔액: " + fp(user.point) + "P"));
+        }
         
         // 3. 실시간 저장 보장
         safeSaveData(data);

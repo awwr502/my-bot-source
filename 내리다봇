@@ -2114,12 +2114,17 @@ function updateStockPrices(data) {
 
             // [가상 정부] 정책에 따른 변동성(Volatility) 보정 적용
             // 예: 시장 안정화 정책 가결 시 변동폭 0.5배 축소 등
-            if (pol.volatilityMult && pol.volatilityMult !== 1.0) {
+           if (pol.volatilityMult && pol.volatilityMult !== 1.0) {
                 changePercent *= pol.volatilityMult;
             }
 
-            if (marketOpenPrice > 0) {
-                var growthRate = (stock.price - marketOpenPrice) / marketOpenPrice;
+            /* [긴급 수정] 전역 시가(marketOpenPrice) 의존성 제거 및 개별 시가(openPrice) 도입 */
+            // 사유: 종목별 가격 편차를 무시하고 단일 기준점을 쓰면 고가주가 폭락하는 버그 수정
+            if (!stock.openPrice) stock.openPrice = stock.price; // 데이터 없으면 현재가를 시가로 초기화
+            var refPrice = stock.openPrice;
+
+            if (refPrice > 0) {
+                var growthRate = (stock.price - refPrice) / refPrice;
                 var sConf = conf.SETTINGS;
 
                 // [교정] 상한선 기준점을 0.20(+20%)으로 정확히 설정
@@ -2154,7 +2159,7 @@ function updateStockPrices(data) {
                     var resistance = gap * sConf.GRAVITY * (1 + (gap * 5)); 
                     changePercent -= resistance;
                 }
-            } // if (marketOpenPrice > 0) 종료
+            } // if (refPrice > 0) 종료
         } // if (isMarketOpen) 종료
         
         // 최종 가격 반영 (중괄호 블록 밖, 루프 내부)
@@ -2486,12 +2491,20 @@ function _runSector16Logic(data, ctx) {
         if (currentHour === conf.SETTINGS.OPEN_HOUR && currentMin === 0 && data.lastMarketOpenMin !== currentMin) {
             data.lastMarketOpenMin = currentMin;
             if (data.stockMarket) {
+                /* [긴급 수정] 개장 시 모든 종목의 시가(openPrice) 개별 동기화 */
+                // 사유: 1개 종목의 가격이 전체 기준점이 되는 버그 수정
+                for (var sKey in data.stockMarket) {
+                    data.stockMarket[sKey].openPrice = data.stockMarket[sKey].price;
+                }
+                
+                // (대시보드 호환성을 위해 전역 변수도 남겨두되 로직엔 영향 없음)
                 var stocks = Object.keys(data.stockMarket);
                 if (stocks.length > 0) {
                     marketOpenPrice = data.stockMarket[stocks[0]].price; 
                     data.marketOpenPrice = marketOpenPrice;
-                    ctx.isUpdated = true;
                 }
+                
+                ctx.isUpdated = true;
             }
         }
     } catch(e) { Log.error("Sys/Save Logic Error: " + e); }

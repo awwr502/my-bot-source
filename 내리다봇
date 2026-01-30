@@ -3672,25 +3672,22 @@ else if (type === "admin_reg_delete") {
 
 //==========섹터21==========
 
-        /* 로또 번호 입력 처리부 (안전 관문 통합 및 입력 인식 강화) */
+        /* 로또 번호 입력 처리부 (순서 보정 및 호환성 강화) */
         if (lottoPurchaseState[targetUid]) {
             var lotto = roomData.features.lotto;
             
-            // 1. 시간 초과 체크
             if (Date.now() - lottoPurchaseState[targetUid].time > 30000) {
                 delete lottoPurchaseState[targetUid];
                 replier.reply(formatError(user, "시간 초과", "30초가 지나 구매가 취소되었습니다."));
                 return true;
             } 
             
-            // 2. 취소 체크
             if (msg === "취소") {
                 delete lottoPurchaseState[targetUid];
                 replier.reply(formatCommand("🚫 로또 구매 취소", user, "구매가 취소되었습니다."));
                 return true;
             }
 
-            // 3. 상태 검증
             var stateRes = util_checkUserState(user, targetUid);
             if (!stateRes.canAction) {
                 delete lottoPurchaseState[targetUid];
@@ -3698,52 +3695,47 @@ else if (type === "admin_reg_delete") {
                 return true;
             }
 
-            // 4. 숫자 파싱 (쉼표, 공백, 온점 등 모든 구분자 허용)
             var rawNums = msg.match(/\d+/g);
-            
             if (!rawNums || rawNums.length !== 3) {
-                replier.reply(formatError(user, "입력 오류", "숫자 3개를 입력해주세요.\n예) 1 5 10 또는 1,5,10"));
+                replier.reply(formatError(user, "입력 오류", "숫자 3개를 입력해주세요.\n예) 1 5 10"));
                 return true;
             }
             
             var nums = rawNums.map(Number).sort(function(a, b) { return a - b; });
-            var isInvalid = false;
             
-            // 중복 및 범위 체크
-            if (new Set(nums).size !== 3) isInvalid = true;
-            for (var i = 0; i < 3; i++) { if (nums[i] < 1 || nums[i] > 15) isInvalid = true; }
+            // [개선] 호환성을 위해 Set 대신 반복문으로 중복 체크
+            var hasDup = false;
+            if (nums[0] === nums[1] || nums[1] === nums[2] || nums[0] === nums[2]) hasDup = true;
             
-            if (isInvalid) {
+            var outOfRange = false;
+            for (var i = 0; i < 3; i++) { if (nums[i] < 1 || nums[i] > 15) outOfRange = true; }
+            
+            if (hasDup || outOfRange) {
                 replier.reply(formatError(user, "번호 오류", "1~15 사이의 중복 없는 숫자 3개를 입력하세요."));
                 return true;
             }
 
-            // 5. 가격 계산 및 결제
-            var lottoPrice = (lottoPurchaseState[targetUid].price !== undefined) ? lottoPurchaseState[targetUid].price : 1000;
-            var startPoint = Number(user.point); 
+            var lottoPrice = (lottoPurchaseState[targetUid].price !== undefined) ? lottoPurchaseState[targetUid].price : 2000;
 
-            if (startPoint < lottoPrice) {
+            if (Number(user.point) < lottoPrice) {
                  delete lottoPurchaseState[targetUid];
                  replier.reply(formatError(user, "잔액 부족", fp(lottoPrice) + "P가 필요합니다."));
                  return true;
             }
 
-            // 안전 관문을 통해 포인트 차감 (국고 연동)
-            util_updatePoint(user, roomData, -lottoPrice, "로또 구매", roomName); 
-            
-            // 실제로 차감된 금액 계산
-            var actualDeducted = startPoint - Number(user.point); 
-
-            // 6. 로또 응모권 등록
+            // [핵심] 기록 준비 (메모리 안정성 확보)
+            if (!lotto.entries) lotto.entries = {};
             if (!lotto.entries[targetUid]) lotto.entries[targetUid] = [];
+            
+            // 1. 먼저 로또를 등록합니다.
             lotto.entries[targetUid].push(nums);
+            lotto.dailyPool = (lotto.dailyPool || 0) + lottoPrice;
 
-            // 당첨금 풀에 추가
-            lotto.dailyPool = (lotto.dailyPool || 0) + actualDeducted;
+            // 2. 모든 등록이 성공한 후 마지막에 포인트를 차감합니다. (중요)
+            util_updatePoint(user, roomData, -lottoPrice, "로또 구매 완료", roomName);
             
             delete lottoPurchaseState[targetUid];
-            
-            replier.reply(formatCommand("🎫 로또 구매 완료", user, "선택 번호: [" + nums.join(", ") + "]\n차감 금액: " + fp(actualDeducted) + "P\n추첨 시간: 매일 밤 22:00", "내 잔액: " + fP(user.point) + "P"));
+            replier.reply(formatCommand("🎫 로또 구매 완료", user, "선택 번호: [" + nums.join(", ") + "]\n차감 금액: " + fp(lottoPrice) + "P\n추첨 시간: 매일 밤 22:00", "내 잔액: " + fP(user.point) + "P"));
             
             safeSaveData(data);
             return true;

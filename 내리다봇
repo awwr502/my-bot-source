@@ -3156,6 +3156,7 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 var roomName = room ? room.trim() : "";
                 var cleanSender = sender ? String(sender).trim() : ""; 
                 
+                // 1. 방 가드 및 기본 데이터 로드
                 if (ALLOWED_ROOMS.indexOf(roomName) === -1 || cleanSender === "오픈채팅봇") return;
 
                 var data = getDatabase(); 
@@ -3164,25 +3165,25 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
                 var roomData = data.rooms[roomName];
                 
+                // 2. 방별 피처(Features) 및 상태 저장소 초기화
                 if (!roomData.features) {
                     if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
                         roomData.features = ROOM_FEATURE_TEMPLATE();
                     }
-                }
-
-                // [2번] 실시간 하이프(채팅량) 기록
-                roomData.features.msgCount = (roomData.features.msgCount || 0) + 1;
-
-               /* [안전 패치] 템플릿 구조 변경 시 실시간 반영 (누락 데이터 자동 생성) */
-                // 설명: 섹터 1의 템플릿에 새로운 기능이 추가되면, 기존 방에도 즉시 해당 공간을 만들어줍니다.
-                if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
-                    var template = ROOM_FEATURE_TEMPLATE();
-                    // 1. 메인 기능 키 누락 체크 (racing, lotto 등)
-                    for (var key in template) {
-                        if (!roomData.features[key]) {
-                            roomData.features[key] = template[key];
+                } else {
+                    // 1. [실시간 패치] 누락된 템플릿 키 자동 생성 (무결성 유지)
+                    if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
+                        var template = ROOM_FEATURE_TEMPLATE();
+                        for (var key in template) {
+                            if (!roomData.features[key]) roomData.features[key] = template[key];
                         }
                     }
+                }
+
+                // 채팅 하이프 기록
+                roomData.features.msgCount = (roomData.features.msgCount || 0) + 1;
+                var rFeatures = roomData.features;
+
                     // 2. States 내부 누락 체크 (menuWait, bankProcess 등)
                     if (!roomData.features.states) {
                         roomData.features.states = template.states;
@@ -3356,118 +3357,79 @@ if (!data) return;
 var roomData = data.rooms[roomName] || { users: {} };
 data.rooms[roomName] = roomData;
 
-/* [v9.5 초고속 엔진] 전역 통합 O(1) 식별 캐시 시스템 */
-// 로더 리로드 시에도 유지되는 globalData 캐시 사용 (I/O 병목 제거 핵심)
-var cacheKey = roomName + "_" + cleanSender;
-var targetUid = globalData.nameToIdCache[cacheKey];
-var isIdentityRecovered = false;
+/* [v9.5 초고속 엔진] 전역 통합 O(1) 식별 캐시 및 신분 복구 시스템 */
+                var cacheKey = roomName + "_" + cleanSender;
+                var targetUid = (globalData.nameToIdCache) ? globalData.nameToIdCache[cacheKey] : null;
+                var isIdentityRecovered = false;
 
-// 1. [캐시 검증] 캐시된 UID가 실제 유저 데이터와 일치하는지 확인 (닉변 감지)
-// 불일치 시에만 정밀 루프(O(n))를 가동하여 성능 저하 방지
-if (!targetUid || !roomData.users[targetUid] || roomData.users[targetUid].name !== cleanSender) {
-    var nameMatchId = null;
-    var hashMatchId = null;
-    var currentImgHash = null;
-    try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
+                // 1. [캐시/정밀 검증] 닉네임 변경 및 프사 변경 대응
+                if (!targetUid || !roomData.users[targetUid] || roomData.users[targetUid].name !== cleanSender) {
+                    var nameMatchId = null;
+                    var hashMatchId = null;
+                    var currentImgHash = null;
+                    try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
 
-    // 정밀 교차 식별 루프 (캐시 미적중 시 1회만 실행)
-    for (var id in roomData.users) {
-        var u = roomData.users[id];
-        var isNameEqual = (u.name === cleanSender);
-        var isHashEqual = (currentImgHash && u.imageHash === currentImgHash);
+                    for (var id in roomData.users) {
+                        var u = roomData.users[id];
+                        if (u.name === cleanSender) nameMatchId = id;
+                        if (currentImgHash && u.imageHash === currentImgHash) hashMatchId = id;
+                        if (nameMatchId && hashMatchId) break;
+                    }
 
-        if (isNameEqual && isHashEqual) {
-            targetUid = id;
-            break; // 완벽 일치 시 즉시 종료
-        }
-        if (isNameEqual) nameMatchId = id;
-        if (isHashEqual) hashMatchId = id;
-    }
+                    if (nameMatchId) targetUid = nameMatchId;
+                    else if (hashMatchId) {
+                        targetUid = hashMatchId;
+                        roomData.users[targetUid].name = cleanSender; // 닉변 반영
+                    }
+                }
 
-    // 완벽 일치가 없을 경우 교차 판별 (닉변/프변 대응)
-    if (!targetUid) {
-        if (nameMatchId) {
-            targetUid = nameMatchId; // 프사만 바뀐 경우
-            if (currentImgHash) roomData.users[targetUid].imageHash = currentImgHash;
-        } else if (hashMatchId) {
-            targetUid = hashMatchId; // 닉네임만 바뀐 경우 (닉변)
-            var u = roomData.users[targetUid];
-            if (!data.nickHistory[targetUid]) data.nickHistory[targetUid] = [];
-            data.nickHistory[targetUid].push({ old: u.name, date: getSimpleDate() });
-            u.name = cleanSender;
-        }
-    }
+                // 2. [신분 복구] 영구 명부(Registry) 대조
+                if (!targetUid) {
+                    try {
+                        var regFile = new java.io.File(REGISTRY_PATH);
+                        if (regFile.exists()) {
+                            var registry = JSON.parse(FileStream.read(REGISTRY_PATH));
+                            if (registry[cacheKey]) {
+                                targetUid = registry[cacheKey];
+                                isIdentityRecovered = true;
+                                Log.info("[Identity] " + cleanSender + " 신분 복구됨.");
+                            }
+                        }
+                    } catch(e) { Log.error("Registry Sync Fail"); }
+                }
 
-    // 찾은 결과가 있다면 캐시 최신화 (다음번엔 0ms 탐색)
-    if (targetUid) {
-        globalData.nameToIdCache[cacheKey] = targetUid;
-    }
-}
+                // 3. [신규 생성] 진짜 처음 온 유저인 경우
+                if (!targetUid) {
+                    targetUid = generateUUID();
+                    try {
+                        var regFile = new java.io.File(REGISTRY_PATH);
+                        var registry = regFile.exists() ? JSON.parse(FileStream.read(REGISTRY_PATH)) : {};
+                        registry[cacheKey] = targetUid;
+                        FileStream.write(REGISTRY_PATH, JSON.stringify(registry));
+                    } catch(e) {}
+                }
 
-// 2. [신분 복구] 식별 실패 시 영구 명부(Registry) 대조 (데이터 부활)
-// 캐시에도 없고 루프에서도 못 찾았을 때만 파일 I/O 수행
-if (!targetUid) {
-    var regKey = roomName + "_" + cleanSender;
-    var registry = {};
-    try {
-        var regFile = new java.io.File(REGISTRY_PATH);
-        if (regFile.exists()) registry = JSON.parse(FileStream.read(REGISTRY_PATH));
-        
-        if (registry[regKey]) {
-            targetUid = registry[regKey]; // 과거 코드가 있다면 즉시 부활
-            globalData.nameToIdCache[cacheKey] = targetUid; // 캐시 복구
-            isIdentityRecovered = true; // [추가] 명부 복구 성공 시 true 할당
-            Log.info("[Identity Restore] " + cleanSender + "님 신분 복구 완료.");
-        }
-    } catch(e) { Log.error("Registry Read Error"); }
-}
+                // 캐시 업데이트
+                if (!globalData.nameToIdCache) globalData.nameToIdCache = {};
+                globalData.nameToIdCache[cacheKey] = targetUid;
 
-// 3. [신규 생성] 진짜 신규 유저일 경우
-if (!targetUid) {
-    targetUid = generateUUID();
-    globalData.nameToIdCache[cacheKey] = targetUid; // 신규 유저도 캐시 등록
-    
-    // 명부 자동 등록
-    try {
-        var regKey = roomName + "_" + cleanSender;
-        var regFile = new java.io.File(REGISTRY_PATH);
-        var registry = regFile.exists() ? JSON.parse(FileStream.read(REGISTRY_PATH)) : {};
-        registry[regKey] = targetUid;
-        FileStream.write(REGISTRY_PATH, JSON.stringify(registry));
-        Log.info("[Registry Auto-Sync] " + cleanSender + "님 신규 등록.");
-    } catch(e) {}
-}
+                // 4. [초기화] 유저 데이터 객체 생성 (스키마 준수)
+                if (!roomData.users[targetUid]) {
+                    var newUser = { uid: targetUid, name: cleanSender, lastDate: "" };
+                    try { if (imageDB) newUser.imageHash = imageDB.getProfileHash(); } catch(e) {}
 
-// [C] UID는 확보되었으나 실제 게임 데이터(Object)가 없는 경우 초기화 실행
-if (!roomData.users[targetUid]) {
-// 1. 기초 유저 객체 생성 및 스키마 적용
-    var newUser = { uid: targetUid, name: cleanSender, imageHash: currentImgHash, lastDate: "" };
+                    USER_SCHEMA.forEach(function(item) {
+                        newUser[item.key] = item.default;
+                    });
 
-    USER_SCHEMA.forEach(function(item) {
-        newUser[item.key] = item.default;
-    });
+                    roomData.users[targetUid] = newUser;
+                    util_updatePoint(newUser, roomData, 100000, "입장 축하 보너스", roomName);
 
-    roomData.users[targetUid] = newUser;
-
-    // 2. 게이트웨이를 통한 공식 보너스 지급 (로그 기록 보장)
-    if (typeof util_updatePoint === 'function') {
-        util_updatePoint(roomData.users[targetUid], roomData, 100000, "입장 축하 보너스", roomName);
-    }
-    
-    uidCache[cacheKey] = targetUid;
-    
-    var welcomeTitle = isIdentityRecovered ? "🎊 [" + cleanSender + "]님 신분 복구 완료!" : "🎊 [" + cleanSender + "]님 환영합니다!";
-    var welcomeSub = isIdentityRecovered ? "🛡️ 영구 명부에서 과거 고유 코드를 찾아 연결했습니다." : "🎁 입장 축하 보너스: " + fP(100000) + "P 지급!";
-    
-    var welcomeMsg = welcomeTitle + "\n━━━━━━━━━━━━━━━\n" +
-                     welcomeSub + "\n" +
-                     "🕹️ 미니게임 및 출석체크 기능 제공\n" +
-                     "💳 신용 등급: 4등급 (600점) 부여\n\n" + 
-                     "📖 이용 전 반드시 '/도움말'을 확인해주세요!";
-                     
-    replier.reply(welcomeMsg); 
-    safeSaveData(data);
-}
+                    var welcomeTitle = isIdentityRecovered ? "🎊 [" + cleanSender + "]님 신분 복구 완료!" : "🎊 [" + cleanSender + "]님 환영합니다!";
+                    var welcomeSub = isIdentityRecovered ? "🛡️ 과거 데이터가 안전하게 연결되었습니다." : "🎁 입장 보너스 100,000P가 지급되었습니다.";
+                    replier.reply(welcomeTitle + "\n━━━━━━━━━━━━━━━\n" + welcomeSub + "\n📖 '/도움말'을 확인해주세요!");
+                    safeSaveData(data);
+                }
 
 //==========섹터20-2==========
 

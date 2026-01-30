@@ -1,5 +1,10 @@
 //==========섹터1==========
 
+/* 전역 상태 변수 */ 
+if (typeof globalData === 'undefined' || globalData === null) {
+    var globalData = { rooms: {}, botActive: true }; 
+}
+
 /* [신규] 명령어 자동 등록 시스템 (Command Registry) */
 var USER_COMMANDS = {};
 var ADMIN_COMMANDS = {};
@@ -70,12 +75,12 @@ var uidCache = uidCache || {};
 var Executor = java.util.concurrent.Executors.newFixedThreadPool(6);
 // 2. [신규] 저장 전담 엔진: 단 1개의 스레드가 순차적으로 파일 기록 (안전성 담당)
 var SaveExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
+
+/* [안전한 바인딩] 생성된 엔진을 전역 객체에 연결 */
 if (globalData) {
+    globalData.Executor = Executor;
     globalData.SaveExecutor = SaveExecutor;
 }
-
-globalData.Executor = Executor;
-globalData.SaveExecutor = SaveExecutor;
 
 /* 로그 저장 경로 및 디렉토리 설정 */ 
 var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt"; 
@@ -84,11 +89,6 @@ var logDir = new java.io.File(BASE_DIR + "logs/");
 if (!logDir.exists()) logDir.mkdirs(); 
 var dir = new java.io.File(BACKUP_DIR); 
 if (!dir.exists()) dir.mkdirs(); 
-
-/* 전역 상태 변수 */ 
-if (typeof globalData === 'undefined' || globalData === null) {
-    var globalData = { rooms: {}, botActive: true }; 
-}
 
 /* [안정화] 핵심 게임 엔진 및 상태 참조 전역 선언 */
 var racingData = null;      // 경마 실시간 데이터 참조용
@@ -3356,6 +3356,8 @@ if (!data) return;
 var roomData = data.rooms[roomName] || { users: {} };
 data.rooms[roomName] = roomData;
 
+var isIdentityRecovered = false;
+
 /* [v9.5 초고속 엔진] 전역 통합 O(1) 식별 캐시 시스템 */
 // 로더 리로드 시에도 유지되는 globalData 캐시 사용 (I/O 병목 제거 핵심)
 var cacheKey = roomName + "_" + cleanSender;
@@ -3404,7 +3406,6 @@ if (!targetUid || !roomData.users[targetUid] || roomData.users[targetUid].name !
 }
 
 // 2. [신분 복구] 식별 실패 시 영구 명부(Registry) 대조 (데이터 부활)
-// 캐시에도 없고 루프에서도 못 찾았을 때만 파일 I/O 수행
 if (!targetUid) {
     var regKey = roomName + "_" + cleanSender;
     var registry = {};
@@ -3413,8 +3414,9 @@ if (!targetUid) {
         if (regFile.exists()) registry = JSON.parse(FileStream.read(REGISTRY_PATH));
         
         if (registry[regKey]) {
-            targetUid = registry[regKey]; // 과거 코드가 있다면 즉시 부활
-            globalData.nameToIdCache[cacheKey] = targetUid; // 캐시 복구
+            targetUid = registry[regKey]; 
+            isIdentityRecovered = true; // [추가] 복구 성공 플래그 설정
+            globalData.nameToIdCache[cacheKey] = targetUid;
             Log.info("[Identity Restore] " + cleanSender + "님 신분 복구 완료.");
         }
     } catch(e) { Log.error("Registry Read Error"); }
@@ -4006,7 +4008,7 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
             var donation = user.totalDonation;
             
           if (donation >= 2000000) util_checkAndAwardTitle(user, replierStub, "기부왕", 5004, "👑", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(2000000) + "P", "국가 경제의 진정한 수호자입니다.");
-            else if (donation >= 1000000) util_checkAndAwardTitle(user, replierStub, "자선가", 5003, "✨", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(1000000) + "P", "노블레스 오블리주를 몸소 실천하고 있습니다.")
+            else if (donation >= 1000000) util_checkAndAwardTitle(user, replierStub, "자선가", 5003, "✨", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(1000000) + "P", "노블레스 오블리주를 몸소 실천하고 있습니다.");
             else if (donation >= 700000) util_checkAndAwardTitle(user, replierStub, "기부천사", 5002, "👼", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(700000) + "P", "어려운 이들에게 희망의 빛을 선사했습니다.");
             else if (donation >= 300000) util_checkAndAwardTitle(user, replierStub, "선한손길", 5001, "🌱", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(300000) + "P", "당신의 따뜻한 마음이 사회의 소중한 밀알이 됩니다.");
 

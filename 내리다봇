@@ -3677,22 +3677,20 @@ else if (type === "admin_reg_delete") {
 
 //==========섹터21==========
 
-       /**
- * [독립형 함수] 로또 번호 입력 처리 엔진 (함수화 완료)
- * 기능: 로또 구매 대기 상태인 유저의 번호 입력을 처리하고 결제를 진행합니다.
+/**
+ * [독립형 함수] 로또 번호 입력 처리 엔진
  */
 function _handleLottoInput(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
-    // [안전 가드] 방 데이터나 기능이 로드되지 않았으면 즉시 종료
     if (!roomData || !roomData.features) return false;
 
-    // 방별 독립 상태 저장소 참조 (참조 경로 수정)
+    // 방별 독립 상태 저장소 참조
     var lottoPurchaseState = roomData.features.states.lottoPurchase;
     
     // 현재 유저가 로또 구매 대기 중인지 확인
     if (!lottoPurchaseState || !lottoPurchaseState[targetUid]) return false;
 
-    // 1. 시간 초과(30초) 및 취소 가드
+    // 1. 시간 초과 및 취소 가드
     if (Date.now() - lottoPurchaseState[targetUid].time > 30000) {
         delete lottoPurchaseState[targetUid];
         replier.reply(formatError(user, "시간 초과", "30초가 지나 구매가 자동 취소되었습니다."));
@@ -3704,7 +3702,7 @@ function _handleLottoInput(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 2. 활동 상태 검증 (섹터 11 연동)
+    // 2. 활동 상태 검증
     var stateRes = util_checkUserState(user, targetUid, roomName);
     if (!stateRes.canAction) {
         delete lottoPurchaseState[targetUid];
@@ -3712,7 +3710,7 @@ function _handleLottoInput(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 3. 번호 파싱 및 유효성 검증
+    // 3. 번호 파싱
     var rawNums = msg.match(/\d+/g);
     if (!rawNums || rawNums.length !== 3) {
         replier.reply(formatError(user, "입력 오류", "숫자 3개를 입력해주세요.\n예) 1 5 10"));
@@ -3732,11 +3730,11 @@ function _handleLottoInput(msg, user, data, replier, roomName, targetUid) {
     var lottoPrice = (lottoPurchaseState[targetUid].price !== undefined) ? lottoPurchaseState[targetUid].price : 2000;
     if (Number(user.point) < lottoPrice) {
          delete lottoPurchaseState[targetUid];
-         replier.reply(formatError(user, "잔액 부족", fp(lottoPrice) + "P가 필요합니다.\n(현재: " + fp(user.point) + "P)"));
+         replier.reply(formatError(user, "잔액 부족", fp(lottoPrice) + "P가 필요합니다."));
          return true;
     }
 
-    // 5. [핵심] 장부 선등록 및 객체 초기화
+    // 5. 로또 데이터 등록
     var lotto = roomData.features.lotto;
     if (!lotto.entries) lotto.entries = {};
     if (!lotto.entries[targetUid]) lotto.entries[targetUid] = [];
@@ -3744,12 +3742,11 @@ function _handleLottoInput(msg, user, data, replier, roomName, targetUid) {
     lotto.entries[targetUid].push(nums);
     lotto.dailyPool = (Number(lotto.dailyPool) || 0) + lottoPrice;
 
-    // 6. [결제] 포인트 차감 및 국고 연동
+    // 6. 결제 및 완료
     var prePoint = Number(user.point);
     util_updatePoint(user, roomData, -lottoPrice, "로또 구매", roomName);
     var actualDeducted = prePoint - Number(user.point);
 
-    // 7. 완료 처리 및 저장
     delete lottoPurchaseState[targetUid];
     
     replier.reply(formatCommand("🎫 로또 구매 완료", user, 
@@ -3761,40 +3758,6 @@ function _handleLottoInput(msg, user, data, replier, roomName, targetUid) {
 
     safeSaveData(data);
     return true; 
-}
-
-        /* [채팅 보너스 로직 분리] */
-function _runChatBonusLogic(msg, user, data, replier, roomName, targetUid) {
-    if (msg.indexOf("/") !== 0) {
-        user.chatCount = (user.chatCount || 0) + 1;
-        user.chatCycleCount = (user.chatCycleCount || 0) + 1;
-        
-        if (user.chatCycleCount > 13 || !user.chatBonusTarget) {
-            user.chatCycleCount = 1; 
-            user.chatBonusTarget = Math.floor(Math.random() * 12) + 1;
-            user.chatBonusGiven = false; 
-        }
-        
-        if (user.chatCycleCount >= user.chatBonusTarget && !user.chatBonusGiven) {
-            // [v5.9] 통합 상태 가드
-            var stateRes = util_checkUserState(user, targetUid, roomName);
-            if (!stateRes.canAction && stateRes.reason.indexOf("징역") !== -1) return;
-
-            var multiplier = util_getEcoMultiplier(roomName);
-            var basePrize = Math.floor(Math.random() * 201) + 300;
-            var prize = Math.floor(basePrize * multiplier);
-            
-            var res = processRepayment(user, prize, targetUid, roomName);
-            util_updatePoint(user, data.rooms[roomName], Number(res.actualGain), "채팅 보너스", roomName);
-
-            user.creditScore = Math.min(1000, Number(user.creditScore || 600) + 1);
-            
-            var output = "🎁 채팅 보너스\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n" + fp(prize) + "P를 획득했습니다!" + (res.repayMsg ? res.repayMsg : "") + "\n━━━━━━━━━━━━━━━";
-            replier.reply(output + "\n내 잔액: " + fP(user.point) + "P");
-            
-            user.chatBonusGiven = true; 
-        }
-    }
 }
 
 //==========섹터22-1==========
@@ -4900,34 +4863,78 @@ if (msg === "/가이드") {
 
 //==========섹터24==========
 
-        /* [최적화] 모든 숫자 입력 및 상태 기반 명령어 통합 처리 구간 */
+/* [최적화] 모든 숫자 입력 및 상태 기반 명령어 통합 처리 구간 */
         
-        // 1. 유저의 상태(status)가 존재하는지 먼저 확인
         if (rFeatures && rFeatures.states) {
-
-            // 0. 중복 유저 선택 처리 (최우선 순위로 배치)
+            // 0. 중복 유저 선택
             if (typeof _handleSelectionLogic === 'function' && _handleSelectionLogic(msg, user, data, replier, roomName, targetUid)) return;
-
-            // [신규 연결] 로또 번호 입력 처리 (이 부분이 핵심입니다!)
+            // 1. 로또 번호 입력 (섹터21 연결)
             if (typeof _handleLottoInput === 'function' && _handleLottoInput(msg, user, data, replier, roomName, targetUid)) return;
-            
-            // A. 은행 업무 처리 (Step 1~5) - sender 인자 추가
+            // A. 은행 업무
             if (typeof _handleBankStep1 === 'function' && _handleBankStep1(msg, user, data, replier, roomName, targetUid)) return;
             if (typeof _handleBankStep2 === 'function' && _handleBankStep2(msg, user, data, replier, roomName, targetUid)) return;
             if (typeof _handleBankStep3 === 'function' && _handleBankStep3(msg, user, data, replier, roomName, targetUid)) return;
             if (typeof _handleBankStep4 === 'function' && _handleBankStep4(msg, user, data, replier, roomName, targetUid)) return;
             if (typeof _handleBankStep5 === 'function' && _handleBankStep5(msg, user, data, replier, roomName, targetUid)) return;
-
-            // B. 메뉴 및 선택 대기 처리 (상점, 도움말, 중복유저 등) - sender 인자 추가
+            // B. 메뉴 대기
             if (typeof _handleMenuStep1 === 'function' && _handleMenuStep1(msg, user, data, replier, roomName, targetUid)) return;
             if (typeof _handleMenuStep2 === 'function' && _handleMenuStep2(msg, user, data, replier, roomName, targetUid)) return;
             if (typeof _handleMenuStep3 === 'function' && _handleMenuStep3(msg, user, data, replier, roomName, targetUid)) return;
             if (typeof _handleMenuStep4 === 'function' && _handleMenuStep4(msg, user, data, replier, roomName, targetUid)) return;
         }
 
-        // 2. 일반 게임 명령어 처리 (Dispatcher)
+        // 2. 일반 게임 명령어 처리
         if (typeof _handleGameLogic === 'function') {
             if (_handleGameLogic(msg, user, data, replier, roomName, targetUid, cleanSender)) return;
+        }
+
+        /* [3. 채팅 보너스 로직 (직접 실행)] */
+        // 명령어가 아닌 일반 채팅일 때만 실행
+        if (msg.indexOf("/") !== 0) {
+            user.chatCount = (user.chatCount || 0) + 1;
+            user.chatCycleCount = (user.chatCycleCount || 0) + 1;
+            
+            // 사이클 목표가 없거나 초과하면 재설정
+            if (user.chatCycleCount > 13 || !user.chatBonusTarget) {
+                user.chatCycleCount = 1; 
+                user.chatBonusTarget = Math.floor(Math.random() * 12) + 1;
+                user.chatBonusGiven = false; 
+            }
+            
+            // 목표 달성 시 보너스 지급 (징역 상태가 아닐 때만)
+            if (user.chatCycleCount >= user.chatBonusTarget && !user.chatBonusGiven) {
+                var isJail = false;
+                if (user.jailReleaseTime && Date.now() < user.jailReleaseTime) isJail = true;
+
+                if (!isJail) {
+                    var multiplier = 1.0;
+                    if (typeof util_getEcoMultiplier === 'function') multiplier = util_getEcoMultiplier(roomName);
+
+                    var basePrize = Math.floor(Math.random() * 201) + 300;
+                    var prize = Math.floor(basePrize * multiplier);
+                    
+                    // 상환 및 지급 (게이트웨이 연동)
+                    var res = { actualGain: prize, repayMsg: "" };
+                    if (typeof processRepayment === 'function') res = processRepayment(user, prize, targetUid, roomName);
+                    
+                    if (typeof util_updatePoint === 'function') {
+                        util_updatePoint(user, data.rooms[roomName], Number(res.actualGain), "채팅 보너스", roomName);
+                    } else {
+                        user.point += Number(res.actualGain); // 비상용 직접 지급
+                    }
+
+                    user.creditScore = Math.min(1000, Number(user.creditScore || 600) + 1);
+                    
+                    var output = "🎁 채팅 보너스\n━━━━━━━━━━━━━━━\n" + 
+                                 getDisplayName(user) + "님\n" + 
+                                 fp(prize) + "P를 획득했습니다!" + 
+                                 (res.repayMsg ? res.repayMsg : "") + "\n━━━━━━━━━━━━━━━";
+                    replier.reply(output + "\n내 잔액: " + fP(user.point) + "P");
+                    
+                    user.chatBonusGiven = true; 
+                    // safeSaveData(data); // 잦은 저장을 피하기 위해 스케줄러 저장에 의존
+                }
+            }
         }
 
 //==========섹터25==========

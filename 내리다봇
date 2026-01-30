@@ -8326,6 +8326,16 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         if (!data.stockTraffic) data.stockTraffic = {};
         if (!data.stockTraffic[sName]) data.stockTraffic[sName] = { buy: 0, sell: 0 };
         data.stockTraffic[sName].buy += count;
+
+        if (Math.random() < 0.1) { // 10% 확률
+            user.stockCertCount = (user.stockCertCount || 0) + 1;
+            buySuccessMsg += "\n\n[System] 📈 서류 봉투에서 '미발행확인서'가 발견되었습니다.\n(현재 수집: " + user.stockCertCount + " / 10)";
+            
+            if (user.stockCertCount >= 10) {
+                user.stockCertCount = 0; // 초기화
+                util_checkAndAwardTitle(user, replier, "최대주주", 888, "🏛️", "경제 위원회", "확인서 10장 수집 완료", "주식 매도 시 세금 50% 감면", roomName);
+            }
+        }
         
         replier.reply(formatCommand("📈 주식 매수 완료", user, "종목: " + sName + "\n수량: " + count + "주\n매수가: " + fp(stock.price) + "P (총 " + fp(totalPrice) + "P)", "내 잔액: " + fp(user.point) + "P"));
         safeSaveData(data);
@@ -8358,10 +8368,13 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var stock = data.stockMarket[sName];
         var sellPrice = stock ? Math.floor(Number(stock.price)) : 0;
         var totalSell = sellPrice * count; 
-        // [가상 정부] 정책에 따른 유동적 세율 적용 (기본 5%)
-        var currentTax = pol.stockTax || 0.05;
-        var fee = Math.floor(totalSell * currentTax);
-        var finalPrice = totalSell - fee; 
+
+        var isMajor = (user.title === "최대주주");
+        var baseTaxRate = pol.stockTax || 0.05;
+        var appliedTaxRate = isMajor ? (baseTaxRate / 2) : baseTaxRate; // 최대주주면 세금 50% 감면
+        
+        var fee = Math.floor(totalSell * appliedTaxRate);
+        var finalPrice = totalSell - fee;
 
         /* [핵심] 은행 파산 보호 (뱅크런 방지) */
         if (roomData.bankReserve < finalPrice) {

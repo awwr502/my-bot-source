@@ -7879,20 +7879,41 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             }
 
             if (isWin) {
-                // 3. 승리 횟수 갱신 (직접 연산 ++ 대신 게이트웨이 보호 적용)
+                // 1. 승리 데이터 갱신
                 var nextWins = Number(user.totalGambleWins || 0) + 1;
                 util_setData(user, 'totalGambleWins', nextWins, "도박 승리 기록", roomName);
-                var res = processRepayment(user, expectedPayout, targetUid, roomName);
-                // [엔진 연결] 게이트웨이 승리금 지급 (은행 자동 차감)
-                util_updatePoint(user, roomData, Number(res.actualGain), "홀짝 적중", roomName);
-                var winPrefix = isLuckyCharmActive ? "🔮 [부적] " : (isFeverActive ? "🔥 [피버] " : "🎊 ");
-                var charmMsg = isLuckyCharmActive ? "\n(✨ 행운의부적 효과 적용 중: 승률 +3%)" : "";
                 
-                replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, "결과: [" + result + "]\n축하합니다! " + fp(Number(res.actualGain)) + "P 획득!" + res.repayMsg + charmMsg, "잔액: " + fp(user.point) + "P"));
+                var res = processRepayment(user, expectedPayout, targetUid, roomName);
+                util_updatePoint(user, roomData, Number(res.actualGain), "홀짝 적중", roomName);
+                
+                /* ===== 수정 포인트: 변수 안전성 확보 ===== */
+                // 변수가 선언되지 않았을 경우를 대비해 직접 상태 체크
+                var isCharm = (user.luckyCharmEnd && Date.now() < user.luckyCharmEnd);
+                var isFever = (data.feverData && data.feverData.active === true);
+                
+                var winPrefix = isCharm ? "🔮 [부적] " : (isFever ? "🔥 [피버] " : "🎊 ");
+                var charmMsg = isCharm ? "\n(✨ 행운의부적 효과 적용 중: 승률 +3%)" : "";
+                var repayInfo = (res && res.repayMsg) ? res.repayMsg : ""; // undefined 방어
+                
+                var outputMsg = "결과: [" + result + "]\n축하합니다! " + fp(Number(res.actualGain)) + "P 획득!" + repayInfo + charmMsg;
+                
+                // 최종 출력
+                replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, outputMsg, "잔액: " + fp(user.point) + "P"));
+                
             } else {
+                // 2. 패배 처리
                 util_updatePoint(user, roomData, -bet, "홀짝 미적중", roomName);
-                var losePrefix = isLuckyCharmActive ? "🔮 [부적] " : (isFeverActive ? "🔥 [피버] " : "💀 ");
-                replier.reply(formatCommand(losePrefix + "홀짝 미적중", user, "결과: [" + result + "]\n아쉽지만 " + fp(bet) + "P를 잃었습니다.", "잔액: " + fp(user.point) + "P"));
+                
+                /* ===== 수정 포인트: 변수 안전성 확보 ===== */
+                var isCharm = (user.luckyCharmEnd && Date.now() < user.luckyCharmEnd);
+                var isFever = (data.feverData && data.feverData.active === true);
+                
+                var losePrefix = isCharm ? "🔮 [부적] " : (isFever ? "🔥 [피버] " : "💀 ");
+                
+                var outputMsg = "결과: [" + result + "]\n아쉽지만 " + fp(bet) + "P를 잃었습니다.";
+                
+                // 최종 출력
+                replier.reply(formatCommand(losePrefix + "홀짝 미적중", user, outputMsg, "잔액: " + fp(user.point) + "P"));
             }
 
             // [엔진 연결] 칭호 자동 부여 시스템

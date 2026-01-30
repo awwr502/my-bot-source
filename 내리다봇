@@ -1093,40 +1093,36 @@ function util_stamp(key) {
  */
 function util_calculateNetWorth(user, roomData) {
     if (!user) return 0;
-    var data = getDatabase(); 
-    var liquidAssets = Number(user.point || 0) + Number(user.bank || 0);
-    var stockAssets = 0;
+    try {
+        var data = getDatabase(); 
+        var liquidAssets = Number(user.point || 0) + Number(user.bank || 0);
+        var stockAssets = 0;
 
-    // [교정]: stockMarket 데이터 경로 유연성 확보 (전역/지역 시장 데이터 통합 탐색)
-    var market = data.stockMarket;
-    if (!market && roomData && roomData.features) market = roomData.features.stockMarket;
+        // [교정]: 주식 시장 데이터 경로 통합 탐색 (Crash 방지)
+        var market = data.stockMarket || (roomData && roomData.features ? roomData.features.stockMarket : null);
 
-    if (user.stockHoldings && market) {
-        for (var sName in user.stockHoldings) {
-            var count = Number(user.stockHoldings[sName] || 0);
-            var stock = market[sName];
-            var currentPrice = stock ? Number(stock.price) : 0;
-            if (!isNaN(count) && !isNaN(currentPrice)) stockAssets += (count * currentPrice);
-        }
-    }
-    
-    var bankDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
-    var sacheDebt = 0;
-    var sacheClaims = 0; 
-
-    if (roomData && roomData.loanContracts) {
-        for (var cid in roomData.loanContracts) {
-            var c = roomData.loanContracts[cid];
-            if (c.borrowerUid === user.uid || (user.name && c.borrowerName === user.name)) {
-                sacheDebt += Number(c.currentDebt || 0);
-            }
-            if (c.lenderUid === user.uid || (user.name && c.lenderName === user.name)) {
-                sacheClaims += Number(c.currentDebt || 0);
+        if (user.stockHoldings && market) {
+            for (var sName in user.stockHoldings) {
+                var stock = market[sName];
+                if (stock) stockAssets += (Number(user.stockHoldings[sName] || 0) * Number(stock.price || 0));
             }
         }
+        
+        var bankDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
+        var sacheDebt = 0;
+        var sacheClaims = 0; 
+
+        if (roomData && roomData.loanContracts) {
+            for (var cid in roomData.loanContracts) {
+                var c = roomData.loanContracts[cid];
+                if (c.borrowerUid === user.uid) sacheDebt += Number(c.currentDebt || 0);
+                if (c.lenderUid === user.uid) sacheClaims += Number(c.currentDebt || 0);
+            }
+        }
+        return Math.max(0, Math.floor(liquidAssets + stockAssets + sacheClaims - bankDebt - sacheDebt));
+    } catch(e) {
+        return Number(user.point || 0); // 에러 시 최소한의 값 반환으로 로직 중단 방지
     }
-    var netWorth = (liquidAssets + stockAssets + sacheClaims) - (bankDebt + sacheDebt);
-    return Math.max(0, Math.floor(netWorth));
 }
 
 /**
@@ -1201,6 +1197,8 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
         }
     }
 
+    // 5. 자산가 칭호 엔진 (에러 격리 보호막 적용)
+    // 설명: 여기서 에러가 나더라도 로또 구매 응답 메시지는 반드시 출력되도록 try-catch로 감쌉니다.
     try {
         var totalNetWorth = util_calculateNetWorth(user, roomData);
         var assetTitles = [
@@ -1221,13 +1219,13 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
                     user.inventory.push({ id: t.id, name: "[" + t.name + "] 칭호", icon: "💰", effect: "title", title: t.name });
                     user.title = t.name;
                     var targetRoom = roomName || (roomData && roomData.roomName ? roomData.roomName : "내리다");
-                    try { Api.replyRoom(targetRoom, "🎊 [내리다 경제 위원회]\n" + (user.name || "유저") + "님이 [" + t.name + "] 작위를 하사받았습니다!"); } catch(e){}
+                    try { Api.replyRoom(targetRoom, "🎊 [경제 위원회] " + user.name + "님 [" + t.name + "] 등극!"); } catch(e){}
                     break; 
                 }
             }
         }
     } catch(titleError) {
-        Log.error("Title System Blocked: " + titleError); // 칭호 엔진만 죽고 결제 로직은 계속 진행
+        // 칭호 엔진에서 에러가 나면 무시하고 다음 로직(로또 응답)으로 넘깁니다.
     }
 
     // 6. 블랙박스 저널링 기록 (유실 방지)

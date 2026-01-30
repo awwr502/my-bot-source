@@ -4902,11 +4902,14 @@ if (msg === "/가이드") {
 
         /* [최적화] 모든 숫자 입력 및 상태 기반 명령어 통합 처리 구간 */
         
-        // 1. 유저의 상태(status)가 존재하는지 먼저 확인 (숫자/문자 입력 대기 공통)
+        // 1. 유저의 상태(status)가 존재하는지 먼저 확인
         if (rFeatures && rFeatures.states) {
 
             // 0. 중복 유저 선택 처리 (최우선 순위로 배치)
             if (typeof _handleSelectionLogic === 'function' && _handleSelectionLogic(msg, user, data, replier, roomName, targetUid)) return;
+
+            // [신규 연결] 로또 번호 입력 처리 (이 부분이 핵심입니다!)
+            if (typeof _handleLottoInput === 'function' && _handleLottoInput(msg, user, data, replier, roomName, targetUid)) return;
             
             // A. 은행 업무 처리 (Step 1~5) - sender 인자 추가
             if (typeof _handleBankStep1 === 'function' && _handleBankStep1(msg, user, data, replier, roomName, targetUid)) return;
@@ -5556,21 +5559,23 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         replier.reply(formatCommand("🎫 인증권 사용 완료", user, "게임 판수 인증이 기록되었습니다.\n현재 인증 횟수: " + user.gameAuthCount + "/2", "시즌당 구매: " + user.purchasedAuthCount + "/2"));
     } 
     
-    // 3. [복구] 로또 구매 대기 처리 (시간 제한 가드 추가)
+    // 3. [핵심 수정] 로또 구매 (방별 독립 상태 저장소 사용)
     else if (item.effect === "lotto") {
         var currentHour = new Date().getHours();
-        
-        // 21:00(마감공지) ~ 23:59 사이 구매 시도 차단
         if (currentHour >= 21) {
-            // 차단된 경우 차감된 포인트를 다시 복구하고 종료
             util_updatePoint(user, roomData, finalPrice, "로또 구매 불가 환불", roomName);
             replier.reply(formatError(user, "구매 불가", "로또 판매가 마감되었습니다.\n(판매 시간: 00:00 ~ 20:59)\n\n💰 결제 금액이 환불되었습니다."));
             return;
         }
 
-        lottoPurchaseState[targetUid] = { time: Date.now(), price: finalPrice };
-        replier.reply(formatCommand("🎫 로또 번호 입력", user, "1~15 사이의 숫자 3개를 입력해주세요.\n(예: 1 5 10)", "취소: [취소]"));
-    } 
+        // [수정] 전역 변수가 아닌 roomData 내의 states에 접근하여 할당
+        if (roomData.features && roomData.features.states) {
+            roomData.features.states.lottoPurchase[targetUid] = { time: Date.now(), price: finalPrice };
+            replier.reply(formatCommand("🎫 로또 번호 입력", user, "1~15 사이의 숫자 3개를 입력해주세요.\n(예: 1 5 10)", "취소: [취소]"));
+        } else {
+            replier.reply(formatError(user, "시스템 오류", "로또 상태 저장소를 찾을 수 없습니다."));
+        }
+    }
     
     // 4. 상점 일반 아이콘 구매 처리
     else if (item.effect === "icon") {

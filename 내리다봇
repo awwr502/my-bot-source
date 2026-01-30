@@ -3761,6 +3761,40 @@ function _handleLottoInput(msg, user, data, replier, roomName, targetUid) {
     return true; 
 }
 
+/* [채팅 보너스 로직 분리] - 섹터 21 하단에 추가 */
+function _runChatBonusLogic(msg, user, data, replier, roomName, targetUid) {
+    if (msg.indexOf("/") !== 0) {
+        user.chatCount = (user.chatCount || 0) + 1;
+        user.chatCycleCount = (user.chatCycleCount || 0) + 1;
+        
+        if (user.chatCycleCount > 13 || !user.chatBonusTarget) {
+            user.chatCycleCount = 1; 
+            user.chatBonusTarget = Math.floor(Math.random() * 12) + 1;
+            user.chatBonusGiven = false; 
+        }
+        
+        if (user.chatCycleCount >= user.chatBonusTarget && !user.chatBonusGiven) {
+            // [v5.9] 통합 상태 가드
+            var stateRes = util_checkUserState(user, targetUid, roomName);
+            if (!stateRes.canAction && stateRes.reason.indexOf("징역") !== -1) return;
+
+            var multiplier = util_getEcoMultiplier(roomName);
+            var basePrize = Math.floor(Math.random() * 201) + 300;
+            var prize = Math.floor(basePrize * multiplier);
+            
+            var res = processRepayment(user, prize, targetUid, roomName);
+            util_updatePoint(user, data.rooms[roomName], Number(res.actualGain), "채팅 보너스", roomName);
+
+            user.creditScore = Math.min(1000, Number(user.creditScore || 600) + 1);
+            
+            var output = "🎁 채팅 보너스\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n" + fp(prize) + "P를 획득했습니다!" + (res.repayMsg ? res.repayMsg : "") + "\n━━━━━━━━━━━━━━━";
+            replier.reply(output + "\n내 잔액: " + fP(user.point) + "P");
+            
+            user.chatBonusGiven = true; 
+        }
+    }
+}
+
 //==========섹터22-1==========
 
 /* [독립형 함수] 통합 업무 처리 핸들러 1단계: 송금, 예금 및 기부 */
@@ -4889,53 +4923,9 @@ if (msg === "/가이드") {
             if (_handleGameLogic(msg, user, data, replier, roomName, targetUid, cleanSender)) return;
         }
 
-        /* [3. 채팅 보너스 로직 (직접 실행)] */
-        // 명령어가 아닌 일반 채팅일 때만 실행
-        if (msg.indexOf("/") !== 0) {
-            user.chatCount = (user.chatCount || 0) + 1;
-            user.chatCycleCount = (user.chatCycleCount || 0) + 1;
-            
-            // 사이클 목표가 없거나 초과하면 재설정
-            if (user.chatCycleCount > 13 || !user.chatBonusTarget) {
-                user.chatCycleCount = 1; 
-                user.chatBonusTarget = Math.floor(Math.random() * 12) + 1;
-                user.chatBonusGiven = false; 
-            }
-            
-            // 목표 달성 시 보너스 지급 (징역 상태가 아닐 때만)
-            if (user.chatCycleCount >= user.chatBonusTarget && !user.chatBonusGiven) {
-                var isJail = false;
-                if (user.jailReleaseTime && Date.now() < user.jailReleaseTime) isJail = true;
-
-                if (!isJail) {
-                    var multiplier = 1.0;
-                    if (typeof util_getEcoMultiplier === 'function') multiplier = util_getEcoMultiplier(roomName);
-
-                    var basePrize = Math.floor(Math.random() * 201) + 300;
-                    var prize = Math.floor(basePrize * multiplier);
-                    
-                    // 상환 및 지급 (게이트웨이 연동)
-                    var res = { actualGain: prize, repayMsg: "" };
-                    if (typeof processRepayment === 'function') res = processRepayment(user, prize, targetUid, roomName);
-                    
-                    if (typeof util_updatePoint === 'function') {
-                        util_updatePoint(user, data.rooms[roomName], Number(res.actualGain), "채팅 보너스", roomName);
-                    } else {
-                        util_updatePoint(user, data.rooms[roomName], Number(res.actualGain), "채팅 보너스(강제)", roomName);
-                    }
-
-                    user.creditScore = Math.min(1000, Number(user.creditScore || 600) + 1);
-                    
-                    var output = "🎁 채팅 보너스\n━━━━━━━━━━━━━━━\n" + 
-                                 getDisplayName(user) + "님\n" + 
-                                 fp(prize) + "P를 획득했습니다!" + 
-                                 (res.repayMsg ? res.repayMsg : "") + "\n━━━━━━━━━━━━━━━";
-                    replier.reply(output + "\n내 잔액: " + fP(user.point) + "P");
-                    
-                    user.chatBonusGiven = true; 
-                    // safeSaveData(data); // 잦은 저장을 피하기 위해 스케줄러 저장에 의존
-                }
-            }
+        /* [3. 채팅 보너스 로직 (함수 연결)] */
+        if (typeof _runChatBonusLogic === 'function') {
+            _runChatBonusLogic(msg, user, data, replier, roomName, targetUid);
         }
 
 //==========섹터25==========

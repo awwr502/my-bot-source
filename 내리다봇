@@ -503,7 +503,13 @@ function verifyPointTransaction(user, prePoint, changeAmount, reason, roomName, 
         if (actual !== expected) {
             var errorMsg = "[" + new Date().toLocaleString() + "] [불일치] " + (user.name||"") + ": " + reason + " (예상:" + fp(expected) + "/실제:" + fp(actual) + ")\n";
             FileStream.append(ERROR_LOG_PATH, errorMsg);
-            try { Api.replyRoom("내리다", "⚠️ 포인트 불일치 발생\n" + errorMsg); } catch(e){}
+            
+            try { 
+                Api.replyRoom("내리다", "⚠️ 포인트 불일치 발생\n" + errorMsg); 
+            } catch(e) {
+                // 전송 실패 무시
+            }
+
             user.lastAction = { cmd: reason, status: "FAIL", amount: changeAmount, time: Date.now(), msg: "데이터 불일치" };
         } else {
             if (roomName) {
@@ -562,7 +568,9 @@ function safeSaveData(data, isForceBackup) {
                 var dbContent = FileStream.read(FILE_PATH);
                 if (dbContent) DB_DATA = JSON.parse(dbContent);
             }
-        } catch(e) { Log.error("DB Read for Healing Fail: " + e); }
+        } catch (e) {
+            Log.error("DB Read for Healing Fail: " + e);
+        }
 
         for (var rName in data.rooms) {
             var room = data.rooms[rName];
@@ -653,14 +661,16 @@ function safeSaveData(data, isForceBackup) {
             }
         }
 
-       if (isHealed && healReports.length > 0) {
+        if (isHealed && healReports.length > 0) {
             try {
                 var reportMsg = "🚨 [데이터 자가 치유 작동]\n" +
                                 "손상 의심 데이터를 제외하고 정상 저장되었습니다.\n\n" +
                                 "[치유 내역]\n• " + healReports.join("\n• ") + "\n\n" +
                                 "⚠️ 관리자는 해당 유저의 활동을 점검하십시오.";
                 Api.replyRoom("내리다", reportMsg);
-            } catch(e) {}
+            } catch (e) {
+                // 전송 실패 무시
+            }
         }
 
     } catch (validationError) {
@@ -669,7 +679,9 @@ function safeSaveData(data, isForceBackup) {
         Log.error("사유: " + validationError.message);
         try {
             Api.replyRoom("내리다", "🚨 [데이터 보호 시스템 작동]\n심각한 데이터 오염이 감지되어 자동 저장을 차단했습니다.\n사유: " + validationError.message + "\n\n⚠️ 관리자는 즉시 시스템을 점검하십시오.");
-        } catch (e) {}
+        } catch (e) {
+            // 전송 실패 무시
+        }
         return; // 파일 쓰기 단계로 넘어가지 않고 종료
     }
 
@@ -688,7 +700,9 @@ function safeSaveData(data, isForceBackup) {
         Log.error("Save Guard Blocked: " + e.message);
         try {
             Api.replyRoom("내리다", "⚠️ 데이터 보호 작동: 오염된 데이터의 쓰기 시도를 차단했습니다.\n사유: " + e.message);
-        } catch (err) {}
+        } catch (err) {
+            // 전송 실패 무시
+        }
         return; // 오염된 데이터는 배경 일꾼에게 넘기지 않고 즉시 차단
     }
 
@@ -739,14 +753,15 @@ function safeSaveData(data, isForceBackup) {
                 Log.error("Async File Write Error: " + e);
                 try {
                     Api.replyRoom("내리다", "⚠️ 시스템 오류: 배경 저장 실패\n" + e.message);
-                } catch (err) {}
+                } catch (err) {
+                    // 전송 실패 무시
+                }
             } finally {
                 lock.unlock(); // 작업 완료 후 락 해제
             }
         }
     }));
 }
-
 //==========섹터4==========
 
 /* 관리자 및 시스템 설정 */
@@ -1311,58 +1326,58 @@ function stock_calculateNextPrice(currentPrice) {
 //==========섹터8==========
 
 /**
- * [Gemini 정밀 교정] 경제 지표 계산 함수 (시스템 판돈 완벽 통합 버전)
- * 반영: 주식, 경마 배팅액, 로또 잭팟, 은행 재원 등을 모두 합산하여 물가 왜곡 방지
- */
+* [Gemini 정밀 교정] 경제 지표 계산 함수 (시스템 판돈 완벽 통합 버전)
+* 반영: 주식, 경마 배팅액, 로또 잭팟, 은행 재원 등을 모두 합산하여 물가 왜곡 방지
+*/
 function calculateEconomy(data, roomName) {
-    var totalAssets = 0;
-    var userCount = 0;
-    if (!data || !data.rooms) return { total: 0, count: 0, average: 0 };
+    var totalAssets = 0;
+    var userCount = 0;
+    if (!data || !data.rooms) return { total: 0, count: 0, average: 0 };
 
-    var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
-    
-    // [전역 자산 합산] 로또 잭팟은 방과 상관없는 공통 자산이므로 1회만 합산
-    totalAssets += Number(data.lotto_jackpot_pool || 0);
+    var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
 
-    for (var i = 0; i < roomsToScan.length; i++) {
-        var r = roomsToScan[i];
-        var roomData = data.rooms[r];
-        if (!roomData) continue;
+    // [전역 자산 합산] 로또 잭팟은 방과 상관없는 공통 자산이므로 1회만 합산
+    totalAssets += Number(data.lotto_jackpot_pool || 0);
 
-        // 1. 중앙은행 금고 자산 합산
-        if (roomData.bankReserve !== undefined) {
-            totalAssets += Number(roomData.bankReserve);
-        }
+    for (var i = 0; i < roomsToScan.length; i++) {
+        var r = roomsToScan[i];
+        var roomData = data.rooms[r];
+        if (!roomData) continue;
 
-        // 2. [신규 추가] 시스템 내 대기 중인 판돈 합산 (Deflation 방지)
-        if (roomData.features) {
-            // A. 경마: 아직 정산되지 않은 현재 회차 총 배팅액 + 이월금
-            if (roomData.features.racing) {
-                totalAssets += Number(roomData.features.racing.totalPool || 0);
-                totalAssets += Number(roomData.features.racing.carryOver || 0);
-            }
-            // B. 로또: 오늘 판매된 로또 총액
-            if (roomData.features.lotto) {
-                totalAssets += Number(roomData.features.lotto.dailyPool || 0);
-            }
-        }
+        // 1. 중앙은행 금고 자산 합산
+        if (roomData.bankReserve !== undefined) {
+            totalAssets += Number(roomData.bankReserve);
+        }
 
-        // 3. 유저별 순자산 합산 (현금 + 예금 + 주식가치 + 채권 - 부채)
-        for (var uid in roomData.users) {
-            var u = roomData.users[uid];
-            if (!u) continue;
+        // 2. [신규 추가] 시스템 내 대기 중인 판돈 합산 (Deflation 방지)
+        if (roomData.features) {
+            // A. 경마: 아직 정산되지 않은 현재 회차 총 배팅액 + 이월금
+            if (roomData.features.racing) {
+                totalAssets += Number(roomData.features.racing.totalPool || 0);
+                totalAssets += Number(roomData.features.racing.carryOver || 0);
+            }
+            // B. 로또: 오늘 판매된 로또 총액
+            if (roomData.features.lotto) {
+                totalAssets += Number(roomData.features.lotto.dailyPool || 0);
+            }
+        }
 
-            // util_calculateNetWorth 내부에 주식 가치 계산이 포함되어 있습니다.
-            totalAssets += util_calculateNetWorth(u, roomData);
-            userCount++;
-        }
-    }
+        // 3. 유저별 순자산 합산 (현금 + 예금 + 주식가치 + 채권 - 부채)
+            for (var uid in roomData.users) {
+            var u = roomData.users[uid];
+            if (!u) continue;
 
-    return {
-        total: Math.max(0, totalAssets),
-        count: userCount,
-        average: userCount > 0 ? Math.floor(totalAssets / userCount) : 0
-    };
+            // util_calculateNetWorth 내부에 주식 가치 계산이 포함되어 있습니다.
+            totalAssets += util_calculateNetWorth(u, roomData);
+            userCount++;
+        }
+    }
+
+    return {
+    total: Math.max(0, totalAssets),
+    count: userCount,
+    average: userCount > 0 ? Math.floor(totalAssets / userCount) : 0
+    };
 }
 
 //==========섹터9==========

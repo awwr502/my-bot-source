@@ -8479,16 +8479,27 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         
         var multiplier = util_getEcoMultiplier(roomName);
 
-        var basePenalty = Math.floor(Math.random() * 101) + 200;
-        var penalty = Math.floor(basePenalty * multiplier);
-        var actualPenalty = Math.min(penalty, Number(thief.point));
+        // 1. 벌금 계산: 현보유액의 10% 차감
+        var cashFine = Math.floor(Number(thief.point) * 0.1);
+        // 2. 대납 계산: 최소 벌금 1,000P 미달 시 부족분을 대출로 전환
+        var loanGap = Math.max(0, 1000 - cashFine);
 
-        util_updatePoint(thief, roomData, -actualPenalty, "도둑질 체포 벌금", roomName);
-        
-        thief.jailReleaseTime = Date.now() + (1 * 60 * 60 * 1000); // 1시간 징역
-        delete activeThefts[targetUid];
-        
-        replier.reply(formatAdmin("🚓 체포 완료", "🚨 [현행범 체포]\n대상: " + getDisplayName(thief) + "\n결과: -" + fp(actualPenalty) + "P 차감 / 징역 1시간"));
+        util_updatePoint(thief, roomData, -cashFine, "도둑질 체포 벌금", roomName);
+        
+        var loanMsg = "";
+        if (loanGap > 0) {
+            if (!thief.loan) thief.loan = { debt: 0, items: [] };
+            thief.loan.debt = Number(thief.loan.debt || 0) + loanGap;
+            if (!thief.loan.items) thief.loan.items = [];
+            thief.loan.items.push(loanGap);
+            loanMsg = "\n⚠️ 벌금 부족분 대납: " + fp(loanGap) + "P 대출 전환";
+        }
+        
+        thief.jailReleaseTime = Date.now() + (1 * 60 * 60 * 1000); 
+        delete activeThefts[targetUid];
+        
+        var resContent = "🚨 [현행범 체포]\n대상: " + getDisplayName(thief) + "\n결과: -" + fp(cashFine) + "P 차감 / 징역 1시간" + loanMsg + "\n내 잔액: " + fp(thief.point) + "P";
+        replier.reply(formatAdmin("🚓 체포 완료", resContent));
         safeSaveData(data);
         return true;
     }

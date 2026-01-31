@@ -2138,7 +2138,13 @@ function updateStockPrices(data) {
         specFactor = data.pendingSpecialEffect.factor;
     }
 
-    /* [3] 시세 변동 계산 루프 */
+    /* [3] 시세 변동 계산 루프 진입 전 하이프 계수 선행 계산 */
+    var msgCount = (mainRoom.features.msgCount || 0);
+    // 500개 한도로 50개당 1단위 산출 (최대 10단위)
+    var units = Math.floor(Math.min(msgCount, 500) / 50); 
+    // $1 + (units \times 0.01)$ 공식 적용
+    var hypeFactor = 1 + (units * 0.01); 
+
     for (var name in data.stockMarket) {
         var stock = data.stockMarket[name];
         if (stock.isOverheated === undefined) stock.isOverheated = false;
@@ -2147,25 +2153,22 @@ function updateStockPrices(data) {
         
         stock.lastPrice = Number(stock.price);
 
-        // [계단식 하이프] 채팅 50개당 1% 증폭, 최대 10%(500개) 제한
-            var msgCount = (mainRoom.features.msgCount || 0);
-            
-            // 500개까지만 계산에 포함하고, 50으로 나눠 '단위'를 구함 (최대 10단위)
-            var units = Math.floor(Math.min(msgCount, 500) / 50); 
-            
-            // 단위당 1%(0.01) 보너스 부여 (최대 1.10배)
-            var hypeFactor = 1 + (units * 0.01);
-            
+        if (isMarketOpen) {
             if (name === specStock) { 
+                // 이벤트 종목에 하이프 증폭 적용
                 changePercent = specFactor * hypeFactor;
-                eventNews.push("🚨 [변동성 알림]\n종목: " + name + "\n내용: " + (specFactor > 0 ? "🚀 폭등" : "📉 폭락") + " (" + (Math.abs(specFactor * 100)).toFixed(0) + "%)");
+                eventNews.push("🚨 [변동성 알림]\n종목: " + name + "\n내용: " + (specFactor > 0 ? "🚀 폭등" : "📉 폭락") + " (" + (Math.abs(changePercent * 100)).toFixed(1) + "%)");
             } else {
+                // 일반 종목의 기본 변동성에도 하이프 보너스 반영 (시장 활성화)
                 if (stock.trendTick <= 0) {
                     stock.trendTick = Math.floor(Math.random() * 4) + 2;
-                    var p = Math.random(); stock.trend = (p < 0.35) ? "up" : (p < 0.70 ? "down" : "volatile");
+                    var p = Math.random(); 
+                    stock.trend = (p < 0.35) ? "up" : (p < 0.70 ? "down" : "volatile");
                 }
                 var baseRate = (stock.trend === "up" ? 0.025 : (stock.trend === "down" ? -0.025 : (Math.random()*0.08-0.04)));
-                changePercent = baseRate * trait.volatility;
+                
+                // 일반 변동성 * 종목특성 * 채팅하이프
+                changePercent = baseRate * trait.volatility * hypeFactor;
                 if (stock.trendTick > 0) stock.trendTick--;
             }
             

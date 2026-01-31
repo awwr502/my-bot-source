@@ -43,7 +43,9 @@ var USER_SCHEMA = [
     { key: 'horseParts', default: [], type: 'array' },       // 1) 경마 부품 (안장, 등자 등) 수집 목록
     { key: 'stockCertCount', default: 0, type: 'number' },   // 2) 주식 미발행확인서 보유 개수
     { key: 'lottoFailCount', default: 0, type: 'number' },   // 3) 로또/스피또 위로의편지 보유 개수
-    { key: 'luckyCharmEnd', default: 0, type: 'number' }     // 3) 행운의부적 효과 종료 시간 (Timestamp)
+    { key: 'luckyCharmEnd', default: 0, type: 'number' },    // 3) 행운의부적 효과 종료 시간 (Timestamp)
+    { key: 'accruedInterest', default: 0, type: 'number' },   // 적립된 이자 주머니
+    { key: 'lastBankUpdateTime', default: 0, type: 'number' } // 마지막 은행 잔액 변동 시간 (Timestamp)
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -1068,7 +1070,18 @@ function util_updateBank(user, roomData, delta, reason, roomName) {
         if (isNormal) user.skipHealing = true;
     }
 
+    var now = Date.now();
     var preBank = Number(user.bank || 0);
+
+    // [이자 적립 엔진] 잔액이 변하기 전, 직전까지 머물렀던 금액에 대한 이자 계산
+    if (user.lastBankUpdateTime > 0 && preBank > 0) {
+        var timePassed = now - user.lastBankUpdateTime;
+        var dayMs = 24 * 60 * 60 * 1000; // 하루 밀리초
+        // 공식: 잔액 * 이율(5%) * (흐른시간 / 하루시간)
+        var earned = preBank * 0.05 * (timePassed / dayMs);
+        user.accruedInterest = (user.accruedInterest || 0) + earned;
+    }
+    user.lastBankUpdateTime = now; // 변동 시점 기록
     var expectedBank = preBank + Number(delta);
     if (expectedBank < 0) expectedBank = 0;
     user.bank = expectedBank;
@@ -2951,17 +2964,25 @@ function _runSector17Logic(data, ctx) {
                 u.dailyStimulusCount = 0; 
                 u.dailyCreditRestoreCount = 0; 
                 
-                // [보안강화] 지능형 은행 예금 이자 지급 (탄력 이율 적용)
-                var preBank = Number(u.bank || 0);
-                if (preBank > 0) {
-                    // 국고가 부족하면 예금 이자를 올려서 저축을 유도함 (dynMult 비례)
-                    var savingsRate = 0.02 * dynMult; 
-                    var interest = Math.floor(preBank * savingsRate);
-                    if (interest > 0) {
-                        util_updateBank(u, roomObj, interest, "은행 예금 이자 지급", rName);
-                        util_updateReserve(roomObj, -interest, "은행 예금 이자 지급", rName);
-                    }
+                // [보안강화] 시간 비례 적립 이자 정산 (0시 정각)
+                var now = Date.now();
+                // 0시 정각까지 남은 마지막 쪼가리 이자까지 합산
+                if (u.lastBankUpdateTime > 0 && Number(u.bank) > 0) {
+                    var timePassed = now - u.lastBankUpdateTime;
+                    var dayMs = 24 * 60 * 60 * 1000;
+                    var lastMinuteEarned = Number(u.bank) * 0.05 * (timePassed / dayMs);
+                    u.accruedInterest = (u.accruedInterest || 0) + lastMinuteEarned;
                 }
+
+                var finalInterest = Math.floor(u.accruedInterest || 0);
+                if (finalInterest > 0) {
+                    util_updateBank(u, roomObj, finalInterest, "은행 예금 이자 지급", rName);
+                    util_updateReserve(roomObj, -finalInterest, "은행 예금 이자 지급", rName);
+                }
+                
+                // 정산 후 초기화
+                u.accruedInterest = 0;
+                u.lastBankUpdateTime = now;
                 
                 // [보안강화] 지능형 차등 대출 이자 가산 (신용등급별 + 탄력 승수)
                 if (u.loan && Number(u.loan.debt) > 0) { 

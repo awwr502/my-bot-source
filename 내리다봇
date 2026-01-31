@@ -3320,24 +3320,30 @@ function _runSector18Logic(data, ctx) {
 
 //==========섹터19==========
 
-/* 메인 메시지 리스너 함수 (하이브리드 엔진 적용) */
+/* 메인 메시지 리스너 함수 (수신 무결성 진단 버전) */
 action = function(room, msg, sender, isGroupChat, replier, imageDB) {
     _msgReceiveTime = Date.now();
     
-    // [Step 1] 병렬 수신: 여러 메시지를 동시에 받아내어 카톡 씹힘을 방지합니다.
+    // [진단 로그 1] 앱 수신 즉시 기록 (이게 안 찍히면 앱/폰 설정 문제입니다)
+    // Log.info("--- [RAW 수신] --- 방: " + room + " | 발신: " + sender + " | 메시지: " + msg);
+
+    // [Step 1] 병렬 수신 엔진 가동 (최대한 빠르게 action 함수를 종료하여 다음 메시지를 받게 함)
     ParallelPool.execute(new java.lang.Runnable({
         run: function() {
-            // [Step 2] 순차 처리: 실제 데이터 수정 로직은 1열로 줄을 세워 데이터 꼬임을 방지합니다.
+            var roomName = room ? room.trim() : "";
+            var cleanSender = sender ? String(sender).trim() : ""; 
+
+            // [조건 검사] 여기서 리턴되면 로그에 남지 않습니다. (방 이름, 봇 제외)
+            if (ALLOWED_ROOMS.indexOf(roomName) === -1 || cleanSender === "오픈채팅봇") return;
+
+            // [Step 2] 순차 처리 엔진 진입
             LogicQueue.execute(new java.lang.Runnable({
                 run: function() {
-                    // 데이터 무결성을 위해 락(Lock)을 가동합니다.
-                    lock.lock();
-                    try {
-                        var roomName = room ? room.trim() : "";
-                        var cleanSender = sender ? String(sender).trim() : ""; 
-                        
-                        if (ALLOWED_ROOMS.indexOf(roomName) === -1 || cleanSender === "오픈채팅봇") return;
+                    // [진단 로그 2] 큐 진입 기록 (1번은 찍히는데 2번이 안 찍히면 큐 병목입니다)
+                    // Log.info(">>> [큐 진입] : " + cleanSender);
 
+                    lock.lock(); // 데이터 수정권한 획득
+                    try {
                         var data = getDatabase(); 
                         if (!data) return;
 

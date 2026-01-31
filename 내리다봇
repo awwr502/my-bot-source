@@ -45,7 +45,8 @@ var USER_SCHEMA = [
     { key: 'lottoFailCount', default: 0, type: 'number' },   // 3) 로또/스피또 위로의편지 보유 개수
     { key: 'luckyCharmEnd', default: 0, type: 'number' },    // 3) 행운의부적 효과 종료 시간 (Timestamp)
     { key: 'accruedInterest', default: 0, type: 'number' },   // 적립된 이자 주머니
-    { key: 'lastBankUpdateTime', default: 0, type: 'number' } // 마지막 은행 잔액 변동 시간 (Timestamp)
+    { key: 'lastBankUpdateTime', default: 0, type: 'number' }, // 마지막 은행 잔액 변동 시간 (Timestamp)
+    { key: 'totalFishingSuccess', default: 0, type: 'number' } // 낚시 누적 성공 횟수 (칭호용)
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -1228,20 +1229,25 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
             { name: "재벌", limit: 500000, id: 700, msg: "성공적인 자산 축적의 첫 결실을 맺었습니다." }
         ];
 
-        if (!user.inventory) user.inventory = [];
+       var rStub = { reply: function(m) { try { Api.replyRoom(roomName || "내리다", m); } catch(e){} } };
+
         for (var i = 0; i < assetTitles.length; i++) {
             var t = assetTitles[i];
             if (totalNetWorth >= t.limit) {
-                var isOwned = user.inventory.some(function(it) { 
-                    return it.effect === "title" && it.title === t.name; 
-                });
-               if (!isOwned) {
-                    user.inventory.push({ id: t.id, name: "[" + t.name + "] 칭호", icon: "💰", effect: "title", title: t.name });
-                    user.title = t.name;
-                    var targetRoom = roomName || (roomData && roomData.roomName ? roomData.roomName : "내리다");
-                    try { Api.replyRoom(targetRoom, "🎊 [경제 위원회] " + user.name + "님 [" + t.name + "] 등극!"); } catch(e){}
-                    break; 
-                }
+                // 공용 함수를 호출하여 작위 수여식 진행 (가방 체크 및 장착 로직 내장됨)
+                var awarded = util_checkAndAwardTitle(
+                    user, 
+                    rStub, 
+                    t.name, 
+                    t.id, 
+                    "💰", 
+                    "내리다 경제 위원회", 
+                    "순자산 " + fp(t.limit) + "P", 
+                    t.msg, 
+                    roomName
+                );
+                
+                if (awarded) break; // 하나라도 수여했다면 중단 (중복 방지)
             }
         }
     } catch(titleError) {
@@ -9171,6 +9177,20 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
                 var reward = Math.floor(Math.random() * (selectedFish.max - selectedFish.min + 1)) + selectedFish.min;
                 var res = processRepayment(user, reward, targetUid, roomName);
                 util_updatePoint(user, roomData, Number(res.actualGain), "낚시 보상: " + selectedFish.name, roomName);
+
+                // [신설] 낚시 성공 카운트 증가 및 칭호 체크
+                user.totalFishingSuccess = (user.totalFishingSuccess || 0) + 1;
+                
+                var rStub = { reply: function(m) { replier.reply(m); } };
+                var fCount = user.totalFishingSuccess;
+
+                if (fCount >= 500) {
+                    util_checkAndAwardTitle(user, rStub, "해", "F003", "🔱", "내리다 해양수산부", "낚시 성공 500회", "바다의 모든 생명체를 다스리는 전설적인 낚시꾼입니다.", roomName);
+                } else if (fCount >= 300) {
+                    util_checkAndAwardTitle(user, rStub, "도시어부", "F002", "🛶", "내리다 해양수산부", "낚시 성공 300회", "이제 어떤 물길에서도 고기를 낚아낼 줄 아는 베테랑입니다.", roomName);
+                } else if (fCount >= 100) {
+                    util_checkAndAwardTitle(user, rStub, "강태공", "F001", "🎣", "내리다 해양수산부", "낚시 성공 100회", "세월을 낚는 여유와 기술을 겸비하기 시작했습니다.", roomName);
+                }
 
                 var content = "찌가 깊숙이 가라앉습니다! 영차!\n\n" +
                               "🐟 [" + selectedFish.desc + " " + selectedFish.name + "]를 낚았습니다!\n" +

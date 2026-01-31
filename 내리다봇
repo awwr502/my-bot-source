@@ -4303,8 +4303,11 @@ function _handleBankStep2(msg, user, data, replier, roomName, targetUid) {
                 dynMult = util_getDynamicRateMultiplier(roomName);
             }
 
-            // 등급별 기본 이율(cr.rate - 1)에 시장 탄력 승수(dynMult)를 곱하여 최종 상환액 산출
-            var finalRate = 1 + ((cr.rate - 1) * dynMult);
+            // [기부왕] 실행 시 선이자 30% 감면
+            var rateGap = (cr.rate - 1) * dynMult;
+            if (user.title === "기부왕") rateGap *= 0.7;
+            var finalRate = 1 + rateGap;
+
             var total = Math.floor(amt * finalRate);
             if (!user.loan || typeof user.loan !== 'object') user.loan = { debt: 0, items: [] };
             if (!user.loan.items) user.loan.items = [];
@@ -5635,23 +5638,25 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
 
         for (var i = 0; i < durationMin; i++) {
             var rand = Math.random();
-            var minIncome = basePrice * multiplier;
+            // [채굴왕] 기본 포인트 20% 상승
+            var miningBonus = (user.title === "채굴왕") ? 1.2 : 1.0;
+            var minIncome = basePrice * multiplier * miningBonus;
 
-            if (rand < conf.DIA_PROB) { 
-                // 1. 다이아몬드 판정 (0 ~ 0.005) -> 0.5%
+            // [도굴왕] 발견 확률 20% 상승 (상대적 상승)
+            var luck = (user.title === "도굴왕") ? 1.2 : 1.0;
+            
+            if (rand < (conf.DIA_PROB * luck)) { 
                 diaCount++; 
                 totalEarn += (minIncome * conf.DIA_MULT); 
             } 
-            else if (rand < (conf.DIA_PROB + conf.GOLD_PROB)) { 
-                // 2. 금 판정 (0.005 ~ 0.035) -> 설정값 그대로 3%
+            else if (rand < ((conf.DIA_PROB + conf.GOLD_PROB) * luck)) { 
                 goldCount++; 
                 totalEarn += (minIncome * conf.GOLD_MULT); 
             } 
-            else if (rand < (conf.DIA_PROB + conf.GOLD_PROB + conf.COPPER_PROB)) { 
-                // 3. 구리 판정 (0.035 ~ 0.085) -> 설정값 그대로 5%
+            else if (rand < ((conf.DIA_PROB + conf.GOLD_PROB + conf.COPPER_PROB) * luck)) { 
                 copperCount++; 
                 totalEarn += (minIncome * conf.COPPER_MULT); 
-            } 
+            }
             else { 
                 // 4. 일반 돌덩이 판정 (나머지 91.5%)
                 totalEarn += minIncome; 
@@ -8079,7 +8084,11 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             if (bet > maxBet) { replier.reply(formatError(user, "상한 초과", "최대 " + fp(maxBet) + "P까지 베팅 가능합니다.")); return true; }
             if (Number(user.point) < bet) { replier.reply(formatError(user, "포인트 부족", "베팅할 포인트가 부족합니다.")); return true; }
 
-            var expectedPayout = Math.floor(bet * 0.85);
+            // [도박왕] 배당금 0.05배 상승 (0.85 -> 0.90)
+            var payoutRate = 0.85;
+            if (user.title === "도박왕") payoutRate += 0.05;
+            var expectedPayout = Math.floor(bet * payoutRate);
+
             // 게임 컨텐츠는 긴급 삭감을 적용하지 않음
             var finalProfit = Math.floor(expectedPayout); 
             var totalPayout = bet + finalProfit; // 원금 + 수익 전체 보존
@@ -8406,8 +8415,10 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         if (Number(victim.data.point) <= 300) { replier.reply(formatError(user, "강탈 대상 부적합", fp(300) + "P를 초과하는 유저만 털 수 있습니다.")); return true; }
 
         // 도둑질 프로세스 시작
+       // [괴도] 경찰 출동 확률 50% -> 30% 감소
+        var policeProb = (user.title === "괴도") ? 0.3 : 0.5;
         var sT = setTimeout(function(){ processTheftResult(roomName, targetUid, victim.id); }, 60000);
-        var pT = setTimeout(function(){ if (Math.random() < 0.5) { processPoliceResult(roomName, targetUid, victim.id); } }, 30000);
+        var pT = setTimeout(function(){ if (Math.random() < policeProb) { processPoliceResult(roomName, targetUid, victim.id); } }, 30000);
         activeThefts[victim.id] = { thiefUid: targetUid, successTimer: sT, policeTimer: pT };
 
         user.theftCooldowns[victim.id] = now;
@@ -8721,6 +8732,12 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         
         var fee = Math.floor(totalSell * appliedTaxRate);
         var baseFinalPrice = totalSell - fee;
+
+        // [투자왕] 매도 시 수익(수익금 기준)의 5% 추가 지급
+        if (user.title === "투자왕" && profit > 0) {
+            var bonus = Math.floor(profit * 0.05);
+            baseFinalPrice += bonus;
+        }
 
         // 투자 컨텐츠는 긴급 삭감(0.5)을 적용하지 않고 전액(baseFinalPrice)을 지급액으로 설정
         var finalPrice = Math.floor(baseFinalPrice); 

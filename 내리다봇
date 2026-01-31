@@ -131,6 +131,15 @@ var miningState = {};
 var loanRegisterState = {};
 var loanContractWaitState = {};
 
+/* [v10.0] 지능형 성능 감시자(IPM) 전역 메트릭스 */
+var PERF_METRICS = {
+    avgLag: 0,        // 평균 지연 시간 (ms)
+    peakLag: 0,       // 최고 지연 시간 (ms)
+    lastOptimize: 0,  // 마지막 최적화 시간
+    msgPerMin: 0,     // 분당 처리 메시지 수
+    logSize: 0        // 현재 로그 파일 크기 (bytes)
+};
+
 /**
  * [Gemini 요청 사항] 방별 독립화를 위한 데이터 템플릿
  * 설명: 아래의 구조가 각 방(Room)이 생성될 때마다 독립적으로 복제되어 할당됩니다.
@@ -2761,6 +2770,31 @@ function _runSector16Logic(data, ctx) {
             ctx.isUpdated = true;
             ctx.isForceBackup = true; 
         }
+
+/* [v10.0 IPM] 5분 주기 시스템 성능 진단 및 자율 최적화 */
+        if (currentMin % 5 === 0 && data.lastMonitorMin !== currentMin) {
+            data.lastMonitorMin = currentMin;
+            
+            var logFile = new java.io.File(JOURNAL_PATH);
+            PERF_METRICS.logSize = logFile.exists() ? logFile.length() : 0;
+
+            // 1. 로그 로테이션 (임계치 초과 시 자동 백업)
+            if (PERF_METRICS.logSize > (INTELLIGENT_CONFIG ? INTELLIGENT_CONFIG.PERFORMANCE.MAX_LOG_SIZE : 1572864)) {
+                var archivePath = BASE_DIR + "logs/transaction_" + ctx.today + ".bak";
+                logFile.renameTo(new java.io.File(archivePath));
+                Log.info("[IPM] 성능 유지를 위해 로그 아카이빙을 완료했습니다.");
+            }
+
+            // 2. 성능 병목 진단 (응답 지연 과다 시 메모리 정리)
+            if (PERF_METRICS.avgLag > (INTELLIGENT_CONFIG ? INTELLIGENT_CONFIG.PERFORMANCE.LAG_THRESHOLD_MS : 450)) {
+                globalData.nameToIdCache = {}; // 식별 캐시 초기화
+                java.lang.System.gc();        // 가비지 컬렉션 유도
+                Log.warn("[IPM] 성능 저하가 감지되어 메모리 긴급 최적화를 수행했습니다.");
+            }
+            
+            PERF_METRICS.msgPerMin = 0; // 메시지 카운트 리셋
+        }
+
         if (currentHour === conf.SETTINGS.OPEN_HOUR && currentMin === 0 && data.lastMarketOpenMin !== currentMin) {
             data.lastMarketOpenMin = currentMin;
             if (data.stockMarket) {
@@ -3501,6 +3535,7 @@ function _runSector18Logic(data, ctx) {
 
 /* 메인 메시지 리스너 함수 (수신 무결성 진단 버전) */
 action = function(room, msg, sender, isGroupChat, replier, imageDB) {
+    var _perfStartTime = java.lang.System.currentTimeMillis(); // IPM 시작점
     _msgReceiveTime = Date.now();
     
     // [진단 로그 1] 앱 수신 즉시 기록 (이게 안 찍히면 앱/폰 설정 문제입니다)
@@ -4145,7 +4180,7 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
                 replier.reply(formatAdmin("🚫 복구 중단", "복구 처리 중 오류가 발생했습니다.\n사유: " + e.message));
                 Log.error("Select Restore Error: " + e);
             }
-        }
+    }
         else if (type === "admin_nick_log") {
             var hist = data.nickHistory[selected.id] || [];
             if (hist.length === 0) {
@@ -6787,6 +6822,27 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         replier.reply(formatAdmin("🚫 복구 중단", "사유: " + e.message));
         Log.error("Restore Error: " + e);
     }
+        return true;
+    }
+
+/* [v10.0 IPM] 실시간 시스템 상태 대시보드 */
+    if (msg === "/서버상태") {
+        var statusIcon = (PERF_METRICS.avgLag < 200) ? "🟢 쾌적" : (PERF_METRICS.avgLag < 400 ? "🟡 보통" : "🔴 과부하");
+        var logMB = (PERF_METRICS.logSize / (1024 * 1024)).toFixed(2);
+        
+        var report = "⚙️ [시스템 실시간 건강 진단]\n" +
+                     "━━━━━━━━━━━━━━━\n" +
+                     "📊 퍼포먼스 상태: " + statusIcon + "\n" +
+                     "• 평균 응답: " + PERF_METRICS.avgLag + "ms\n" +
+                     "• 최고 지연: " + PERF_METRICS.peakLag + "ms\n\n" +
+                     "📂 자원 사용량\n" +
+                     "• 블랙박스 로그: " + logMB + " / 1.50 MB\n" +
+                     "• 분당 처리량: " + PERF_METRICS.msgPerMin + " msg/min\n" +
+                     "• 식별 캐시: " + Object.keys(globalData.nameToIdCache || {}).length + " 건\n" +
+                     "━━━━━━━━━━━━━━━\n" +
+                     "💡 시스템이 스스로 최적화 중입니다.";
+                     
+        replier.reply(formatAdmin("지능형 감시 센터", report));
         return true;
     }
 

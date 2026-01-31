@@ -4657,14 +4657,20 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             var unitPrice = getItemPrice(item, user, roomName);
             var totalPrice = 0;
 
-            // [변경] 승급 기회 구매(ID: 8)일 경우, 5% 복리 누적 합산 적용
-            if (item.id === 8) {
-                // 등비수열의 합 공식 적용: a * (r^n - 1) / (r - 1)
-                // a: 현재 단가(unitPrice), r: 공비(1.05), n: 수량(qty)
+            var paidQty = qty; 
+
+            // [랜덤박스 전용] 보유 중인 이용권 개수만큼 결제 대상 수량(paidQty)에서 제외
+            if (item.effect === "randomBox") {
+                var currentTickets = Number(user.boxTickets || 0);
+                paidQty = Math.max(0, qty - currentTickets); // 이용권으로 충당 안 되는 수량만 유료 결제
+            }
+
+            if (item.id === 8) { 
+                // [변경] 승급 기회 구매(ID: 8)일 경우, 5% 복리 누적 합산 적용
                 var ratio = 1.05;
                 totalPrice = Math.round(unitPrice * (Math.pow(ratio, qty) - 1) / (ratio - 1));
             } else {
-                totalPrice = unitPrice * qty;
+                totalPrice = unitPrice * paidQty; // 보정된 paidQty로 가격 계산
             }
 
             if (Number(user.point) < totalPrice) {
@@ -5334,6 +5340,10 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
                     entry = (i + 1) + ". " + (displayIcon || "📦") + " " + it.name + activeMark;
                     iconEntries.push(entry);
                 } else if (it.effect === "title") {
+
+                    // [필터링] 수집대마왕, 도굴왕 칭호만 노출하고 나머지는 스킵
+                    if (it.title !== "수집대마왕" && it.title !== "도굴왕") continue;
+
                     // 칭호 카테고리: [아이콘+이름] 포맷 (아이콘이 있는 경우에만 대괄호 결합)
                     if (displayIcon) {
                         entry = (i + 1) + ". [" + displayIcon + it.title + "] 칭호" + activeMark;
@@ -5776,8 +5786,9 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
     /* [1. 자산 정산] 이용권을 사용하지 않은 경우에만 구매 대금(총액)을 은행으로 귀속 */
     // [교정] 중복 가산 제거: util_updatePoint에서 이미 국고 연동이 완료되었습니다.
     if (isUsingTicket) {
-        // 이용권 사용 시 수동 차감 로직 유지
-        util_setData(user, 'boxTickets', Math.max(0, (user.boxTickets || 0) - 1), "랜덤박스 이용권 사용", roomName);
+        // [수정] 단권 구매 및 다량 구매 시 이용권 수량에 맞게 선차감 로직 통합
+        var ticketsToUse = (item.effect === "randomBox") ? qty : 1;
+        util_setData(user, 'boxTickets', Math.max(0, (user.boxTickets || 0) - ticketsToUse), "이용권 사용", roomName);
     }
 
     /* [Gemini 요청 사항] 수집대마왕 판정 함수 - 전종 수집(보유+분해) 체크 */

@@ -8414,9 +8414,12 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 중복 도둑질 진행 여부 체크
-        for (var v in activeThefts) { 
-            if (activeThefts[v].thiefUid === targetUid) { replier.reply(formatError(user, "작업 중", "이미 도둑질을 진행 중입니다.")); return true; }
+        // 1. 도둑 글로벌 쿨타임 체크 (1시간)
+        var now = Date.now();
+        if (now - (user.lastTheftActionTime || 0) < 3600000) {
+            var remainMin = Math.ceil((3600000 - (now - user.lastTheftActionTime)) / 60000);
+            replier.reply(formatError(user, "쿨타임 제한", "도둑질 후 재정비 시간이 필요합니다.\n" + remainMin + "분 후 다시 시도하세요."));
+            return true;
         }
 
         var tn = msg.substring(5).trim();
@@ -8425,34 +8428,36 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         if (found.length > 1) { handleUserSelection(replier, targetUid, found, "theft", null, user, roomName); return true; }
         
         var victim = found[0];
+        if (victim.id === targetUid) { replier.reply(formatError(user, "강탈 불가", "자신의 지갑은 털 수 없습니다.")); return true; }
 
-        // 대상 상태 확인
-        if (victim.data.mining && victim.data.mining.active) {
-            replier.reply(formatError(user, "접근 불가", "대상이 현재 광산 깊은 곳에서 작업 중이라 털 수 없습니다."));
+        // 2. 피해자 조건 체크: 최소 자산 1만P 초과 & 피해자 보호 6시간 체크
+        if (Number(victim.data.point) <= 10000) { 
+            replier.reply(formatError(user, "강탈 대상 부적합", "보유 포인트가 " + fp(10000) + "P를 초과하는 유저만 털 수 있습니다.")); 
+            return true; 
+        }
+        if (now < (victim.data.lastTheftVictimTime || 0)) {
+            var remainSec = Math.ceil((victim.data.lastTheftVictimTime - now) / 1000);
+            var h = Math.floor(remainSec / 3600);
+            var m = Math.ceil((remainSec % 3600) / 60);
+            replier.reply(formatError(user, "보호 대상", "해당 유저는 최근 피해를 입어 국가의 보호를 받고 있습니다.\n(남은 시간: " + h + "시간 " + m + "분)"));
             return true;
         }
         if (activeThefts[victim.id]) { replier.reply(formatError(user, "중복 강탈 불가", getDisplayName(victim.data) + "님은 현재 다른 도둑이 작업 중입니다!")); return true; }
-        if (victim.id === targetUid) { replier.reply(formatError(user, "강탈 불가", "자신의 지갑은 털 수 없습니다.")); return true; }
 
-        // 쿨타임 및 대상 포인트 확인
-        if (!user.theftCooldowns) user.theftCooldowns = {};
-        var now = Date.now();
-        var lastTheftTime = user.theftCooldowns[victim.id] || 0;
-        if (now - lastTheftTime < 3600000) { 
-            var remainMinCooldown = Math.ceil((3600000 - (now - lastTheftTime)) / 60000);
-            replier.reply(formatError(user, "쿨타임 제한", getDisplayName(victim.data) + "님은 이미 털었습니다.\n" + remainMinCooldown + "분 후 다시 가능합니다."));
-            return true;
-        }
-        if (Number(victim.data.point) <= 300) { replier.reply(formatError(user, "강탈 대상 부적합", fp(300) + "P를 초과하는 유저만 털 수 있습니다.")); return true; }
-
-        // 도둑질 프로세스 시작
-       // [약탈왕] 경찰 출동 확률 50% -> 30% 감소
+        // 3. 도둑질 프로세스 설정 (30초 단축 및 랜덤 타이머)
+        user.lastTheftActionTime = now; // 쿨타임 시작 시점 기록
+        
+        // 성공 타이머: 20초 ~ 30초 사이 랜덤
+        var successDelay = Math.floor(Math.random() * 10001) + 20000;
+        // 경찰 타이머: 10초 ~ 30초 사이 랜덤
+        var policeDelay = Math.floor(Math.random() * 20001) + 10000;
+        
         var policeProb = (user.title === "약탈왕") ? 0.3 : 0.5;
-        var sT = setTimeout(function(){ processTheftResult(roomName, targetUid, victim.id); }, 60000);
-        var pT = setTimeout(function(){ if (Math.random() < policeProb) { processPoliceResult(roomName, targetUid, victim.id); } }, 30000);
+        
+        var sT = setTimeout(function(){ processTheftResult(roomName, targetUid, victim.id); }, successDelay);
+        var pT = setTimeout(function(){ if (Math.random() < policeProb) { processPoliceResult(roomName, targetUid, victim.id); } }, policeDelay);
+        
         activeThefts[victim.id] = { thiefUid: targetUid, successTimer: sT, policeTimer: pT };
-
-        user.theftCooldowns[victim.id] = now;
         user.creditScore = Math.max(0, Number(user.creditScore || 600) - 10);
 
         replier.reply(formatCommand("🕵️ 도둑질 시도", user, getDisplayName(victim.data) + "님 강탈 시도 중 (1분 소요)\n\n🚓 30초 후 경찰 출동 확률 50%!", "방어: 1분 내 [잡았다요놈] 입력"));

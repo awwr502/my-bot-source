@@ -905,6 +905,7 @@ var CMD_LIST = {
     admin: [
         { cmd: "/봇구동", desc: "[온|오프] 시스템 제어", func: "_adminSystemLogic" },
         { cmd: "/진단", desc: "[닉네임] 유저 상태 정밀 분석", func: "_adminUserManageLogic" },
+        { cmd: "/블랙박스", desc: "[닉네임] 최근 거래 내역 역추적", func: "_adminUserManageLogic" },
         { cmd: "/시장자산복구", desc: "유저 평단가 기반 주가 긴급 복구", func: "_adminEconomyLogic" },
         { cmd: "/종목추가", desc: "[이름] [가격] 신규 상장", func: "_adminEconomyLogic" },
         { cmd: "/종목수정", desc: "[기존] [새이름] [가격] 수정", func: "_adminEconomyLogic" },
@@ -4193,6 +4194,10 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             }
         }
 
+         else if (type === "admin_blackbox") {
+            _executeBlackboxSearch(selected.id, targetUser, replier);
+        }
+
 else if (type === "admin_reg_delete") {
             // 명부 강제 삭제 타입 처리 로직 추가
             var targetKey = selected.id; // handleUserSelection에서 넘겨준 regKey
@@ -6766,6 +6771,61 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
             safeSaveData(data);
             replier.reply(formatAdmin("유저 삭제 완료", "[" + targetData.name + "]님의 데이터를 영구 삭제했습니다." + refundLog));
         return true;
+    }
+
+    /* [신규] 지능형 거래 역추적 명령어 */
+    if (msg.indexOf("/블랙박스 ") === 0) {
+        var tn = msg.substring(6).trim();
+        var roomData = data.rooms[roomName];
+        var found = findUserByName(roomData, tn);
+
+        if (found.length === 0) {
+            replier.reply(formatAdmin("🚫 대상 없음", "[" + tn + "] 유저를 찾을 수 없습니다."));
+        } else if (found.length > 1) {
+            handleUserSelection(replier, targetUid, found, "admin_blackbox", null, user, roomName);
+        } else {
+            _executeBlackboxSearch(found[0].id, found[0].data, replier);
+        }
+        return true;
+    }
+
+    /* 블랙박스 파일 분석 및 출력 엔진 */
+    function _executeBlackboxSearch(uid, targetUser, replier) {
+        try {
+            var logFile = new java.io.File(JOURNAL_PATH);
+            if (!logFile.exists() || logFile.length() === 0) {
+                return replier.reply(formatAdmin("📋 조회 결과", "기록된 블랙박스 로그가 없습니다."));
+            }
+
+            var content = FileStream.read(JOURNAL_PATH);
+            var lines = content.split("\n");
+            var logs = [];
+            
+            // 최신 로그부터 역순 탐색 (최근 10건 추출)
+            for (var i = lines.length - 1; i >= 0; i--) {
+                var line = lines[i].trim();
+                if (!line) continue;
+                
+                var parts = line.split("|");
+                if (parts[0] === uid) {
+                    var delta = Number(parts[2]);
+                    var sign = delta > 0 ? "➕" : "➖";
+                    logs.push("• [" + parts[4] + "] " + sign + fp(Math.abs(delta)) + "P");
+                }
+                if (logs.length >= 10) break;
+            }
+
+            var resultBody = "👤 대상: " + targetUser.name + "\n" +
+                             "🆔 ID: " + uid + "\n" +
+                             "━━━━━━━━━━━━━━━\n" +
+                             (logs.length > 0 ? logs.join("\n") : "최근 거래 내역이 없습니다.") + "\n" +
+                             "━━━━━━━━━━━━━━━\n" +
+                             "💰 현재 잔액: " + fp(targetUser.point) + "P";
+
+            replier.reply(formatAdmin("📋 거래 블랙박스 보고서", resultBody));
+        } catch (e) {
+            replier.reply(formatAdmin("🚫 분석 실패", "로그 분석 중 오류 발생: " + e));
+        }
     }
 
     /* [개인 복구] 4대 보안 가드가 적용된 지능형 유저 복구 (Smart User Restore v5.9.1) */

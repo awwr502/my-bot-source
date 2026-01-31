@@ -1350,6 +1350,29 @@ function util_isBankruptcy(roomName) {
     return roomData.lastBankAlert === "disaster";
 }
 
+/**
+ * [신설] 종목 약어 검색 엔진
+ * @param {Object} market - 검색 대상 종목 객체 (전체 시장 혹은 보유 주식)
+ * @param {String} input - 유저 입력 약어 (예: "나투증")
+ */
+function util_findStockByShorthand(market, input) {
+    var stocks = Object.keys(market);
+    var matched = [];
+    var searchStr = input ? input.trim() : "";
+    if (searchStr === "") return matched;
+
+    for (var i = 0; i < stocks.length; i++) {
+        var name = stocks[i];
+        var searchIdx = 0;
+        // 입력된 글자가 종목명에 순서대로 들어있는지 체크 (예: 나...투...증)
+        for (var j = 0; j < name.length && searchIdx < searchStr.length; j++) {
+            if (name[j] === searchStr[searchIdx]) searchIdx++;
+        }
+        if (searchIdx === searchStr.length) matched.push(name);
+    }
+    return matched;
+}
+
 //==========섹터8==========
 
 /**
@@ -1659,6 +1682,24 @@ function handleUserSelection(replier, targetUid, found, type, extra, user, roomN
     }
 
     replier.reply(formatCommand("🔍 중복 닉네임 선택", user, "여러 유저가 검색되었습니다.\n번호를 선택해주세요.\n\n" + list.join("\n") + "\n\n(취소: [취소])", "입력 대기: 30초"));
+}
+
+/**
+ * [신설] 중복 종목 선택 핸들러
+ */
+function handleStockSelection(replier, targetUid, found, type, qty, user, roomName) {
+    var data = getDatabase();
+    var roomData = data.rooms[roomName];
+    if (!roomData || !roomData.features) return;
+
+    roomData.features.states.selectWait[targetUid] = { 
+        timestamp: Date.now(), 
+        results: found, 
+        type: type,     
+        extra: { amount: qty } 
+    };
+    var list = found.map(function(name, i) { return (i + 1) + ". " + name; });
+    replier.reply(formatCommand("🔍 종목 선택", user, "여러 종목이 검색되었습니다.\n번호를 선택해주세요.\n\n" + list.join("\n") + "\n\n(취소: [취소])", "입력 대기: 30초"));
 }
 
 /* 날짜 및 시즌 유틸 함수 */
@@ -3725,6 +3766,15 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
         var targetUser = selected.data;
         
         delete selectWaitState[targetUid]; // 선택 완료 시 세션 삭제
+
+        // 주식 중복 선택 처리 분기
+        if (type === "stock_buy" || type === "stock_sell") {
+            var stockName = selected; // 주식은 selected 자체가 종목명(String)
+            var cmdPrefix = (type === "stock_buy") ? "/매수 " : "/매도 ";
+            // 기존 주식 로직으로 리다이렉트하여 거래 집행
+            _gameStockLogic(cmdPrefix + stockName + " " + extra.amount, user, data, replier, roomName, targetUid);
+            return true;
+        }
 
         if (type === "info") {
             var cr = getCreditInfo(targetUser.creditScore);
@@ -8520,7 +8570,13 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
 
         var parts = msg.split(" ");
         if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/매수 [종목명] [수량]")); return true; }
-        var sName = parts[1], count = parseInt(parts[2]);
+        var sInput = parts[1], count = parseInt(parts[2].replace(/,/g, ""));
+        var matched = util_findStockByShorthand(data.stockMarket, sInput);
+        
+        if (matched.length === 0) { replier.reply(formatError(user, "종목 없음", "[" + sInput + "] 종목을 찾을 수 없습니다.")); return true; }
+        if (matched.length > 1) { handleStockSelection(replier, targetUid, matched, "stock_buy", count, user, roomName); return true; }
+        
+        var sName = matched[0];
         var stock = data.stockMarket[sName];
         if (!stock) { replier.reply(formatError(user, "종목 없음", "[" + sName + "]을 찾을 수 없습니다.")); return true; }
         if (isNaN(count) || count <= 0) { replier.reply(formatError(user, "수량 오류", "수량을 정확히 입력하세요.")); return true; }
@@ -8595,11 +8651,37 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var parts = msg.split(" ");
         if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/매도 [종목명] [수량]")); return true; }
         
-        var sName = parts[1];
-        var count = parseInt(parts[2]);
-        var holdings = (user.stockHoldings && user.stockHoldings[sName]) ? Number(user.stockHoldings[sName]) : 0;
+        var sInput = parts[1]; 
+        var count = parseInt(parts[2].replace(/,/g, ""));
+        
+        // [지능형 매도 검색] 보유 중인 주식 리스트에서만 검색 풀(Pool) 생성
+        var myMarket = {};
+        for (var key in user.stockHoldings) { 
+            if (data.stockMarket[key] && Number(user.stockHoldings[key]) > 0) {
+                myMarket[key] = data.stockMarket[key]; 
+            }
+        }
+        
+        // 약어 검색 엔진 가동
+        var matched = util_findStockByShorthand(myMarket, sInput);
+        
+        if (matched.length === 0) { 
+            replier.reply(formatError(user, "보유 종목 없음", "보유 중인 주식 중 [" + sInput + "]와 일치하는 종목이 없습니다.")); 
+            return true; 
+        }
+        
+        // 검색 결과가 2개 이상일 경우 선택 대기 상태로 전환
+        if (matched.length > 1) { 
+            handleStockSelection(replier, targetUid, matched, "stock_sell", count, user, roomName); 
+            return true; 
+        }
+        
+        // 1개일 경우 종목명 확정
+        var sName = matched[0];
 
+        var holdings = (user.stockHoldings && user.stockHoldings[sName]) ? Number(user.stockHoldings[sName]) : 0;
         if (holdings < count || count <= 0) { replier.reply(formatError(user, "수량 부족", "보유 수량을 확인해주세요.")); return true; }
+
         user.skipHealing = true; 
 
         // [가상 정부] 현재 시행 중인 정책 데이터 로드

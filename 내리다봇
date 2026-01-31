@@ -1464,10 +1464,11 @@ function getItemPrice(item, user, roomName) {
         basePrice = Math.floor(basePrice * 0.85);
     }
 
-    // 승급권(id:8)은 누적 구매 횟수에 따른 기본 단가 할증 유지
+    // [승급권 누적 할증] 구매할 때마다 기본가의 10%씩 영구 할증
     if (item.id === 8) { 
         var boughtCount = Number(user.purchasedPromotionAttempts || 0);
-        return basePrice + (boughtCount * 50); 
+        var surchargeUnit = Math.floor(basePrice * 0.10); // 기본가의 10% 산출
+        return basePrice + (surchargeUnit * boughtCount); 
     }
 
     return basePrice;
@@ -3143,6 +3144,7 @@ function _runSector17Logic(data, ctx) {
                     u.tier = 0;
                     u.gameAuthCount = 0; 
                     u.purchasedAuthCount = 0; 
+                    u.purchasedPromotionAttempts = 0;
                 } 
             }
             try { 
@@ -4651,15 +4653,22 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
         if (isNaN(qty) || qty <= 0) {
             replier.reply(formatError(user, "입력 오류", "숫자로 수량을 입력해주세요."));
         } else {
-            var unitPrice = getItemPrice(item, user, roomName); 
+            var multiplier = util_getEcoMultiplier(roomName);
+            var basePrice = Math.floor(Number(item.price) * multiplier);
+            if (user.title === "수집대마왕") basePrice = Math.floor(basePrice * 0.85);
+            
             var totalPrice = 0;
 
             if (item.id === 8) { 
-                // [변경] 승급 기회 구매(ID: 8)일 경우, 10% 복리 누적 합산 적용
-                var ratio = 1.10; 
-                totalPrice = Math.round(unitPrice * (Math.pow(ratio, qty) - 1) / (ratio - 1));
+                var count = Number(user.purchasedPromotionAttempts || 0);
+                var d = Math.floor(basePrice * 0.10); // 할증 단위 (10%)
+                
+                // 등차수열의 합 공식: Sn = n/2 * [2a + (n-1)d]
+                // a = 현재 살 수 있는 첫 번째 유닛의 가격
+                var a = basePrice + (d * count);
+                totalPrice = Math.round((qty / 2) * (2 * a + (qty - 1) * d));
             } else {
-                totalPrice = unitPrice * qty; 
+                totalPrice = getItemPrice(item, user, roomName) * qty; 
             }
 
             if (Number(user.point) < totalPrice) {
@@ -7218,12 +7227,53 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         replier.reply(formatAdmin("완료", "전체 승급 기회 초기화"));
         return true;
     }
-    if (msg === "/시즌강제종료") {
+    네, 기존의 단순한 코드는 티어만 0으로 만들 뿐, 우리가 새로 만든 **'승급 횟수 누적 할증'이나 '명예의 전당 기록'**을 초기화하지 못합니다.
+
+따라서 요청하신 **"시즌 종료 시 가격 초기화"**와 "명예의 전당 삭제" 기능이 모두 포함된 강화된 로직으로 교체해야 합니다.
+
+섹터 35 수정 (전체 초기화 로직으로 교체)
+=====요청사항 시작=====
+
+JavaScript
+
+//==========섹터35==========
+
+    if (msg.trim() === "/시즌강제종료") {
+        var resetCount = 0;
         for (var r in data.rooms) {
-            for (var id in data.rooms[r].users) { data.rooms[r].users[id].tier = 0; }
+            var rObj = data.rooms[r];
+            if (!rObj.users) continue;
+            for (var id in rObj.users) {
+                var u = rObj.users[id];
+                
+                // 1. 티어 및 명예의 전당 초기화
+                u.tier = 0; 
+                u.challengerCount = 0; 
+                u.challengerIconSeason = ""; 
+
+                // 2. [핵심] 승급권 구매 횟수 초기화 (가격을 다시 2,000P로 복구)
+                u.purchasedPromotionAttempts = 0; 
+
+                // 3. 시즌 한정 소모품/인증 초기화
+                u.gameAuthCount = 0; 
+                u.purchasedAuthCount = 0; 
+
+                // 4. 보안 엔진(Healer)의 강제 복구 일시 차단
+                u.skipHealing = true; 
+                
+                resetCount++;
+            }
         }
-        safeSaveData(data);
-        replier.reply(formatAdmin("완료", "모든 유저 티어 초기화"));
+        
+        // 변경 사항 즉시 저장 및 백업
+        safeSaveData(data, true); 
+        
+        var resMsg = "시즌을 강제 종료하고 모든 기록을 리셋했습니다.\n\n" +
+                     "• 대상 유저: " + resetCount + "명\n" +
+                     "• 초기화 항목: 티어, 명예의전당, 승급권 할증가\n" +
+                     "• 상태: 새 시즌 준비 완료";
+        
+        replier.reply(formatAdmin("🏆 시즌 강제 종료 완료", resMsg));
         return true;
     }
 

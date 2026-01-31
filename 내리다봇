@@ -988,8 +988,7 @@ function util_setData(user, key, value, reason, roomName) {
 }
 
 /**
- * [원자적 개편: 중앙은행 국고 3중 방어막] v2.0
- * 검증: 국고 변동이 시스템 기대값과 일치하는지 확인하고 정상 사유 패턴 매칭 적용
+ * [원자적 개편: 중앙은행 국고 3중 방어막] v2.1 (전체 롤백 적용)
  */
 function util_updateReserve(roomData, delta, reason, roomName) {
     if (!roomData || isNaN(delta) || delta === 0) return;
@@ -997,13 +996,11 @@ function util_updateReserve(roomData, delta, reason, roomName) {
     var preReserve = Number(roomData.bankReserve || 0);
     var expectedReserve = preReserve + Number(delta);
 
-    // [정상 패턴 승인] 대형 지출 사유 화이트리스트
     var normalOutflow = ["경마 당첨금", "로또", "주식 매도", "은행 출금", "재원", "지원금", "투표", "거마비", "스피또"];
     var isVerified = normalOutflow.some(function(act) { return reason.indexOf(act) !== -1; });
 
     roomData.bankReserve = expectedReserve;
 
-    // [최종 판독] 연산이 정확하고 검증된 사유라면 급감해도 보호막 미작동
     var isCorrupted = isNaN(roomData.bankReserve) || (roomData.bankReserve !== expectedReserve);
     var lossRate = preReserve > 0 ? (preReserve - roomData.bankReserve) / preReserve : 0;
     var isAbnormalLoss = !isVerified && (preReserve > 100000 && lossRate >= 0.8);
@@ -1011,15 +1008,16 @@ function util_updateReserve(roomData, delta, reason, roomName) {
     if (isCorrupted || isAbnormalLoss) {
         var db = getDatabase();
         var rName = roomName || "내리다";
-        var safeReserve = (db.rooms[rName]) ? Number(db.rooms[rName].bankReserve || 0) : 10000;
-        roomData.bankReserve = safeReserve;
-        try { Api.replyRoom(rName, "🚨 [국고 보안 엔진] 비인가 변동 차단\n사유: " + (isCorrupted ? "데이터 오염" : "이상 급감") + "\n상태: 안전 지점 복구 완료"); } catch(e){}
+        // [수정] 국고 데이터 전체를 안전 지점으로 롤백
+        if (db.rooms[rName]) {
+            roomData.bankReserve = Number(db.rooms[rName].bankReserve || 10000);
+        }
+        try { Api.replyRoom(rName, "🚨 [국고 보안 엔진] 비인가 변동 감지\n사유: " + (isCorrupted ? "연산오류" : "이상급감") + "\n상태: 국고 전체 데이터를 이전 세이브 지점으로 롤백했습니다."); } catch(e){}
     }
 }
 
 /**
- * [원자적 개편: 주식 보유량 정밀 감사] v2.0
- * 검증: 매도 시 발생하는 대량 감소를 '정상 의도'로 선제 승인하여 오탐지 방지
+ * [원자적 개편: 주식 보유량 정밀 감사] v2.1 (전체 롤백 적용)
  */
 function util_updateStock(user, stockName, delta, reason, roomName) {
     if (!user || !stockName || isNaN(delta)) return;
@@ -1028,7 +1026,6 @@ function util_updateStock(user, stockName, delta, reason, roomName) {
     var preCount = Number(user.stockHoldings[stockName] || 0);
     var expectedCount = preCount + Number(delta);
     
-    // [정상 의도 승인] 매도/상패 등으로 인한 감소는 헬러 개입 금지
     var normalStockActs = ["매도", "판매", "청산", "상장폐지"];
     var isVerified = normalStockActs.some(function(act) { return reason.indexOf(act) !== -1; });
 
@@ -1040,16 +1037,18 @@ function util_updateStock(user, stockName, delta, reason, roomName) {
         var db = getDatabase();
         var safeUser = null;
         for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
-        if (safeUser && safeUser.stockHoldings) {
-            user.stockHoldings[stockName] = Number(safeUser.stockHoldings[stockName] || 0);
-            try { Api.replyRoom(roomName || "내리다", "🛡️ [주식 자산 자가치유]\n종목: " + stockName + "\n사유: 연산 오류 발생\n상태: 데이터 롤백 완료"); } catch(e){}
+        
+        if (safeUser) {
+            // [핵심: 돈복사 방지] 단순히 수량만 고치는게 아니라 유저 객체를 통째로 롤백
+            var roomData = getDatabase().rooms[roomName || "내리다"];
+            if (roomData) roomData.users[user.uid] = JSON.parse(JSON.stringify(safeUser));
+            try { Api.replyRoom(roomName || "내리다", "🛡️ [주식 보안 엔진] 데이터 오염 감지\n대상: " + user.name + "\n상태: 유저 데이터를 결제 전 시점으로 전체 롤백했습니다."); } catch(e){}
         }
     }
 }
 
 /**
- * [원자적 개편: 은행 잔고 게이트웨이] v2.0
- * 검증: 이자 지급 및 출금 시 발생하는 변동을 원자적으로 검증하고 보증 플래그 부여
+ * [원자적 개편: 은행 잔고 게이트웨이] v2.1 (전체 롤백 적용)
  */
 function util_updateBank(user, roomData, delta, reason, roomName) {
     if (!user || isNaN(delta) || delta === 0) return;
@@ -1057,7 +1056,6 @@ function util_updateBank(user, roomData, delta, reason, roomName) {
     var preBank = Number(user.bank || 0);
     var expectedBank = preBank + Number(delta);
 
-    // [정상 의도 승인] 은행 관련 필수 키워드 보증
     var normalBankActs = ["출금", "송금", "이체", "결제", "지불", "기부", "수수료", "이자"];
     var isVerified = (delta > 0) || normalBankActs.some(function(act) { return reason.indexOf(act) !== -1; });
 
@@ -1070,16 +1068,17 @@ function util_updateBank(user, roomData, delta, reason, roomName) {
         user.accruedInterest = (user.accruedInterest || 0) + earned;
     }
     user.lastBankUpdateTime = now;
-    
     user.bank = Math.max(0, expectedBank);
 
     if (isNaN(user.bank) || user.bank !== expectedBank) {
         var db = getDatabase();
         var safeUser = null;
         for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
-        if (safeUser && !isNaN(safeUser.bank)) {
-            user.bank = Number(safeUser.bank);
-            try { Api.replyRoom(roomName || "내리다", "🛡️ [은행 자산 자가치유]\n대상: " + user.name + "\n상태: 연산 불일치로 인한 안전 복구"); } catch(e){}
+        
+        if (safeUser) {
+            // [핵심: 돈복사 방지] 예금 연산 오류 시 유저 데이터 전체 롤백
+            if (roomData) roomData.users[user.uid] = JSON.parse(JSON.stringify(safeUser));
+            try { Api.replyRoom(roomName || "내리다", "🛡️ [은행 보안 엔진] 자산 오염 차단\n대상: " + user.name + "\n상태: 안전 세이브 지점으로 전체 복구되었습니다."); } catch(e){}
         }
     }
 }
@@ -1133,34 +1132,26 @@ function util_calculateNetWorth(user, roomData) {
 }
 
 /**
- * [원자적 개편: 포인트 게이트웨이 엔진] v7.0
- * 검증: '기대값 검증 시스템'을 통해 정상 로직 보증을 받은 거래는 80% 급감 방어막을 통과시킴
+ * [원자적 개편: 포인트 게이트웨이 엔진] v7.1 (Full Rollback 적용)
  */
 function util_updatePoint(user, roomData, delta, reason, roomName) {
     if (!user || isNaN(delta) || delta === 0) return;
 
-    // 1. [정상 로직 보증 리스트] 로직상 안전함이 확인된 키워드
     var normalKeywords = ["매수", "매도", "상점", "구매", "예금", "출금", "송금", "배팅", "기부", "차감", "홀짝", "결투", "벌금", "상환", "패널티", "분해", "줍기", "도둑질", "수수료", "수거", "정산", "환수", "징수", "스피또", "로또", "낚시", "인증", "거마비"];
-    
-    // 거래 보증 판정: 포인트 증가(+)이거나 정상 키워드 포함 시 보증 승인
-    var isVerifiedAction = (delta > 0) || normalKeywords.some(function(k) { return reason.indexOf(k) !== -1; });
+    var isVerifiedAction = (delta > 0) || normalKeywords.some(function(k) { return reason && reason.indexOf(k) !== -1; });
 
     var prePoint = Number(user.point || 0);
     var actualDelta = (delta < 0 && (prePoint + delta) < 0) ? -prePoint : Number(delta);
     var expectedPoint = prePoint + actualDelta;
 
-    // 2. 보증 승인 시 자가치유 개입 즉시 차단
-    if (isVerifiedAction) {
-        user.skipHealing = true;
-    }
-
-    // 3. 중앙은행(국고) 재원 연동 로직
-    var bankOutput = ["출석 보상", "민생지원금", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등", "로또 2등", "로또 3등", "분해 회수", "중복 환급", "결투 승리", "뿌리기 줍기", "경마 당첨", "은행 출금", "대출 실행", "투표 거마비"];
-    var bankInput = ["주식 매수", "홀짝 미적중", "체포 벌금", "대출 상환", "상점 구매", "경찰 벌금", "도둑질 성공", "은행 기부", "경마 배팅", "취소 수수료", "로또 구매", "보유세 징수", "자산 환수"];
+    if (isVerifiedAction) user.skipHealing = true;
 
     var brDelta = 0; 
     if (roomData && typeof roomData === 'object') {
         if (roomData.bankReserve === undefined) roomData.bankReserve = 10000;
+        var bankOutput = ["출석 보상", "민생지원금", "홀짝 적중", "주식 매도", "광산 채굴", "로또 1등", "로또 2등", "로또 3등", "분해 회수", "중복 환급", "결투 승리", "뿌리기 줍기", "경마 당첨", "은행 출금", "대출 실행", "투표 거마비"];
+        var bankInput = ["주식 매수", "홀짝 미적중", "체포 벌금", "대출 상환", "상점 구매", "경찰 벌금", "도둑질 성공", "은행 기부", "경마 배팅", "취소 수수료", "로또 구매", "보유세 징수", "자산 환수"];
+        
         if (actualDelta > 0) {
             if (bankOutput.some(function(r){ return reason.indexOf(r) !== -1; })) brDelta = -actualDelta;
         } else {
@@ -1169,10 +1160,8 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
         util_updateReserve(roomData, brDelta, reason, roomName);
     }
 
-    // 4. 최종 포인트 갱신 (원자적 연산)
     user.point = expectedPoint; 
 
-    // 5. [심판] 보증되지 않은 활동 중 비상식적 급감(80%↑) 혹은 데이터 파손(NaN) 시에만 복구
     var lossRate = prePoint > 0 ? (prePoint - user.point) / prePoint : 0;
     var isAbnormalLoss = !user.skipHealing && (lossRate >= 0.8);
     var isCorrupted = isNaN(user.point) || user.point === null || user.point !== expectedPoint;
@@ -1182,16 +1171,18 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
         var safeUser = null;
         for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
 
-        if (safeUser && !isNaN(safeUser.point)) {
-            user.point = Number(safeUser.point);
-            var errType = isCorrupted ? "데이터 오염(Audit Fail)" : "비인가 자산 급감(Guard)";
+        if (safeUser) {
+            // [핵심 패치] 돈복사를 막기 위해 유저를 세이브 시점으로 완전히 되돌림
+            // 획득했던 아이템, 변경된 칭호 등이 모두 결제 전 상태로 롤백됩니다.
+            if (roomData) roomData.users[user.uid] = JSON.parse(JSON.stringify(safeUser));
+            
+            var errType = isCorrupted ? "데이터 오염" : "비인가 자산 급감";
             try { 
-                Api.replyRoom(roomName || "내리다", "🛡️ [시스템 3중 방어막 작동]\n대상: " + (user.name||"유저") + "\n사유: " + errType + "\n상태: 비정상 변동 차단 및 즉각 복구 완료"); 
+                Api.replyRoom(roomName || "내리다", "🛡️ [시스템 3중 방어막 작동]\n대상: " + (user.name||"유저") + "\n사유: " + errType + "\n상태: 데이터 오염 방지를 위해 전체 롤백을 수행했습니다."); 
             } catch(e){}
         }
     }
 
-    // 칭호 엔진 및 블랙박스 기록 (기존 유지)
     try {
         var totalNetWorth = util_calculateNetWorth(user, roomData);
         var assetTitles = [

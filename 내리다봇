@@ -1458,10 +1458,11 @@ function checkEconomicStimulus(user, roomName, isManual) {
     if (myNetWorth < targetLine) {
         var multiplier = util_getEcoMultiplier(roomName);
         var gap = targetLine - myNetWorth;
-        var baseGive = Math.floor(10000 * multiplier); 
+        var emergencyMult = util_getEmergencyMultiplier(roomName);
+        var baseGive = Math.floor(10000 * multiplier * emergencyMult); 
         var giveAmount = Math.min(baseGive, gap); 
         
-        if (giveAmount < 100) return;
+        if (giveAmount < 100 || !util_isBankSolvent(roomName, giveAmount)) return;
 
         util_updatePoint(user, roomData, giveAmount, "민생지원금 지급", roomName);
         user.dailyStimulusCount = currentCount + 1;
@@ -2782,6 +2783,14 @@ function _runSector16Logic(data, ctx) {
                             var maxLimit = b.amount * (rConf.MAX_PAYOUT_MULT || 10);
                             if (prize > maxLimit) prize = maxLimit;
 
+                            var emergencyMult = util_getEmergencyMultiplier(ctx.targetRoom);
+                            var finalPrize = Math.floor(prize * emergencyMult);
+
+                            if (!util_isBankSolvent(ctx.targetRoom, finalPrize)) {
+                                try { Api.replyRoom(ctx.targetRoom, "🚨 [국고 부도] 경마 당첨금 지급이 정지되었습니다."); } catch(e){}
+                                return;
+                            }
+
                             var res = processRepayment(u, prize, uId, ctx.targetRoom);
                             // [교정] mainRoomData를 인자로 전달하여 게이트웨이 국고 연동 및 저널링 보장
                             util_updatePoint(u, mainRoomData, Number(res.actualGain), "경마 당첨금", ctx.targetRoom);
@@ -3165,7 +3174,12 @@ function _runSector18Logic(data, ctx) {
             // 1등 지급 (전액 n빵)
             if(w1.length > 0) { 
                 var p1 = Math.floor(totalPrizePool / w1.length); 
-                w1.forEach(function(obj){ 
+                w1.forEach(function(obj){
+                // 로또는 잭팟 금액이므로 삭감(0.5)보다는 지급 능력 위주로 체크
+                    if (!util_isBankSolvent(obj.rm, p1)) {
+                        try { Api.replyRoom(obj.rm, "🚨 [국고 부도] 로또 당첨금이 부족하여 지급이 연기되었습니다."); } catch(e){}
+                        return;
+                    }
                     var res = processRepayment(obj.u, p1, obj.id, obj.rm);
                     util_updatePoint(obj.u, data.rooms[obj.rm], Number(res.actualGain), "로또 1등 당첨", obj.rm);
                     totalPayout += p1;
@@ -7959,9 +7973,12 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             if (Number(user.point) < bet) { replier.reply(formatError(user, "포인트 부족", "베팅할 포인트가 부족합니다.")); return true; }
 
             var expectedPayout = Math.floor(bet * 0.85);
-            if (roomData.bankReserve < expectedPayout) {
-                replier.reply(formatError(user, "은행 자금 부족", "현재 금고 잔액 부족으로 도박이 불가능합니다."));
-                return true;
+            var emergencyMult = util_getEmergencyMultiplier(roomName);
+            var finalProfit = Math.floor(expectedPayout * emergencyMult);
+            var totalPayout = bet + finalProfit; // 원금 + 삭감된 수익
+
+            if (!util_isBankSolvent(roomName, finalProfit)) {
+                return replier.reply("🚨 [중앙은행 지불 정지]\n금고 잔액 부족으로 홀짝 승리금을 지급할 수 없습니다.");
             }
             
             var isFeverActive = (data.feverData && data.feverData.active === true);

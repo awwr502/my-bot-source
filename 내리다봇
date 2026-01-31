@@ -1789,19 +1789,19 @@ function processPoliceResult(roomName, thiefUid, victimUid) {
     // [상태 해제] 올바른 참조 경로에서 삭제 수행
     delete activeThefts[victimUid]; 
     
-    // 1. 벌금 계산: 보유 포인트의 10%
-    var fine = Math.floor(Number(thief.point) * 0.1);
-    util_updatePoint(thief, room, -fine, "도둑질 체포 벌금", roomName);
+    // 1. 벌금 계산: 현금 차감은 무조건 보유액의 10%
+    var cashFine = Math.floor(Number(thief.point) * 0.1);
+    // 2. 대납 계산: 1,000P 하한선에서 현금 벌금을 뺀 나머지 금액
+    var loanGap = Math.max(0, 1000 - cashFine);
+    
+    util_updatePoint(thief, room, -cashFine, "도둑질 체포 벌금", roomName);
     
     var loanMsg = "";
-    // 2. 대납 대출 로직: 보유 포인트가 10,000P 미만일 경우 차액만큼 대출 전환
-    if (Number(thief.point) < 10000) {
-        var gap = 10000 - Number(thief.point);
+    if (loanGap > 0) {
         if (!thief.loan) thief.loan = { debt: 0, items: [] };
-        thief.loan.debt = Number(thief.loan.debt) + gap;
-        thief.loan.items.push(gap);
-        thief.isDefaulter = (Number(thief.creditScore || 600) < 500);
-        loanMsg = "\n⚠️ 부족금 대납: " + fp(gap) + "P가 대출금으로 전환되었습니다.";
+        thief.loan.debt = Number(thief.loan.debt) + loanGap;
+        thief.loan.items.push(loanGap);
+        loanMsg = "\n⚠️ 벌금 부족분 대납: " + fp(loanGap) + "P가 대출금으로 전환되었습니다.";
     }
     
     var jailTime = 1 * 60 * 60 * 1000;
@@ -1834,12 +1834,12 @@ function processTheftResult(roomName, thiefUid, victimUid) {
     var thief = room.users[thiefUid];
     var victim = room.users[victimUid];
     
-    // 1. 탈취액 계산: 5% ~ 10% 랜덤
+    // 1. 탈취액: 5% ~ 10% 사이 랜덤
     var minSteal = Math.floor(Number(victim.point) * 0.05);
-    var maxSteal = Math.floor(Number(victim.point) * 0.1);
+    var maxSteal = Math.floor(Number(victim.point) * 0.10);
     var stealAmount = Math.floor(Math.random() * (maxSteal - minSteal + 1)) + minSteal;
     
-    // 2. 피해자 보호 설정: 6시간 동안 도둑질 대상 제외
+    // 2. 피해자 보호: 6시간 동안 타겟 제외
     victim.lastTheftVictimTime = Date.now() + (6 * 60 * 60 * 1000);
 
     util_updatePoint(victim, room, -stealAmount, "도둑질 당함", roomName);

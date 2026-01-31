@@ -3317,13 +3317,14 @@ function _runSector18Logic(data, ctx) {
 
 //==========섹터19==========
 
-/* 메인 메시지 리스너 함수 */
+/* 메인 메시지 리스너 함수 (하이브리드 엔진 적용) */
 action = function(room, msg, sender, isGroupChat, replier, imageDB) {
     _msgReceiveTime = Date.now();
-    // [Step 1] 병렬 수신: 메시지를 즉시 접수하여 리스너 스레드를 해방합니다.
+    
+    // [Step 1] 병렬 수신: 여러 메시지를 동시에 받아내어 카톡 씹힘을 방지합니다.
     ParallelPool.execute(new java.lang.Runnable({
         run: function() {
-            // [Step 2] 순차 처리: 실제 로직은 큐(Queue)에 넣어 순서대로 처리합니다.
+            // [Step 2] 순차 처리: 실제 데이터 수정 로직은 1열로 줄을 세워 데이터 꼬임을 방지합니다.
             LogicQueue.execute(new java.lang.Runnable({
                 run: function() {
                     // 데이터 무결성을 위해 락(Lock)을 가동합니다.
@@ -3337,14 +3338,14 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                         var data = getDatabase(); 
                         if (!data) return;
 
-                if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
-                var roomData = data.rooms[roomName];
-                
-                if (!roomData.features) {
-                    if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
-                        roomData.features = ROOM_FEATURE_TEMPLATE();
-                    }
-                }
+                        if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
+                        var roomData = data.rooms[roomName];
+                        
+                        if (!roomData.features) {
+                            if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
+                                roomData.features = ROOM_FEATURE_TEMPLATE();
+                            }
+                        }
 
                 // [2번] 실시간 하이프(채팅량) 기록
                 roomData.features.msgCount = (roomData.features.msgCount || 0) + 1;
@@ -5287,14 +5288,15 @@ if (msg === "/가이드") {
 //==========섹터26==========
 
         } catch (e) {
-            Log.error("Thread Runtime Error: " + e);
-        } finally {
-            // [스레드 보호] 로직 종료/에러 발생 여부와 상관없이 무조건 락 해제
-            // 이 구문이 없으면 봇이 영구적으로 멈춥니다.
-            lock.unlock(); 
+                        Log.error("Thread Runtime Error: " + e);
+                    } finally {
+                        // [중요] 어떤 경우에도 락을 해제하여 다음 메시지가 처리되게 합니다.
+                        lock.unlock(); 
+                    }
+                }
+            })); // LogicQueue 종료
         }
-    }
-}));
+    })); // ParallelPool 종료
 };
 
 //==========섹터27==========

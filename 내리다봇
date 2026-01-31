@@ -1312,6 +1312,32 @@ function stock_calculateNextPrice(currentPrice) {
     return Math.max(10, currentPrice + (currentPrice * change));
 }
 
+/**
+ * [신설] 국고 비상태세 배율 산출 (지능형 방어)
+ */
+function util_getEmergencyMultiplier(roomName) {
+    var data = getDatabase();
+    var roomData = data.rooms[roomName];
+    if (!roomData || !roomData.economyBase) return 1.0;
+    
+    var reserve = Number(roomData.bankReserve || 0);
+    var base = Number(roomData.economyBase);
+    
+    // 재고가 기준점의 10% 미만이면 모든 보상 50% 삭감
+    if (reserve < (base * 0.1)) return 0.5; 
+    return 1.0;
+}
+
+/**
+ * [신설] 국고 지급 가능 여부 체크 (부도 방어)
+ */
+function util_isBankSolvent(roomName, amount) {
+    var data = getDatabase();
+    var roomData = data.rooms[roomName];
+    if (!roomData) return false;
+    return (Number(roomData.bankReserve || 0) >= amount);
+}
+
 //==========섹터8==========
 
 /**
@@ -8525,12 +8551,13 @@ function _gameStockLogic(msg, user, data, replier, roomName, targetUid) {
         var appliedTaxRate = isMajor ? (baseTaxRate / 2) : baseTaxRate; // 최대주주면 세금 50% 감면
         
         var fee = Math.floor(totalSell * appliedTaxRate);
-        var finalPrice = totalSell - fee;
+        var baseFinalPrice = totalSell - fee;
 
-        /* [핵심] 은행 파산 보호 (뱅크런 방지) */
-        if (roomData.bankReserve < finalPrice) {
-            replier.reply(formatError(user, "거래 일시 중단", "죄송합니다. 현재 중앙은행의 현금 유동성 부족으로 주식 매도 대금 지급이 불가능합니다.\n\n🏦 현재 은행 금고: " + fp(roomData.bankReserve) + "P"));
-            return true;
+        var emergencyMult = util_getEmergencyMultiplier(roomName);
+        var finalPrice = Math.floor(baseFinalPrice * emergencyMult);
+
+        if (!util_isBankSolvent(roomName, finalPrice)) {
+            return replier.reply("🚨 [중앙은행 지불 정지]\n중앙은행의 현금 유동성 부족으로 주식 매도 대금 지급이 불가능합니다.");
         }
 
         var avgPrice = (user.stockAvg && user.stockAvg[sName]) ? Number(user.stockAvg[sName]) : sellPrice; 
@@ -8637,14 +8664,12 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
         // 정책 배율(pol.attendMult)을 보상 계산에 최종 적용
         var reward = Math.floor(baseReward * multiplier * (pol.attendMult || 1.0));
 
-        /* [핵심 수정] 은행 파산 보호 로직 */
-        // 은행 금고에 출석 보상을 지급할 수 있는 현금이 있는지 확인
-        if (roomData.bankReserve < reward) {
-            var errorMsg = "죄송합니다. 현재 중앙은행의 재고가 부족하여 출석 보상을 지급할 수 없습니다.\n" +
-                           "경제 활동(주식 매수, 상점 이용 등)을 통해 국고가 충전될 때까지 기다려주세요.\n\n" +
-                           "🏦 현재 금고: " + fp(roomData.bankReserve) + "P";
-            replier.reply(formatError(user, "국고 고갈", errorMsg));
-            return true;
+        var emergencyMult = util_getEmergencyMultiplier(roomName);
+        var baseResult = Math.floor(baseReward * multiplier * (pol.attendMult || 1.0));
+        var reward = Math.floor(baseResult * emergencyMult);
+
+        if (!util_isBankSolvent(roomName, reward)) {
+            return replier.reply("🚨 [중앙은행 지불 정지]\n국고가 완전히 고갈되어 출석 보상을 지급할 수 없습니다.\n관리자의 재원 수혈이 필요합니다.");
         }
 
         /* [핵심 수정] 출석 보상 지급 전 통합 상환 엔진 호출 */

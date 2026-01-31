@@ -1189,10 +1189,14 @@ function util_stagingRollback(user, roomName) {
 }
 
 /**
- * [원자적 개편: 포인트 게이트웨이 엔진] v7.1 (Full Rollback 적용)
+ * [원자적 개편: 포인트 게이트웨이 엔진] v7.2 (Staging 호환형)
  */
 function util_updatePoint(user, roomData, delta, reason, roomName) {
     if (!user || isNaN(delta) || delta === 0) return;
+    
+    // [v10.0] 스테이징 활성화 여부에 따른 동적 참조
+    var targetUser = GLOBAL_STAGING.active[user.uid] ? user : user; 
+    /* (참고: 스테이징 중이면 이미 user 객체가 메모리상에서 분리된 상태임) */
 
     var normalKeywords = ["매수", "매도", "상점", "구매", "예금", "출금", "송금", "배팅", "기부", "차감", "홀짝", "결투", "벌금", "상환", "패널티", "분해", "줍기", "도둑질", "수수료", "수거", "정산", "환수", "징수", "스피또", "로또", "낚시", "인증", "거마비"];
     var isVerifiedAction = (delta > 0) || normalKeywords.some(function(k) { return reason && reason.indexOf(k) !== -1; });
@@ -1219,24 +1223,16 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
 
     user.point = expectedPoint; 
 
-    var lossRate = prePoint > 0 ? (prePoint - user.point) / prePoint : 0;
-    var isAbnormalLoss = !user.skipHealing && (lossRate >= 0.8);
-    var isCorrupted = isNaN(user.point) || user.point === null || user.point !== expectedPoint;
-
-    if (isCorrupted || isAbnormalLoss) {
-        var db = getDatabase();
-        var safeUser = null;
-        for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
-
-        if (safeUser) {
-            // [핵심 패치] 돈복사를 막기 위해 유저를 세이브 시점으로 완전히 되돌림
-            // 획득했던 아이템, 변경된 칭호 등이 모두 결제 전 상태로 롤백됩니다.
-            if (roomData) roomData.users[user.uid] = JSON.parse(JSON.stringify(safeUser));
-            
-            var errType = isCorrupted ? "데이터 오염" : "비인가 자산 급감";
-            try { 
-                Api.replyRoom(roomName || "내리다", "🛡️ [시스템 3중 방어막 작동]\n대상: " + (user.name||"유저") + "\n사유: " + errType + "\n상태: 데이터 오염 방지를 위해 전체 롤백을 수행했습니다."); 
-            } catch(e){}
+    if (!GLOBAL_STAGING.active[user.uid]) {
+        var lossRate = prePoint > 0 ? (prePoint - user.point) / prePoint : 0;
+        if ((isNaN(user.point) || user.point === null || user.point !== expectedPoint) || (!user.skipHealing && lossRate >= 0.8)) {
+            var db = getDatabase();
+            var safeUser = null;
+            for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
+            if (safeUser) {
+                if (roomData) roomData.users[user.uid] = JSON.parse(JSON.stringify(safeUser));
+                try { Api.replyRoom(roomName, "🛡️ [보안 엔진] 비정상 변동 차단 및 롤백 완료"); } catch(e){}
+            }
         }
     }
 
@@ -1399,6 +1395,39 @@ function util_findStockByShorthand(market, input) {
 //==========섹터8==========
 
 /**
+ * [v10.0 지능형 엔진] 지니 계수(Gini Coefficient) 계산 함수
+ * 원리: 자산의 불평등도를 산출 (0: 완전평등, 1: 완전불평등)
+ * $$G = \frac{\sum_{i=1}^{n} \sum_{j=1}^{n} |x_i - x_j|}{2n^2 \bar{x}}$$
+ */
+function util_calculateGini(roomName) {
+    var data = getDatabase();
+    var room = data.rooms[roomName];
+    if (!room) return 0;
+
+    var assets = [];
+    for (var uid in room.users) {
+        assets.push(util_calculateNetWorth(room.users[uid], room));
+    }
+    
+    var n = assets.length;
+    if (n < 2) return 0;
+    
+    assets.sort(function(a, b) { return a - b; });
+    
+    var mean = assets.reduce(function(a, b) { return a + b; }, 0) / n;
+    if (mean === 0) return 0;
+
+    var sumDiff = 0;
+    for (var i = 0; i < n; i++) {
+        for (var j = 0; j < n; j++) {
+            sumDiff += Math.abs(assets[i] - assets[j]);
+        }
+    }
+    
+    return sumDiff / (2 * n * n * mean);
+}
+
+/**
  * [Gemini 정밀 교정] 경제 지표 계산 함수 (시스템 판돈 완벽 통합 버전)
  * 반영: 주식, 경마 배팅액, 로또 잭팟, 은행 재원 등을 모두 합산하여 물가 왜곡 방지
  */
@@ -1454,6 +1483,42 @@ function calculateEconomy(data, roomName) {
 }
 
 //==========섹터9==========
+
+/**
+ * [신설: 지능형 빈부격차 교정 배율] v1.0
+ * 기능: 지니 계수에 따라 자산가에게는 누진세를, 서민에게는 보너스를 부여하는 지능형 수치를 반환
+ */
+function util_getGiniCorrection(user, roomName) {
+    var gini = util_calculateGini(roomName);
+    var conf = INTELLIGENT_CONFIG.ECONOMY;
+    
+    if (gini < conf.GINI_CRITICAL) return { tax: 1.0, reward: 1.0, level: "안정" };
+
+    var data = getDatabase();
+    var room = data.rooms[roomName];
+    var eco = calculateEconomy(data, roomName);
+    var myNetWorth = util_calculateNetWorth(user, room);
+    
+    // 평균 자산보다 높으면 '자산가', 낮으면 '서민'으로 분류
+    var isWealthy = myNetWorth > eco.average;
+    var intensity = (gini - conf.GINI_CRITICAL) / (1 - conf.GINI_CRITICAL); // 격차 강도 (0~1)
+
+    if (isWealthy) {
+        // 자산가: 세금 가산 (최대 +20%)
+        return { 
+            tax: 1.0 + (conf.MAX_PROGRESSIVE_TAX * intensity), 
+            reward: 1.0, 
+            level: "불평등(누진세 가산)" 
+        };
+    } else {
+        // 서민: 보상 강화 (최대 1.5배)
+        return { 
+            tax: 1.0, 
+            reward: 1.0 + ((conf.REWARD_BOOST_LIMIT - 1.0) * intensity), 
+            level: "불평등(서민 지원)" 
+        };
+    }
+}
 
 /**
  * [공통 함수: 물가 배율 통합 엔진] v5.9

@@ -270,10 +270,10 @@ var SYSTEM_CONFIG = {
                 OPEN_HOUR: 7,      // 주식 장 개장 시간
                 CLOSE_HOUR: 23,    // 주식 장 마감 시간
                 MANI_RATE: 0.15,   // 기본 특수 이벤트(폭등/폭락) 변동폭
-                DELIST_LIMIT: 0.15, // [상폐 기준]: 시장 평균가 대비 해당 비율 이하로 떨어지면 상장폐지 검토
-                CLOSING_LIMIT: 0.30, // [상한 저항]: 시가 대비 +20% 지점부터 하락 압력 강화
-                RESISTANCE_START: 0.25, // [저항 시작]: 시가 대비 +15% 지점부터 완만한 하락 압력 발생
-                GRAVITY: 0.22      // [중력 계수]: 저항의 세기 (수치가 높을수록 억제력이 강함)
+                DELIST_LIMIT: 0.20, // [상폐 기준]: 시장 평균가 대비 20% 이하
+                CLOSING_LIMIT: 0.40, // [최대 슈팅]: 시가 대비 +40%까지 상승 허용
+                RESISTANCE_START: 0.20, // [고무줄 시작]: +20% 지점부터 부드러운 저항 발생
+                GRAVITY: 0.18      // [중력 계수]: 회귀 강도 (낮을수록 더 완만하게 복귀)
             }
         },
         MINE: { // [광산 채굴 설정]
@@ -2191,40 +2191,26 @@ function updateStockPrices(data) {
                 var growthRate = (stock.price - refPrice) / refPrice;
                 var sConf = conf.SETTINGS;
 
-                // [교정] 상한선 기준점을 0.20(+20%)으로 정확히 설정
-                var limitThreshold = sConf.CLOSING_LIMIT; 
-
-                // 1. 과열(저항) 시작 판정 (설정된 상한선 20% 터치 시)
-                if (growthRate >= limitThreshold) {
-                    stock.isOverheated = true;
-                }
-
-                // 2. 과열 상태에서의 감쇠 저항 로직
-                if (stock.isOverheated) {
-                    // 설정된 상한선(limitThreshold)과의 거리 계산
-                    var gap = growthRate - limitThreshold; 
+                // [유연한 탄성 저항 엔진]
+                // 20%를 넘어서는 순간부터 고무줄 효과가 발생합니다.
+                if (growthRate > sConf.RESISTANCE_START) {
+                    var gap = growthRate - sConf.RESISTANCE_START;
                     
-                    // [부드러운 압력] gap이 클수록 강해지되, 가격이 내려오면(gap 감소) 저항도 함께 약해짐
-                    var elasticPull = (gap * 0.12) + 0.001; 
-                    changePercent -= elasticPull;
-                    
-                    // 저항 구간 내 자연스러운 시세 흔들림
-                    changePercent += (Math.random() * 0.06 - 0.03);
+                    // 1. 점진적 압박: 20%에서 멀어질수록 당기는 힘이 강해짐
+                    var pull = gap * sConf.GRAVITY;
+                    changePercent -= pull;
 
-                    // 3. 해제 조건: 주가가 설정된 상한선 미만으로 내려가면 해제
-                    if (growthRate < limitThreshold) {
-                        stock.isOverheated = false;
+                    // 2. 불규칙 진동(Jitter): 하락 중에도 50% 확률로 위로 튀어 오르는 노이즈 주입
+                    // 이를 통해 일직선 하락이 아닌 '계단식/톱니형' 하락을 연출합니다.
+                    var jitter = (Math.random() * 0.07 - 0.03); // -3% ~ +4% 사이의 무작위 흔들림
+                    changePercent += jitter;
+
+                    // 3. 40% 한계 돌파 방지: 최대 한계선에 근접할수록 급격한 저항 추가
+                    if (growthRate >= sConf.CLOSING_LIMIT - 0.05) {
+                        changePercent -= 0.05; // 강한 압박
                     }
                 }
-                // 일반 저항 구간 (15% ~ 20% 사이)
-                else if (growthRate > sConf.RESISTANCE_START) {
-                    var gap = (growthRate - sConf.RESISTANCE_START);
-                    // 저항 계수를 소폭 하향하여 상승 에너지를 더 보존함
-                    var resistance = gap * sConf.GRAVITY * (1 + (gap * 5)); 
-                    changePercent -= resistance;
-                }
-            } // if (refPrice > 0) 종료
-        } // if (isMarketOpen) 종료
+            }
         
         // 최종 가격 반영 (중괄호 블록 밖, 루프 내부)
         var nextPrice = stock.price * (1 + changePercent);

@@ -4676,9 +4676,16 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             if (Number(user.point) < totalPrice) {
                 replier.reply(formatError(user, "포인트 부족", "총 " + fp(totalPrice) + "P가 필요합니다."));
             } else {
+                // 이용권이 1개라도 있으면 true를 전달하여 섹터 30이 차감 로직을 타게 합니다.
+                var isUsingTicket = (item.effect === "randomBox" && (user.boxTickets || 0) > 0);
+                
                 util_updatePoint(user, roomData, -totalPrice, "상점 구매: " + item.name + " x" + qty, roomName);
                 delete bankProcessState[targetUid];
-                if (typeof _handleShopEffect === 'function') _handleShopEffect(item, user, roomName, replier, data, targetUid, totalPrice, false, qty);
+                
+                // 기존 'false'로 고정되어 있던 8번째 인자를 'isUsingTicket' 변수로 교체
+                if (typeof _handleShopEffect === 'function') {
+                    _handleShopEffect(item, user, roomName, replier, data, targetUid, totalPrice, isUsingTicket, qty);
+                }
                 safeSaveData(data);
             }
         }
@@ -5783,12 +5790,12 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         roomData.bankReserve = 10000;
     }
     
-    /* [1. 자산 정산] 이용권을 사용하지 않은 경우에만 구매 대금(총액)을 은행으로 귀속 */
-    // [교정] 중복 가산 제거: util_updatePoint에서 이미 국고 연동이 완료되었습니다.
-    if (isUsingTicket) {
-        // [수정] 단권 구매 및 다량 구매 시 이용권 수량에 맞게 선차감 로직 통합
-        var ticketsToUse = (item.effect === "randomBox") ? qty : 1;
-        util_setData(user, 'boxTickets', Math.max(0, (user.boxTickets || 0) - ticketsToUse), "이용권 사용", roomName);
+    /* [1. 자산 정산] 이용권 차감 로직 (유저님의 기존 사유 문구 보존) */
+    if (isUsingTicket && item.effect === "randomBox") {
+        var currentTickets = Number(user.boxTickets || 0);
+        // 구매 수량(qty)만큼 차감하되, 보유량보다 많이 뺄 수 없도록 제한
+        var ticketsToUse = Math.min(qty, currentTickets); 
+        util_setData(user, 'boxTickets', currentTickets - ticketsToUse, "랜덤박스 이용권 사용", roomName);
     }
 
     /* [Gemini 요청 사항] 수집대마왕 판정 함수 - 전종 수집(보유+분해) 체크 */

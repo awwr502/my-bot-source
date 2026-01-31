@@ -74,6 +74,8 @@ var uidCache = uidCache || {};
 var ParallelPool = java.util.concurrent.Executors.newFixedThreadPool(8);
 // 2. 순차 처리 엔진: 단 1개의 큐가 로직 및 답장을 순서대로 안전하게 처리 (데이터 무결성 담당)
 var LogicQueue = java.util.concurrent.Executors.newSingleThreadExecutor();
+// 3. 백그라운드 저장 엔진: 무거운 파일 쓰기 전용
+var SaveExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
 
 /* 로그 저장 경로 및 디렉토리 설정 */ 
 var BUG_LOG_PATH = BASE_DIR + "logs/bug_report.txt"; 
@@ -3318,17 +3320,22 @@ function _runSector18Logic(data, ctx) {
 /* 메인 메시지 리스너 함수 */
 action = function(room, msg, sender, isGroupChat, replier, imageDB) {
     _msgReceiveTime = Date.now();
-    Executor.execute(new java.lang.Runnable({
+    // [Step 1] 병렬 수신: 메시지를 즉시 접수하여 리스너 스레드를 해방합니다.
+    ParallelPool.execute(new java.lang.Runnable({
         run: function() {
-            lock.lock();
-            try {
-                var roomName = room ? room.trim() : "";
-                var cleanSender = sender ? String(sender).trim() : ""; 
-                
-                if (ALLOWED_ROOMS.indexOf(roomName) === -1 || cleanSender === "오픈채팅봇") return;
+            // [Step 2] 순차 처리: 실제 로직은 큐(Queue)에 넣어 순서대로 처리합니다.
+            LogicQueue.execute(new java.lang.Runnable({
+                run: function() {
+                    // 데이터 무결성을 위해 락(Lock)을 가동합니다.
+                    lock.lock();
+                    try {
+                        var roomName = room ? room.trim() : "";
+                        var cleanSender = sender ? String(sender).trim() : ""; 
+                        
+                        if (ALLOWED_ROOMS.indexOf(roomName) === -1 || cleanSender === "오픈채팅봇") return;
 
-                var data = getDatabase(); 
-                if (!data) return;
+                        var data = getDatabase(); 
+                        if (!data) return;
 
                 if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
                 var roomData = data.rooms[roomName];

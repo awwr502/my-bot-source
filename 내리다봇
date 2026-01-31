@@ -3019,10 +3019,24 @@ function _runSector17Logic(data, ctx) {
                     u.accruedInterest = (u.accruedInterest || 0) + lastMinuteEarned;
                 }
 
-                var finalInterest = Math.floor(u.accruedInterest || 0);
+                // 긴급 경제 조치 배율 확인
+                var emergencyMult = util_getEmergencyMultiplier(rName);
+                // 지급할 최종 금액 (이월된 금액 포함 전체에 대해 긴급 배율 적용 시도)
+                var finalInterest = Math.floor((u.accruedInterest || 0) * emergencyMult);
+
                 if (finalInterest > 0) {
-                    util_updateBank(u, roomObj, finalInterest, "은행 예금 이자 지급", rName);
-                    util_updateReserve(roomObj, -finalInterest, "은행 예금 이자 지급", rName);
+                    // 국고 지불 능력 확인
+                    if (util_isBankSolvent(rName, finalInterest)) {
+                        util_updateBank(u, roomObj, finalInterest, "은행 예금 이자 지급", rName);
+                        util_updateReserve(roomObj, -finalInterest, "은행 예금 이자 지급", rName);
+                        
+                        // [핵심] 지급에 성공했을 때만 이자 주머니를 0으로 초기화
+                        u.accruedInterest = 0; 
+                    } else {
+                        // [핵심] 지급 실패 시 u.accruedInterest를 0으로 초기화하지 않음!
+                        // 데이터는 보존되며 내일 정산 시 오늘치 이자가 다시 더해짐 (이월)
+                        Log.info("[Bank Default] " + u.name + "님 국고 고갈로 이자 지급 보류 및 이월");
+                    }
                 }
                 
                 // 정산 후 초기화

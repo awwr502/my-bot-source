@@ -1797,6 +1797,54 @@ function handleStockSelection(replier, targetUid, found, type, qty, user, roomNa
     replier.reply(formatCommand("🔍 종목 선택", user, "여러 종목이 검색되었습니다.\n번호를 선택해주세요.\n\n" + list.join("\n") + "\n\n(취소: [취소])", "입력 대기: 30초"));
 }
 
+/**
+ * [신설: 원자적 신분 동기화 엔진] v1.0
+ * 기능: 유저의 닉네임 변경 시 전 서버의 모든 참조 데이터(사채, 경마 등)를 일괄 갱신합니다.
+ * @param {String} uid - 유저 고유 ID
+ * @param {String} oldName - 변경 전 이름
+ * @param {String} newName - 변경 후 이름
+ */
+function util_syncIdentityGlobal(uid, oldName, newName) {
+    var data = getDatabase();
+    var syncCount = 0;
+
+    for (var rName in data.rooms) {
+        var room = data.rooms[rName];
+        
+        // 1. 사채 계약서(Loan Contracts) 동기화
+        if (room.loanContracts) {
+            for (var cid in room.loanContracts) {
+                var c = room.loanContracts[cid];
+                if (c.borrowerUid === uid) { c.borrowerName = newName; syncCount++; }
+                if (c.lenderUid === uid) { c.lenderName = newName; syncCount++; }
+            }
+        }
+
+        // 2. 경마 배팅 기록(Racing Bets) 동기화
+        if (room.features && room.features.racing && room.features.racing.bets) {
+            var bets = room.features.racing.bets;
+            if (bets[uid]) {
+                bets[uid].name = newName;
+                syncCount++;
+            }
+        }
+        
+        // 3. 사채 등록 매물(Loan Pools) 동기화
+        if (room.loanPools) {
+            for (var pid in room.loanPools) {
+                if (room.loanPools[pid].lenderUid === uid) {
+                    room.loanPools[pid].lenderName = newName;
+                    syncCount++;
+                }
+            }
+        }
+    }
+
+    if (syncCount > 0) {
+        Log.info("[AIS] " + oldName + " ➔ " + newName + " (" + syncCount + "개 데이터 원자적 동기화 완료)");
+    }
+}
+
 /* 날짜 및 시즌 유틸 함수 */
 function getSimpleDate() { var d = new Date(); return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2); }
 function getSimpleSeason() { var d = new Date(); return d.getFullYear().toString().slice(-2) + "-" + (d.getMonth() + 1) + "시즌"; }
@@ -3666,11 +3714,28 @@ if (!targetUid || !roomData.users[targetUid] || roomData.users[targetUid].name !
             targetUid = nameMatchId; // 프사만 바뀐 경우
             if (currentImgHash) roomData.users[targetUid].imageHash = currentImgHash;
         } else if (hashMatchId) {
-            targetUid = hashMatchId; // 닉네임만 바뀐 경우 (닉변)
+            // [v10.0 AIS 적용] 프사 해시는 같으나 닉네임이 바뀐 경우 (닉변 감지)
+            targetUid = hashMatchId; 
             var u = roomData.users[targetUid];
+            var oldName = u.name;
+            var newName = cleanSender;
+
+            // 1. 닉네임 변경 기록부 업데이트
             if (!data.nickHistory[targetUid]) data.nickHistory[targetUid] = [];
-            data.nickHistory[targetUid].push({ old: u.name, date: getSimpleDate() });
-            u.name = cleanSender;
+            data.nickHistory[targetUid].push({ old: oldName, date: getSimpleDate() });
+
+            // 2. 원자적 신분 동기화 엔진 트리거 (사채, 경마 등 모든 DB의 이름 참조 갱신)
+            // 이 한 줄이 있어야 전 서버의 계약서 이름이 자동으로 바뀝니다.
+            if (typeof util_syncIdentityGlobal === 'function') {
+                util_syncIdentityGlobal(targetUid, oldName, newName);
+            }
+
+            // 3. 메인 유저 객체 이름 변경
+            u.name = newName;
+            
+            // 4. 식별 캐시 즉시 교체 (구 닉네임 캐시 파기 및 신규 등록)
+            delete globalData.nameToIdCache[roomName + "_" + oldName];
+            globalData.nameToIdCache[roomName + "_" + newName] = targetUid;
         }
     }
 
@@ -3681,7 +3746,6 @@ if (!targetUid || !roomData.users[targetUid] || roomData.users[targetUid].name !
 }
 
 // 2. [신분 복구] 식별 실패 시 영구 명부(Registry) 대조 (데이터 부활)
-// 캐시에도 없고 루프에서도 못 찾았을 때만 파일 I/O 수행
 if (!targetUid) {
     var regKey = roomName + "_" + cleanSender;
     var registry = {};
@@ -3690,8 +3754,8 @@ if (!targetUid) {
         if (regFile.exists()) registry = JSON.parse(FileStream.read(REGISTRY_PATH));
         
         if (registry[regKey]) {
-            targetUid = registry[regKey]; // 과거 코드가 있다면 즉시 부활
-            globalData.nameToIdCache[cacheKey] = targetUid; // 캐시 복구
+            targetUid = registry[regKey]; 
+            globalData.nameToIdCache[cacheKey] = targetUid; 
             Log.info("[Identity Restore] " + cleanSender + "님 신분 복구 완료.");
         }
     } catch(e) { Log.error("Registry Read Error"); }

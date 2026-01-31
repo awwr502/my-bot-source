@@ -5623,13 +5623,37 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         var totalPrize = 0;
         var results = { rank1: 0, rank2: 0, rank3: 0, rank4: 0, fail: 0 };
 
+        var earnedLetters = 0; // 이번 구매에서 획득한 편지 총수
+
         for (var i = 0; i < qty; i++) {
             var rand = Math.random();
             if (rand < conf.PROBS.RANK1) { results.rank1++; totalPrize += conf.PRIZES.RANK1; }
             else if (rand < conf.PROBS.RANK2) { results.rank2++; totalPrize += conf.PRIZES.RANK2; }
             else if (rand < conf.PROBS.RANK3) { results.rank3++; totalPrize += conf.PRIZES.RANK3; }
             else if (rand < conf.PROBS.RANK4) { results.rank4++; totalPrize += conf.PRIZES.RANK4; }
-            else { results.fail++; }
+            else { 
+                results.fail++; 
+                // [개별 확률 적용] 낙첨된 복권 한 장당 20% 확률로 편지 카운트
+                if (Math.random() < 0.2) earnedLetters++; 
+            }
+        }
+
+        // 편지 데이터 반영 및 부적 변환 체크
+        var letterMsg = "";
+        if (earnedLetters > 0) {
+            user.lottoFailCount = (user.lottoFailCount || 0) + earnedLetters;
+            letterMsg = "\n\n📩 낙첨 위로의 편지 " + earnedLetters + "장 획득!";
+            
+            // 15장 마다 부적으로 변환 (while문으로 다량 획득 대응)
+            while (user.lottoFailCount >= 15) {
+                user.lottoFailCount -= 15;
+                user.luckyCharmEnd = Date.now() + 3600000; // 1시간
+                user.inventory.push({ id: 888, name: "행운의부적", icon: "🔮", effect: "item", title: "행운의부적" });
+                letterMsg += "\n✨ 편지 15장이 모여 [행운의부적]이 완성되었습니다! (현재 잔여: " + user.lottoFailCount + "장)";
+            }
+            if (user.lottoFailCount > 0 && user.lottoFailCount < 15) {
+                letterMsg += "\n(현재 수집 현황: " + user.lottoFailCount + "/15)";
+            }
         }
 
         var res = processRepayment(user, totalPrize, targetUid, roomName);
@@ -5638,25 +5662,14 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         var body = "🧧 스피또 " + qty + "매 개봉 결과\n\n";
         if (totalPrize > 0) {
             body += "🎊 총 당첨금: " + fp(totalPrize) + "P\n";
-            if (results.rank1 > 0) body += "⭐ 1등(" + fp(conf.PRIZES.RANK1) + "P): " + results.rank1 + "회\n";
-            if (results.rank2 > 0) body += "🥈 2등(" + fp(conf.PRIZES.RANK2) + "P): " + results.rank2 + "회\n";
+            if (results.rank1 > 0) body += "⭐ 1등: " + fp(conf.PRIZES.RANK1) + "회\n";
+            if (results.rank2 > 0) body += "🥈 2등: " + fp(conf.PRIZES.RANK2) + "회\n";
             body += "🥉 기타 등수: " + (results.rank3 + results.rank4) + "회 당첨";
         } else {
             body += "💀 아쉽게도 모두 꽝입니다...";
-            // 다량 구매 시에도 꽝이 있으면 20% 확률로 편지 1장 지급
-            if (Math.random() < 0.2) {
-                user.lottoFailCount = (user.lottoFailCount || 0) + 1;
-                body += "\n\n📩 아쉬운 마음에 '위로의편지' 1장을 얻었습니다! (" + user.lottoFailCount + "/15)";
-                if (user.lottoFailCount >= 15) {
-                    user.lottoFailCount = 0;
-                    user.luckyCharmEnd = Date.now() + 3600000;
-                    user.inventory.push({ id: 888, name: "행운의부적", icon: "🔮", effect: "item", title: "행운의부적" });
-                    body += "\n✨ 편지 15장이 모여 [행운의부적]이 완성되었습니다!";
-                }
-            }
         }
         
-        replier.reply(formatCommand("🎰 스피또 결과", user, body + (res.repayMsg || ""), "내 잔액: " + fp(user.point) + "P"));
+        replier.reply(formatCommand("🎰 스피또 결과", user, body + letterMsg + (res.repayMsg || ""), "내 잔액: " + fp(user.point) + "P"));
     }
     
     // 1. 랜덤 아이콘 박스 처리 (메시지 테이블 및 중복 조각 지급 포함)

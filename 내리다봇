@@ -6684,38 +6684,58 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         }
 
         var stockData = data.stockMarket[oldName];
-        stockData.price = newPrice;
-        stockData.lastPrice = newPrice;
-        
-        if (oldName !== newName) {
-            data.stockMarket[newName] = stockData;
-            delete data.stockMarket[oldName];
-            
-            var fixCount = 0;
-            for (var r in data.rooms) {
-                var users = data.rooms[r].users;
-                for (var uid in users) {
-                    var u = users[uid];
-                    if (u.stockHoldings && u.stockHoldings[oldName] !== undefined) {
-                        u.stockHoldings[newName] = u.stockHoldings[oldName];
-                        delete u.stockHoldings[oldName];
-                        if (u.stockAvg && u.stockAvg[oldName] !== undefined) {
-                            u.stockAvg[newName] = u.stockAvg[oldName];
-                            delete u.stockAvg[oldName];
-                        }
-                        fixCount++;
-                    }
-                }
-            }
-        }
+        var oldPrice = Number(stockData.price);
+        
+        // 자산 보존 비율 계산 (기존가 / 신규가)
+        var ratio = oldPrice / newPrice;
 
-        safeSaveData(data);
-        var res = "✅ 수정 완료: " + oldName + " ➔ " + newName + "\n💰 가격: " + fp(newPrice) + "P";
-        if (oldName !== newName) res += "\n👥 유저 데이터 이전: " + fixCount + "명";
-        
-        replier.reply(formatAdmin("주식 시장 개입", res));
-        return true;
-    }
+        // 1. 시장 데이터 업데이트
+        stockData.price = newPrice;
+        stockData.lastPrice = newPrice;
+        stockData.openPrice = newPrice; // 시가 동기화로 급락 방지
+
+        var fixCount = 0;
+        for (var r in data.rooms) {
+            var users = data.rooms[r].users;
+            for (var uid in users) {
+                var u = users[uid];
+                if (u.stockHoldings && u.stockHoldings[oldName] !== undefined) {
+                    // 2. 보안 가드: 수량 급변으로 인한 자가치유 엔진 차단
+                    u.skipHealing = true;
+
+                    var oldQty = Number(u.stockHoldings[oldName]);
+                    var oldAvg = Number(u.stockAvg[oldName] || oldPrice);
+
+                    // 3. 보유 수량 및 평단가 비율 조정 (가치 보존)
+                    var newQty = Math.max(1, Math.floor(oldQty * ratio));
+                    var newAvg = Math.floor(oldAvg / ratio);
+
+                    // 4. 데이터 이식 (이름 변경 대응 포함)
+                    u.stockHoldings[newName] = newQty;
+                    u.stockAvg[newName] = newAvg;
+
+                    if (oldName !== newName) {
+                        delete u.stockHoldings[oldName];
+                        if (u.stockAvg[oldName]) delete u.stockAvg[oldName];
+                    }
+                    fixCount++;
+                }
+            }
+        }
+
+        if (oldName !== newName) {
+            data.stockMarket[newName] = stockData;
+            delete data.stockMarket[oldName];
+        }
+
+        safeSaveData(data);
+        var res = "✅ 시장 데이터 정밀 교정 완료\n" +
+                  "━━━━━━━━━━━━━━━\n" +
+                  "• 종목: " + oldName + " ➔ " + newName + "\n" +
+                  "• 가격: " + fp(oldPrice) + "P ➔ " + fp(newPrice) + "P\n" +
+                  "• 대상: 유저 " + fixCount + "명의 자산 가치 보존 완료\n" +
+                  "━━━━━━━━━━━━━━━\n" +
+                  "💡 가격 변동 비율에 맞춰 수량과 평단가가 자동 조정되었습니다.";
 
     /* [3] 유저 보유 자산 기반 시장 재건 */
     if (msg === "/시장자산복구") {

@@ -1171,39 +1171,30 @@ function util_stagingStart(user) {
 }
 
 /**
- * [v10.0 AAS] 스테이징 시작 (스냅샷 생성)
+ * [신설: 원자적 커밋] v1.0
+ * 기능: 모든 로직이 에러 없이 종료되었을 때, 가상 주머니의 내용을 실제 DB에 반영합니다.
  */
-function util_stagingStart(user) {
-    if (!global.GLOBAL_STAGING) global.GLOBAL_STAGING = { active: {}, snapshots: {} };
-    // 현재 유저 상태를 깊은 복사하여 보관
-    global.GLOBAL_STAGING.active[user.uid] = true;
-    global.GLOBAL_STAGING.snapshots[user.uid] = JSON.parse(JSON.stringify(user));
+function util_stagingCommit(user, roomData) {
+    if (!user || !user.uid || !GLOBAL_STAGING.active[user.uid]) return;
+    delete GLOBAL_STAGING.active[user.uid];
+    delete GLOBAL_STAGING.cache[user.uid];
+    // 커밋 성공 시 최종 상태를 물리 파일로 영속화
+    safeSaveData(globalData);
 }
 
 /**
- * [v10.0 AAS] 스테이징 확정 (성공 시)
+ * [신설: 원자적 롤백] v1.0
+ * 기능: 로직 도중 에러가 발생하면, 가상 주머니를 파기하고 시작 전 상태로 되돌립니다.
  */
-function util_stagingCommit(user) {
-    if (global.GLOBAL_STAGING) {
-        delete global.GLOBAL_STAGING.active[user.uid];
-        delete global.GLOBAL_STAGING.snapshots[user.uid];
+function util_stagingRollback(user, roomName) {
+    if (!user || !user.uid || !GLOBAL_STAGING.active[user.uid]) return;
+    var snapshot = GLOBAL_STAGING.cache[user.uid];
+    if (snapshot && globalData.rooms[roomName]) {
+        globalData.rooms[roomName].users[user.uid] = snapshot; // 시작 전 상태로 즉시 복구
     }
-}
-
-/**
- * [v10.0 AAS] 스테이징 롤백 (실패 시)
- */
-function util_stagingRollback(user, roomData) {
-    if (global.GLOBAL_STAGING && global.GLOBAL_STAGING.snapshots[user.uid]) {
-        // 시작 전 스냅샷으로 유저 객체 완전 복구
-        var snapshot = global.GLOBAL_STAGING.snapshots[user.uid];
-        roomData.users[user.uid] = JSON.parse(JSON.stringify(snapshot));
-        
-        delete global.GLOBAL_STAGING.active[user.uid];
-        delete global.GLOBAL_STAGING.snapshots[user.uid];
-        return true;
-    }
-    return false;
+    delete GLOBAL_STAGING.active[user.uid];
+    delete GLOBAL_STAGING.cache[user.uid];
+    Log.warn("[Atomic Staging] " + user.name + "님의 트랜잭션이 실패하여 롤백되었습니다.");
 }
 
 /**

@@ -2690,7 +2690,7 @@ function market_forceNewLandmark() {
 function market_updateLandmarkNow(roomName) {
     var data = getDatabase();
     var result = updateLandmarkPrices(data);
-    var body = "📈 부동산 시세 변동\n━━━━━━━━━━━━━━━\n🟢 시장 운영 중\n\n" + (generateLandmarkList(data) || "매물 정보 없음");
+    var body = "📈 부동산 시세 변동\n━━━━━━━━━━━━━━━\n🟢 부동산 운영중\n\n" + (generateLandmarkList(data) || "매물 정보 없음");
     if (result.length > 0) body += "\n\n" + result.join("\n");
     body += "\n━━━━━━━━━━━━━━━"; 
     Api.replyRoom(roomName || "내리다", body);
@@ -3100,7 +3100,7 @@ function _runSector16Logic(data, ctx) {
 
             if (mainRoomData.features) mainRoomData.features.msgCount = 0;
 
-            var statusText = "🟢 부동산 시장 운영 중 (07:00 ~ 23:59)";
+            var statusText = "🟢 부동산 운영중 (07:00 ~ 23:59)";
             var body = "📈 부동산 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateLandmarkList(data) || "매물 정보 없음");
             
             if (landResult.length > 0) body += "\n\n" + landResult.join("\n");
@@ -3125,7 +3125,7 @@ function _runSector16Logic(data, ctx) {
             // 섹터 15에서 만든 랜드마크 전용 엔진 호출
             var landResult = updateLandmarkPrices(data);
 
-            var body = "📈 부동산 시세 변동\n━━━━━━━━━━━━━━━\n🟢 시장 운영 중 (07:00 ~ 23:59)\n\n" + (generateLandmarkList(data) || "매물 정보 없음"); 
+            var body = "📈 부동산 시세 변동\n━━━━━━━━━━━━━━━\n🟢 부동산 운영중 (07:00 ~ 23:59)\n\n" + (generateLandmarkList(data) || "매물 정보 없음"); 
             if (landResult.length > 0) body += "\n\n" + landResult.join("\n");
             body += "\n━━━━━━━━━━━━━━━";
             Api.replyRoom(ctx.targetRoom, body);
@@ -3270,15 +3270,27 @@ function _runSector16Logic(data, ctx) {
                 mainRoomData.features.msgCount = 0;
             }
 
-            var isMarketOpen = (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR);
-            var statusText = isMarketOpen ? "🟢 장 운영 중 (07:00 ~ 23:59)" : "🔴 장 마감";
-            var body = "📉 주식 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateStockList(data) || "시세 정보 없음"); 
-            if (stockResult.length > 0) body += "\n\n" + stockResult.join("\n");
+            // 1. 장 운영 상태 및 제목 설정 (부동산 컨셉 적용)
+            var isMarketOpen = (currentHour >= 7 && currentHour <= 23);
+            var statusText = isMarketOpen ? "🟢 부동산 시장 운영 중 (07:00 ~ 23:59)" : "🔴 부동산 시장 마감";
+            
+            // 2. 출력 메시지 조립 (주주 정보 포함을 위해 ctx.targetRoom 인자 전달)
+            var body = "📈 부동산 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateLandmarkList(data, ctx.targetRoom) || "매물 정보 없음");
+            
+            // 3. 특수 변동 내역(폭등/폭락 등)이 있을 경우 추가
+            if (landResult && landResult.length > 0) body += "\n\n" + landResult.join("\n");
             body += "\n━━━━━━━━━━━━━━━";
-            try { Api.replyRoom(ctx.targetRoom, body); } catch(err) {}
+            
+            // 4. 전송 및 시스템 상태 도장 기록
+            try { 
+                Api.replyRoom(ctx.targetRoom, body); 
+            } catch(err) {
+                Log.error("Reply Error: " + err);
+            }
+            
             ctx.isUpdated = true;
-            util_stamp("stockLogic");
-        }
+            util_stamp("landmarkLogic"); // 기존 stockLogic에서 landmarkLogic으로 변경
+
     } catch (e) { Log.error("Stock Logic Error: " + e); }
 
     /* [3. 경마 시스템 통합 스케줄러] */

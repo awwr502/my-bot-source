@@ -5789,7 +5789,7 @@ if (msg === "/가이드") {
     util_stagingCommit(user, roomData);
 
     } catch (e) {
-        /* [예외 발생] 로직 에러나 게이트웨이 보안에 걸린 경우 즉시 롤백 */
+        /* [예외 발생] 로직 에러나 보안 엔진 적발 시 롤백 */
         util_stagingRollback(user, roomName);
         
         if (typeof util_reportError === 'function') {
@@ -5810,27 +5810,21 @@ if (typeof _runChatBonusLogic === 'function') {
                         if (typeof util_reportError === 'function') {
                             util_reportError(e, roomName, cleanSender, msg);
                         }
-                    } finally {
-            // [v10.0 IPM] 실시간 수치 연산 및 PERF_METRICS 업데이트
-            if (typeof _perfStartTime !== 'undefined') {
-                var _pDur = java.lang.System.currentTimeMillis() - _perfStartTime;
-                
-                // 평균 지연 시간 (최근 데이터 가중치 10% 반영)
-                PERF_METRICS.avgLag = Math.floor((PERF_METRICS.avgLag * 9 + _pDur) / 10);
-                
-                // 최고 지연 시간(Peak) 갱신
-                if (_pDur > PERF_METRICS.peakLag) PERF_METRICS.peakLag = _pDur;
-                
-                // 메시지 처리 카운트 증가
-                PERF_METRICS.msgPerMin++;
-            }
-            // 어떤 경우에도 락을 해제하여 데드락을 방지합니다.
-            lock.unlock(); 
+                    finally {
+        // [v10.0 IPM] 실시간 성능 메트릭 업데이트
+        if (typeof _perfStartTime !== 'undefined') {
+            var _pDur = java.lang.System.currentTimeMillis() - _perfStartTime;
+            PERF_METRICS.avgLag = Math.floor((PERF_METRICS.avgLag * 9 + _pDur) / 10);
+            if (_pDur > PERF_METRICS.peakLag) PERF_METRICS.peakLag = _pDur;
+            PERF_METRICS.msgPerMin++;
         }
-    } // <--- 1. LogicQueue의 run: function() 마감
-    }); // 2. LogicQueue.execute 마감
-} // <--- 3. ParallelPool의 run: function() 마감
-}); // 4. ParallelPool.execute 마감
+        // 어떤 경우에도 락을 해제하여 데드락을 방지
+        if (lock.isLocked()) lock.unlock(); 
+    }
+} // LogicQueue 내 run: function() 마감
+})); // LogicQueue.execute(new Runnable({...})) 마감
+} // ParallelPool 내 run: function() 마감
+})); // ParallelPool.execute(new Runnable({...})) 마감
 };
 
 //==========섹터27==========

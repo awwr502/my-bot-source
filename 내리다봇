@@ -3650,6 +3650,57 @@ function _runSector17Logic(data, ctx) {
                 }
             }
 
+            /* [v11.0] 6대 랜드마크 최대주주 일일 배당 정산 엔진 */
+            // 설명: 하루 동안 쌓인 분야별 수익금(dailyPools)을 각 건물 지분 1위에게 배당합니다.
+            var pools = roomObj.features.dailyPools;
+            var divConf = SYSTEM_CONFIG.ECO.DIVIDENDS;
+            var divReport = [];
+
+            if (pools) {
+                // 1. 배당 대상 건물 및 매핑 설정 (건물명: {주머니키, 배당률})
+                var targets = {
+                    "광산": { key: "mine", rate: divConf.MINE },
+                    "낚시터": { key: "fish", rate: divConf.FISH },
+                    "카지노": { key: "casino", rate: divConf.CASINO },
+                    "은행": { key: "bank", rate: divConf.BANK },
+                    "백화점": { key: "shop", rate: divConf.SHOP },
+                    "경마장": { key: "race", rate: divConf.RACING }
+                };
+
+                for (var landName in targets) {
+                    var info = targets[landName];
+                    var poolAmount = Number(pools[info.key] || 0);
+                    
+                    if (poolAmount > 0) {
+                        // 섹터 7에서 만든 엔진으로 최대주주 탐색
+                        var owner = util_getMajorityOwner(roomObj, landName);
+                        
+                        if (owner && owner.data) {
+                            var dividend = Math.floor(poolAmount * info.rate);
+                            if (dividend > 0) {
+                                // 최대주주에게 배당금 입금 (게이트웨이 사용)
+                                util_updatePoint(owner.data, roomObj, dividend, "랜드마크 배당금: " + landName, rName);
+                                divReport.push("• " + landName + ": " + owner.data.name + "님 (+" + fp(dividend) + "P)");
+                            }
+                        }
+                    }
+                    // 배당 완료 후 해당 분야 주머니 초기화
+                    pools[info.key] = 0;
+                }
+
+                // 배당 결과 발표 (수익이 발생한 경우에만)
+                if (divReport.length > 0) {
+                    var msg = "🌙 [내리다 경제 위원회: 일일 배당 보고]\n" +
+                              "━━━━━━━━━━━━━━━\n" +
+                              "오늘 발생한 국가 수익의 일부를\n" +
+                              "각 구역 최대주주분들께 배당하였습니다.\n\n" +
+                              divReport.join("\n") + "\n" +
+                              "━━━━━━━━━━━━━━━\n" +
+                              "💡 지분을 늘려 시스템의 주인이 되어보세요!";
+                    Api.replyRoom(rName, msg);
+                }
+            }
+
             try { 
                 Api.replyRoom(rName, formatAdmin("🎫 로또 판매 시작", "새로운 로또 판매가 시작되었습니다.\n매일 밤 22시 추첨!")); 
             } catch(e) {}

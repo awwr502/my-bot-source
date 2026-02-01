@@ -299,7 +299,7 @@ var SYSTEM_CONFIG = {
                 MAX_COUNT: 10,     // 시장에 동시 상장 가능한 최대 종목 수
                 OPEN_HOUR: 7,      // 주식 장 개장 시간
                 CLOSE_HOUR: 23,    // 주식 장 마감 시간
-                MANI_RATE: 0.15,   // 기본 특수 이벤트(폭등/폭락) 변동폭
+                MANI_RATE: 0.25,   // 기본 특수 이벤트(폭등/폭락) 변동폭
                 DELIST_LIMIT: 0.25, // [상폐 기준]: 시장 평균가 대비 20% 이하
                 ABS_DELIST_LIMIT: 10000, // [절대적 기준]: 10,000P 미만 시 상폐 카운트
                 CLOSING_LIMIT: 0.40, // [최대 슈팅]: 시가 대비 +40%까지 상승 허용
@@ -1178,6 +1178,7 @@ function util_stagingStart(user) {
  */
 function util_stagingCommit(user, roomData) {
     if (!user || !user.uid || !GLOBAL_STAGING.active[user.uid]) return;
+    user.skipHealing = true;
     delete GLOBAL_STAGING.active[user.uid];
     delete GLOBAL_STAGING.cache[user.uid];
     // 커밋 성공 시 최종 상태를 물리 파일로 영속화
@@ -4138,6 +4139,10 @@ if (user.bank > 0 && (!user.lastBankUpdateTime || user.lastBankUpdateTime === 0)
     user.lastBankUpdateTime = Date.now();
 }
 
+util_stagingStart(user); 
+
+try {
+
 /**
  * [독립형 함수] 중복 유저 선택 처리 엔진
  * 설명: 닉네임 검색 시 중복 발생 건에 대한 유저의 숫자 선택을 처리합니다.
@@ -5651,30 +5656,55 @@ if (msg === "/가이드") {
 
 //==========섹터25==========
 
-/* [최적화] 관리자 명령어 통합 처리 구간 */
-        if (isAdmin(sender, data)) {
-            if (typeof _handleAdminLogic === 'function') {
-                if (_handleAdminLogic(msg, user, data, replier, roomName, targetUid, sender)) return;
+네, 사용자님이 작성하신 소스코드의 구조는 제가 가이드드린 트랜잭션(스테이징) 설계와 100% 일치하며 정확한 위치에 잘 배치되었습니다.질문하신 isProcessed = true; } } 부분은 사용자 명령어 실행 블록과 명령어 시작("/") 체크 블록을 닫아주는 중괄호들입니다. 이 구조 덕분에 로직이 중간에 튕기지 않고 맨 아래의 util_stagingCommit까지 무사히 내려올 수 있게 되었습니다.원하시는 3가지 요구 조건이 이 코드로 어떻게 실현되는지 정리해 드리고, 전체 섹터 25를 깨끗하게 정리해서 다시 박스에 담아드릴게요.1) 사용자님의 3가지 요구 조건 달성 확인조건이 코드에서의 작동 원리결과1. 정상 활동 성공 시모든 명령어가 isProcessed = true만 남기고 Commit 함수까지 도달합니다.skipHealing = true가 부여되어 딥헬러가 통과시킴.2. 활동 중 오류 발생 시로직 중간에 에러가 나면 즉시 catch로 점프하여 Rollback이 실행됩니다.데이터가 되돌아가고 skipHealing이 없어 딥헬러가 감시함.3. 비정상 수치 변경 시게이트웨이(util_updatePoint)에서 비정상 연산을 감지해 Error를 던집니다.catch문이 이를 낚아채 즉시 롤백하고 딥헬러가 감시함.2) [섹터 25] 최종 확정 소스코드이 내용을 그대로 복사해서 섹터 24 아래부터 섹터 26 시작 전까지 덮어쓰시면 됩니다.JavaScript//==========섹터25==========
+
+    /* [v10.1] C. 관리자 명령어 처리 (트랜잭션 flow 유지) */
+    if (!isProcessed && isAdmin(sender, data, targetUid)) {
+        if (typeof _handleAdminLogic === 'function') {
+            if (_handleAdminLogic(msg, user, data, replier, roomName, targetUid, sender)) {
+                isProcessed = true; // 처리 완료 깃발만 들고 Commit 지점까지 이동
             }
         }
+    }
 
-        /* [명령어 실행 및 예외 처리] */
+    /* [v10.1] D. 명령어 레지스트리 자동 실행 (트랜잭션 flow 유지) */
+    if (!isProcessed && msg.startsWith("/")) {
         var cmdKey = msg.split(" ")[0];
-
-        if (msg.startsWith("/")) {
-            // 1. 사용자 명령어 실행 로직
-            if (USER_COMMANDS && USER_COMMANDS[cmdKey]) {
-                USER_COMMANDS[cmdKey].execute(msg, user, data, replier, roomName, targetUid, sender);
-                return;
-            }
-
-            // 2. 관리자/사용자 명령어 모두 없는 경우
-            if (!ADMIN_COMMANDS[cmdKey]) {
-                var unknownCmdMsg = "'" + cmdKey + "'은(는) 등록되지 않은 명령어입니다.";
-                replier.reply(formatError(user, "알 수 없는 명령어", unknownCmdMsg + "\n'/도움말'을 입력하여 전체 명령어 목록을 확인하세요."));
-                return;
-            }
+        
+        // 1. 등록된 사용자 명령어 실행
+        if (USER_COMMANDS && USER_COMMANDS[cmdKey]) {
+            USER_COMMANDS[cmdKey].execute(msg, user, data, replier, roomName, targetUid, sender);
+            isProcessed = true; // [질문하신 부분] 사용자 명령어 블록 마감
+        } 
+        
+        // 2. 관리자/사용자 명령어 모두 없는 경우 처리
+        else if (!ADMIN_COMMANDS[cmdKey]) {
+            var unknownCmdMsg = "'" + cmdKey + "'은(는) 등록되지 않은 명령어입니다.";
+            replier.reply(formatError(user, "알 수 없는 명령어", unknownCmdMsg + "\n'/도움말'을 입력하여 전체 명령어 목록을 확인하세요."));
+            isProcessed = true; // 알 수 없는 명령어도 처리가 끝난 것으로 간주
         }
+    }
+
+    /* [최종 단계] 여기까지 에러가 없었다면 트랜잭션 확정(Commit) */
+    // 이 함수가 실행되어야 skipHealing = true가 되어 딥헬러를 성공적으로 통과합니다.
+    util_stagingCommit(user, roomData);
+
+} catch (e) {
+    /* [예외 발생] 로직 에러나 게이트웨이 보안에 걸린 경우 즉시 롤백 */
+    // skipHealing 권한을 주지 않은 상태로 데이터를 입력 전으로 완벽히 되돌립니다.
+    util_stagingRollback(user, roomName);
+    
+    if (typeof util_reportError === 'function') {
+        util_reportError(e, roomName, cleanSender, msg);
+    }
+    replier.reply(formatError(user, "시스템 보호 작동", "로직 처리 중 오류가 발생하여 자산을 안전하게 복구했습니다."));
+}
+
+/* [채팅 보너스] 트랜잭션 보호막 외부에서 별도 실행 (저장 로직은 Commit/Rollback이 담당) */
+if (typeof _runChatBonusLogic === 'function') {
+    _runChatBonusLogic(msg, user, data, replier, roomName, targetUid);
+}
+
 
 //==========섹터26==========
 

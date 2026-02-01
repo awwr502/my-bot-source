@@ -6474,7 +6474,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
     // 수량 및 누적 매출 정산 로직 최적화
     var qty = (quantity !== undefined && quantity !== null) ? quantity : 1;
 
-    // [v11.0] 현대백화점 최대주주 배당을 위한 일일 판매액(매출) 누적
+    // [v11.0] 백화점 최대주주 배당을 위한 일일 판매액(매출) 누적
     // 설명: 무료 이용권 사용이 아닌 순수 포인트 결제 시에만 매출액을 배당 주머니에 합산합니다.
     if (!isUsingTicket && roomData.features.dailyPools) {
         roomData.features.dailyPools.shop += (Number(finalPrice) || 0);
@@ -8819,6 +8819,11 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         racingData.bets[targetUid] = { uid: targetUid, horseId: hId, amount: betAmt, name: user.name };
         racingData.totalPool += betAmt;
 
+        // [v11.0] 중앙경마장 최대주주 배당을 위한 일일 배팅금액 누적
+        if (roomData.features.dailyPools) {
+            roomData.features.dailyPools.race += betAmt;
+        }
+
         var betSuccessContent = "🏇 선택: " + selectedHorse.id + "번 " + selectedHorse.name + "\n💰 금액: " + fp(betAmt) + "P 배팅 성공!";
 
         if (Math.random() < 0.1) { // 10% 확률
@@ -8875,6 +8880,12 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         util_updatePoint(user, roomData, refund, "경마 배팅 취소", roomName);
         
         racingData.totalPool -= myBet.amount;
+
+        // [v11.0] 배팅 취소 시 일일 누적 금액에서 차감 (실제 유효 배팅액 반영)
+        if (roomData.features.dailyPools) {
+            roomData.features.dailyPools.race -= myBet.amount;
+        }
+
         delete racingData.bets[targetUid];
 
         var cancelMsg = "경마 배팅을 철회했습니다.\n\n💰 원래 배팅금: " + fp(myBet.amount) + "P\n⚖️ 취소 위약금(10%): -" + fp(fee) + "P\n🎁 최종 환불액: " + fp(refund) + "P";
@@ -8964,6 +8975,13 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 // 1. 승리 데이터 갱신
                 var nextWins = Number(user.totalGambleWins || 0) + 1;
                 util_setData(user, 'totalGambleWins', nextWins, "도박 승리 기록", roomName);
+
+                // [v11.0] 로얄카지노 최대주주 배당을 위한 홀짝 당첨 수수료(15%) 누적
+                // 설명: (배팅액 - 지급수익) 차액인 0.15 배당분을 카지노 수익 주머니에 합산합니다.
+                var casinoFee = bet - expectedPayout;
+                if (roomData.features.dailyPools) {
+                    roomData.features.dailyPools.casino += Math.max(0, casinoFee);
+                }
                 
                 var res = processRepayment(user, expectedPayout, targetUid, roomName);
                 util_updatePoint(user, roomData, Number(res.actualGain), "홀짝 적중", roomName);
@@ -9998,6 +10016,12 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
 
                 // [해왕] 칭호 효과: 물고기 판매 보상 20% 증가
                 if (user.title === "해왕") reward = Math.floor(reward * 1.2);
+
+                // [v11.0] 내리다낚시터 최대주주 배당을 위한 일일 판매대금 누적
+                // 설명: 물고기를 팔아 획득한 보상액을 배당 주머니에 합산합니다.
+                if (roomData.features.dailyPools) {
+                    roomData.features.dailyPools.fish += reward;
+                }
 
                 var matchingBonus = 0;
                 var isStimulusActive = (data.stimulusEndTime && Date.now() < data.stimulusEndTime);

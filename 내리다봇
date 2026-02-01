@@ -194,6 +194,17 @@ var ROOM_FEATURE_TEMPLATE = function() {
             isDeadlineNotified: false, // [알림 제어]: 49분 59초 마감 공지가 중복 발송되는 것을 방지하는 스위치
             isResultProcessed: false   // [정산 제어]: 정각(00분) 결과 정산 로직이 중복 실행되는 것을 방지하는 스위치
         },
+
+        /* [신규] 6대 랜드마크 일일 배당금 누적 주머니 */
+        dailyPools: {
+            mine: 0,    // 광산 채굴량 누적
+            fish: 0,    // 낚시 판매금 누적
+            casino: 0,  // 홀짝 수수료 누적
+            bank: 0,    // 은행 이자 발생액 누적
+            shop: 0,    // 백화점(상점) 구매액 누적
+            race: 0     // 경마장 배팅액 누적
+        },
+
         /* 방별 주식 시장 및 기타 데이터 */
         stockMarket: {},
         stockTraffic: {},
@@ -254,6 +265,17 @@ var ADMIN_CMD_LIST = [
 /* 시스템 핵심 상수 설정 */
 var SYSTEM_CONFIG = {
     ECO: {
+
+        /* [신규] 랜드마크 최대주주 배당 비율 설정 */
+        DIVIDENDS: {
+            MINE: 0.01,    // 총 채굴량의 1%
+            FISH: 0.03,    // 총 판매대금의 3%
+            CASINO: 0.05,  // 홀짝 수수료의 5%
+            BANK: 0.05,    // 총 발생 이자의 5%
+            SHOP: 0.02,    // 총 쇼핑액의 2%
+            RACING: 0.02   // 총 배팅금의 2%
+        },
+
         /* [기초 경제 설정] */
         ATTEND_MIN: 8000, // [출석 최소 지급]: 출석 체크 시 무작위로 지급되는 포인트의 하한선
         ATTEND_MAX: 10000, // [출석 최대 지급]: 출석 체크 시 무작위로 지급되는 포인트의 상한선
@@ -1518,6 +1540,32 @@ function util_findStockByShorthand(market, input) {
     return matched;
 }
 
+/**
+ * [신설] 랜드마크 최대주주 추출 엔진
+ * @param {Object} roomData - 해당 방 데이터
+ * @param {String} landName - 건물 이름
+ * @returns {Object|null} 유저 객체 및 ID, 지분량
+ */
+function util_getMajorityOwner(roomData, landName) {
+    var topOwnerId = null;
+    var maxQty = 0;
+    
+    // 해당 방의 모든 유저를 루프하며 특정 건물의 지분 1위를 탐색
+    for (var uid in roomData.users) {
+        var u = roomData.users[uid];
+        var qty = (u.landHoldings && u.landHoldings[landName]) ? Number(u.landHoldings[landName]) : 0;
+        
+        // 지분이 현재 최고치보다 많을 경우 갱신
+        if (qty > maxQty) {
+            maxQty = qty;
+            topOwnerId = uid;
+        }
+    }
+    
+    // 지분 보유자가 한 명이라도 있으면 객체 반환, 없으면 null 반환
+    return topOwnerId ? { id: topOwnerId, data: roomData.users[topOwnerId], qty: maxQty } : null;
+}
+
 //==========섹터8==========
 
 /**
@@ -2478,6 +2526,26 @@ function updateLandmarkPrices(data) {
     if (!data.landmarkMarket) data.landmarkMarket = {};
     if (!data.landmarkTraffic) data.landmarkTraffic = {}; 
 
+    // 1. [고정] 사용자 지정 6대 핵심 랜드마크 강제 상장
+    var fixedSites = {
+        "광산": { price: 500000, type: "bluechip", icon: "⛏️" },
+        "낚시터": { price: 300000, type: "normal", icon: "🎣" },
+        "카지노": { price: 1000000, type: "hotspot", icon: "🎰" },
+        "중앙은행": { price: 5000000, type: "bluechip", icon: "🏦" },
+        "백화점": { price: 1500000, type: "hotspot", icon: "🏢" },
+        "경마장": { price: 800000, type: "normal", icon: "🏇" }
+    };
+    
+    for (var fName in fixedSites) {
+        if (!data.landmarkMarket[fName]) {
+            var site = fixedSites[fName];
+            data.landmarkMarket[fName] = { 
+                price: site.price, lastPrice: site.price, type: site.type, 
+                delistTick: 0, delistLimit: 9999, trend: "none", trendTick: 0, openPrice: site.price 
+            };
+        }
+    }
+
     var mainRoom = data.rooms["내리다"];
     var pol = util_getActivePolicy(mainRoom);
 
@@ -3005,37 +3073,29 @@ function _runSector16Logic(data, ctx) {
 
     /* [2. 부동산 주기적 변동 처리] */
     try {
-        if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && currentMin % 10 === 0 && data.lastLandUpdateMin !== currentMin) {
-            data.lastLandUpdateMin = currentMin; 
-            var currentLandCount = Object.keys(data.landmarkMarket || {}).length;
+        // 1. 현재 분이 0분(정각)이고, 마지막으로 업데이트한 '시간'과 현재 '시간'이 다를 때만 실행
+        if (currentHour >= 7 && currentHour <= 23 && currentMin === 0 && data.lastLandUpdateHour !== currentHour) {
             
+            // 2. 실행 즉시 현재 시간을 기록하여 해당 시간(60초 동안) 내 중복 실행 방지
+            data.lastLandUpdateHour = currentHour; 
+
+            // 관리자 조작 모드(mani) 체크 및 시세 갱신
             if (mani && mani.ACTIVE === true) {
                 data.pendingSpecialEffect = { landmark: mani.TARGET, factor: mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE), forceMani: true };
-            } else {
-                if (currentLandCount < 3 || (currentLandCount < 12 && Math.random() < 0.8)) { 
-                    data.pendingNewLandmark = true;
-                } else if (Math.random() < 0.5) {
-                    var landmarks = Object.keys(data.landmarkMarket || {});
-                    if (landmarks.length > 0) {
-                        var target = landmarks[Math.floor(Math.random() * landmarks.length)];
-                        var isUp = Math.random() < 0.45;
-                        var baseMani = conf.SETTINGS.MANI_RATE || 0.25;
-                        data.pendingSpecialEffect = { landmark: target, factor: isUp ? baseMani : -baseMani };
-                    }
-                }
             }
-            try { java.lang.Thread.sleep(1000); } catch(e){}
+            
             var landResult = updateLandmarkPrices(data);
 
             if (mainRoomData.features) mainRoomData.features.msgCount = 0;
 
             var statusText = "🟢 부동산 시장 운영 중 (07:00 ~ 23:59)";
-            var body = "📈 부동산 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateLandmarkList(data) || "매물 정보 없음"); 
+            var body = "📈 부동산 시세 변동\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (generateLandmarkList(data) || "매물 정보 없음");
+            
             if (landResult.length > 0) body += "\n\n" + landResult.join("\n");
             body += "\n━━━━━━━━━━━━━━━";
+            
             Api.replyRoom(ctx.targetRoom, body);
-            ctx.isUpdated = true;
-            util_stamp("landmarkLogic");
+            ctx.isUpdated = true; 
         }
     } catch (e) { Log.error("Landmark Logic Error: " + e); }
 
@@ -3828,6 +3888,15 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 roomData.features.msgCount = (roomData.features.msgCount || 0) + 1;
 
                /* [안전 패치] 템플릿 구조 변경 시 실시간 반영 (누락 데이터 자동 생성) */
+
+                // [v11.0] 6대 랜드마크 일일 배당금 누적 주머니 자동 복구 로직 (Healer)
+                // 설명: 기존 방 데이터에 주머니가 없는 경우, 에러 방지를 위해 즉시 생성합니다.
+                if (!roomData.features.dailyPools) {
+                    roomData.features.dailyPools = { 
+                        mine: 0, fish: 0, casino: 0, bank: 0, shop: 0, race: 0 
+                    };
+                }
+
                 // 설명: 섹터 1의 템플릿에 새로운 기능이 추가되면, 기존 방에도 즉시 해당 공간을 만들어줍니다.
                 if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
                     var template = ROOM_FEATURE_TEMPLATE();
@@ -5640,7 +5709,7 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         else if (choice === "2") { targetCat = "게임"; next = "미니게임 참여: [/홀짝], [/낚시]"; }
         else if (choice === "3") { targetCat = "상점"; next = "상점 확인: [/상점]"; }
         else if (choice === "4") { targetCat = "경제"; next = "은행 및 사채 메뉴: [/은행]"; }
-        else if (choice === "5") { targetCat = "주식"; next = "시세 확인: [/주식]"; }
+        else if (choice === "5") { targetCat = "부동산"; next = "시세 확인: [/랜드마크]"; }
         else if (choice === "6") { targetCat = "광산"; next = "채굴 시작: [/광산시작]"; }
         else if (choice === "7") { targetCat = "정부"; next = "정책 확인: [/의회]"; }
         

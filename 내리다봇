@@ -1025,6 +1025,7 @@ var CMD_LIST = {
         { cmd: "/신용조정", desc: "[닉네임] [점수] 신용점수 직접 가감", func: "_adminUserManageLogic" },
         { cmd: "/칭호회수", desc: "[닉네임] [칭호명] 박탈", func: "_adminUserManageLogic" },
         { cmd: "/보안테스트", desc: "[1-3] 보안 엔진 4단계 스트레스 테스트", func: "_adminEconomyLogic" },
+        { cmd: "/전체부동산", desc: "전 구역 유저들의 부동산 보유 현황 총괄 조회", func: "_adminEconomyLogic" },
         { cmd: "/시장데이터교정", desc: "헬러 간섭으로 꼬인 랜드마크 수량 강제 압축 및 교정", func: "_adminEconomyLogic" },
         { cmd: "/경제전체리셋", desc: "모든 유저 자산/부채 초기화 및 20만P 공평 지급", func: "_adminEconomyLogic" }
     ]
@@ -7538,6 +7539,67 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         }
         safeSaveData(data, false); 
         replier.reply(formatAdmin("🛠️ 부동산 지분 정밀 수리", "대상 인원: " + fixUserCount + "명\n조치: 비정상 고액 지분 강제 압축 완료"));
+        return true;
+    }
+
+    /* [v11.0] 전 구역 유저 부동산 보유 현황 총괄 조회 */
+    if (msg === "/전체부동산") {
+        var allUsers = [];
+        var totalMarketValue = 0;
+        var ownerCount = 0;
+
+        for (var r in data.rooms) {
+            var roomUsers = data.rooms[r].users;
+            for (var uid in roomUsers) {
+                var u = roomUsers[uid];
+                var holdings = u.landHoldings || {};
+                var keys = Object.keys(holdings);
+                
+                if (keys.length > 0) {
+                    var userTotalValue = 0;
+                    var holdingList = [];
+                    
+                    for (var i = 0; i < keys.length; i++) {
+                        var lName = keys[i];
+                        var qty = Number(holdings[lName]);
+                        if (qty <= 0) continue;
+                        
+                        var land = data.landmarkMarket[lName];
+                        var curPrice = land ? Number(land.price) : 0;
+                        var trait = (land && land.type && SYSTEM_CONFIG.ECO.LANDMARK.TRAITS[land.type]) 
+                                    ? SYSTEM_CONFIG.ECO.LANDMARK.TRAITS[land.type] : {icon: "🏢"};
+                        
+                        userTotalValue += (qty * curPrice);
+                        holdingList.push("• " + trait.icon + " " + lName + " : " + qty + "지분");
+                    }
+
+                    if (holdingList.length > 0) {
+                        allUsers.push({
+                            name: getDisplayName(u),
+                            list: holdingList.join("\n"),
+                            total: userTotalValue
+                        });
+                        totalMarketValue += userTotalValue;
+                        ownerCount++;
+                    }
+                }
+            }
+        }
+
+        if (allUsers.length === 0) {
+            replier.reply(formatAdmin("조회 결과", "현재 부동산 지분을 보유한 유저가 없습니다."));
+            return true;
+        }
+
+        var body = allUsers.map(function(u) {
+            return "👤 " + u.name + "님\n" + u.list + "\n💰 자산가치: " + fp(u.total) + "P";
+        }).join("\n\n");
+
+        var summary = "📈 전체 통계 요약\n" +
+                      "• 부동산 보유 유저: " + ownerCount + "명\n" +
+                      "• 전 구역 지분 총액: " + fp(totalMarketValue) + "P";
+
+        replier.reply(formatAdmin("📊 전 구역 부동산 보유 현황", body + "\n━━━━━━━━━━━━━━━\n" + summary));
         return true;
     }
 

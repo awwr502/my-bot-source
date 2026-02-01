@@ -1951,26 +1951,27 @@ function findUserGlobal(name) {
     return res;
 }
 
-/* 중복 유저 선택 핸들러 함수 */
+/* 중복 유저 선택 핸들러 함수 (전역 대응형) */
 function handleUserSelection(replier, targetUid, found, type, extra, user, roomName) {
     var data = getDatabase();
     var roomData = data.rooms[roomName];
     if (!roomData || !roomData.features) return;
 
-    // 방별 독립 저장소인 features.states.selectWait에 저장
     roomData.features.states.selectWait[targetUid] = { 
         timestamp: Date.now(), 
-        results: found, 
+        results: found, // 여기에 각 유저의 roomName이 포함되어 있음
         type: type, 
         extra: extra 
     };
     
     var list = [];
     for(var i=0; i<found.length; i++) {
-        list.push((i + 1) + ". " + found[i].data.name);
+        var f = found[i];
+        // [방 이름 표시] 관리자가 어느 방 유저를 건드리는지 명확히 표시
+        list.push((i + 1) + ". [" + f.roomName + "] " + f.data.name);
     }
 
-    replier.reply(formatCommand("🔍 중복 닉네임 선택", user, "여러 유저가 검색되었습니다.\n번호를 선택해주세요.\n\n" + list.join("\n") + "\n\n(취소: [취소])", "입력 대기: 30초"));
+    replier.reply(formatCommand("🔍 전역 중복 유저 선택", user, "관리하실 대상을 선택해주세요.\n\n" + list.join("\n") + "\n\n(취소: [취소])", "입력 대기: 30초"));
 }
 
 /**
@@ -4235,8 +4236,9 @@ var isProcessed = false;
 try {
 
 /**
- * [독립형 함수] 중복 유저 선택 처리 엔진
+ * [독립형 함수] 중복 유저 선택 처리 엔진 (전역 원격 관제 v10.5)
  * 설명: 닉네임 검색 시 중복 발생 건에 대한 유저의 숫자 선택을 처리합니다.
+ * 반영: 모든 관리자 명령어가 유저가 속한 실제 방(Target Room)의 데이터를 수정하도록 교정.
  */
 function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
@@ -4262,10 +4264,14 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
     var choice = parseInt(msg.replace(/[^0-9]/g, ""));
     if (!isNaN(choice) && choice >= 1 && choice <= selectWaitState[targetUid].results.length) {
         var state = selectWaitState[targetUid];
-        var selected = state.results[choice - 1];
+        var selected = state.results[choice - 1]; // 선택된 검색 결과 (roomName 정보 포함)
         var type = state.type;
         var extra = state.extra;
         var targetUser = selected.data;
+        
+        // [원격 관제 핵심] 유저가 실제로 상주하는 방의 데이터를 타겟팅
+        var targetRoom = selected.roomName || roomName; 
+        var targetRoomData = data.rooms[targetRoom];
         
         delete selectWaitState[targetUid]; // 선택 완료 시 세션 삭제
 
@@ -4273,44 +4279,49 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
         if (type === "stock_buy" || type === "stock_sell") {
             var stockName = selected; // 주식은 selected 자체가 종목명(String)
             var cmdPrefix = (type === "stock_buy") ? "/매수 " : "/매도 ";
-            // 기존 주식 로직으로 리다이렉트하여 거래 집행
-            _gameStockLogic(cmdPrefix + stockName + " " + extra.amount, user, data, replier, roomName, targetUid);
+            // [교정] targetRoom 컨텍스트로 주식 거래 집행
+            _gameStockLogic(cmdPrefix + stockName + " " + extra.amount, targetUser, data, replier, targetRoom, selected.id);
             return true;
         }
 
         if (type === "info") {
             var cr = getCreditInfo(targetUser.creditScore);
-            var info = "💰 포인트: " + fp(targetUser.point) + "P\n🏦 예금: " + fp(targetUser.bank) + "P\n💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n🏅 티어: " + TIERS[targetUser.tier];
+            // [교정] 소속 방 정보 추가
+            var info = "📍 소속: " + targetRoom + "\n💰 포인트: " + fp(targetUser.point) + "P\n🏦 예금: " + fp(targetUser.bank) + "P\n💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n🏅 티어: " + (TIERS[targetUser.tier] || "아이언");
             replier.reply(formatCommand("🔍 유저 상세 정보", targetUser, info, null));
         }
         else if (type === "transfer") {
             if (selected.id === targetUid) return replier.reply(formatError(user, "송금 불가", "자기 자신에게는 송금할 수 없습니다."));
+            // 보내는 사람: 현재 방(roomData), 받는 사람: 실제 유저가 있는 방(targetRoomData)
             util_updatePoint(user, roomData, -extra.amount, "송금 보냄", roomName);
-            var res = processRepayment(targetUser, extra.amount, selected.id, roomName);
-            util_updatePoint(targetUser, roomData, Number(res.actualGain), "송금 받음", roomName);
-            replier.reply(formatCommand("💸 송금 완료", user, getDisplayName(targetUser) + "님께 " + fp(extra.amount) + "P 보냈습니다.", "내 잔액: " + fp(user.point) + "P"));
+            var res = processRepayment(targetUser, extra.amount, selected.id, targetRoom);
+            util_updatePoint(targetUser, targetRoomData, Number(res.actualGain), "송금 받음", targetRoom);
+            replier.reply(formatCommand("💸 송금 완료", user, "[" + targetRoom + "] " + getDisplayName(targetUser) + "님께 " + fp(extra.amount) + "P 보냈습니다.", "내 잔액: " + fp(user.point) + "P"));
         }
         else if (type === "admin_userdata") { 
             replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(targetUser, null, 2))); 
         }
         else if (type === "admin_point_give") {
-            util_updatePoint(targetUser, roomData, extra.amount, "관리자 지급", roomName);
-            replier.reply(formatAdmin("포인트 지급 완료", getDisplayName(targetUser) + "님: +" + fp(extra.amount) + "P\n(현재: " + fp(targetUser.point) + "P)"));
+            // [교정] targetRoomData 국고 연동
+            util_updatePoint(targetUser, targetRoomData, extra.amount, "관리자 지급", targetRoom);
+            replier.reply(formatAdmin("포인트 지급 완료", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님: +" + fp(extra.amount) + "P\n(현재: " + fp(targetUser.point) + "P)"));
         }
         else if (type === "admin_point_take") {
-            util_updatePoint(targetUser, roomData, -extra.amount, "관리자 차감", roomName);
-            replier.reply(formatAdmin("포인트 차감 완료", getDisplayName(targetUser) + "님 차감 처리됨"));
+            // [교정] targetRoomData 국고 연동
+            util_updatePoint(targetUser, targetRoomData, -extra.amount, "관리자 차감", targetRoom);
+            replier.reply(formatAdmin("포인트 차감 완료", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님 차감 처리됨"));
         }
         else if (type === "admin_attend_edit") {
             targetUser.totalAttendance = extra.days;
-            replier.reply(formatAdmin("출석 수정 완료", getDisplayName(targetUser) + "님: " + extra.days + "일"));
+            replier.reply(formatAdmin("출석 수정 완료", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님: " + extra.days + "일"));
         }
         else if (type === "admin_credit_edit") {
             var oldScore = Number(targetUser.creditScore || 600);
             targetUser.creditScore = Math.min(1000, Math.max(0, oldScore + extra.score));
-            if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(targetUser, roomName);
+            // [교정] targetRoom 기준으로 신불자 체크
+            if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(targetUser, targetRoom);
             var crInfo = getCreditInfo(targetUser.creditScore);
-            replier.reply(formatAdmin("⚙️ 신용 점수 조정 완료", "대상: " + getDisplayName(targetUser) + "\n변동: " + extra.score + "점\n현재: " + targetUser.creditScore + "점 (" + crInfo.label + ")"));
+            replier.reply(formatAdmin("⚙️ 신용 점수 조정 완료", "대상: [" + targetRoom + "] " + getDisplayName(targetUser) + "\n변동: " + extra.score + "점\n현재: " + targetUser.creditScore + "점 (" + crInfo.label + ")"));
         }
         else if (type === "admin_title_take") {
             var titleToTake = extra.title;
@@ -4324,9 +4335,9 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             });
             if (targetUser.title === titleToTake) { targetUser.title = ""; removed = true; }
             if (removed) {
-                replier.reply(formatAdmin("🎖️ 칭호 회수 완료", getDisplayName(targetUser) + "님에게서 [" + titleToTake + "] 칭호를 박탈했습니다."));
+                replier.reply(formatAdmin("🎖️ 칭호 회수 완료", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님에게서 [" + titleToTake + "] 칭호를 박탈했습니다."));
             } else {
-                replier.reply(formatAdmin("회수 실패", getDisplayName(targetUser) + "님은 해당 칭호를 보유하고 있지 않습니다."));
+                replier.reply(formatAdmin("회수 실패", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님은 해당 칭호를 보유하고 있지 않습니다."));
             }
         }
         else if (type === "admin_delete") {
@@ -4335,48 +4346,52 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             var refundLog = "";
             var refundCount = 0;
             var totalRefunded = 0;
-            if (roomData.loanContracts) {
-                for (var cid in roomData.loanContracts) {
-                    var c = roomData.loanContracts[cid];
+            // [교정] targetRoomData의 사채 계약 처리
+            if (targetRoomData.loanContracts) {
+                for (var cid in targetRoomData.loanContracts) {
+                    var c = targetRoomData.loanContracts[cid];
                     if (c.borrowerUid === targetId) {
-                        var lender = roomData.users[c.lenderUid];
+                        var lender = targetRoomData.users[c.lenderUid];
                         if (lender) {
                             var debtAmt = Number(c.currentDebt);
-                            util_updatePoint(lender, roomData, debtAmt, "사채 강제 정산", roomName);
+                            util_updatePoint(lender, targetRoomData, debtAmt, "사채 강제 정산", targetRoom);
                             totalRefunded += debtAmt;
                             refundCount++;
-                            try { Api.replyRoom(roomName, "🚬 [사채 강제 정산]\n" + tName + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); } catch(e){}
+                            try { Api.replyRoom(targetRoom, "🚬 [사채 강제 정산]\n" + tName + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); } catch(e){}
                         }
-                        delete roomData.loanContracts[cid];
+                        delete targetRoomData.loanContracts[cid];
                     }
                 }
             }
             if (targetUser.loan && Number(targetUser.loan.debt) > 0) {
                 var bankDebt = Number(targetUser.loan.debt);
-                util_updateReserve(roomData, bankDebt, "대출금 국고 회수", roomName);
+                util_updateReserve(targetRoomData, bankDebt, "대출금 국고 회수", targetRoom);
                 refundLog += "\n\n🏦 은행 대출금 " + fp(bankDebt) + "P가 국고로 자동 회수되었습니다.";
             }
             if (refundCount > 0) refundLog += "\n⚠️ 사채 보전 완료: " + refundCount + "건 (" + fp(totalRefunded) + "P)";
+            
+            // 캐시 삭제
             if (typeof uidCache !== 'undefined') {
                 for (var key in uidCache) { if (uidCache[key] === targetId) delete uidCache[key]; }
             }
-            delete roomData.users[targetId];
+            // [교정] 실제 유저가 있는 방에서 삭제
+            delete targetRoomData.users[targetId];
             try {
                 var regFile = new java.io.File(REGISTRY_PATH);
                 if (regFile.exists()) {
                     var regData = JSON.parse(FileStream.read(REGISTRY_PATH));
-                    delete regData[roomName + "_" + tName];
+                    // [교정] 타겟 방 이름 키로 명부 삭제
+                    delete regData[targetRoom + "_" + tName];
                     FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
                 }
             } catch (e) { Log.error("Registry Delete Error: " + e); }
-            replier.reply(formatAdmin("유저 삭제 완료", "[" + tName + "]님의 데이터를 영구 삭제했습니다." + refundLog));
+            replier.reply(formatAdmin("유저 삭제 완료", "[" + targetRoom + "] 방에서 [" + tName + "]님의 데이터를 영구 삭제했습니다." + refundLog));
         }
         else if (type === "admin_attend_reset") {
             targetUser.lastDate = "";
-            replier.reply(formatAdmin("출석 초기화", getDisplayName(targetUser) + "님의 오늘 출석 기록을 삭제했습니다."));
+            replier.reply(formatAdmin("출석 초기화", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님의 오늘 출석 기록을 삭제했습니다."));
         }
         else if (type === "user_restore") {
-            // [Gemini 수정] 중복 선택 시에도 스마트 복구 로직(v5.9.1) 적용
             var stablePath = BASE_DIR + "backup/last_stable_backup.json";
             var stableFile = new java.io.File(stablePath);
 
@@ -4386,16 +4401,14 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             }
 
             try {
-                // 1. 소스 코드 결정 (입력된 UUID가 있으면 그것을, 없으면 선택된 유저의 ID를 사용)
                 var sourceCode = (extra && extra.sourceCode) ? extra.sourceCode : selected.id;
                 var targetId = selected.id;
-                var fullNick = selected.data.name; // 현재 방에 존재하는 정확한 풀네임
+                var fullNick = selected.data.name; 
 
                 var backupContent = FileStream.read(stablePath);
                 var backupData = JSON.parse(backupContent);
                 var rawBackupUser = null;
 
-                // 2. 백업본에서 소스 데이터 탐색
                 for (var r in backupData.rooms) {
                     if (backupData.rooms[r].users[sourceCode]) {
                         rawBackupUser = backupData.rooms[r].users[sourceCode];
@@ -4405,51 +4418,45 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
 
                 if (!rawBackupUser) throw new Error("백업본에 해당 데이터(ID:" + sourceCode + ")가 없습니다.");
 
-                // 3. 데이터 이식 및 동기화
                 var backupUser = JSON.parse(JSON.stringify(rawBackupUser));
                 var schema = { chatLog: [], inventory: [], stockHoldings: {}, stockAvg: {}, point: 50000 };
                 for (var key in schema) { if (backupUser[key] === undefined) backupUser[key] = schema[key]; }
 
-                // [동기화] 이름은 현재 방의 풀네임으로 유지
                 backupUser.name = fullNick;
-                roomData.users[targetId] = backupUser;
+                // [교정] targetRoomData에 복원 데이터 이식
+                targetRoomData.users[targetId] = backupUser;
 
                 safeSaveData(data, false);
                 if (typeof globalData !== 'undefined') globalData = data;
 
-                // 4. 결과 출력 (신형 포맷)
                 replier.reply(formatAdmin("✅ 데이터 정밀 이관 완료",
+                    "📍 소속: " + targetRoom + "\n" +
                     "현재 대상: " + fullNick + "\n" +
-                    "식별 모드: 간략화 검색 지원\n" +
                     "━━━━━━━━━━━━━━━\n" +
                     "💰 최종 복구 잔액: " + fp(backupUser.point) + "P\n\n" +
-                    "💡 전체 닉네임과의 동기화가 완료되어 즉시 사용 가능합니다."));
+                    "💡 원격지 방으로의 데이터 동기화가 완료되었습니다."));
 
             } catch (e) {
                 replier.reply(formatAdmin("🚫 복구 중단", "복구 처리 중 오류가 발생했습니다.\n사유: " + e.message));
                 Log.error("Select Restore Error: " + e);
             }
-    }
+        }
         else if (type === "admin_nick_log") {
             var hist = data.nickHistory[selected.id] || [];
             if (hist.length === 0) {
-                replier.reply(formatAdmin("닉네임 기록", getDisplayName(targetUser) + "님은 변경 이력이 없습니다."));
+                replier.reply(formatAdmin("닉네임 기록", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님은 변경 이력이 없습니다."));
             } else {
                 var logMsg = [];
                 for(var i=0; i<hist.length; i++) logMsg.push((i+1) + ". " + hist[i].old + " (" + hist[i].date + ")");
-                replier.reply(formatAdmin("📋 닉네임 변경 이력", "현재: " + targetUser.name + "\n\n[과거 기록]\n" + logMsg.join("\n")));
+                replier.reply(formatAdmin("📋 닉네임 변경 이력", "📍 소속: " + targetRoom + "\n현재: " + targetUser.name + "\n\n[과거 기록]\n" + logMsg.join("\n")));
             }
         }
-
-         else if (type === "admin_blackbox") {
+        else if (type === "admin_blackbox") {
             _executeBlackboxSearch(selected.id, targetUser, replier);
         }
-
-else if (type === "admin_reg_delete") {
-            // 명부 강제 삭제 타입 처리 로직 추가
-            var targetKey = selected.id; // handleUserSelection에서 넘겨준 regKey
+        else if (type === "admin_reg_delete") {
+            var targetKey = selected.id; 
             var targetFullNick = selected.data.name;
-            
             try {
                 var regFile = new java.io.File(REGISTRY_PATH);
                 if (regFile.exists()) {
@@ -4462,10 +4469,8 @@ else if (type === "admin_reg_delete") {
         }
 
         safeSaveData(data);
-        return true; // 로직 처리 완료
+        return true; 
     }
-    return false;
-}
 
 //==========섹터21==========
 
@@ -7702,53 +7707,38 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [8] 포인트 지급 */
+    /* [8] 전역 포인트 지급 */
     if (msg.indexOf("/포인트지급 ") === 0) {
         var parts = msg.trim().split(/\s+/);
-        if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/포인트지급 [닉네임] [금액]")); return true; }
+        if (parts.length < 3) return replier.reply(formatError(user, "형식 오류", "/포인트지급 [닉네임] [금액]"));
         var am = parseInt(parts.pop());
         var tn = parts.slice(1).join(" ").trim();
-        var roomData = data.rooms[roomName];
-        var found = findUserByName(roomData, tn);
-        if (found.length === 0) { replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); return true; }
+        
+        var found = findUserGlobal(tn); // 전역 검색
+        if (!found.length) { replier.reply(formatError(user, "대상 없음", "유저를 찾을 수 없습니다.")); return true; }
         if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_give", { amount: am }, user, roomName); return true; }
-    
-    var targetUser = found[0].data;
-    util_updatePoint(targetUser, roomData, am, "관리자 직접 지급", roomName);
-        replier.reply(formatAdmin("포인트 지급 완료", getDisplayName(targetUser) + "님: +" + fp(am) + "P"));
+        
+        var f = found[0];
+        util_updatePoint(f.data, data.rooms[f.roomName], am, "관리자 전역 지급", f.roomName);
+        replier.reply(formatAdmin("지급 완료", "[" + f.roomName + "] " + f.data.name + "님: +" + fp(am) + "P"));
         safeSaveData(data);
         return true;
     }
 
-    /* [9] 포인트 차감 (강화: 잔액 초과 차감 시 안내 문구 추가) */
+    /* [9] 전역 포인트 차감 */
     if (msg.indexOf("/포인트차감 ") === 0) {
         var parts = msg.trim().split(/\s+/);
-        if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/포인트차감 [닉네임] [금액]")); return true; }
-        var requestedAmount = parseInt(parts.pop());
+        if (parts.length < 3) return replier.reply(formatError(user, "형식 오류", "/포인트차감 [닉네임] [금액]"));
+        var am = parseInt(parts.pop());
         var tn = parts.slice(1).join(" ").trim();
-        var roomData = data.rooms[roomName];
-        var found = findUserByName(roomData, tn);
-
-        if (found.length === 0) { replier.reply(formatError(user, "대상 없음", "[" + tn + "]님을 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_take", { amount: requestedAmount }, user, roomName); return true; }
         
-        var targetUser = found[0].data;
-        var currentPoint = Number(targetUser.point);
+        var found = findUserGlobal(tn);
+        if (!found.length) { replier.reply(formatError(user, "대상 없음", "유저를 찾을 수 없습니다.")); return true; }
+        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_take", { amount: am }, user, roomName); return true; }
         
-        // 실제로 가져갈 수 있는 양 계산
-        var actualTake = Math.min(currentPoint, requestedAmount);
-        var isShortage = requestedAmount > currentPoint;
-
-        // 실제 차감 집행 (섹터 7의 util_updatePoint 호출)
-        util_updatePoint(targetUser, roomData, -actualTake, "관리자 직접 차감", roomName);
-        
-        var resContent = getDisplayName(targetUser) + "님: -" + fp(actualTake) + "P 차감 완료";
-        if (isShortage) {
-            resContent += "\n(⚠️ 요청액 " + fp(requestedAmount) + "P 중 잔액 부족으로 보유 전액 차감)";
-        }
-        resContent += "\n현재 잔액: " + fp(targetUser.point) + "P"; // [수정] 0P 고정 출력 버그 해결
-
-        replier.reply(formatAdmin("포인트 차감 보고", resContent));
+        var f = found[0];
+        util_updatePoint(f.data, data.rooms[f.roomName], -am, "관리자 전역 차감", f.roomName);
+        replier.reply(formatAdmin("차감 완료", "[" + f.roomName + "] " + f.data.name + "님 차감 처리됨"));
         safeSaveData(data);
         return true;
     }

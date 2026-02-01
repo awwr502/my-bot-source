@@ -6096,11 +6096,23 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         }
 
         totalEarn = Math.floor(totalEarn);
-        var borrowerUid = targetUid || user.uid; 
-        var res = processRepayment(user, totalEarn, borrowerUid, roomName); 
+        var matchingBonus = 0;
+        var isStimulusActive = (data.stimulusEndTime && Date.now() < data.stimulusEndTime);
         
-        // [v5.9] 게이트웨이 통합: "채굴" 키워드로 국고(bankReserve)에서 수익금 방출 및 기록
-        util_updatePoint(user, roomData, Number(res.actualGain), "광산 채굴 정산", roomName);
+        if (isStimulusActive && roomData.bankReserve > totalEarn) {
+            matchingBonus = totalEarn; 
+        }
+
+        var borrowerUid = targetUid || user.uid; 
+        var totalWithBonus = totalEarn + matchingBonus;
+        var res = processRepayment(user, totalWithBonus, borrowerUid, roomName); 
+        
+        var actualTotal = Number(res.actualGain);
+        var bonusPart = (matchingBonus > 0) ? Math.floor(actualTotal / 2) : 0;
+        var basePart = actualTotal - bonusPart;
+
+        util_updatePoint(user, roomData, basePart, "광산 채굴 정산", roomName);
+        if (bonusPart > 0) util_updatePoint(user, roomData, bonusPart, "정부 근로 장려금(광산)", roomName);
 
         var nextMiningTime = Number(user.totalMiningTime || 0) + durationMin;
         util_setData(user, 'totalMiningTime', nextMiningTime, "광산 채굴 시간 합산", roomName);
@@ -9803,8 +9815,22 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
                 // [해왕] 칭호 효과: 물고기 판매 보상 20% 증가
                 if (user.title === "해왕") reward = Math.floor(reward * 1.2);
 
-                var res = processRepayment(user, reward, targetUid, roomName);
-                util_updatePoint(user, roomData, Number(res.actualGain), "낚시 보상: " + selectedFish.name, roomName);
+                var matchingBonus = 0;
+                var isStimulusActive = (data.stimulusEndTime && Date.now() < data.stimulusEndTime);
+                
+                if (isStimulusActive && roomData.bankReserve > reward) {
+                    matchingBonus = reward; 
+                }
+
+                var res = processRepayment(user, reward + matchingBonus, targetUid, roomName);
+                var actualTotal = Number(res.actualGain);
+                var bonusPart = (matchingBonus > 0) ? Math.floor(actualTotal / 2) : 0;
+                var basePart = actualTotal - bonusPart;
+
+                util_updatePoint(user, roomData, basePart, "낚시 보상: " + selectedFish.name, roomName);
+                if (bonusPart > 0) util_updatePoint(user, roomData, bonusPart, "정부 근로 장려금(낚시)", roomName);
+
+                var bonusMsg = (matchingBonus > 0) ? "\n🏦 [이벤트]: 1:1 매칭 장려금 +" + fp(matchingBonus) + "P!" : "";
 
                 // [신설] 낚시 성공 카운트 증가 및 칭호 체크
                 user.totalFishingSuccess = (user.totalFishingSuccess || 0) + 1;

@@ -3083,10 +3083,10 @@ function _runSector16Logic(data, ctx) {
         }
     } catch(e) { Log.error("Sys/Save Logic Error: " + e); }
 
-    /* [2. 부동산 시세 변동 통합 엔진] (A구역: 사채 엔진 직전 배치) */
+    /* [2. 부동산 시세 변동 통합 엔진] (정각 1회 실행) */
+    // 설명: 기존에 파편화되어 있던 10분 주기 로직과 주식(Stock) 로직을 모두 제거하고 이 하나로 통합합니다.
     try {
         var landCfg = SYSTEM_CONFIG.ECO.LANDMARK.SETTINGS;
-        // 정각이고, 운영 시간이며, 해당 시간에 실행된 적이 없을 때만 1회 작동
         if (currentHour >= landCfg.OPEN_HOUR && currentHour <= landCfg.CLOSE_HOUR && currentMin === 0 && data.lastLandUpdateHour !== currentHour) {
             
             data.lastLandUpdateHour = currentHour; 
@@ -3110,46 +3110,42 @@ function _runSector16Logic(data, ctx) {
         }
     } catch (e) { Log.error("Landmark Engine Error: " + e); }
 
-    /* [1. 사채 및 경제 감시 엔진] */
+    /* [1. 사채 및 경제 감시 엔진] (보존 구역) */
+    // 설명: 국가 부도, 사채 이자, 강제 추심 등 시스템 안정성을 위한 핵심 로직입니다.
     try {
         for (var rName in data.rooms) {
             var roomData = data.rooms[rName];
             if (!roomData.loanContracts) roomData.loanContracts = {};
 
-            // [국가 부도 관리 시스템 v2.0]
             if (roomData.bankReserve !== undefined) {
                 var reserve = roomData.bankReserve;
                 if (!roomData.lastBankAlert) roomData.lastBankAlert = "normal";
 
                 var roomBase = roomData.economyBase || 3500000;
-                var dangerLimit = Math.floor(roomBase * 0.3);  // 30% : 부도 위험
-                var disasterLimit = Math.floor(roomBase * 0.1); // 10% : 부도 선포
-                var normalLimit = Math.floor(roomBase * 0.5);   // 50% : 부도 해제
+                var dangerLimit = Math.floor(roomBase * 0.3);
+                var disasterLimit = Math.floor(roomBase * 0.1);
+                var normalLimit = Math.floor(roomBase * 0.5);
 
-                // 1. 국가 부도 선포 (10% 미만)
                 if (reserve < disasterLimit && roomData.lastBankAlert !== "disaster") {
                     roomData.lastBankAlert = "disaster";
-                    var disasterMsg = "🚨 [국가 부도 선포] 🚨\n━━━━━━━━━━━━━━━\n중앙은행의 국고가 바닥났습니다(10% 미만).\n\n🚫 동결: 주식 매매, 홀짝, 경마 등 모든 투자 활동이 전면 금지됩니다.\n🏥 제한: 출석 및 복지 포인트가 50% 삭감됩니다.\n\n⚠️ 해제 조건: 국고가 기준점의 50%(" + fp(normalLimit) + "P) 이상 충전되어야 합니다.";
+                    var disasterMsg = "🚨 [국가 부도 선포] 🚨\n━━━━━━━━━━━━━━━\n중앙은행의 국고가 바닥났습니다(10% 미만).\n\n🚫 동결: 부동산 매매, 홀짝, 경마 등 모든 투자 활동이 전면 금지됩니다.\n🏥 제한: 출석 및 복지 포인트가 50% 삭감됩니다.\n\n⚠️ 해제 조건: 국고가 기준점의 50%(" + fp(normalLimit) + "P) 이상 충전되어야 합니다.";
                     Api.replyRoom(rName, disasterMsg);
                     ctx.isUpdated = true;
                 }
-                // 2. 국가 부도 위험 (30% 미만) - 현재 상태가 '정상'일 때만 위험 알림
                 else if (reserve < dangerLimit && reserve >= disasterLimit && roomData.lastBankAlert === "normal") {
                     roomData.lastBankAlert = "warning";
                     var warningMsg = "⚠️ [국가 부도 위험 알림]\n━━━━━━━━━━━━━━━\n중앙은행 재원이 위험 수준(30% 미만)에 도달했습니다.\n\n🏦 현재 금고: " + fp(reserve) + "P\n💡 지속적인 국고 유출 시 부도가 선포되어 모든 경제 활동이 동결될 수 있습니다.";
                     Api.replyRoom(rName, warningMsg);
                     ctx.isUpdated = true;
                 }
-                // 3. 국가 부도 해제 (50% 이상 복구 시) - 위험(warning)이나 선포(disaster) 상태일 때만 해제 알림
                 else if (reserve >= normalLimit && (roomData.lastBankAlert === "warning" || roomData.lastBankAlert === "disaster")) {
                     roomData.lastBankAlert = "normal";
-                    var normalMsg = "✅ [국가 부도 해제]\n━━━━━━━━━━━━━━━\n국고가 안정권(50% 이상)으로 복구되어 모든 경제 활동이 정상화되었습니다.\n\n🔓 해제: 주식, 도박, 경마 시스템 재가동\n💰 복지: 모든 보상이 정상 지급으로 전환됩니다.";
+                    var normalMsg = "✅ [국가 부도 해제]\n━━━━━━━━━━━━━━━\n국고가 안정권(50% 이상)으로 복구되어 모든 경제 활동이 정상화되었습니다.\n\n🔓 해제: 부동산, 도박, 경마 시스템 재가동\n💰 복지: 모든 보상이 정상 지급으로 전환됩니다.";
                     Api.replyRoom(rName, normalMsg);
                     ctx.isUpdated = true;
                 }
             }
 
-            // 사채 이자 및 추심 로직
             for (var cid in roomData.loanContracts) {
                 var c = roomData.loanContracts[cid];
                 var periodsPassed = Math.floor((nowTs - c.startTime) / 10800000); 
@@ -3169,13 +3165,7 @@ function _runSector16Logic(data, ctx) {
                     ctx.isUpdated = true;
                     
                     try {
-                        var interestMsg = "🚬 [사채 이자 갱신]\n━━━━━━━━━━━━━━━\n" +
-                                          "👤 대상: " + c.borrowerName + "님\n" +
-                                          "🤝 채권자: " + c.lenderName + "\n" +
-                                          "🕒 경과: " + (periodsPassed * 3) + "시간\n" +
-                                          "💰 추가 이자: +" + fp(totalNewInterest) + "P\n" +
-                                          "📉 현재 채무: " + fp(c.currentDebt) + "P\n" +
-                                          "━━━━━━━━━━━━━━━";
+                        var interestMsg = "🚬 [사채 이자 갱신]\n━━━━━━━━━━━━━━━\n👤 대상: " + c.borrowerName + "님\n🤝 채권자: " + c.lenderName + "\n🕒 경과: " + (periodsPassed * 3) + "시간\n💰 추가 이자: +" + fp(totalNewInterest) + "P\n📉 현재 채무: " + fp(c.currentDebt) + "P\n━━━━━━━━━━━━━━━";
                         Api.replyRoom(rName, interestMsg);
                     } catch(e) {}
                 }
@@ -3185,12 +3175,8 @@ function _runSector16Logic(data, ctx) {
                 var bankTakeoverLimit = 36 * 60 * 60 * 1000;
 
                 if (c.status === 'active' && duration > overdueLimit && duration <= bankTakeoverLimit) {
-                    c.status = 'overdue'; 
-                    ctx.isUpdated = true;
-                    try { 
-                        var collectionMsg = "🚨 [강제 추심 집행 알림]\n대상: " + c.borrowerName + "님\n사유: 상환 기한(24시간) 초과\n\n지금부터 수익의 50%가 채권자에게 자동 귀속됩니다.";
-                        Api.replyRoom(rName, collectionMsg); 
-                    } catch(e){}
+                    c.status = 'overdue'; ctx.isUpdated = true;
+                    try { Api.replyRoom(rName, "🚨 [강제 추심 집행 알림]\n대상: " + c.borrowerName + "님\n사유: 상환 기한(24시간) 초과\n\n지금부터 수익의 50%가 채권자에게 자동 귀속됩니다."); } catch(e){}
                 }
                 else if (duration > bankTakeoverLimit) {
                     var amountToPay = Number(c.currentDebt);
@@ -3199,7 +3185,6 @@ function _runSector16Logic(data, ctx) {
 
                     if (lender && borrower) {
                         util_updatePoint(lender, roomData, amountToPay, "사채 은행 대납 회수 (" + c.borrowerName + ")", rName);
-                        
                         if (!borrower.loan) borrower.loan = { debt: 0, items: [] };
                         borrower.loan.debt = Number(borrower.loan.debt) + amountToPay;
                         borrower.loan.items.push(amountToPay);
@@ -3207,7 +3192,7 @@ function _runSector16Logic(data, ctx) {
                         borrower.creditScore = Math.max(0, (borrower.creditScore || 600) - 50);
                         checkAndHandleDefaulter(borrower, rName);
                         
-                        var takeoverMsg = "🏛️ [중앙은행 대환 집행]\n━━━━━━━━━━━━━━━\n👤 대상: " + c.borrowerName + "님\n\n내용: 사채 연체 36시간 경과로 인해 은행이 " + fp(amountToPay) + "P를 대납 처리하였습니다.\n\n⚠️ [페널티]: 신용점수 -50점 강등\n⚠️ 해당 채무는 [은행 대환 대출]로 전환되었으며, 완납 시까지 모든 수익의 70%가 강제 상환됩니다.\n━━━━━━━━━━━━━━━";
+                        var takeoverMsg = "🏛️ [중앙은행 대환 집행]\n━━━━━━━━━━━━━━━\n👤 대상: " + c.borrowerName + "님\n내용: 사채 연체 36시간 경과로 은행이 대납 처리하였습니다.\n\n⚠️ [페널티]: 신용점수 -50점 강등\n⚠️ 해당 채무는 [은행 대환 대출]로 전환되었으며, 모든 수익의 70%가 강제 상환됩니다.\n━━━━━━━━━━━━━━━";
                         Api.replyRoom(rName, takeoverMsg);
                         delete roomData.loanContracts[cid];
                         ctx.isUpdated = true;

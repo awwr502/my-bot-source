@@ -1508,7 +1508,30 @@ function calculateEconomy(data, roomName) {
         for (var uid in roomData.users) {
             var u = roomData.users[uid];
             if (!u) continue;
-            totalAssets += util_calculateNetWorth(u, roomData);
+            // [중복 제거 로직] 예금을 제외한 [현금 + 주식 가치]만 합산
+            var pureUserAssets = Number(u.point || 0); // 보유 현금
+            
+            // 주식 가치 합산
+            var market = data.stockMarket || (roomData.features ? roomData.features.stockMarket : null);
+            if (u.stockHoldings && market) {
+                for (var sName in u.stockHoldings) {
+                    var stock = market[sName];
+                    if (stock) pureUserAssets += (Number(u.stockHoldings[sName] || 0) * Number(stock.price || 0));
+                }
+            }
+            
+            // 채무 관계 정산 (사채 등)
+            var sacheDebt = 0;
+            var sacheClaims = 0;
+            if (roomData.loanContracts) {
+                for (var cid in roomData.loanContracts) {
+                    var c = roomData.loanContracts[cid];
+                    if (c.borrowerUid === uid) pureUserAssets -= Number(c.currentDebt || 0); // 빚은 자산에서 제외
+                    if (c.lenderUid === uid) pureUserAssets += Number(c.currentDebt || 0);   // 받을 돈은 자산에 포함
+                }
+            }
+
+            totalAssets += pureUserAssets;
             userCount++;
         }
     }

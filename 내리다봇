@@ -1474,46 +1474,43 @@ function util_calculateGini(roomName) {
 function calculateEconomy(data, roomName) {
     var totalAssets = 0;
     var userCount = 0;
-    if (!data || !data.rooms) return { total: 0, count: 0, average: 0 };
+    // 1. 스캔 대상 방 결정 (roomName이 있으면 해당 방만, 없으면 전체)
+    var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
+    
+    // 2. 전역 자산 합산 (방별 분리 시에는 로또 잭팟 등 공용 자산을 제외하여 물가 왜곡 방지)
+    if (!roomName) {
+        totalAssets += Number(data.lotto_jackpot_pool || 0);
+    }
 
-    var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
-    
-    // [전역 자산 합산] 로또 잭팟은 방과 상관없는 공통 자산이므로 1회만 합산
-    totalAssets += Number(data.lotto_jackpot_pool || 0);
+    for (var i = 0; i < roomsToScan.length; i++) {
+        var r = roomsToScan[i];
+        var roomData = data.rooms[r];
+        if (!roomData) continue;
 
-    for (var i = 0; i < roomsToScan.length; i++) {
-        var r = roomsToScan[i];
-        var roomData = data.rooms[r];
-        if (!roomData) continue;
+        // A. 해당 방의 중앙은행 금고 자산 합산
+        if (roomData.bankReserve !== undefined) {
+            totalAssets += Number(roomData.bankReserve);
+        }
 
-        // 1. 중앙은행 금고 자산 합산
-        if (roomData.bankReserve !== undefined) {
-            totalAssets += Number(roomData.bankReserve);
-        }
+        // B. 해당 방의 진행 중인 시스템 판돈 합산
+        if (roomData.features) {
+            if (roomData.features.racing) {
+                totalAssets += Number(roomData.features.racing.totalPool || 0);
+                totalAssets += Number(roomData.features.racing.carryOver || 0);
+            }
+            if (roomData.features.lotto) {
+                totalAssets += Number(roomData.features.lotto.dailyPool || 0);
+            }
+        }
 
-        // 2. [신규 추가] 시스템 내 대기 중인 판돈 합산 (Deflation 방지)
-        if (roomData.features) {
-            // A. 경마: 아직 정산되지 않은 현재 회차 총 배팅액 + 이월금
-            if (roomData.features.racing) {
-                totalAssets += Number(roomData.features.racing.totalPool || 0);
-                totalAssets += Number(roomData.features.racing.carryOver || 0);
-            }
-            // B. 로또: 오늘 판매된 로또 총액
-            if (roomData.features.lotto) {
-                totalAssets += Number(roomData.features.lotto.dailyPool || 0);
-            }
-        }
-
-        // 3. 유저별 순자산 합산 (현금 + 예금 + 주식가치 + 채권 - 부채)
-        for (var uid in roomData.users) {
-            var u = roomData.users[uid];
-            if (!u) continue;
-
-            // util_calculateNetWorth 내부에 주식 가치 계산이 포함되어 있습니다.
-            totalAssets += util_calculateNetWorth(u, roomData);
-            userCount++;
-        }
-    }
+        // C. 해당 방에 소속된 유저별 순자산 합산
+        for (var uid in roomData.users) {
+            var u = roomData.users[uid];
+            if (!u) continue;
+            totalAssets += util_calculateNetWorth(u, roomData);
+            userCount++;
+        }
+    }
 
     return {
         total: Math.max(0, totalAssets),

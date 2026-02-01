@@ -3835,8 +3835,33 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                         var data = getDatabase(); 
                         if (!data) return;
 
-                        /* [핵심 가드] 봇 가동 상태 체크 (Main Power Switch) */
-                        // 봇이 오프 상태이고, 발신자가 관리자가 아니라면 모든 로직 수행 중단
+                        /* [식별 엔진 상단 이동] 봇 가동 전 유저를 먼저 식별합니다. */
+                        var cacheKey = "GLOBAL_" + cleanSender;
+                        var targetUid = globalData.nameToIdCache[cacheKey];
+
+                        // 캐시가 없거나 데이터가 불일치할 때만 정밀 루프 가동
+                        if (!targetUid || !data.rooms[roomName] || !data.rooms[roomName].users[targetUid] || data.rooms[roomName].users[targetUid].name !== cleanSender) {
+                            var hashMatchId = null;
+                            var currentImgHash = null;
+                            try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
+
+                            for (var id in (data.rooms[roomName] ? data.rooms[roomName].users : {})) {
+                                var u = data.rooms[roomName].users[id];
+                                if (u.name === cleanSender) { targetUid = id; break; }
+                                if (currentImgHash && u.imageHash === currentImgHash) { hashMatchId = id; }
+                            }
+
+                            // [AIS] 닉네임 변경 감지 시 즉시 이름 업데이트 및 동기화
+                            if (!targetUid && hashMatchId) {
+                                targetUid = hashMatchId;
+                                var u = data.rooms[roomName].users[targetUid];
+                                if (typeof util_syncIdentityGlobal === 'function') util_syncIdentityGlobal(targetUid, u.name, cleanSender);
+                                u.name = cleanSender;
+                                globalData.nameToIdCache[cacheKey] = targetUid;
+                            }
+                        }
+
+                        /* [핵심 가드] 이제 식별된 targetUid로 관리자 여부를 정확히 판별합니다. */
                         if (data.botActive === false && !isAdmin(cleanSender, data, targetUid)) {
                             return; 
                         }
@@ -4044,65 +4069,6 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
 if (!data) return;
 var roomData = data.rooms[roomName] || { users: {} };
 data.rooms[roomName] = roomData;
-
-/* [v9.5 초고속 엔진] 전역 통합 O(1) 식별 캐시 시스템 */
-// 로더 리로드 시에도 유지되는 globalData 캐시 사용 (I/O 병목 제거 핵심)
-var cacheKey = "GLOBAL_" + cleanSender;
-var targetUid = globalData.nameToIdCache[cacheKey];
-
-// 1. [캐시 검증] 캐시된 UID가 실제 유저 데이터와 일치하는지 확인 (닉변 감지)
-// 불일치 시에만 정밀 루프(O(n))를 가동하여 성능 저하 방지
-if (!targetUid || !roomData.users[targetUid] || roomData.users[targetUid].name !== cleanSender) {
-    var nameMatchId = null;
-    var hashMatchId = null;
-    var currentImgHash = null;
-    try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
-
-    // 정밀 교차 식별 루프 (캐시 미적중 시 1회만 실행)
-    for (var id in roomData.users) {
-        var u = roomData.users[id];
-        var isNameEqual = (u.name === cleanSender);
-        var isHashEqual = (currentImgHash && u.imageHash === currentImgHash);
-
-        if (isNameEqual && isHashEqual) {
-            targetUid = id;
-            break; // 완벽 일치 시 즉시 종료
-        }
-        if (isNameEqual) nameMatchId = id;
-        if (isHashEqual) hashMatchId = id;
-    }
-
-    // 완벽 일치가 없을 경우 교차 판별 (닉변/프변 대응)
-    if (!targetUid) {
-        if (nameMatchId) {
-            targetUid = nameMatchId; // 프사만 바뀐 경우
-            if (currentImgHash) roomData.users[targetUid].imageHash = currentImgHash;
-        } else if (hashMatchId) {
-            // [v10.0 AIS] 프사 해시는 같으나 닉네임이 바뀐 경우 (닉변 감지)
-            targetUid = hashMatchId; 
-            var u = roomData.users[targetUid];
-            var oldName = u.name;
-            var newName = cleanSender;
-
-            if (!data.nickHistory[targetUid]) data.nickHistory[targetUid] = [];
-            data.nickHistory[targetUid].push({ old: oldName, date: getSimpleDate() });
-
-            // 원자적 신분 동기화 엔진 (부동산/사채/경마 통합 갱신)
-            if (typeof util_syncIdentityGlobal === 'function') {
-                util_syncIdentityGlobal(targetUid, oldName, newName);
-            }
-
-            u.name = newName;
-            delete globalData.nameToIdCache[roomName + "_" + oldName];
-            globalData.nameToIdCache[roomName + "_" + newName] = targetUid;
-        }
-    }
-
-    // 찾은 결과가 있다면 캐시 최신화 (다음번엔 0ms 탐색)
-    if (targetUid) {
-        globalData.nameToIdCache[cacheKey] = targetUid;
-    }
-}
 
 // 2. [신분 복구] 식별 실패 시 영구 명부(Registry) 대조 (데이터 부활)
 if (!targetUid) {

@@ -15,7 +15,7 @@ var INTELLIGENT_CONFIG = {
     },
     ECONOMY: {
         GINI_CRITICAL: 0.45,             // 지니계수 0.45 초과 시 '빈부격차 경보' 및 교정 가동
-        MAX_PROGRESSIVE_TAX: 0.10,       // 불평등 심화 시 자산가 최대 추가 세율 (10%)
+        MAX_PROGRESSIVE_TAX: 0.5,       // 불평등 심화 시 자산가 최대 추가 세율 (5%)
         REWARD_BOOST_LIMIT: 1.5          // 서민층 최대 보상 강화 배율 (1.5배)
     }
 };
@@ -1387,28 +1387,34 @@ function formatError(user, content, nextStep) {
  * 기능: 시스템 장애 발생 시 관리자에게 즉시 카톡 리포트 전송
  */
 function util_reportError(e, room, sender, msg) {
-// [필터] 명령어(/) 또는 시스템 키워드로 시작하지 않는 일반 채팅 에러는 알림 무시
     var isCommand = msg.startsWith("/") || 
                     ["줍기", "수락", "거절", "취소", "잡았다요놈", "배팅취소"].indexOf(msg) !== -1 ||
-                    !isNaN(Number(msg)); // 숫자(메뉴선택)도 포함
+                    !isNaN(Number(msg));
 
     if (!isCommand) {
-        // 일반 채팅 에러는 조용히 로그만 남기고 종료
         Log.error("[Silent Error] " + sender + ": " + e.message);
         return;
     }
+
+    // [교정] 에러 메시지 한글 변환 로직
+    var rawErr = e.message || String(e);
+    var koErr = rawErr;
+    if (rawErr.indexOf("is not a function") !== -1) koErr = "실행할 함수를 찾을 수 없음 (로직 누락)";
+    else if (rawErr.indexOf("is not defined") !== -1) koErr = "정의되지 않은 변수 사용 (참조 오류)";
+    else if (rawErr.indexOf("null") !== -1 && rawErr.indexOf("read property") !== -1) koErr = "데이터가 비어있음 (객체 참조 실패)";
+    else if (rawErr.indexOf("JSON") !== -1) koErr = "데이터 파싱 실패 (JSON 규격 위반)";
+
     var errLog = "🚨 [장애 발생 알림]\n" +
                  "━━━━━━━━━━━━━━━\n" +
                  "👤 발생 유저: " + sender + "\n" +
                  "📍 발생 장소: " + room + "\n" +
                  "💬 입력 내용: " + msg + "\n" +
-                 "🚫 에러 내용: " + e.message + "\n" +
+                 "🚫 에러 내용: " + koErr + "\n" +
                  "━━━━━━━━━━━━━━━\n" +
                  "💡 로그 확인 후 조치가 필요합니다.";
     
-    // 관리자 전용 방("베릭방") 또는 현재 방에 관리자 태그와 함께 전송
     try { Api.replyRoom("베릭방", errLog); } catch(err) {}
-    Log.error("[Error Push] " + sender + ": " + e.message);
+    Log.error("[Error Push] " + sender + ": " + rawErr);
 }
 
 /**
@@ -3127,7 +3133,7 @@ function _runSector16Logic(data, ctx) {
 
     /* [2. 주식 주기적 변동 처리] */
     try {
-        if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && currentMin % 10 === 0 && data.lastStockUpdateMin !== currentMin) {
+        if (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR && currentMin === 0 && data.lastStockUpdateMin !== currentMin) {
             data.lastStockUpdateMin = currentMin; 
             var currentStockCount = Object.keys(data.stockMarket || {}).length;
             
@@ -3141,7 +3147,8 @@ function _runSector16Logic(data, ctx) {
                     if (stocks.length > 0) {
                         var target = stocks[Math.floor(Math.random() * stocks.length)];
                         var isUp = Math.random() < SYSTEM_CONFIG.PROB.STOCK_UP_CHANCE;
-                        var randFactor = (Math.random() * 0.07) + 0.08;
+                        var baseMani = conf.SETTINGS.MANI_RATE || 0.25;
+                        var randFactor = baseMani * (0.8 + Math.random() * 0.4);
                         data.pendingSpecialEffect = { stock: target, factor: isUp ? randFactor : -randFactor };
                     }
                 }

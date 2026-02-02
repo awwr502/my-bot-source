@@ -4417,6 +4417,30 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             } catch (e) { Log.error("Registry Delete Error: " + e); }
             replier.reply(formatAdmin("유저 삭제 완료", "[" + targetRoom + "] 방에서 [" + tName + "]님의 데이터를 영구 삭제했습니다." + refundLog));
         }
+
+        else if (type === "admin_land_take") {
+            var holdings = targetUser.landHoldings || {};
+            var matchedLand = util_findStockByShorthand(holdings, extra.land);
+            
+            if (matchedLand.length === 0) {
+                replier.reply(formatAdmin("🚫 회수 실패", "[" + targetUser.name + "]님은 해당 지분이 없습니다."));
+            } else {
+                var sName = matchedLand[0];
+                var currentQty = Number(holdings[sName] || 0);
+                var takeQty = (extra.qty === "전부") ? currentQty : parseInt(extra.qty.replace(/,/g, ""));
+                if (takeQty > currentQty) takeQty = currentQty;
+
+                targetUser.skipHealing = true;
+                util_updateLandmark(targetUser, sName, -takeQty, "관리자 강제 회수", targetRoom);
+                
+                if (Number(targetUser.landHoldings[sName]) <= 0) {
+                    delete targetUser.landHoldings[sName];
+                    if (targetUser.landAvg) delete targetUser.landAvg[sName];
+                }
+                replier.reply(formatAdmin("⚙️ 부동산 회수 완료", "[" + targetRoom + "] " + targetUser.name + "님의 [" + sName + "] 지분을 회수했습니다."));
+            }
+        }
+
         else if (type === "admin_attend_reset") {
             targetUser.lastDate = "";
             replier.reply(formatAdmin("출석 초기화", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님의 오늘 출석 기록을 삭제했습니다."));
@@ -7624,45 +7648,32 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         } else if (found.length > 1) {
             handleUserSelection(replier, targetUid, found, "admin_land_take", { land: landInput, qty: qtyInput }, user, roomName);
         } else {
-            var tUser = found[0].data;
+            var f = found[0];
+            var tUser = f.data; // 정확히 1명의 데이터만 참조
+            var tRoom = f.roomName;
             var holdings = tUser.landHoldings || {};
             
-            // 건물명 약어 검색 적용
             var matchedLand = util_findStockByShorthand(holdings, landInput);
             if (matchedLand.length === 0) {
-                replier.reply(formatAdmin("🚫 보유 정보 없음", "[" + tUser.name + "]님은 [" + landInput + "] 지분을 가지고 있지 않습니다."));
+                replier.reply(formatAdmin("🚫 보유 정보 없음", "[" + tUser.name + "]님은 [" + landInput + "] 지분이 없습니다."));
                 return true;
             }
             
             var sName = matchedLand[0];
             var currentQty = Number(holdings[sName] || 0);
             var takeQty = (qtyInput === "전부") ? currentQty : parseInt(qtyInput.replace(/,/g, ""));
-
-            if (isNaN(takeQty) || takeQty <= 0) {
-                replier.reply(formatAdmin("오류", "회수할 수량을 숫자로 입력하거나 '전부'라고 입력하세요."));
-                return true;
-            }
-
             if (takeQty > currentQty) takeQty = currentQty;
 
-            // 회수 집행
             tUser.skipHealing = true;
-            util_updateLandmark(tUser, sName, -takeQty, "관리자 강제 회수", roomName);
+            // 해당 유저(tUser)의 지분만 수정
+            util_updateLandmark(tUser, sName, -takeQty, "관리자 강제 회수", tRoom);
             
             if (Number(tUser.landHoldings[sName]) <= 0) {
                 delete tUser.landHoldings[sName];
                 if (tUser.landAvg) delete tUser.landAvg[sName];
             }
 
-            var resMsg = "👤 대상: " + getDisplayName(tUser) + "님\n" +
-                         "🏢 건물: " + sName + "\n" +
-                         "📉 회수량: " + (qtyInput === "전부" ? "전량 (" + takeQty + "지분)" : takeQty + "지분");
-            
-            var footer = Number(tUser.landHoldings[sName] || 0) > 0 
-                         ? "💡 현재 잔여 지분: " + tUser.landHoldings[sName] + "지분" 
-                         : "✅ 해당 부동산 소유권이 완전히 말소되었습니다.";
-
-            replier.reply(formatAdmin("⚙️ 부동산 강제 회수 완료", resMsg + "\n━━━━━━━━━━━━━━━\n" + footer));
+            replier.reply(formatAdmin("⚙️ 부동산 강제 회수 완료", "대상: " + tUser.name + "\n건물: " + sName + "\n수량: " + takeQty + "지분 회수"));
             safeSaveData(data);
         }
         return true;

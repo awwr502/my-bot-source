@@ -69,7 +69,10 @@ var USER_SCHEMA = [
     { key: 'totalFishingSuccess', default: 0, type: 'number' }, // 낚시 누적 성공 횟수 (칭호용)
     { key: 'totalDonation', default: 0, type: 'number' },       // 누적 기부 금액
     { key: 'consecutiveWins', default: 0, type: 'number' },     // [신규] 홀짝 연승 기록용 필드
-    { key: 'lastGambleTime', default: 0, type: 'number' }        // [신규] 마지막 홀짝 진행 시간 (1시간 초기화용)
+    { key: 'lastGambleTime', default: 0, type: 'number' },      // [신규] 마지막 홀짝 진행 시간 (1시간 초기화용)
+    { key: 'isManipulated', default: false, type: 'boolean' }, // 조작 활성화 여부
+    { key: 'gambleWinRate', default: 0, type: 'number' },      // 설정된 홀짝 승률
+    { key: 'fishLuck', default: 0, type: 'number' }           // 설정된 낚시 행운
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -239,6 +242,14 @@ var adminUIDs = ["fixed-uuid-관리자1", "fixed-uuid-관리자2"];
 /* 시스템 핵심 상수 설정 */
 var SYSTEM_CONFIG = {
     ECO: {
+
+        /* [신규] 시스템 조작 관련 상수 설정 */
+        SYSTEM_CONFIG.MANIPULATION = {
+        DEFAULT_GAMBLE: 70, // 별도 입력 없을 시 기본 홀짝 승률
+        DEFAULT_FISH: 65,   // 별도 입력 없을 시 기본 낚시 보정치
+        MAX_RATE: 100,
+        MIN_RATE: 0
+};
 
         /* [신규] 랜드마크 최대주주 배당 비율 설정 */
         MARKET_DIVIDEND_RATE: 0.075,      // [시세배당] 건물 시세의 5% (50만P 건물이면 2,500P)
@@ -1062,6 +1073,7 @@ var CMD_LIST = {
         { cmd: "/명부업데이트", desc: "등록된 전체 유저 복구 코드 업데이트", func: "_adminEconomyLogic" },
         { cmd: "/신용조정", desc: "[닉네임] [점수] 신용점수 직접 가감", func: "_adminUserManageLogic" },
         { cmd: "/칭호회수", desc: "[닉네임] [칭호명] 박탈", func: "_adminUserManageLogic" },
+        { cmd: "/조작", desc: "[닉네임] [홀짝%] [낚시%]", func: "_adminUserManageLogic" },
         { cmd: "/보안테스트", desc: "[1-3] 보안 엔진 4단계 스트레스 테스트", func: "_adminEconomyLogic" },
         { cmd: "/전체부동산", desc: "전 구역 유저들의 부동산 보유 현황 총괄 조회", func: "_adminEconomyLogic" },
         { cmd: "/부동산회수", desc: "[닉네임] [건물명] [수량|전부] 지분 강제 몰수", func: "_adminEconomyLogic" },
@@ -7185,6 +7197,57 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
+   /* [관리자] 특정 유저 게임 확률 조작 (설정 및 오프 통합) */
+    if (msg.indexOf("/조작 ") === 0) {
+        var ps = msg.trim().split(/\s+/);
+        if (ps.length < 3) {
+            replier.reply(formatAdmin("오류", "사용법:\n1. 설정: /조작 [닉네임] [홀짝%] [낚시%]\n2. 해제: /조작 [닉네임] 오프"));
+            return true;
+        }
+
+        var lastArg = ps.pop();
+        var targetNick = "";
+        var roomData = data.rooms[roomName];
+        
+        // 1. "오프" 모드 처리
+        if (lastArg === "오프") {
+            targetNick = ps.slice(1).join(" ").trim();
+            var found = findUserGlobal(targetNick);
+            if (!found.length) return replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
+            if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_manipulate_off", null, user, roomName); return true; }
+            
+            var tUser = found[0].data;
+            tUser.isManipulated = false;
+            tUser.gambleWinRate = 0;
+            tUser.fishLuck = 0;
+            tUser.skipHealing = true;
+            safeSaveData(data);
+            replier.reply(formatAdmin("🎯 조작 해제", "대상: " + tUser.name + "\n모든 확률이 정상으로 돌아왔습니다."));
+        } 
+        // 2. "설정" 모드 처리
+        else {
+            var gambleRate = parseInt(ps.pop());
+            var fishLuck = parseInt(lastArg);
+            targetNick = ps.slice(1).join(" ").trim();
+
+            if (isNaN(gambleRate) || isNaN(fishLuck)) return replier.reply(formatAdmin("오류", "확률은 숫자로 입력해주세요."));
+
+            var found = findUserGlobal(targetNick);
+            if (!found.length) return replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
+            if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_manipulate_on", { g: gambleRate, f: fishLuck }, user, roomName); return true; }
+
+            var tUser = found[0].data;
+            tUser.isManipulated = true;
+            tUser.gambleWinRate = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, gambleRate));
+            tUser.fishLuck = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, fishLuck));
+            tUser.skipHealing = true;
+            safeSaveData(data);
+            
+            replier.reply(formatAdmin("🎯 조작 활성화", "대상: " + tUser.name + "\n🎲 홀짝 승률: " + tUser.gambleWinRate + "%\n🎣 낚시 보정: " + tUser.fishLuck + "%"));
+        }
+        return true;
+    }
+
     /* 출석 초기화 */
     if (msg.indexOf("/출석초기화 ") === 0) {
         var tn = msg.substring(7).trim();
@@ -9300,6 +9363,11 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             var baseProb = data.feverData && data.feverData.active ? SYSTEM_CONFIG.PROB.ODD_EVEN_FEVER : SYSTEM_CONFIG.PROB.ODD_EVEN_WIN;
             var winProb = (user.luckyCharmEnd && Date.now() < user.luckyCharmEnd) ? baseProb + 0.03 : baseProb;
 
+            // [조작] 활성화 상태일 때만 설정된 승률 적용
+            if (user.isManipulated === true) {
+                winProb = (user.gambleWinRate || SYSTEM_CONFIG.MANIPULATION.DEFAULT_GAMBLE) / 100;
+            }
+
             var isWin = Math.random() < winProb; 
             var result = isWin ? pick : (pick === "홀" ? "짝" : "홀");
             
@@ -10398,6 +10466,14 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
                 ];
 
                 var fishRand = Math.random();
+
+                // [조작] 활성화 상태일 때만 낚시 보정 적용
+                if (user.isManipulated === true) {
+                    var luckFactor = (user.fishLuck || SYSTEM_CONFIG.MANIPULATION.DEFAULT_FISH) / 100;
+                    // 100%에 가까울수록 돗돔/황금쏘가리 등 최하단 물고기 당첨
+                    fishRand = Math.max(fishRand, luckFactor - 0.005);
+                }
+
                 var selectedFish = fishPool[0];
                 var cumulative = 0;
                 for (var i = 0; i < fishPool.length; i++) {

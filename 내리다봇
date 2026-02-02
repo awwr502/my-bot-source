@@ -475,6 +475,44 @@ function recoverFromJournal(data) {
 }
 
 /**
+ * [v11.9 신설] 블랙박스 기반 배당 주머니 정밀 재계산 엔진
+ * 기능: 오염된 dailyPools 변수를 버리고, 실제 거래 로그를 분석하여 주머니를 다시 채웁니다.
+ */
+function util_recalculateDailyPools(data, roomName) {
+    try {
+        var logFile = new java.io.File(JOURNAL_PATH);
+        if (!logFile.exists() || logFile.length() === 0) return;
+
+        var logs = FileStream.read(JOURNAL_PATH).split("\n");
+        var roomObj = data.rooms[roomName];
+        var cfg = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES;
+        
+        // 1. 기존 오염된 주머니 초기화 (찌꺼기 제거)
+        roomObj.features.dailyPools = { mine: 0, fish: 0, casino: 0, bank: 0, shop: 0, race: 0 };
+
+        // 2. 로그 전수 조사 및 실제 활동 수익만 추출
+        logs.forEach(function(line) {
+            if (!line.trim()) return;
+            var parts = line.split("|");
+            if (parts.length < 5 || parts[1] !== roomName) return;
+
+            var amount = Math.abs(Number(parts[2])); // 거래 금액
+            var reason = parts[4]; // 사유
+
+            // 설정된 적립 배율에 따라 주머니에 다시 적립
+            if (reason.indexOf("광산 채굴") !== -1) roomObj.features.dailyPools.mine += Math.floor(amount * cfg.MINE);
+            else if (reason.indexOf("낚시 보상") !== -1) roomObj.features.dailyPools.fish += Math.floor(amount * cfg.FISH);
+            else if (reason.indexOf("홀짝 적중") !== -1) roomObj.features.dailyPools.casino += Math.floor(amount * cfg.CASINO);
+            else if (reason.indexOf("이자 지급") !== -1) roomObj.features.dailyPools.bank += Math.floor(amount * cfg.BANK);
+            else if (reason.indexOf("상점 구매") !== -1) roomObj.features.dailyPools.shop += Math.floor(amount * cfg.SHOP);
+            else if (reason.indexOf("경마 당첨") !== -1) roomObj.features.dailyPools.race += Math.floor(amount * cfg.RACING);
+        });
+    } catch (e) {
+        Log.error("Recalculate DailyPools Error: " + e);
+    }
+}
+
+/**
  * [Gemini 정밀 교정] 데이터베이스 로드 함수
  */
 function getDatabase() {
@@ -7722,6 +7760,11 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
     /* [v11.5] 6대 핵심 랜드마크 실시간 배당 현황 조회 (문법 완전 수정본) */
     if (msg === "/배당현황") {
         var roomData = data.rooms[roomName];
+
+        if (typeof util_recalculateDailyPools === 'function') {
+            util_recalculateDailyPools(data, roomName);
+        }
+
     var pools = roomData.features.dailyPools;
     var ecoCfg = SYSTEM_CONFIG.ECO;
 
@@ -7765,18 +7808,14 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
     targets.forEach(function(t) {
         var basis = Number(pools[t.key] || 0); // 현재 적립된 주머니 금액
         var landData = data.landmarkMarket[t.name];
+        // [v11.9.1 교정] 하드코딩 제거: 시장(landmarkMarket)의 실시간 가격을 직접 참조
+
         var curPrice = landData ? Number(landData.price) : 0;
-        if (curPrice === 0) { // 고정 건물 가격 예외 처리
-            if (t.name === "중앙은행") curPrice = 5000000;
-            else if (t.name === "백화점") curPrice = 1500000;
-            else curPrice = 500000;
-        }
+        
         var marketPart = Math.floor(curPrice * SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE);
         
-        // 2. [활동 배당] SYSTEM_CONFIG 설정값(10%)을 직접 참조
         var activityPart = Math.floor(basis * SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO);
         
-        // 최종 합계
         var totalDividend = marketPart + activityPart;
             
             // [정밀화] 현재 방 유저 대상 최대주주 수동 검색

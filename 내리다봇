@@ -7754,21 +7754,45 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             { name: "경마장", key: "race", rate: divConf.RACING, icon: "🏇" }
         ].sort(function(a, b) { return a.name.localeCompare(b.name); });
 
+        /* [핵심] 광산 실시간 미확정 수익 가결산 루프 */
+        var pendingMineEarn = 0;
+        var nowTs = Date.now();
+        var pol = util_getActivePolicy(roomData);
+        var multiplier = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
+
+        for (var uid in roomData.users) {
+            var u = roomData.users[uid];
+            if (u.mining && u.mining.active === true) {
+                var durationMin = Math.floor((nowTs - u.mining.startTime) / 60000);
+                if (durationMin >= 1) {
+                    pendingMineEarn += Math.floor(durationMin * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * multiplier);
+                }
+            }
+        }
+
         var report = [];
         targets.forEach(function(t) {
             var basis = Number(pools[t.key] || 0);
+            
+            // 광산의 경우 실시간 미확정 수익(pendingMineEarn)을 합산하여 표시
+            if (t.key === "mine") basis += pendingMineEarn;
+            
             var estimated = Math.floor(basis * t.rate);
+            
+            // 주주 판독 로직 보강
             var ownerUid = util_getMajorityOwner(roomName, t.name);
             var ownerName = "⚠️ 주인 없음";
             
             if (ownerUid) {
                 var oUser = roomData.users[ownerUid];
-                if (oUser) ownerName = "👑 " + getDisplayName(oUser);
+                if (oUser) {
+                    var qty = oUser.landHoldings[t.name];
+                    ownerName = "👑 " + getDisplayName(oUser) + " (" + qty + "지분)";
+                }
             }
 
             report.push(t.icon + " " + t.name + "\n  💰 예상 수령액: " + fp(estimated) + "P\n  👤 현재 주주: " + ownerName);
         });
-
         var header = "📊 실시간 랜드마크 배당 현황\n" + 
                      "━━━━━━━━━━━━━━━\n" +
                      "※ 오늘 누적된 수익을 바탕으로 계산된 예상치입니다.";

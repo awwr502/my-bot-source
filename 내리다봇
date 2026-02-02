@@ -3384,8 +3384,7 @@ function _runSector17Logic(data, ctx) {
 
     // [수정] 중복 실행 방지 가드: 로직 진입 직후에 바로 날짜를 갱신하여 무한 반복 차단
     if (data.lastDailyReset === ctx.today) return;
-    
-    data.lastDailyReset = ctx.today; 
+    data.lastDailyReset = ctx.today;
     if (typeof safeSaveData === 'function') safeSaveData(data); // 즉시 물리 저장
 
     // [부동산] 과열 상태 및 일일 변동 데이터 초기화
@@ -3605,18 +3604,17 @@ function _runSector17Logic(data, ctx) {
             /* [v11.0] 6대 랜드마크 최대주주 일일 배당 정산 엔진 */
             // 설명: 하루 동안 쌓인 분야별 수익금(dailyPools)을 각 건물 지분 1위에게 배당합니다.
             var pools = roomObj.features.dailyPools;
-            var divConf = SYSTEM_CONFIG.ECO.DIVIDENDS;
+            var ecoCfg = SYSTEM_CONFIG.ECO; // SYSTEM_CONFIG 참조로 교정
             var divReport = [];
 
-            if (pools) {
-                // 1. 배당 대상 건물 및 매핑 설정 (건물명: {주머니키, 배당률})
+            if (pools && ecoCfg) {
                 var targets = {
-                    "광산": { key: "mine", rate: divConf.MINE },
-                    "낚시터": { key: "fish", rate: divConf.FISH },
-                    "카지노": { key: "casino", rate: divConf.CASINO },
-                    "중앙은행": { key: "bank", rate: divConf.BANK },
-                    "백화점": { key: "shop", rate: divConf.SHOP },
-                    "경마장": { key: "race", rate: divConf.RACING }
+                    "광산": { key: "mine", rate: ecoCfg.ACTIVITY_ACCUM_RATES.MINE },
+                    "낚시터": { key: "fish", rate: ecoCfg.ACTIVITY_ACCUM_RATES.FISH },
+                    "카지노": { key: "casino", rate: ecoCfg.ACTIVITY_ACCUM_RATES.CASINO },
+                    "중앙은행": { key: "bank", rate: ecoCfg.ACTIVITY_ACCUM_RATES.BANK },
+                    "백화점": { key: "shop", rate: ecoCfg.ACTIVITY_ACCUM_RATES.SHOP },
+                    "경마장": { key: "race", rate: ecoCfg.ACTIVITY_ACCUM_RATES.RACING }
                 };
 
                 for (var landName in targets) {
@@ -7768,20 +7766,18 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         var basis = Number(pools[t.key] || 0); // 현재 적립된 주머니 금액
         var landData = data.landmarkMarket[t.name];
         var curPrice = landData ? Number(landData.price) : 0;
-        if (curPrice === 0) {
-            if (t.name === "중앙은행") curPrice = 5000000;
-            else if (t.name === "백화점") curPrice = 1500000;
-            else curPrice = 500000;
-        }
-
-        // 1. 시세 배당 (시세의 2.5%)
-        var marketPart = Math.floor(curPrice * 0.025);
-        
-        // 2. 활동 배당 (적립된 주머니의 10%)
-        // pendingPart(가결산)는 복잡성만 높이므로 제거하고 현재 쌓인 순수 basis로만 시뮬레이션
-        var activityPart = Math.floor(basis * 0.10);
-        
-        var totalDividend = marketPart + activityPart;
+        if (curPrice === 0) { // 고정 건물 가격 예외 처리
+            if (t.name === "중앙은행") curPrice = 5000000;
+            else if (t.name === "백화점") curPrice = 1500000;
+            else curPrice = 500000;
+        }
+        var marketPart = Math.floor(curPrice * SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE);
+        
+        // 2. [활동 배당] SYSTEM_CONFIG 설정값(10%)을 직접 참조
+        var activityPart = Math.floor(basis * SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO);
+        
+        // 최종 합계
+        var totalDividend = marketPart + activityPart;
             
             // [정밀화] 현재 방 유저 대상 최대주주 수동 검색
             var maxQty = 0;

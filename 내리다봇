@@ -7789,13 +7789,30 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             var payoutRatio = SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO || 1.0;
             var mRate = SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE || 0.005;
 
-            // 1. 시세 배당금 (상수 적용)
+            // [보정] 시장에 건물 정보가 없으면 기본가(Sector 15 기준)를 강제로 참조
+            var landData = data.landmarkMarket[t.name];
+            var curPrice = 0;
+            
+            if (landData) {
+                curPrice = Number(landData.price);
+            } else {
+                // 시장 미개장 시 각 건물의 기본 시작가 매핑
+                var defaultPrices = { "광산": 500000, "낚시터": 300000, "카지노": 1000000, "중앙은행": 5000000, "백화점": 1500000, "경마장": 800000 };
+                curPrice = defaultPrices[t.name] || 0;
+            }
+
+            // 1. 시세 배당금 계산
             var marketPart = Math.floor(curPrice * mRate); 
             
-            // 2. 활동 배당금 (적립된 금액의 Payout 비율 적용)
-            var activityPart = Math.floor(basis * payoutRatio); 
+            // 2. 활동 배당금 계산 (가결산 데이터 포함)
+            var currentRate = accumRates[t.key.toUpperCase()] || 0.01;
+            var realBasis = basis;
+            if (t.key === "mine") realBasis += Math.floor(pendingMineEarn * currentRate);
+            if (t.key === "bank") realBasis += Math.floor(pendingBankInterest * currentRate);
             
-            // 변수명을 정산 로직과 동일하게 totalDividend로 변경
+            var activityPart = Math.floor(realBasis * payoutRatio); 
+            
+            // 최종 배당금 합산
             var totalDividend = marketPart + activityPart;
             
             // [정밀화] 현재 방 유저 대상 최대주주 수동 검색

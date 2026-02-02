@@ -3635,13 +3635,11 @@ function _runSector17Logic(data, ctx) {
                     var owner = util_getMajorityOwner(roomObj, landName);
                     
                     if (owner && owner.data) {
-                       // 1. 시세 기반 고정 배당 (상수 참조: 시세의 2.5%)
-                        var mRate = SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE || 0.025;
-                        var marketPart = landData ? Math.floor(Number(landData.price) * mRate) : 0;
+                       // 1. 시세 기반 배당 (시세의 2.5% 고정)
+                        var marketPart = landData ? Math.floor(Number(landData.price) * 0.025) : 0;
                         
-                        // 2. 활동 누적액 기반 성과 배당 (주머니의 10%)
-                        var payoutRatio = SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO || 0.10;
-                        var activityPart = Math.floor(poolAmount * payoutRatio);
+                        // 2. 활동 적립금 기반 배당 (적립된 주머니 금액의 딱 10%만 지급)
+                        var activityPart = Math.floor(poolAmount * 0.10);
                         
                         // 3. 최종 합산
                         var totalDividend = marketPart + activityPart;
@@ -7780,24 +7778,22 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
 
     var report = [];
     targets.forEach(function(t) {
-        var basis = Number(pools[t.key] || 0); // 이미 1%~5%가 적립된 '주머니' 금액
+        var basis = Number(pools[t.key] || 0); // 현재 적립된 주머니 금액
         var landData = data.landmarkMarket[t.name];
         var curPrice = landData ? Number(landData.price) : 500000;
 
-        // 2. [시세 배당] 건물 시세의 2.5% 고정
-        var marketPart = Math.floor(curPrice * (ecoCfg.MARKET_DIVIDEND_RATE || 0.025));
+        // 1. 예상 시세 배당금 (무조건 시세의 2.5%)
+        var marketPart = Math.floor(curPrice * 0.025);
         
-        // 3. [활동 배당] 이미 적립된 주머니 금액의 10% 산출
-        var payoutRatio = ecoCfg.DIVIDEND_PAYOUT_RATIO || 0.10;
+        // 2. 예상 활동 배당금 (주머니 잔액의 10% + 실시간 가결산분의 10%)
+        var currentRate = (ecoCfg.ACTIVITY_ACCUM_RATES && ecoCfg.ACTIVITY_ACCUM_RATES[t.key.toUpperCase()]) || 0.01;
         
-        // 실시간 가결산: 현재 활동 중인(광산/은행) 미정산 적립금의 10%만 합산
-        var currentRate = ecoCfg.ACTIVITY_ACCUM_RATES[t.key.toUpperCase()] || 0.01;
-        var pendingPart = 0;
-        if (t.key === "mine") pendingPart = Math.floor(pendingMineEarn * currentRate * payoutRatio);
-        if (t.key === "bank") pendingPart = Math.floor(pendingBankInterest * currentRate * payoutRatio);
+        var pendingPart = 0; // 광산/은행 등 현재 작업 중인 예상 수익의 10%
+        if (t.key === "mine") pendingPart = Math.floor(pendingMineEarn * currentRate * 0.10);
+        if (t.key === "bank") pendingPart = Math.floor(pendingBankInterest * currentRate * 0.10);
         
-        // 최종 수식: (시세 * 2.5%) + (주머니 잔액 * 10%) + (미정산분 * 10%)
-        var totalDividend = marketPart + Math.floor(basis * payoutRatio) + pendingPart;
+        // 최종 합계 = (시세*2.5%) + (주머니*10%) + (실시간*10%)
+        var totalDividend = marketPart + Math.floor(basis * 0.10) + pendingPart;
             
             // [정밀화] 현재 방 유저 대상 최대주주 수동 검색
             var maxQty = 0;

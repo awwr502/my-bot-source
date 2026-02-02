@@ -7754,19 +7754,28 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             { name: "경마장", key: "race", rate: divConf.RACING, icon: "🏇" }
         ].sort(function(a, b) { return a.name.localeCompare(b.name); });
 
-        /* [핵심] 광산 실시간 미확정 수익 가결산 루프 */
+        /* [실시간 엔진] 광산 채굴량 & 은행 이자 실시간 가결산 */
         var pendingMineEarn = 0;
+        var pendingBankInterest = 0;
         var nowTs = Date.now();
         var pol = util_getActivePolicy(roomData);
-        var multiplier = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
+        var mineMult = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
+        var bankRate = (SYSTEM_CONFIG.ECO.BANK.INTEREST_RATE || 0.01); // 기본 이자율 1% 가정
 
         for (var uid in roomData.users) {
             var u = roomData.users[uid];
+            // 1. 실시간 채굴량 계산
             if (u.mining && u.mining.active === true) {
-                var durationMin = Math.floor((nowTs - u.mining.startTime) / 60000);
-                if (durationMin >= 1) {
-                    pendingMineEarn += Math.floor(durationMin * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * multiplier);
-                }
+                var mDuration = Math.floor((nowTs - u.mining.startTime) / 60000);
+                if (mDuration >= 1) pendingMineEarn += Math.floor(mDuration * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * mineMult);
+            }
+            // 2. 실시간 누적 이자 계산 (마지막 활동 이후 쌓인 이자분)
+            var balance = Number(u.point || 0);
+            if (balance > 1000) { // 최소 잔액 기준
+                // 자정부터 현재까지 흐른 시간 비례 (간이 계산법)
+                var todayStart = new Date().setHours(0,0,0,0);
+                var activeTimeRatio = (nowTs - todayStart) / 86400000; 
+                pendingBankInterest += Math.floor(balance * bankRate * activeTimeRatio);
             }
         }
 
@@ -7774,20 +7783,24 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         targets.forEach(function(t) {
             var basis = Number(pools[t.key] || 0);
             
-            // 광산의 경우 실시간 미확정 수익(pendingMineEarn)을 합산하여 표시
+            // 실시간 가결산 데이터 합산
             if (t.key === "mine") basis += pendingMineEarn;
+            if (t.key === "bank") basis += pendingBankInterest;
             
             var estimated = Math.floor(basis * t.rate);
             
-            // 주주 판독 로직 보강
-            var ownerUid = util_getMajorityOwner(roomName, t.name);
+            // [정밀화] 현재 방 유저 대상 최대주주 수동 검색
+            var maxQty = 0;
             var ownerName = "⚠️ 주인 없음";
             
-            if (ownerUid) {
-                var oUser = roomData.users[ownerUid];
-                if (oUser) {
-                    var qty = oUser.landHoldings[t.name];
-                    ownerName = "👑 " + getDisplayName(oUser) + " (" + qty + "지분)";
+            for (var uid in roomData.users) {
+                var u = roomData.users[uid];
+                if (u.landHoldings && u.landHoldings[t.name]) {
+                    var uQty = Number(u.landHoldings[t.name]);
+                    if (uQty > maxQty) {
+                        maxQty = uQty;
+                        ownerName = "👑 " + getDisplayName(u) + " (" + uQty + "지분)";
+                    }
                 }
             }
 

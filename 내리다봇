@@ -3512,28 +3512,21 @@ function _runSector17Logic(data, ctx) {
             for (var id in roomObj.users) {
                 var u = roomObj.users[id];
 
-                /* [v11.2] 광산 재중 유저 가결산 (최대주주 배당 보장 로직) */
-                if (u.mining && u.mining.active === true) {
-                    var nowTs = Date.now();
-                    var durationMin = Math.floor((nowTs - u.mining.startTime) / 60000);
-                    
-                    if (durationMin >= 1) {
-                        // 1. 중간 수익 계산 (기본 효율 적용)
-                        var pol = util_getActivePolicy(roomObj);
-                        var multiplier = util_getEcoMultiplier(rName) * (pol.mineMult || 1.0);
-                        var midEarn = Math.floor(durationMin * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * multiplier);
-                        
-                        // 2. 광산 배당 주머니에 즉시 적립 (최대주주 수익 확정)
-                        if (roomObj.features.dailyPools) {
-                            var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.BANK || 0.05;
-                                roomObj.features.dailyPools.bank += Math.floor(finalInterest * accumRate);
-                        }
-                        
-                        // 3. 유저의 시작 시간을 자정(현재)으로 갱신하여 정산 완료 처리
-                        u.mining.startTime = nowTs;
-                        Log.info("[Mining Mid-Settlement] " + u.name + "님 가결산 완료: +" + midEarn + "P 분량");
-                    }
-                }
+                /* [v11.9 교정] 광산 재중 유저 가결산 (변수 참조 오류 수정) */
+                if (u.mining && u.mining.active === true) {
+                    var nowTs = Date.now();
+                    var durationMin = Math.floor((nowTs - u.mining.startTime) / 60000);
+                    if (durationMin >= 1) {
+                        var pol = util_getActivePolicy(roomObj);
+                        var multiplier = util_getEcoMultiplier(rName) * (pol.mineMult || 1.0);
+                        var midEarn = Math.floor(durationMin * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * multiplier);
+                        if (roomObj.features.dailyPools) {
+                            var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.MINE || 0.01;
+                            roomObj.features.dailyPools.mine += Math.floor(midEarn * accumRate);
+                        }
+                        u.mining.startTime = nowTs;
+                    }
+                }
 
                 u.dailyLoanCount = 0; 
                 u.dailyGambleCount = 0; 
@@ -3635,23 +3628,17 @@ function _runSector17Logic(data, ctx) {
                     var owner = util_getMajorityOwner(roomObj, landName);
                     
                     if (owner && owner.data) {
-                       // 1. 시세 기반 배당 (시세의 2.5% 고정)
-                        var marketPart = landData ? Math.floor(Number(landData.price) * 0.025) : 0;
-                        
-                        // 2. 활동 적립금 기반 배당 (적립된 주머니 금액의 딱 10%만 지급)
-                        var activityPart = Math.floor(poolAmount * 0.10);
-                        
-                        // 3. 최종 합산
-                        var totalDividend = marketPart + activityPart;
+                        var marketPart = landData ? Math.floor(Number(landData.price) * 0.025) : 0;
+                        var activityPart = Math.floor(poolAmount * 0.10);
+                        var totalDividend = marketPart + activityPart;
 
-                        if (totalDividend > 0) {
-                            // 최대주주에게 배당금 입금 (포인트 게이트웨이 준수)
-                            util_updatePoint(owner.data, roomObj, totalDividend, "랜드마크 하이브리드 배당: " + landName, rName);
-                            divReport.push("• " + landName + ": " + owner.data.name + "님 (+" + fp(totalDividend) + "P)");
-                        }
-                    }
-                    // 배당 완료 후 해당 분야 주머니 초기화
-                    pools[info.key] = 0;
+                        if (totalDividend > 0) {
+                            util_updatePoint(owner.data, roomObj, totalDividend, "랜드마크 하이브리드 배당: " + landName, rName);
+                            divReport.push("• " + landName + ": " + owner.data.name + "님 (+" + fp(totalDividend) + "P)");
+                        }
+                    }
+                    // [v11.9 중요] 주인이 있든 없든 적립금 주머니는 매일 자정에 초기화 (이월 방지)
+                    pools[info.key] = 0;
                 }
 
                 // 배당 결과 발표 (수익이 발생한 경우에만)
@@ -7780,23 +7767,21 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
     targets.forEach(function(t) {
         var basis = Number(pools[t.key] || 0); // 현재 적립된 주머니 금액
         var landData = data.landmarkMarket[t.name];
-        var curPrice = landData ? Number(landData.price) : 500000;
+        var curPrice = landData ? Number(landData.price) : 0;
+        if (curPrice === 0) {
+            if (t.name === "중앙은행") curPrice = 5000000;
+            else if (t.name === "백화점") curPrice = 1500000;
+            else curPrice = 500000;
+        }
 
-        // 1. [시세 배당] 무조건 시세의 2.5% (하드코딩 강제 적용)
-        var marketPart = Math.floor(curPrice * 0.025);
-        
-        // 2. [활동 배당] 무조건 주머니의 10% (하드코딩 강제 적용)
-        var payoutRatio = 0.10; 
-        
-        // 실시간 미정산분 10% 계산
-        var accumRates = { MINE: 0.01, FISH: 0.01, CASINO: 0.04, BANK: 0.05, SHOP: 0.008, RACE: 0.02 };
-        var currentRate = accumRates[t.key.toUpperCase()] || 0.01;
-        var pendingPart = 0;
-        if (t.key === "mine") pendingPart = Math.floor(pendingMineEarn * currentRate * payoutRatio);
-        if (t.key === "bank") pendingPart = Math.floor(pendingBankInterest * currentRate * payoutRatio);
-        
-        // 최종 합계 = (시세의 2.5%) + (주머니의 10%) + (미정산분의 10%)
-        var totalDividend = marketPart + Math.floor(basis * payoutRatio) + pendingPart;
+        // 1. 시세 배당 (시세의 2.5%)
+        var marketPart = Math.floor(curPrice * 0.025);
+        
+        // 2. 활동 배당 (적립된 주머니의 10%)
+        // pendingPart(가결산)는 복잡성만 높이므로 제거하고 현재 쌓인 순수 basis로만 시뮬레이션
+        var activityPart = Math.floor(basis * 0.10);
+        
+        var totalDividend = marketPart + activityPart;
             
             // [정밀화] 현재 방 유저 대상 최대주주 수동 검색
             var maxQty = 0;

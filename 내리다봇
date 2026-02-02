@@ -503,6 +503,18 @@ function util_recalculateDailyPools(data, roomName) {
             var amount = Math.abs(Number(parts[2])); 
             var reason = parts[4]; 
 
+            // [v11.9.14] 카지노 배당금 정밀 집계 (0.15 수수료의 4%)
+            if (reason.indexOf("홀짝 적중") !== -1) {
+                // 로그의 amount는 순수익(Bet * 0.85)이므로 베팅액을 역산
+                var originalBet = amount / 0.85; 
+                var houseCommission = originalBet * 0.15; // 1.85배당 제외분 (0.15)
+                roomObj.features.dailyPools.casino += Math.floor(houseCommission * cfg.CASINO);
+            }
+            else if (reason.indexOf("홀짝 미적중") !== -1) {
+                // 낙첨 시에는 베팅금 전액이 카지노 수익이므로 전액의 4% 적립
+                roomObj.features.dailyPools.casino += Math.floor(amount * cfg.CASINO);
+            }
+
             if (reason.indexOf("광산") !== -1) {
                 var mineVal = amount;
                 // 가결산 로그일 경우 괄호 안의 숫자를 추출하여 합산
@@ -9250,12 +9262,12 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 var nextWins = Number(user.totalGambleWins || 0) + 1;
                 util_setData(user, 'totalGambleWins', nextWins, "도박 승리 기록", roomName);
 
-                // [v11.0] 로얄카지노 최대주주 배당을 위한 홀짝 당첨 수수료(15%) 누적
-                // 설명: (배팅액 - 지급수익) 차액인 0.15 배당분을 카지노 수익 주머니에 합산합니다.
-                var casinoFee = bet - expectedPayout;
+                / [v11.9.14] 카지노 최대주주 배당 적립 (0.15 수수료의 4%)
+                // 설명: 유저가 1.85배를 가져갈 때 남는 0.15(수수료) 구간에서 4%를 적립
+                var houseCommission = bet * 0.15; 
                 if (roomData.features.dailyPools) {
                     var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.CASINO || 0.04;
-                    roomData.features.dailyPools.casino += Math.floor(Math.max(0, casinoFee) * accumRate);
+                    roomData.features.dailyPools.casino += Math.floor(houseCommission * accumRate);
                 }
                 
                 var res = processRepayment(user, expectedPayout, targetUid, roomName);

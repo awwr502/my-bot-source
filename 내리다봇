@@ -3569,7 +3569,8 @@ function _runSector17Logic(data, ctx) {
                         // [v11.0] 중앙은행 최대주주 배당을 위한 일일 발생 이자 총액 누적
                         // 설명: 유저에게 이자가 성공적으로 지급될 때마다 해당 금액을 은행 수익 장부에 합산합니다.
                         if (roomObj.features.dailyPools) {
-                            roomObj.features.dailyPools.bank += finalInterest;
+                            var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.BANK || 0.05;
+                            roomObj.features.dailyPools.bank += Math.floor(finalInterest * accumRate);
                         }
                         
                         // [핵심] 지급에 성공했을 때만 이자 주머니를 0으로 초기화
@@ -7786,25 +7787,24 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             var basis = Number(pools[t.key] || 0);
             
             var accumRates = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES || {};
-            if (t.key === "mine") {
-                basis += Math.floor(pendingMineEarn * (accumRates.MINE || 0.01)); 
-            }
-            if (t.key === "bank") {
-                basis += Math.floor(pendingBankInterest * (accumRates.BANK || 0.05));
-            }
+            var payoutRatio = SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO || 0.10;
+            var mRate = SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE || 0.025;
+
+            // [하드코딩 제거] 가결산 데이터 합산 시 반드시 적립 비율을 곱함
+            var currentRate = accumRates[t.key.toUpperCase()] || 0.01;
+            if (t.key === "mine") basis += Math.floor(pendingMineEarn * currentRate);
+            if (t.key === "bank") basis += Math.floor(pendingBankInterest * currentRate);
             
-            /* [v11.9] 실시간 하이브리드 계산 엔진 (변수명 오류 수정 및 이중 상수 완벽 적용) */
             var landData = data.landmarkMarket[t.name];
             var curPrice = landData ? Number(landData.price) : 0;
             
-            // 1. 시세 배당률 (0.5%)
-            var mRate = SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE || 0.005;
-            // 2. 최종 지급 비율 (100%)
-            var payoutRatio = SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO || 1.0;
-            
+            // 1. 시세 배당금 (상수 0.025 적용)
             var marketPart = Math.floor(curPrice * mRate); 
+            
+            // 2. 활동 배당금 (적립된 1% 중 10%만 지급)
             var activityPart = Math.floor(basis * payoutRatio); 
-            var totalEstimated = marketPart + activityPart; // 변수명 확정
+            
+            var totalEstimated = marketPart + activityPart;
             
             // [정밀화] 현재 방 유저 대상 최대주주 수동 검색
             var maxQty = 0;
@@ -9042,7 +9042,8 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
 
         // [v11.0] 중앙경마장 최대주주 배당을 위한 일일 배팅금액 누적
         if (roomData.features.dailyPools) {
-            roomData.features.dailyPools.race += betAmt;
+            var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.RACING || 0.02;
+            roomData.features.dailyPools.race += Math.floor(betAmt * accumRate);
         }
 
         var betSuccessContent = "🏇 선택: " + selectedHorse.id + "번 " + selectedHorse.name + "\n💰 금액: " + fp(betAmt) + "P 배팅 성공!";
@@ -9201,8 +9202,8 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 // 설명: (배팅액 - 지급수익) 차액인 0.15 배당분을 카지노 수익 주머니에 합산합니다.
                 var casinoFee = bet - expectedPayout;
                 if (roomData.features.dailyPools) {
-                    var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.RACING || 0.02;
-                    roomData.features.dailyPools.race += Math.floor(betAmt * accumRate);
+                    var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.CASINO || 0.04;
+                    roomData.features.dailyPools.casino += Math.floor(Math.max(0, casinoFee) * accumRate);
                 }
                 
                 var res = processRepayment(user, expectedPayout, targetUid, roomName);

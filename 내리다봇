@@ -67,7 +67,8 @@ var USER_SCHEMA = [
     { key: 'accruedInterest', default: 0, type: 'number' },   // 적립된 이자 주머니
     { key: 'lastBankUpdateTime', default: 0, type: 'number' }, // 마지막 은행 잔액 변동 시간 (Timestamp)
     { key: 'totalFishingSuccess', default: 0, type: 'number' }, // 낚시 누적 성공 횟수 (칭호용)
-    { key: 'totalDonation', default: 0, type: 'number' }        // 누적 기부 금액
+    { key: 'totalDonation', default: 0, type: 'number' },       // 누적 기부 금액
+    { key: 'consecutiveWins', default: 0, type: 'number' }     // [신규] 홀짝 연승 기록용 필드
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -2304,6 +2305,13 @@ function processTheftResult(roomName, thiefUid, victimUid) {
 
     util_updatePoint(victim, room, -stealAmount, "도둑질 당함", roomName);
 
+    var plunderArtifact = "";
+    if (Math.random() < 0.10 && Number(victim.artifactPieces || 0) > 0) {
+        victim.artifactPieces = Number(victim.artifactPieces) - 1;
+        thief.artifactPieces = Number(thief.artifactPieces || 0) + 1;
+        plunderArtifact = "\n\n✨ [유물 약탈 성공]!\n" + victim.name + "님의 '유물 조각' 1개를 가로챘습니다!";
+    }
+
     var res = processRepayment(thief, stealAmount, thiefUid, roomName); 
     
     // 도둑의 포인트 증가 (이 돈은 피해자에게서 왔으므로 은행 재원 변동 0)
@@ -2328,7 +2336,7 @@ function processTheftResult(roomName, thiefUid, victimUid) {
     // [상태 해제] 올바른 참조 경로에서 삭제 수행
     if (activeThefts[victimUid]) delete activeThefts[victimUid]; 
     
-    var content = "🕵️ 도둑질 성공!\n" + getDisplayName(victim) + "님의 지갑에서\n" + fp(stealAmount) + "P를 훔쳤습니다!" + res.repayMsg;
+    var content = "🕵️ 도둑질 성공!\n" + getDisplayName(victim) + "님의 지갑에서\n" + fp(stealAmount) + "P를 훔쳤습니다!" + res.repayMsg + plunderArtifact;
     // [수정] 도둑질 결과에 보유 포인트 표시 추가
     Api.replyRoom(roomName, formatCommand("💰 도둑질 결과", thief, content, "내 잔액: " + fp(thief.point) + "P"));
     safeSaveData(data);
@@ -9223,14 +9231,16 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             if (bet > maxBet) { replier.reply(formatError(user, "상한 초과", "최대 " + fp(maxBet) + "P까지 베팅 가능합니다.")); return true; }
             if (Number(user.point) < bet) { replier.reply(formatError(user, "포인트 부족", "베팅할 포인트가 부족합니다.")); return true; }
 
-            // [도박왕] 배당금 0.05배 상승 (0.85 -> 0.90)
-            var payoutRate = 0.85;
-            if (user.title === "도박왕") payoutRate += 0.05;
-            var expectedPayout = Math.floor(bet * payoutRate);
+            // [배당 로직 리모델링]
+            var basePayout = 0.85;
+            if (user.title === "도박왕") basePayout += 0.05;
 
-            // 게임 컨텐츠는 긴급 삭감을 적용하지 않음
-            var finalProfit = Math.floor(expectedPayout); 
-            var totalPayout = bet + finalProfit; // 원금 + 수익 전체 보존
+            // 연승 보너스: 1승당 +0.05배 가산
+            var winStreak = Number(user.consecutiveWins || 0);
+            var streakBonus = winStreak * 0.05;
+            var finalPayoutRate = basePayout + streakBonus;
+
+            var expectedPayout = Math.floor(bet * finalPayoutRate);
 
             if (!util_isBankSolvent(roomName, finalProfit)) {
                 return replier.reply("🚨 [중앙은행 지불 정지]\n금고 잔액 부족으로 홀짝 승리금을 지급할 수 없습니다.");
@@ -9260,6 +9270,9 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 // 1. 승리 데이터 갱신
                 var nextWins = Number(user.totalGambleWins || 0) + 1;
                 util_setData(user, 'totalGambleWins', nextWins, "도박 승리 기록", roomName);
+                
+                // [신규] 연승 카운트 증가 (메시지 출력 전 수행)
+                user.consecutiveWins = (user.consecutiveWins || 0) + 1; 
 
                 // [v11.9.15] 카지노 최대주주 배당 적립 교정
                 // 1.85배당 제외분(0.15)의 4% 적립
@@ -9281,13 +9294,24 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
                 var charmMsg = isCharm ? "\n(✨ 행운의부적 효과 적용 중: 승률 +3%)" : "";
                 var repayInfo = (res && res.repayMsg) ? res.repayMsg : ""; // undefined 방어
                 
-                var outputMsg = "결과: [" + result + "]\n축하합니다! " + fp(Number(res.actualGain)) + "P 획득!" + repayInfo + charmMsg;
+                // [메시지 리모델링] 사용자 요청 양식 100% 반영 (줄바꿈 및 연승 정보 포함)
+                var outputMsg = "결과: [" + result + "]\n" +
+                                "축하합니다! " + fp(Number(res.actualGain)) + "P 획득!";
+                
+                // 2연승 이상일 때만 연승 콤보 문구 표시
+                if (user.consecutiveWins > 1) {
+                    outputMsg += "\n🔥 " + user.consecutiveWins + "연승 콤보 달성!\n" +
+                                 "✨ 연승 보너스 배당: " + finalPayoutRate.toFixed(2) + "배 적용";
+                }
+                
+                outputMsg += repayInfo + charmMsg;
                 
                 // 최종 출력
                 replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, outputMsg, "잔액: " + fp(user.point) + "P"));
                 
             } else {
                 // 2. 패배 처리
+                user.consecutiveWins = 0;
                 util_updatePoint(user, roomData, -bet, "홀짝 미적중", roomName);
                 
                 /* ===== 수정 포인트: 변수 안전성 확보 ===== */
@@ -9568,8 +9592,22 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         // 경찰 타이머: 15초 후 출동 확률 계산 (15000ms)
         var policeDelay = 15000;
         
-        var policeProb = (user.title === "약탈왕") ? 0.3 : 0.5;
-        
+        / [신규] 신용등급별 차등 경찰 출동 확률 계산 (기본 50% 베이스)
+        var crInfo = getCreditInfo(user.creditScore || 600);
+        var probTable = {
+            1: 0.72,   // 👑 1등급: 72.0%
+            2: 0.65,   // 💎 2등급: 65.0%
+            3: 0.595,  // 🥇 3등급: 59.5%
+            4: 0.555,  // 🥈 4등급: 55.5%
+            5: 0.525,  // 🥉 5등급: 52.5%
+            6: 0.50    // 🚫 신불자: 50.0%
+        };
+        
+        var policeProb = probTable[crInfo.grade] || 0.555;
+        
+        // [약탈왕] 칭호 효과: 경찰 출동 확률 20% 감면
+        if (user.title === "약탈왕") policeProb = Math.max(0.1, policeProb - 0.20);
+
         var sT = setTimeout(function(){ processTheftResult(roomName, targetUid, victim.id); }, successDelay);
         var pT = setTimeout(function(){ if (Math.random() < policeProb) { processPoliceResult(roomName, targetUid, victim.id); } }, policeDelay);
         

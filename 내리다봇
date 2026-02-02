@@ -3637,17 +3637,25 @@ function _runSector17Logic(data, ctx) {
                     var info = targets[landName];
                     var poolAmount = Number(pools[info.key] || 0);
                     
-                    if (poolAmount > 0) {
-                        // 섹터 7에서 만든 엔진으로 최대주주 탐색
-                        var owner = util_getMajorityOwner(roomObj, landName);
+                    /* [v11.9] 하이브리드 배당 정산: 시세 고정분(0.5%) + 활동 성과분(N%) */
+                    var landData = data.landmarkMarket[landName];
+                    var owner = util_getMajorityOwner(roomObj, landName);
+                    
+                    if (owner && owner.data) {
+                        // 1. 시세 기반 고정 배당 (0.5%)
+                        var mRate = (SYSTEM_CONFIG.ECO && SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE) ? SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE : 0.005;
+                        var marketPart = landData ? Math.floor(Number(landData.price) * mRate) : 0;
                         
-                        if (owner && owner.data) {
-                            var dividend = Math.floor(poolAmount * info.rate);
-                            if (dividend > 0) {
-                                // 최대주주에게 배당금 입금 (게이트웨이 사용)
-                                util_updatePoint(owner.data, roomObj, dividend, "랜드마크 배당금: " + landName, rName);
-                                divReport.push("• " + landName + ": " + owner.data.name + "님 (+" + fp(dividend) + "P)");
-                            }
+                        // 2. 활동 누적액 기반 성과 배당 (설정된 %)
+                        var activityPart = Math.floor(poolAmount * info.rate);
+                        
+                        // 3. 최종 합산 및 지급
+                        var totalDividend = marketPart + activityPart;
+
+                        if (totalDividend > 0) {
+                            // 최대주주에게 배당금 입금 (포인트 게이트웨이 준수)
+                            util_updatePoint(owner.data, roomObj, totalDividend, "랜드마크 하이브리드 배당: " + landName, rName);
+                            divReport.push("• " + landName + ": " + owner.data.name + "님 (+" + fp(totalDividend) + "P)");
                         }
                     }
                     // 배당 완료 후 해당 분야 주머니 초기화
@@ -7787,7 +7795,13 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             if (t.key === "mine") basis += pendingMineEarn;
             if (t.key === "bank") basis += pendingBankInterest;
             
-            var estimated = Math.floor(basis * t.rate);
+            /* [v11.9] 실시간 하이브리드 계산 엔진 */
+            var mRate = 0.005; // 고정 0.5%
+            var aRate = t.rate; // 활동 설정 % (예: 0.08)
+            
+            var marketPart = Math.floor(curPrice * mRate); 
+            var activityPart = Math.floor(basis * aRate); 
+            var totalEstimated = marketPart + activityPart;
             
             // [정밀화] 현재 방 유저 대상 최대주주 수동 검색
             var maxQty = 0;

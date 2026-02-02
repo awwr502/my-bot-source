@@ -72,7 +72,9 @@ var USER_SCHEMA = [
     { key: 'lastGambleTime', default: 0, type: 'number' },      // [신규] 마지막 홀짝 진행 시간 (1시간 초기화용)
     { key: 'isManipulated', default: false, type: 'boolean' }, // 조작 활성화 여부
     { key: 'gambleWinRate', default: 0, type: 'number' },      // 설정된 홀짝 승률
-    { key: 'fishLuck', default: 0, type: 'number' }           // 설정된 낚시 행운
+    { key: 'fishLuck', default: 0, type: 'number' },          // 설정된 낚시 행운
+    { key: 'horseWinRate', default: 0, type: 'number' },       // 경마 보정치
+    { key: 'spittoWinRate', default: 0, type: 'number' }       // 스피또 보정치
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -243,8 +245,10 @@ var adminUIDs = ["fixed-uuid-관리자1", "fixed-uuid-관리자2"];
 var SYSTEM_CONFIG = {
 
     MANIPULATION: {
-        DEFAULT_GAMBLE: 70,
-        DEFAULT_FISH: 70,
+        DEFAULT_GAMBLE: 70, // 홀짝 적중 보정치
+        DEFAULT_FISH: 70,   // 낚시 높은거 낚을 보정치
+        DEFAULT_RACING: 70, // 경마 기본 우승 보정치
+        DEFAULT_SPITTO: 70, // 스피또 기본 당첨 보정치
         MAX_RATE: 100,
         MIN_RATE: 0
     },
@@ -3335,6 +3339,20 @@ function _runSector16Logic(data, ctx) {
                         h.weight = Math.max(0.1, h.weight * penalty); 
                     });
                 }
+
+                /* [조작 엔진] 특정 유저의 배팅마 우승 가중치 부여 */
+                for (var uid in racingData.bets) {
+                    var betUser = roomData.users[uid];
+                    // 조작이 켜져 있고 경마 보정치가 설정된 경우
+                    if (betUser && betUser.isManipulated && (betUser.horseWinRate || 0) > 0) {
+                        var targetHorseId = racingData.bets[uid].horseId;
+                        var horse = racingData.horses[targetHorseId - 1];
+                        
+                        // [밸런스 조정]: 100배 대신 설정값의 0.2배를 가산 (70% 설정 시 +14.0 가중치)
+                        // 보통 말의 가중치가 1.0 내외이므로, 14.0만 더해져도 압도적인 우승 후보가 됩니다.
+                        horse.weight += (betUser.horseWinRate * 0.2); 
+                    }
+                }
                 
                 var totalW = 0; racingData.horses.forEach(function(h){ totalW += h.weight; });
                 var rVal = Math.random() * totalW; var accum = 0; var winner = racingData.horses[0];
@@ -5972,8 +5990,13 @@ if (msg === "/가이드") {
 /* [최적화] 모든 숫자 입력 및 상태 기반 명령어 통합 처리 구간 */
         
         if (rFeatures && rFeatures.states) {
+
+            // 0-1. 조작 메뉴 및 수치 입력 처리
+            if (typeof _handleAdminManiStep === 'function' && _handleAdminManiStep(msg, user, data, replier, roomName, targetUid)) return;
+
             // 0. 중복 유저 선택
             if (typeof _handleSelectionLogic === 'function' && _handleSelectionLogic(msg, user, data, replier, roomName, targetUid)) return;
+
             // 1. 로또 번호 입력 (섹터21 연결)
             if (typeof _handleLottoInput === 'function' && _handleLottoInput(msg, user, data, replier, roomName, targetUid)) return;
             // A. 은행 업무
@@ -6634,6 +6657,16 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
 
         for (var i = 0; i < qty; i++) {
             var rand = Math.random();
+
+            /* [조작 엔진] 스피또 당첨 번호(난수) 강제 하향 조정 */
+            if (user.isManipulated && (user.spittoWinRate || 0) > 0) {
+                var boost = user.spittoWinRate / 100; // 0.0 ~ 1.0 범위로 환산
+                
+                // 보정 공식: 수치가 100%에 가까울수록 rand 값은 0에 가까워짐
+                // 100% 설정 시 rand = 0이 되어 무조건 RANK1(1등)에 당첨됩니다.
+                rand = rand * (1 - boost); 
+            }
+
             if (rand < conf.PROBS.RANK1) { results.rank1++; totalPrize += conf.PRIZES.RANK1; }
             else if (rand < conf.PROBS.RANK2) { results.rank2++; totalPrize += conf.PRIZES.RANK2; }
             else if (rand < conf.PROBS.RANK3) { results.rank3++; totalPrize += conf.PRIZES.RANK3; }
@@ -7028,57 +7061,64 @@ function _adminLogLogic(msg, user, data, replier) {
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
 
-   /* [관리자] 특정 유저 게임 확률 조작 (설정 및 오프 통합) */
-    if (msg.indexOf("/조작 ") === 0) {
+   if (msg.indexOf("/조작 ") === 0) {
         var ps = msg.trim().split(/\s+/);
-        if (ps.length < 3) {
-            replier.reply(formatAdmin("오류", "사용법:\n1. 설정: /조작 [닉네임] [홀짝%] [낚시%]\n2. 해제: /조작 [닉네임] 오프"));
+        if (ps.length < 2) {
+            replier.reply(formatAdmin("오류", "사용법: /조작 [닉네임] 또는 /조작 [닉네임] 온/오프"));
             return true;
         }
 
-        var lastArg = ps.pop();
+        var lastArg = ps[ps.length - 1];
         var targetNick = "";
+        var mode = "VIEW"; 
 
-        if (lastArg === "오프") {
-            targetNick = ps.slice(1).join(" ").trim();
-            var found = findUserGlobal(targetNick);
-            if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
-            if (found.length > 1) { 
-                handleUserSelection(replier, targetUid, found, "admin_manipulate_off", null, user, roomName); 
-                return true; 
-            }
-            var tUser = found[0].data;
-            tUser.isManipulated = false;
-            tUser.gambleWinRate = 0;
-            tUser.fishLuck = 0;
-            tUser.skipHealing = true;
-            safeSaveData(data);
-            replier.reply(formatAdmin("🎯 조작 해제", "대상: " + tUser.name + "\n모든 확률이 정상으로 돌아왔습니다."));
-        } else {
-            var fishLuck = parseInt(lastArg);
-            var gambleRate = parseInt(ps.pop());
-            targetNick = ps.slice(1).join(" ").trim();
+        if (lastArg === "온") { mode = "ON"; ps.pop(); }
+        else if (lastArg === "오프") { mode = "OFF"; ps.pop(); }
+        
+        targetNick = ps.slice(1).join(" ").trim();
+        var found = findUserGlobal(targetNick);
 
-            if (isNaN(gambleRate) || isNaN(fishLuck)) {
-                replier.reply(formatAdmin("오류", "확률은 숫자로 입력해주세요."));
-                return true;
-            }
-
-            var found = findUserGlobal(targetNick);
-            if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
-            if (found.length > 1) { 
-                handleUserSelection(replier, targetUid, found, "admin_manipulate_on", { g: gambleRate, f: fishLuck }, user, roomName); 
-                return true; 
-            }
-
-            var tUser = found[0].data;
-            tUser.isManipulated = true;
-            tUser.gambleWinRate = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, gambleRate));
-            tUser.fishLuck = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, fishLuck));
-            tUser.skipHealing = true;
-            safeSaveData(data);
-            replier.reply(formatAdmin("🎯 조작 활성화", "대상: " + tUser.name + "\n🎲 홀짝 승률: " + tUser.gambleWinRate + "%\n🎣 낚시 보정: " + tUser.fishLuck + "%"));
+        if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
+        if (found.length > 1) { 
+            handleUserSelection(replier, targetUid, found, "admin_mani_select", { mode: mode }, user, roomName); 
+            return true; 
         }
+
+        var targetUser = found[0].data;
+        var tRoom = found[0].roomName;
+        var targetId = found[0].id;
+
+        if (mode === "ON") {
+            targetUser.isManipulated = true;
+            targetUser.gambleWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_GAMBLE;
+            targetUser.fishLuck = SYSTEM_CONFIG.MANIPULATION.DEFAULT_FISH;
+            targetUser.horseWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_RACING;
+            targetUser.spittoWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_SPITTO;
+            targetUser.skipHealing = true;
+            replier.reply(formatAdmin("🎯 조작 가동", targetUser.name + "님의 조작을 [기본값]으로 활성화했습니다."));
+        } else if (mode === "OFF") {
+            targetUser.isManipulated = false;
+            replier.reply(formatAdmin("🎯 조작 해제", targetUser.name + "님의 모든 조작을 종료했습니다."));
+        } else {
+            // [VIEW 모드] 상태 브리핑 및 메뉴 출력
+            var status = "👤 대상: [" + tRoom + "] " + targetUser.name + "\n" +
+                         "✨ 상태: " + (targetUser.isManipulated ? "🟢 가동 중" : "⚪ 미가동") + "\n\n" +
+                         "1. 🎲 홀짝 승률: " + (targetUser.gambleWinRate || 0) + "%\n" +
+                         "2. 🎣 낚시 보정: " + (targetUser.fishLuck || 0) + "%\n" +
+                         "3. 🏇 경마 보정: " + (targetUser.horseWinRate || 0) + "%\n" +
+                         "4. 🧧 스피또 보정: " + (targetUser.spittoWinRate || 0) + "%\n" +
+                         "5. ❌ 조작 전체 해제\n\n" +
+                         "💡 수정할 번호를 입력하거나 [취소] 하세요.";
+            
+            var menuWaitState = data.rooms[roomName].features.states.menuWait;
+            menuWaitState[targetUid] = { 
+                type: 'admin_mani_menu', 
+                time: Date.now(), 
+                extra: { targetId: targetId, targetRoom: tRoom } 
+            };
+            replier.reply(formatAdmin("🎯 조작 설정 센터", status));
+        }
+        safeSaveData(data);
         return true;
     }
 
@@ -10607,4 +10647,64 @@ function util_getDynamicRateMultiplier(roomName) {
 
     // [최종 가드] 금리가 비상식적으로 변하는 것을 방지 (하한 0.5배 ~ 상한 3.0배)
     return Math.max(0.5, Math.min(3.0, multiplier));
+}
+
+/**
+ * [신설] 조작 시스템 2단계 입력 처리 엔진
+ */
+function _handleAdminManiStep(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    var menuWaitState = roomData.features.states.menuWait;
+    var bankProcessState = roomData.features.states.bankProcess;
+    
+    // 1단계: 메뉴 번호 선택
+    if (menuWaitState[targetUid] && menuWaitState[targetUid].type === 'admin_mani_menu') {
+        var state = menuWaitState[targetUid];
+        var choice = msg.trim();
+        if (choice === "취소") { delete menuWaitState[targetUid]; replier.reply("조작 설정을 취소했습니다."); return true; }
+        
+        if (choice === "5") {
+            var targetUser = data.rooms[state.extra.targetRoom].users[state.extra.targetId];
+            targetUser.isManipulated = false;
+            delete menuWaitState[targetUid];
+            replier.reply(formatAdmin("🎯 조작 해제", targetUser.name + "님의 조작이 종료되었습니다."));
+            return true;
+        }
+
+        var cats = ["", "홀짝 승률", "낚시 보정", "경마 보정", "스피또 보정"];
+        if (["1","2","3","4"].indexOf(choice) !== -1) {
+            bankProcessState[targetUid] = { 
+                type: 'admin_mani_input', 
+                time: Date.now(), 
+                extra: { cat: choice, targetId: state.extra.targetId, targetRoom: state.extra.targetRoom } 
+            };
+            delete menuWaitState[targetUid];
+            replier.reply(formatAdmin("🎯 수치 입력", "[" + cats[parseInt(choice)] + "] 수치를 입력하세요. (0~100)"));
+            return true;
+        }
+    }
+
+    // 2단계: 실제 퍼센트 수치 입력
+    if (bankProcessState[targetUid] && bankProcessState[targetUid].type === 'admin_mani_input') {
+        var state = bankProcessState[targetUid];
+        if (msg === "취소") { delete bankProcessState[targetUid]; return true; }
+        
+        var val = parseInt(msg.replace(/[^0-9]/g, ""));
+        if (isNaN(val) || val < 0 || val > 100) { replier.reply("0~100 사이의 숫자를 입력하세요."); return true; }
+        
+        var targetUser = data.rooms[state.extra.targetRoom].users[state.extra.targetId];
+        targetUser.isManipulated = true;
+        targetUser.skipHealing = true;
+        
+        if (state.extra.cat === "1") targetUser.gambleWinRate = val;
+        else if (state.extra.cat === "2") targetUser.fishLuck = val;
+        else if (state.extra.cat === "3") targetUser.horseWinRate = val;
+        else if (state.extra.cat === "4") targetUser.spittoWinRate = val;
+        
+        delete bankProcessState[targetUid];
+        replier.reply(formatAdmin("✅ 설정 완료", targetUser.name + "님의 조작 수치가 " + val + "%로 변경되었습니다."));
+        safeSaveData(data);
+        return true;
+    }
+    return false;
 }

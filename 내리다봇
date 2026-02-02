@@ -502,12 +502,15 @@ function util_recalculateDailyPools(data, roomName) {
             var amount = Math.abs(Number(parts[2])); 
             var reason = parts[4]; 
 
-            // 2. [핵심 가드] 오늘 발생한 활동 로그만 누적 (찌꺼기 원천 차단)
-            // util_updatePoint에서 기록 시 reason 앞에 날짜가 붙지 않으므로, 
-            // 실제 서비스 시에는 로그 생성 시간을 체크하는 로직이 권장되나 
-            // 현재 구조에서는 '오늘 발생한 유효 거래'만 담당하도록 사유(Reason)를 정밀 매칭합니다.
-            
-            if (reason.indexOf("광산 채굴") !== -1) roomObj.features.dailyPools.mine += Math.floor(amount * cfg.MINE);
+            if (reason.indexOf("광산") !== -1) {
+                var mineVal = amount;
+                // 가결산 로그일 경우 괄호 안의 숫자를 추출하여 합산
+                if (reason.indexOf("가결산") !== -1) {
+                    var match = reason.match(/\((\d+)\)/);
+                    if (match) mineVal = Number(match[1]);
+                }
+                roomObj.features.dailyPools.mine += Math.floor(mineVal * cfg.MINE);
+            }
             else if (reason.indexOf("낚시 보상") !== -1) roomObj.features.dailyPools.fish += Math.floor(amount * cfg.FISH);
             else if (reason.indexOf("홀짝 미적중") !== -1) roomObj.features.dailyPools.casino += Math.floor(amount * cfg.CASINO);
             else if (reason.indexOf("이자 지급") !== -1) roomObj.features.dailyPools.bank += Math.floor(amount * cfg.BANK);
@@ -3563,12 +3566,22 @@ function _runSector17Logic(data, ctx) {
                     var durationMin = Math.floor((nowTs - u.mining.startTime) / 60000);
                     if (durationMin >= 1) {
                         var pol = util_getActivePolicy(roomObj);
-                        var multiplier = util_getEcoMultiplier(rName) * (pol.mineMult || 1.0);
-                        var midEarn = Math.floor(durationMin * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * multiplier);
-                        if (roomObj.features.dailyPools) {
-                            var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.MINE || 0.01;
-                            roomObj.features.dailyPools.mine += Math.floor(midEarn * accumRate);
-                        }
+                        // 1. 중간 수익 계산 (finalInterest -> midEarn 변수명 교정)
+                        var midEarn = Math.floor(durationMin * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * multiplier);
+                        
+                        // 2. [핵심] 블랙박스 로그에 가결산 내역 기록 (조회 시 합산되도록 처리)
+                        // 유저 포인트 변동은 0으로 기록하여 실제 지급은 안 하되, '사유'를 남겨 배당에 반영
+                        logLock.lock();
+                        try {
+                            var journalEntry = u.uid + "|" + rName + "|0|0|광산 가결산 수익 (" + midEarn + ")\n";
+                            FileStream.append(JOURNAL_PATH, journalEntry);
+                        } finally { logLock.unlock(); }
+
+                        // 3. 주머니에 즉시 반영 (bank -> mine 주머니 교정)
+                        if (roomObj.features.dailyPools) {
+                            var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.MINE || 0.01;
+                            roomObj.features.dailyPools.mine += Math.floor(midEarn * accumRate);
+                        }
                         u.mining.startTime = nowTs;
                     }
                 }

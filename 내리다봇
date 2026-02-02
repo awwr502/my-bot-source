@@ -1027,6 +1027,7 @@ var CMD_LIST = {
         { cmd: "/보안테스트", desc: "[1-3] 보안 엔진 4단계 스트레스 테스트", func: "_adminEconomyLogic" },
         { cmd: "/전체부동산", desc: "전 구역 유저들의 부동산 보유 현황 총괄 조회", func: "_adminEconomyLogic" },
         { cmd: "/부동산회수", desc: "[닉네임] [건물명] [수량|전부] 지분 강제 몰수", func: "_adminEconomyLogic" },
+        { cmd: "/배당현황", desc: "6대 핵심 랜드마크의 당일 누적 예상 배당금 실시간 조회", func: "_adminEconomyLogic" },
         { cmd: "/시장데이터교정", desc: "헬러 간섭으로 꼬인 랜드마크 수량 강제 압축 및 교정", func: "_adminEconomyLogic" },
         { cmd: "/경제전체리셋", desc: "모든 유저 자산/부채 초기화 및 20만P 공평 지급", func: "_adminEconomyLogic" }
     ]
@@ -7729,6 +7730,50 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatAdmin("⚙️ 부동산 강제 회수 완료", "대상: " + tUser.name + "\n건물: " + sName + "\n수량: " + takeQty + "지분 회수"));
             safeSaveData(data);
         }
+        return true;
+    }
+
+    /* [v11.5] 6대 핵심 랜드마크 실시간 배당 현황 조회 */
+    if (msg === "/배당현황") {
+        var roomData = data.rooms[roomName];
+        var pools = roomData.features.dailyPools;
+        var divConf = SYSTEM_CONFIG.ECO.LANDMARK.DIVIDENDS;
+        
+        if (!pools) {
+            replier.reply(formatAdmin("조회 실패", "해당 구역에 배당 데이터 엔진이 활성화되지 않았습니다."));
+            return true;
+        }
+
+        var targets = [
+            { name: "광산", key: "mine", rate: divConf.MINE, icon: "⛏️" },
+            { name: "낚시터", key: "fish", rate: divConf.FISH, icon: "🎣" },
+            { name: "카지노", key: "casino", rate: divConf.CASINO, icon: "🎰" },
+            { name: "중앙은행", key: "bank", rate: divConf.BANK, icon: "🏦" },
+            { name: "백화점", key: "shop", rate: divConf.SHOP, icon: "🏢" },
+            { name: "경마장", key: "race", rate: divConf.RACING, icon: "🏇" }
+        ].sort(function(a, b) { return a.name.localeCompare(b.name); });
+
+        var report = [];
+        targets.forEach(function(t) {
+            var basis = Number(pools[t.key] || 0);
+            var estimated = Math.floor(basis * t.rate);
+            var ownerUid = util_getMajorityOwner(roomName, t.name);
+            var ownerName = "⚠️ 주인 없음";
+            
+            if (ownerUid) {
+                var oUser = roomData.users[ownerUid];
+                if (oUser) ownerName = "👑 " + getDisplayName(oUser);
+            }
+
+            report.push(t.icon + " " + **t.name** + "\n  💰 예상 수령액: " + **fp(estimated)** + "P\n  👤 현재 주주: " + ownerName);
+        });
+
+        var header = "📊 **실시간 랜드마크 배당 현황**\n" + 
+                     "━━━━━━━━━━━━━━━\n" +
+                     "※ 오늘 누적된 수익을 바탕으로 계산된 예상치입니다.";
+        var footer = "━━━━━━━━━━━━━━━\n✨ 자정(00:00) 정산 순간의 최대주주가 위 금액을 전액 수령합니다.";
+
+        replier.reply(formatAdmin("배당 리포트", header + "\n\n" + report.join("\n\n") + "\n" + footer));
         return true;
     }
 

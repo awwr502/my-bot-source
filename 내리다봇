@@ -7787,31 +7787,33 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
     if (msg === "/배당현황") {
         var roomData = data.rooms[roomName];
 
-        // [v11.9.7 교정] 기존 주머니 데이터를 무시하고 로그를 통해 '오늘' 활동액을 즉석 재계산
+        // 1. [실시간 정화] 기존 주머니 데이터를 무시하고 로그를 통해 '오늘' 활동액을 즉석 재계산
         var pools = { mine: 0, fish: 0, casino: 0, bank: 0, shop: 0, race: 0 };
+        var rates = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES;
         try {
             var logContent = FileStream.read(JOURNAL_PATH);
             if (logContent) {
                 var logs = logContent.split("\n");
-                var rates = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES;
                 logs.forEach(function(line) {
                     var p = line.split("|");
                     if (p.length < 5 || p[1] !== roomName) return;
                     var amt = Math.abs(Number(p[2]));
-                    if (p[4].indexOf("광산") !== -1) pools.mine += Math.floor(amt * rates.MINE);
-                    else if (p[4].indexOf("낚시") !== -1) pools.fish += Math.floor(amt * rates.FISH);
-                    else if (p[4].indexOf("미적중") !== -1) pools.casino += Math.floor(amt * rates.CASINO);
-                    else if (p[4].indexOf("이자") !== -1) pools.bank += Math.floor(amt * rates.BANK);
-                    else if (p[4].indexOf("상점") !== -1) pools.shop += Math.floor(amt * rates.SHOP);
-                    else if (p[4].indexOf("배팅") !== -1) pools.race += Math.floor(amt * rates.RACING);
+                    var reason = p[4];
+                    if (reason.indexOf("광산") !== -1) pools.mine += Math.floor(amt * rates.MINE);
+                    else if (reason.indexOf("낚시") !== -1) pools.fish += Math.floor(amt * rates.FISH);
+                    else if (reason.indexOf("미적중") !== -1) pools.casino += Math.floor(amt * rates.CASINO);
+                    else if (reason.indexOf("이자") !== -1) pools.bank += Math.floor(amt * rates.BANK);
+                    else if (reason.indexOf("상점") !== -1) pools.shop += Math.floor(amt * rates.SHOP);
+                    else if (reason.indexOf("배팅") !== -1) pools.race += Math.floor(amt * rates.RACING);
                 });
             }
-        } catch(e) { Log.error("Real-time Log Scan Fail: " + e); }
+        } catch(e) { Log.error("Dividend Scan Error: " + e); }
 
-        /* [기존 실시간 엔진 활용] 채굴 중인 유저의 예상 수익 합산 */
+        // 2. [광산 가집계 연동] 현재 종료 안 하고 채굴 중인 유저들의 예상 수익 실시간 합산
         var pendingMineEarn = 0;
         var nowTs = Date.now();
-        var mineMult = util_getEcoMultiplier(roomName) * (util_getActivePolicy(roomData).mineMult || 1.0);
+        var pol = util_getActivePolicy(roomData);
+        var mineMult = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
 
         for (var uid in roomData.users) {
             var u = roomData.users[uid];
@@ -7820,36 +7822,37 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
                 if (mDuration >= 1) pendingMineEarn += Math.floor(mDuration * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * mineMult);
             }
         }
-        // 실시간 미정산분(1%) 주머니에 합산
-        pools.mine += Math.floor(pendingMineEarn * SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.MINE);
+        // 미정산 수익의 1%(설정치)를 mine 주머니에 실시간 가산
+        pools.mine += Math.floor(pendingMineEarn * rates.MINE);
 
-    var report = [];
-    targets.forEach(function(t) {
-        var basis = Number(pools[t.key] || 0); // 위에서 재계산된 깨끗한 주머니
+        // 3. [출력 엔진] targets 배열 정의 및 리포트 조립
+        var targets = [
+            { name: "광산", key: "mine", icon: "⛏️" },
+            { name: "낚시터", key: "fish", icon: "🎣" },
+            { name: "카지노", key: "casino", icon: "🎰" },
+            { name: "중앙은행", key: "bank", icon: "🏦" },
+            { name: "백화점", key: "shop", icon: "🏢" },
+            { name: "경마장", key: "race", icon: "🏇" }
+        ].sort(function(a, b) { return a.name.localeCompare(b.name); });
+
+        var report = [];
+        targets.forEach(function(t) {
+            var basis = Number(pools[t.key] || 0); 
             var landData = data.landmarkMarket[t.name];
-            
-            // [교정] 하드코딩 제거: 실시간 시세 및 SYSTEM_CONFIG 상수 참조
             var curPrice = landData ? Number(landData.price) : 0;
+            
+            // 상수 기반 배당금 계산 (2.5% + 10%)
             var marketPart = Math.floor(curPrice * SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE);
             var activityPart = Math.floor(basis * SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO);
             var totalDividend = marketPart + activityPart;
-            
-            // [정밀화] 현재 방 유저 대상 최대주주 수동 검색
-            var maxQty = 0;
+
+            // 최대주주 탐색
             var ownerName = "⚠️ 주인 없음";
-            
-            for (var uid in roomData.users) {
-                var u = roomData.users[uid];
-                if (u.landHoldings && u.landHoldings[t.name]) {
-                    var uQty = Number(u.landHoldings[t.name]);
-                    if (uQty > maxQty) {
-                        maxQty = uQty;
-                        ownerName = "👑 " + getDisplayName(u) + " (" + uQty + "지분)";
-                    }
-                }
+            var owner = util_getMajorityOwner(roomData, t.name);
+            if (owner && owner.data) {
+                ownerName = "👑 " + getDisplayName(owner.data) + " (" + owner.qty + "지분)";
             }
 
-            // 출력부에서도 변경된 변수명 totalDividend를 참조하도록 수정
             report.push(t.icon + " " + t.name + "\n  💰 예상 수령액: " + fp(totalDividend) + "P\n  👤 현재 주주: " + ownerName);
         });
         var header = "📊 실시간 랜드마크 배당 현황\n" + 

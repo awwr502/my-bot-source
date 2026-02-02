@@ -257,7 +257,7 @@ var SYSTEM_CONFIG = {
     ECO: {
 
         /* [신규] 랜드마크 최대주주 배당 비율 설정 */
-        MARKET_DIVIDEND_RATE: 0.025,      // [시세배당] 건물 시세의 0.5% (50만P 건물이면 2,500P)
+        MARKET_DIVIDEND_RATE: 0.025,      // [시세배당] 건물 시세의 2.5% (50만P 건물이면 2,500P)
         ACTIVITY_ACCUM_RATES: {          // [활동적립] 발생 수익의 N%만 주머니에 적립
             MINE: 0.01,    // 채굴량의 1%
             FISH: 0.01,    // 낚시금의 1%
@@ -266,7 +266,7 @@ var SYSTEM_CONFIG = {
             SHOP: 0.008,   // 쇼핑액의 0.8%
             RACING: 0.02   // 배팅금의 2%
         },
-        DIVIDEND_PAYOUT_RATIO: 0.10,       // [최종지급] 주머니 적립금의 100% 지급
+        DIVIDEND_PAYOUT_RATIO: 0.10,       // [최종지급] 주머니 적립금의 10% 지급
 
         /* [기초 경제 설정] */
         ATTEND_MIN: 8000, // [출석 최소 지급]: 출석 체크 시 무작위로 지급되는 포인트의 하한선
@@ -301,7 +301,7 @@ var SYSTEM_CONFIG = {
         
         /* [신규] 중앙은행 지급준비제도 설정 */
         BANK: {
-            RESERVE_RATIO: 0.15, // [지급준비율]: 은행 총 예금액 중 대출해줄 수 없는 최소 현금 보유 비중 (20%)
+            RESERVE_RATIO: 0.20, // [지급준비율]: 은행 총 예금액 중 대출해줄 수 없는 최소 현금 보유 비중 (20%)
             INITIAL_RESERVE: 10000, // [초기 재원]: 데이터 초기화 시 은행 금고에 기본으로 들어있는 포인트
             /* [지능형 탄력 금리 설정] */
             MIN_MULTIPLIER: 0.5,  // 금리 하한 승수 (0.5배)
@@ -3635,15 +3635,15 @@ function _runSector17Logic(data, ctx) {
                     var owner = util_getMajorityOwner(roomObj, landName);
                     
                     if (owner && owner.data) {
-                       // 1. 시세 기반 고정 배당 (상수 참조)
-                        var mRate = SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE || 0.005;
+                       // 1. 시세 기반 고정 배당 (상수 참조: 시세의 2.5%)
+                        var mRate = SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE || 0.025;
                         var marketPart = landData ? Math.floor(Number(landData.price) * mRate) : 0;
                         
-                        // 2. 활동 누적액 기반 성과 배당
-                        var payoutRatio = SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO || 1.0;
+                        // 2. 활동 누적액 기반 성과 배당 (주머니의 10%)
+                        var payoutRatio = SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO || 0.10;
                         var activityPart = Math.floor(poolAmount * payoutRatio);
                         
-                        // 3. 최종 합산 및 지급
+                        // 3. 최종 합산
                         var totalDividend = marketPart + activityPart;
 
                         if (totalDividend > 0) {
@@ -7739,11 +7739,11 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
     /* [v11.5] 6대 핵심 랜드마크 실시간 배당 현황 조회 (문법 완전 수정본) */
     if (msg === "/배당현황") {
         var roomData = data.rooms[roomName];
-        var pools = roomData.features.dailyPools;
-        var accumRates = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES; 
-    
-    if (!accumRates || !pools) {
-        replier.reply(formatAdmin("조회 실패", "배당 설정(ACTIVITY_ACCUM_RATES) 또는 데이터 엔진이 활성화되지 않았습니다."));
+    var pools = roomData.features.dailyPools;
+    var ecoCfg = SYSTEM_CONFIG.ECO;
+
+    if (!ecoCfg || !pools) {
+        replier.reply(formatAdmin("조회 실패", "데이터 엔진이 활성화되지 않았습니다."));
         return true;
     }
 
@@ -7756,64 +7756,53 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         { name: "경마장", key: "race", icon: "🏇" }
     ].sort(function(a, b) { return a.name.localeCompare(b.name); });
 
-        /* [실시간 엔진] 광산 채굴량 & 은행 이자 실시간 가결산 */
-        var pendingMineEarn = 0;
-        var pendingBankInterest = 0;
-        var nowTs = Date.now();
-        var pol = util_getActivePolicy(roomData);
-        var mineMult = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
-        var bankRate = (SYSTEM_CONFIG.ECO.BANK.INTEREST_RATE || 0.01); // 기본 이자율 1% 가정
+    /* [실시간 엔진] 가결산 로직 */
+    var pendingMineEarn = 0;
+    var pendingBankInterest = 0;
+    var nowTs = Date.now();
+    var pol = util_getActivePolicy(roomData);
+    var mineMult = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
+    var bankRate = 0.01; 
 
-        for (var uid in roomData.users) {
-            var u = roomData.users[uid];
-            // 1. 실시간 채굴량 계산
-            if (u.mining && u.mining.active === true) {
-                var mDuration = Math.floor((nowTs - u.mining.startTime) / 60000);
-                if (mDuration >= 1) pendingMineEarn += Math.floor(mDuration * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * mineMult);
-            }
-            // 2. 실시간 누적 이자 계산 (마지막 활동 이후 쌓인 이자분)
-            var balance = Number(u.point || 0);
-            if (balance > 1000) { // 최소 잔액 기준
-                // 자정부터 현재까지 흐른 시간 비례 (간이 계산법)
-                var todayStart = new Date().setHours(0,0,0,0);
-                var activeTimeRatio = (nowTs - todayStart) / 86400000; 
-                pendingBankInterest += Math.floor(balance * bankRate * activeTimeRatio);
-            }
+    for (var uid in roomData.users) {
+        var u = roomData.users[uid];
+        if (u.mining && u.mining.active === true) {
+            var mDuration = Math.floor((nowTs - u.mining.startTime) / 60000);
+            if (mDuration >= 1) pendingMineEarn += Math.floor(mDuration * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * mineMult);
         }
+        var balance = Number(u.point || 0);
+        if (balance > 1000) {
+            var todayStart = new Date().setHours(0,0,0,0);
+            var activeTimeRatio = (nowTs - todayStart) / 86400000; 
+            pendingBankInterest += Math.floor(balance * bankRate * activeTimeRatio);
+        }
+    }
 
-        var report = [];
-        targets.forEach(function(t) {
-            var basis = Number(pools[t.key] || 0);
-            
-            var accumRates = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES || {};
-            var payoutRatio = SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO || 1.0;
-            var mRate = SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE || 0.005;
+    var report = [];
+    targets.forEach(function(t) {
+        var basis = Number(pools[t.key] || 0);
+        
+        // 상수값 강제 교정 (0.025 및 0.10)
+        var mRate = ecoCfg.MARKET_DIVIDEND_RATE || 0.025;
+        var payoutRatio = ecoCfg.DIVIDEND_PAYOUT_RATIO || 0.10;
 
-            // [보정] 시장에 건물 정보가 없으면 기본가(Sector 15 기준)를 강제로 참조
-            var landData = data.landmarkMarket[t.name];
-            var curPrice = 0;
-            
-            if (landData) {
-                curPrice = Number(landData.price);
-            } else {
-                // 시장 미개장 시 각 건물의 기본 시작가 매핑
-                var defaultPrices = { "광산": 500000, "낚시터": 300000, "카지노": 1000000, "중앙은행": 5000000, "백화점": 1500000, "경마장": 800000 };
-                curPrice = defaultPrices[t.name] || 0;
-            }
+        var landData = data.landmarkMarket[t.name];
+        var curPrice = landData ? Number(landData.price) : 500000;
 
-            // 1. 시세 배당금 계산
-            var marketPart = Math.floor(curPrice * mRate); 
-            
-            // 2. 활동 배당금 계산 (가결산 데이터 포함)
-            var currentRate = accumRates[t.key.toUpperCase()] || 0.01;
-            var realBasis = basis;
-            if (t.key === "mine") realBasis += Math.floor(pendingMineEarn * currentRate);
-            if (t.key === "bank") realBasis += Math.floor(pendingBankInterest * currentRate);
-            
-            var activityPart = Math.floor(realBasis * payoutRatio); 
-            
-            // 최종 배당금 합산
-            var totalDividend = marketPart + activityPart;
+        // 1. 시세 배당금 계산 (2.5%)
+        var marketPart = Math.floor(curPrice * mRate); 
+        
+        // 2. 활동 배당금 계산 (가결산 포함 주머니의 10%)
+        var accumRates = ecoCfg.ACTIVITY_ACCUM_RATES || {};
+        var currentRate = accumRates[t.key.toUpperCase()] || 0.01;
+        var realBasis = basis;
+        if (t.key === "mine") realBasis += Math.floor(pendingMineEarn * currentRate);
+        if (t.key === "bank") realBasis += Math.floor(pendingBankInterest * currentRate);
+        
+        var activityPart = Math.floor(realBasis * payoutRatio); 
+        
+        // 최종 합산
+        var totalDividend = marketPart + activityPart;
             
             // [정밀화] 현재 방 유저 대상 최대주주 수동 검색
             var maxQty = 0;

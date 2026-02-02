@@ -3560,34 +3560,30 @@ function _runSector17Logic(data, ctx) {
             for (var id in roomObj.users) {
                 var u = roomObj.users[id];
 
-                /* [v11.9 교정] 광산 재중 유저 가결산 (변수 참조 오류 수정) */
-                if (u.mining && u.mining.active === true) {
-                    var nowTs = Date.now();
-                    var durationMin = Math.floor((nowTs - u.mining.startTime) / 60000);
-                    if (durationMin >= 1) {
-                        var pol = util_getActivePolicy(roomObj);
-                        // 1. 중간 수익 계산 (finalInterest -> midEarn 변수명 교정)
+                /* [v11.2] 광산 재중 유저 가결산 (기존 로직 오류 수정) */
+                if (u.mining && u.mining.active === true) {
+                    var nowTs = Date.now();
+                    var durationMin = Math.floor((nowTs - u.mining.startTime) / 60000);
+                    
+                    if (durationMin >= 1) {
+                        var pol = util_getActivePolicy(roomObj);
+                        var multiplier = util_getEcoMultiplier(rName) * (pol.mineMult || 1.0);
+                        // [교정]: 정의되지 않은 finalInterest 대신 midEarn 사용
                         var midEarn = Math.floor(durationMin * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * multiplier);
                         
-                        // 2. [핵심] 블랙박스 로그에 가결산 내역 기록 (조회 시 합산되도록 처리)
-                        // 유저 포인트 변동은 0으로 기록하여 실제 지급은 안 하되, '사유'를 남겨 배당에 반영
-                        logLock.lock();
-                        try {
-                            var journalEntry = u.uid + "|" + rName + "|0|0|광산 가결산 수익 (" + midEarn + ")\n";
-                            FileStream.append(JOURNAL_PATH, journalEntry);
-                        } finally { logLock.unlock(); }
-
-                        // 3. 주머니에 즉시 반영 (bank -> mine 주머니 교정)
+                        // [교정]: bank 주머니가 아닌 mine 주머니에 적립, 상수는 SYSTEM_CONFIG 참조
                         if (roomObj.features.dailyPools) {
                             var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.MINE || 0.01;
                             roomObj.features.dailyPools.mine += Math.floor(midEarn * accumRate);
                         }
-                        u.mining.startTime = nowTs;
-                    }
-                }
+                        
+                        u.mining.startTime = nowTs;
+                        Log.info("[Mining Mid-Settlement] " + u.name + "님 가결산 완료: +" + midEarn + "P 분량");
+                    }
+                }
 
                 u.dailyLoanCount = 0; 
-                u.dailyGambleCount = 0; 
+                u.dailyGambleCount = 0;
                 u.dailyPromotionAttempts = 1; 
                 u.dailyStimulusCount = 0; 
                 u.dailyCreditRestoreCount = 0; 

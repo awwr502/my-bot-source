@@ -2663,9 +2663,11 @@ function updateLandmarkPrices(data) {
 
         if (isMarketOpen) {
             if (name === specLand) { 
+                // [조작 매물] 폭등/폭락 처리
                 changePercent = specFactor * hypeFactor;
                 eventNews.push("🚨 [변동성 알림]\n건물: " + name + "\n내용: " + (specFactor > 0 ? "🚀 시세 폭등" : "📉 시세 폭락") + " (" + (Math.abs(changePercent * 100)).toFixed(1) + "%)");
             } else {
+                // [일반 매물] 트렌드 및 시세 변동 연산
                 if (landmark.trendTick <= 0) {
                     landmark.trendTick = Math.floor(Math.random() * 4) + 2;
                     var p = Math.random(); 
@@ -2673,37 +2675,39 @@ function updateLandmarkPrices(data) {
                 }
                 var baseRate = (landmark.trend === "up" ? 0.025 : (landmark.trend === "down" ? -0.025 : (Math.random()*0.08-0.04)));
                 changePercent = baseRate * trait.volatility * hypeFactor;
-            }
-            
-            var traffic = data.landmarkTraffic[name] || { buy: 0, sell: 0 };
-            var trafficImpact = Math.max(-0.15, Math.min(0.15, ((traffic.buy - traffic.sell) / (activeUserCount * 5)) * 0.01));
-            changePercent += trafficImpact;
-
-            if (pol.volatilityMult) changePercent *= pol.volatilityMult;
-
-            var refPrice = landmark.openPrice || landmark.price;
-            var growthRate = (landmark.price - refPrice) / refPrice;
-            var sConf = conf.SETTINGS;
-
-            if (growthRate > sConf.RESISTANCE_START) {
-                var gap = growthRate - sConf.RESISTANCE_START;
-                // [v11.9.9 교정] 상승 편향 제거: -0.03 ~ +0.04 범위를 -0.03 ~ +0.03으로 대칭화
-                changePercent -= gap * sConf.GRAVITY;
-                changePercent += (Math.random() * 0.06 - 0.03); 
                 
-                // 과열 구간 진입 시 하락 압력 강화
-                if (growthRate >= sConf.CLOSING_LIMIT - 0.05) changePercent -= 0.08;
-            }
-        
-        } // else 블록 닫기
-    } // if (isMarketOpen) 블록 닫기
-        
-    landmark.price = Math.max(10, Math.round(landmark.price * (1 + changePercent))); 
+                var traffic = data.landmarkTraffic[name] || { buy: 0, sell: 0 };
+                var trafficImpact = Math.max(-0.15, Math.min(0.15, ((traffic.buy - traffic.sell) / (activeUserCount * 5)) * 0.01));
+                changePercent += trafficImpact;
 
-    if (landmark.price < (marketAvg * conf.SETTINGS.DELIST_LIMIT) || landmark.price < ecoBaseFloor) { 
-        landmark.delistTick++; 
-    } else { landmark.delistTick = 0; }
-} // for (var name in data.landmarkMarket) 루프 닫기
+                if (pol.volatilityMult) changePercent *= pol.volatilityMult;
+
+                // [v11.9.9 교정] 저항선 및 하락 압력 로직 (상승 편향 제거)
+                var refPrice = landmark.openPrice || landmark.price;
+                var growthRate = (landmark.price - refPrice) / refPrice;
+                var sConf = conf.SETTINGS;
+
+                if (growthRate > sConf.RESISTANCE_START) {
+                    var gap = growthRate - sConf.RESISTANCE_START;
+                    changePercent -= gap * sConf.GRAVITY;
+                    changePercent += (Math.random() * 0.06 - 0.03); // 대칭적 난수 발생
+                    
+                    if (growthRate >= sConf.CLOSING_LIMIT - 0.05) changePercent -= 0.08;
+                }
+                landmark.trendTick--;
+            } // else 블록 끝
+        } // if (isMarketOpen) 블록 끝
+        
+        // 최종 가격 결정 및 최저가(10P) 보장
+        landmark.price = Math.max(10, Math.round(landmark.price * (1 + changePercent))); 
+
+        // 강제 철거(상폐) 위기 체크
+        if (landmark.price < (marketAvg * conf.SETTINGS.DELIST_LIMIT) || landmark.price < ecoBaseFloor) { 
+            landmark.delistTick++; 
+        } else { 
+            landmark.delistTick = 0; 
+        }
+    } // for 루프 끝
 
     /* 강제 철거(경매) 집행 */
     var demolished = [];

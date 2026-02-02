@@ -249,7 +249,7 @@ var SYSTEM_CONFIG = {
         DEFAULT_FISH: 70,   // 별도 입력 없을 시 기본 낚시 보정치
         MAX_RATE: 100,
         MIN_RATE: 0
-};
+        };
 
         /* [신규] 랜드마크 최대주주 배당 비율 설정 */
         MARKET_DIVIDEND_RATE: 0.075,      // [시세배당] 건물 시세의 5% (50만P 건물이면 2,500P)
@@ -4454,8 +4454,24 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
         
         delete selectWaitState[targetUid]; // 선택 완료 시 세션 삭제
 
+        // [추가] 조작 설정/해제 중복 유저 선택 시 실제 데이터 반영부
+           if (type === "admin_manipulate_on") {
+            targetUser.isManipulated = true;
+            targetUser.gambleWinRate = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, extra.g));
+            targetUser.fishLuck = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, extra.f));
+            targetUser.skipHealing = true;
+            replier.reply(formatAdmin("🎯 조작 활성화", "대상: [" + targetRoom + "] " + targetUser.name + "\n🎲 홀짝 승률: " + targetUser.gambleWinRate + "%\n🎣 낚시 보정: " + targetUser.fishLuck + "%"));
+        }
+        else if (type === "admin_manipulate_off") {
+            targetUser.isManipulated = false;
+            targetUser.gambleWinRate = 0;
+            targetUser.fishLuck = 0;
+            targetUser.skipHealing = true;
+            replier.reply(formatAdmin("🎯 조작 해제", "대상: [" + targetRoom + "] " + targetUser.name + "\n모든 확률이 정상으로 돌아왔습니다."));
+        }
+
         // 부동산 중복 선택 처리 분기
-        if (type === "stock_buy" || type === "stock_sell") {
+        else if (type === "stock_buy" || type === "stock_sell") {
             var landName = selected; // 검색된 건물명
             var cmdPrefix = (type === "stock_buy") ? "/투자 " : "/매각 ";
             // [교정] targetRoom 컨텍스트로 부동산 로직 집행
@@ -4463,7 +4479,7 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        if (type === "info") {
+        else if (type === "info") {
             var cr = getCreditInfo(targetUser.creditScore);
             // [교정] 소속 방 정보 추가
             var info = "📍 소속: " + targetRoom + "\n💰 포인트: " + fp(targetUser.point) + "P\n🏦 예금: " + fp(targetUser.bank) + "P\n💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n🏅 티어: " + (TIERS[targetUser.tier] || "아이언");
@@ -4671,22 +4687,6 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
                 }
             } catch (e) { Log.error("Registry Delete Error: " + e); }
         }
-
-// [추가] 조작 설정/해제 중복 유저 선택 시 실제 데이터 반영부
-            else if (type === "admin_manipulate_on") {
-                targetUser.isManipulated = true;
-                targetUser.gambleWinRate = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, extra.g));
-                targetUser.fishLuck = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, extra.f));
-                targetUser.skipHealing = true;
-                replier.reply(formatAdmin("🎯 조작 활성화", "대상: [" + targetRoom + "] " + targetUser.name + "\n🎲 홀짝 승률: " + targetUser.gambleWinRate + "%\n🎣 낚시 보정: " + targetUser.fishLuck + "%"));
-            }
-            else if (type === "admin_manipulate_off") {
-                targetUser.isManipulated = false;
-                targetUser.gambleWinRate = 0;
-                targetUser.fishLuck = 0;
-                targetUser.skipHealing = true;
-                replier.reply(formatAdmin("🎯 조작 해제", "대상: [" + targetRoom + "] " + targetUser.name + "\n모든 확률이 정상으로 돌아왔습니다."));
-            }
 
         safeSaveData(data);
         return true; 
@@ -7030,6 +7030,61 @@ function _adminLogLogic(msg, user, data, replier) {
  */
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
+
+   /* [관리자] 특정 유저 게임 확률 조작 (설정 및 오프 통합) */
+    if (msg.indexOf("/조작 ") === 0) {
+        var ps = msg.trim().split(/\s+/);
+        if (ps.length < 3) {
+            replier.reply(formatAdmin("오류", "사용법:\n1. 설정: /조작 [닉네임] [홀짝%] [낚시%]\n2. 해제: /조작 [닉네임] 오프"));
+            return true;
+        }
+
+        var lastArg = ps.pop();
+        var targetNick = "";
+
+        if (lastArg === "오프") {
+            targetNick = ps.slice(1).join(" ").trim();
+            var found = findUserGlobal(targetNick);
+            if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
+            if (found.length > 1) { 
+                handleUserSelection(replier, targetUid, found, "admin_manipulate_off", null, user, roomName); 
+                return true; 
+            }
+            var tUser = found[0].data;
+            tUser.isManipulated = false;
+            tUser.gambleWinRate = 0;
+            tUser.fishLuck = 0;
+            tUser.skipHealing = true;
+            safeSaveData(data);
+            replier.reply(formatAdmin("🎯 조작 해제", "대상: " + tUser.name + "\n모든 확률이 정상으로 돌아왔습니다."));
+        } else {
+            var fishLuck = parseInt(lastArg);
+            var gambleRate = parseInt(ps.pop());
+            targetNick = ps.slice(1).join(" ").trim();
+
+            if (isNaN(gambleRate) || isNaN(fishLuck)) {
+                replier.reply(formatAdmin("오류", "확률은 숫자로 입력해주세요."));
+                return true;
+            }
+
+            var found = findUserGlobal(targetNick);
+            if (!found.length) { replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다.")); return true; }
+            if (found.length > 1) { 
+                handleUserSelection(replier, targetUid, found, "admin_manipulate_on", { g: gambleRate, f: fishLuck }, user, roomName); 
+                return true; 
+            }
+
+            var tUser = found[0].data;
+            tUser.isManipulated = true;
+            tUser.gambleWinRate = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, gambleRate));
+            tUser.fishLuck = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, fishLuck));
+            tUser.skipHealing = true;
+            safeSaveData(data);
+            replier.reply(formatAdmin("🎯 조작 활성화", "대상: " + tUser.name + "\n🎲 홀짝 승률: " + tUser.gambleWinRate + "%\n🎣 낚시 보정: " + tUser.fishLuck + "%"));
+        }
+        return true;
+    }
+
     if (msg.indexOf("/진단 ") === 0) {
         var tn = msg.substring(4).trim();
         var roomData = data.rooms[roomName];
@@ -7209,64 +7264,6 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatAdmin("🎖️ 칭호 회수 완료", getDisplayName(targetUser) + "님에게서 [" + titleToTake + "] 칭호를 박탈했습니다."));
         } else {
             replier.reply(formatAdmin("회수 실패", getDisplayName(targetUser) + "님은 해당 칭호를 보유하고 있지 않습니다."));
-        }
-        return true;
-    }
-
-   /* [관리자] 특정 유저 게임 확률 조작 (설정 및 오프 통합) */
-    if (msg.indexOf("/조작 ") === 0) {
-        var ps = msg.trim().split(/\s+/);
-        if (ps.length < 3) {
-            replier.reply(formatAdmin("오류", "사용법:\n1. 설정: /조작 [닉네임] [홀짝%] [낚시%]\n2. 해제: /조작 [닉네임] 오프"));
-            return true;
-        }
-
-        var lastArg = ps.pop();
-        var targetNick = "";
-        
-        // 1. "오프" 모드 처리
-        if (lastArg === "오프") {
-            targetNick = ps.slice(1).join(" ").trim();
-            var found = findUserGlobal(targetNick);
-            if (!found.length) return replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
-            if (found.length > 1) { 
-                handleUserSelection(replier, targetUid, found, "admin_manipulate_off", null, user, roomName); 
-                return true; 
-            }
-            
-            var tUser = found[0].data;
-            var tRoom = found[0].roomName;
-            tUser.isManipulated = false;
-            tUser.gambleWinRate = 0;
-            tUser.fishLuck = 0;
-            tUser.skipHealing = true;
-            safeSaveData(data);
-            replier.reply(formatAdmin("🎯 조작 해제", "대상: " + tUser.name + "\n모든 확률이 정상으로 돌아왔습니다."));
-        } 
-        // 2. "설정" 모드 처리
-        else {
-            var fishLuck = parseInt(lastArg);
-            var gambleRate = parseInt(ps.pop());
-            targetNick = ps.slice(1).join(" ").trim();
-
-            if (isNaN(gambleRate) || isNaN(fishLuck)) return replier.reply(formatAdmin("오류", "확률은 숫자로 입력해주세요."));
-
-            var found = findUserGlobal(targetNick);
-            if (!found.length) return replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
-            if (found.length > 1) { 
-                handleUserSelection(replier, targetUid, found, "admin_manipulate_on", { g: gambleRate, f: fishLuck }, user, roomName); 
-                return true; 
-            }
-
-            var tUser = found[0].data;
-            var tRoom = found[0].roomName;
-            tUser.isManipulated = true;
-            tUser.gambleWinRate = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, gambleRate));
-            tUser.fishLuck = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, fishLuck));
-            tUser.skipHealing = true;
-            safeSaveData(data);
-            
-            replier.reply(formatAdmin("🎯 조작 활성화", "대상: " + tUser.name + "\n🎲 홀짝 승률: " + tUser.gambleWinRate + "%\n🎣 낚시 보정: " + tUser.fishLuck + "%"));
         }
         return true;
     }

@@ -9235,16 +9235,15 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             if (bet > maxBet) { replier.reply(formatError(user, "상한 초과", "최대 " + fp(maxBet) + "P까지 베팅 가능합니다.")); return true; }
             if (Number(user.point) < bet) { replier.reply(formatError(user, "포인트 부족", "베팅할 포인트가 부족합니다.")); return true; }
 
-            // [배당 로직 리모델링]
-            var basePayout = 0.85;
-            if (user.title === "도박왕") basePayout += 0.05;
+            // 1. 배당률 계산 (기본 0.85 + 도박왕 0.05 + 연승 보너스)
+        var basePayout = 0.85;
+        if (user.title === "도박왕") basePayout += 0.05;
 
-            // 연승 보너스: 1승당 +0.05배 가산 (기호 양옆 공백 유지)
-            var winStreak = Number(user.consecutiveWins || 0);
-            var streakBonus = winStreak * 0.05;
-            var finalPayoutRate = basePayout + streakBonus;
+        var winStreak = Number(user.consecutiveWins || 0);
+        var streakBonus = winStreak * 0.05; // 1승당 0.05배 추가
+        var finalPayoutRate = Math.min(1.50, basePayout + streakBonus); // 최대 1.5배 제한
 
-            var expectedPayout = Math.floor(bet * finalPayoutRate);
+        var expectedProfit = Math.floor(bet * finalPayoutRate); // 순수익 계산
 
             if (!util_isBankSolvent(roomName, finalProfit)) {
                 return replier.reply("🚨 [중앙은행 지불 정지]\n금고 잔액 부족으로 홀짝 승리금을 지급할 수 없습니다.");
@@ -9271,63 +9270,44 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             }
 
             if (isWin) {
-                // 1. 승리 데이터 갱신
-                var nextWins = Number(user.totalGambleWins || 0) + 1;
-                util_setData(user, 'totalGambleWins', nextWins, "도박 승리 기록", roomName);
-                
-                // [신규] 연승 카운트 증가 (메시지 출력 전 수행)
-                user.consecutiveWins = (user.consecutiveWins || 0) + 1; 
+                user.consecutiveWins = winStreak + 1; // 연승 증가
+            util_setData(user, 'totalGambleWins', Number(user.totalGambleWins || 0) + 1, "도박 승리 기록", roomName);
 
-                // [v11.9.15] 카지노 최대주주 배당 적립 교정
-                // 1.85배당 제외분(0.15)의 4% 적립
-                var houseComm = bet * 0.15; 
-                if (roomData.features.dailyPools) {
-                    var cRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.CASINO || 0.04;
-                    roomData.features.dailyPools.casino += Math.floor(houseComm * cRate);
-                }
-                
-                var res = processRepayment(user, expectedPayout, targetUid, roomName);
-                util_updatePoint(user, roomData, Number(res.actualGain), "홀짝 적중", roomName);
-                
-                /* ===== 수정 포인트: 변수 안전성 확보 ===== */
-                // 변수가 선언되지 않았을 경우를 대비해 직접 상태 체크
-                var isCharm = (user.luckyCharmEnd && Date.now() < user.luckyCharmEnd);
-                var isFever = (data.feverData && data.feverData.active === true);
-                
-                var winPrefix = isCharm ? "🔮 [부적] " : (isFever ? "🔥 [피버] " : "🎊 ");
-                var charmMsg = isCharm ? "\n(✨ 행운의부적 효과 적용 중: 승률 +3%)" : "";
-                var repayInfo = (res && res.repayMsg) ? res.repayMsg : ""; // undefined 방어
-                
-                // [메시지 리모델링] 사용자 요청 양식 100% 반영 (줄바꿈 및 연승 정보 포함)
-                var outputMsg = "결과: [" + result + "]\n" +
-                                "축하합니다! " + fp(Number(res.actualGain)) + "P 획득!";
-                
-                // 2연승 이상일 때만 연승 콤보 문구 표시
-                if (user.consecutiveWins > 1) {
-                    outputMsg += "\n🔥 " + user.consecutiveWins + "연승 콤보 달성!\n" +
-                                 "✨ 연승 보너스 배당: " + finalPayoutRate.toFixed(2) + "배 적용";
-                }
-                
-                outputMsg += repayInfo + charmMsg;
-                
-                // 최종 출력
-                replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, outputMsg, "잔액: " + fp(user.point) + "P"));
+            // 카지노 배당 적립 (수수료 4%)
+            var houseComm = bet * 0.15; 
+            if (roomData.features.dailyPools) {
+                var cRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.CASINO || 0.04;
+                roomData.features.dailyPools.casino += Math.floor(houseComm * cRate);
+            }
+            
+            var res = processRepayment(user, expectedProfit, targetUid, roomName);
+            util_updatePoint(user, roomData, Number(res.actualGain), "홀짝 적중", roomName);
+            
+            var isCharm = (user.luckyCharmEnd && Date.now() < user.luckyCharmEnd);
+            var isFever = (data.feverData && data.feverData.active === true);
+            var winPrefix = isCharm ? "🔮 [부적] " : (isFever ? "🔥 [피버] " : "🎊 ");
+            
+            // [출력 메시지 리모델링]
+            var outputMsg = "결과: [" + result + "]\n" +
+                            "축하합니다! " + fp(Number(res.actualGain)) + "P 획득!";
+            
+            if (user.consecutiveWins > 1) {
+                outputMsg += "\n🔥 " + user.consecutiveWins + "연승 콤보 달성!\n" +
+                             "✨ 연승 보너스 배당: " + finalPayoutRate.toFixed(2) + "배 적용";
+            }
+            outputMsg += (res.repayMsg || "") + (isCharm ? "\n(✨ 행운의부적 효과 적용 중)" : "");
+
+            replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, outputMsg, "잔액: " + fp(user.point) + "P"));
                 
             } else {
-                // 2. 패배 처리
-                user.consecutiveWins = 0;
-                util_updatePoint(user, roomData, -bet, "홀짝 미적중", roomName);
-                
-                /* ===== 수정 포인트: 변수 안전성 확보 ===== */
-                var isCharm = (user.luckyCharmEnd && Date.now() < user.luckyCharmEnd);
-                var isFever = (data.feverData && data.feverData.active === true);
-                
-                var losePrefix = isCharm ? "🔮 [부적] " : (isFever ? "🔥 [피버] " : "💀 ");
-                
-                var outputMsg = "결과: [" + result + "]\n아쉽지만 " + fp(bet) + "P를 잃었습니다.";
-                
-                // 최종 출력
-                replier.reply(formatCommand(losePrefix + "홀짝 미적중", user, outputMsg, "잔액: " + fp(user.point) + "P"));
+               user.consecutiveWins = 0; // 연승 초기화
+            util_updatePoint(user, roomData, -bet, "홀짝 미적중", roomName);
+            
+            var isFever = (data.feverData && data.feverData.active === true);
+            var losePrefix = isFever ? "🔥 [피버] " : "💀 ";
+            var outputMsg = "결과: [" + result + "]\n아쉽지만 " + fp(bet) + "P를 잃었습니다.";
+            
+            replier.reply(formatCommand(losePrefix + "홀짝 미적중", user, outputMsg, "잔액: " + fp(user.point) + "P"));
             }
 
             // [엔진 연결] 칭호 자동 부여 시스템

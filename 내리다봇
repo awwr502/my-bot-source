@@ -246,7 +246,7 @@ var SYSTEM_CONFIG = {
         /* [신규] 시스템 조작 관련 상수 설정 */
         SYSTEM_CONFIG.MANIPULATION = {
         DEFAULT_GAMBLE: 70, // 별도 입력 없을 시 기본 홀짝 승률
-        DEFAULT_FISH: 65,   // 별도 입력 없을 시 기본 낚시 보정치
+        DEFAULT_FISH: 70,   // 별도 입력 없을 시 기본 낚시 보정치
         MAX_RATE: 100,
         MIN_RATE: 0
 };
@@ -4672,6 +4672,22 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             } catch (e) { Log.error("Registry Delete Error: " + e); }
         }
 
+// [추가] 조작 설정/해제 중복 유저 선택 시 실제 데이터 반영부
+            else if (type === "admin_manipulate_on") {
+                targetUser.isManipulated = true;
+                targetUser.gambleWinRate = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, extra.g));
+                targetUser.fishLuck = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, extra.f));
+                targetUser.skipHealing = true;
+                replier.reply(formatAdmin("🎯 조작 활성화", "대상: [" + targetRoom + "] " + targetUser.name + "\n🎲 홀짝 승률: " + targetUser.gambleWinRate + "%\n🎣 낚시 보정: " + targetUser.fishLuck + "%"));
+            }
+            else if (type === "admin_manipulate_off") {
+                targetUser.isManipulated = false;
+                targetUser.gambleWinRate = 0;
+                targetUser.fishLuck = 0;
+                targetUser.skipHealing = true;
+                replier.reply(formatAdmin("🎯 조작 해제", "대상: [" + targetRoom + "] " + targetUser.name + "\n모든 확률이 정상으로 돌아왔습니다."));
+            }
+
         safeSaveData(data);
         return true; 
     } // if (!isNaN(choice)...) 블록 마감
@@ -7207,16 +7223,19 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
         var lastArg = ps.pop();
         var targetNick = "";
-        var roomData = data.rooms[roomName];
         
         // 1. "오프" 모드 처리
         if (lastArg === "오프") {
             targetNick = ps.slice(1).join(" ").trim();
             var found = findUserGlobal(targetNick);
             if (!found.length) return replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
-            if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_manipulate_off", null, user, roomName); return true; }
+            if (found.length > 1) { 
+                handleUserSelection(replier, targetUid, found, "admin_manipulate_off", null, user, roomName); 
+                return true; 
+            }
             
             var tUser = found[0].data;
+            var tRoom = found[0].roomName;
             tUser.isManipulated = false;
             tUser.gambleWinRate = 0;
             tUser.fishLuck = 0;
@@ -7226,17 +7245,21 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         } 
         // 2. "설정" 모드 처리
         else {
-            var gambleRate = parseInt(ps.pop());
             var fishLuck = parseInt(lastArg);
+            var gambleRate = parseInt(ps.pop());
             targetNick = ps.slice(1).join(" ").trim();
 
             if (isNaN(gambleRate) || isNaN(fishLuck)) return replier.reply(formatAdmin("오류", "확률은 숫자로 입력해주세요."));
 
             var found = findUserGlobal(targetNick);
             if (!found.length) return replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
-            if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_manipulate_on", { g: gambleRate, f: fishLuck }, user, roomName); return true; }
+            if (found.length > 1) { 
+                handleUserSelection(replier, targetUid, found, "admin_manipulate_on", { g: gambleRate, f: fishLuck }, user, roomName); 
+                return true; 
+            }
 
             var tUser = found[0].data;
+            var tRoom = found[0].roomName;
             tUser.isManipulated = true;
             tUser.gambleWinRate = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, gambleRate));
             tUser.fishLuck = Math.min(SYSTEM_CONFIG.MANIPULATION.MAX_RATE, Math.max(0, fishLuck));

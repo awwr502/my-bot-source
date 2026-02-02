@@ -7780,29 +7780,24 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
 
     var report = [];
     targets.forEach(function(t) {
-        var basis = Number(pools[t.key] || 0);
-        
-        // 상수값 강제 교정 (0.025 및 0.10)
-        var mRate = ecoCfg.MARKET_DIVIDEND_RATE || 0.025;
-        var payoutRatio = ecoCfg.DIVIDEND_PAYOUT_RATIO || 0.10;
-
+        var basis = Number(pools[t.key] || 0); // 이미 1%~5%가 적립된 '주머니' 금액
         var landData = data.landmarkMarket[t.name];
         var curPrice = landData ? Number(landData.price) : 500000;
 
-        // 1. 시세 배당금 계산 (2.5%)
-        var marketPart = Math.floor(curPrice * mRate); 
+        // 2. [시세 배당] 건물 시세의 2.5% 고정
+        var marketPart = Math.floor(curPrice * (ecoCfg.MARKET_DIVIDEND_RATE || 0.025));
         
-        // 2. 활동 배당금 계산 (가결산 포함 주머니의 10%)
-        var accumRates = ecoCfg.ACTIVITY_ACCUM_RATES || {};
-        var currentRate = accumRates[t.key.toUpperCase()] || 0.01;
-        var realBasis = basis;
-        if (t.key === "mine") realBasis += Math.floor(pendingMineEarn * currentRate);
-        if (t.key === "bank") realBasis += Math.floor(pendingBankInterest * currentRate);
+        // 3. [활동 배당] 이미 적립된 주머니 금액의 10% 산출
+        var payoutRatio = ecoCfg.DIVIDEND_PAYOUT_RATIO || 0.10;
         
-        var activityPart = Math.floor(realBasis * payoutRatio); 
+        // 실시간 가결산: 현재 활동 중인(광산/은행) 미정산 적립금의 10%만 합산
+        var currentRate = ecoCfg.ACTIVITY_ACCUM_RATES[t.key.toUpperCase()] || 0.01;
+        var pendingPart = 0;
+        if (t.key === "mine") pendingPart = Math.floor(pendingMineEarn * currentRate * payoutRatio);
+        if (t.key === "bank") pendingPart = Math.floor(pendingBankInterest * currentRate * payoutRatio);
         
-        // 최종 합산
-        var totalDividend = marketPart + activityPart;
+        // 최종 수식: (시세 * 2.5%) + (주머니 잔액 * 10%) + (미정산분 * 10%)
+        var totalDividend = marketPart + Math.floor(basis * payoutRatio) + pendingPart;
             
             // [정밀화] 현재 방 유저 대상 최대주주 수동 검색
             var maxQty = 0;

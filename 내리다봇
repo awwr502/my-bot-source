@@ -7787,48 +7787,41 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
     if (msg === "/배당현황") {
         var roomData = data.rooms[roomName];
 
-        if (typeof util_recalculateDailyPools === 'function') {
-            util_recalculateDailyPools(data, roomName);
+        // [v11.9.7 교정] 기존 주머니 데이터를 무시하고 로그를 통해 '오늘' 활동액을 즉석 재계산
+        var pools = { mine: 0, fish: 0, casino: 0, bank: 0, shop: 0, race: 0 };
+        try {
+            var logContent = FileStream.read(JOURNAL_PATH);
+            if (logContent) {
+                var logs = logContent.split("\n");
+                var rates = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES;
+                logs.forEach(function(line) {
+                    var p = line.split("|");
+                    if (p.length < 5 || p[1] !== roomName) return;
+                    var amt = Math.abs(Number(p[2]));
+                    if (p[4].indexOf("광산") !== -1) pools.mine += Math.floor(amt * rates.MINE);
+                    else if (p[4].indexOf("낚시") !== -1) pools.fish += Math.floor(amt * rates.FISH);
+                    else if (p[4].indexOf("미적중") !== -1) pools.casino += Math.floor(amt * rates.CASINO);
+                    else if (p[4].indexOf("이자") !== -1) pools.bank += Math.floor(amt * rates.BANK);
+                    else if (p[4].indexOf("상점") !== -1) pools.shop += Math.floor(amt * rates.SHOP);
+                    else if (p[4].indexOf("배팅") !== -1) pools.race += Math.floor(amt * rates.RACING);
+                });
+            }
+        } catch(e) { Log.error("Real-time Log Scan Fail: " + e); }
+
+        /* [기존 실시간 엔진 활용] 채굴 중인 유저의 예상 수익 합산 */
+        var pendingMineEarn = 0;
+        var nowTs = Date.now();
+        var mineMult = util_getEcoMultiplier(roomName) * (util_getActivePolicy(roomData).mineMult || 1.0);
+
+        for (var uid in roomData.users) {
+            var u = roomData.users[uid];
+            if (u.mining && u.mining.active === true) {
+                var mDuration = Math.floor((nowTs - u.mining.startTime) / 60000);
+                if (mDuration >= 1) pendingMineEarn += Math.floor(mDuration * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * mineMult);
+            }
         }
-
-    var pools = roomData.features.dailyPools;
-    var ecoCfg = SYSTEM_CONFIG.ECO;
-
-    if (!ecoCfg || !pools) {
-        replier.reply(formatAdmin("조회 실패", "데이터 엔진이 활성화되지 않았습니다."));
-        return true;
-    }
-
-    var targets = [
-        { name: "광산", key: "mine", icon: "⛏️" },
-        { name: "낚시터", key: "fish", icon: "🎣" },
-        { name: "카지노", key: "casino", icon: "🎰" },
-        { name: "중앙은행", key: "bank", icon: "🏦" },
-        { name: "백화점", key: "shop", icon: "🏢" },
-        { name: "경마장", key: "race", icon: "🏇" }
-    ].sort(function(a, b) { return a.name.localeCompare(b.name); });
-
-    /* [실시간 엔진] 가결산 로직 */
-    var pendingMineEarn = 0;
-    var pendingBankInterest = 0;
-    var nowTs = Date.now();
-    var pol = util_getActivePolicy(roomData);
-    var mineMult = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
-    var bankRate = 0.01; 
-
-    for (var uid in roomData.users) {
-        var u = roomData.users[uid];
-        if (u.mining && u.mining.active === true) {
-            var mDuration = Math.floor((nowTs - u.mining.startTime) / 60000);
-            if (mDuration >= 1) pendingMineEarn += Math.floor(mDuration * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * mineMult);
-        }
-        var balance = Number(u.point || 0);
-        if (balance > 1000) {
-            var todayStart = new Date().setHours(0,0,0,0);
-            var activeTimeRatio = (nowTs - todayStart) / 86400000; 
-            pendingBankInterest += Math.floor(balance * bankRate * activeTimeRatio);
-        }
-    }
+        // 실시간 미정산분(1%) 주머니에 합산
+        pools.mine += Math.floor(pendingMineEarn * SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.MINE);
 
     var report = [];
     targets.forEach(function(t) {

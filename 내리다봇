@@ -68,7 +68,8 @@ var USER_SCHEMA = [
     { key: 'lastBankUpdateTime', default: 0, type: 'number' }, // 마지막 은행 잔액 변동 시간 (Timestamp)
     { key: 'totalFishingSuccess', default: 0, type: 'number' }, // 낚시 누적 성공 횟수 (칭호용)
     { key: 'totalDonation', default: 0, type: 'number' },       // 누적 기부 금액
-    { key: 'consecutiveWins', default: 0, type: 'number' }     // [신규] 홀짝 연승 기록용 필드
+    { key: 'consecutiveWins', default: 0, type: 'number' },     // [신규] 홀짝 연승 기록용 필드
+    { key: 'lastGambleTime', default: 0, type: 'number' }        // [신규] 마지막 홀짝 진행 시간 (1시간 초기화용)
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -1894,6 +1895,11 @@ function checkEconomicStimulus(user, roomName, isManual) {
         // 지능형 보상 부스트(giniCorr.reward)를 적용하여 서민 자산 복구 가속
         var baseGive = Math.floor(10000 * multiplier * emergencyMult * giniCorr.reward);
         var giveAmount = Math.min(baseGive, gap); 
+
+        // [신규] 신용불량자 페널티: 민생지원금 20% 삭감
+        if (Number(user.creditScore || 600) < 500) {
+            giveAmount = Math.floor(giveAmount * 0.8);
+        }
         
         if (giveAmount < 100 || !util_isBankSolvent(roomName, giveAmount)) return;
 
@@ -2358,8 +2364,7 @@ function checkAndHandleDefaulter(user, roomName) {
     if (currentScore < 500) {
         if (!user.isDefaulter) {
             util_setData(user, 'isDefaulter', true, "신용도 하락(500미만)", roomName);
-            util_setData(user, 'icon', "", "신용불량 아이콘 몰수", roomName);
-            var msg = "신용 점수 500점 미만 하락\n\n1. 보유 아이콘 몰수\n2. 획득 포인트 50% 자동 상환 적용";
+            var msg = "신용 점수 500점 미만 하락\n\n1. 대출 보유 시 수익 50% 자동상환\n2. 각종 지원금 20% 삭감 (국고 환수)\n3. 의회 투표권 박탈"
             try { Api.replyRoom(roomName, formatCommand("📉 신용불량자 지정", user, msg, "대출 상환을 권장합니다.")); } catch(e){}
         }
     } else {
@@ -2486,11 +2491,11 @@ function processRepayment(user, amount, userUid, roomName) {
             repaymentRate = 0.7; 
             typeLabel = "🚨 대환 채무 강제 추심";
         } 
-        // [조건 2] 신용불량자(500점 미만)는 50% 압류
-        else if (Number(user.creditScore || 600) < 500) {
-            repaymentRate = 0.5; 
-            typeLabel = "신용불량 제한 상환";
-        }
+        // [조건 2] 신용불량자(500점 미만)는 수익 발생 시 50% 압류 (상환 로직 확정)
+        else if (Number(user.creditScore || 600) < 500) {
+            repaymentRate = 0.5; 
+            typeLabel = "신용불량 제한 상환";
+        }
 
         var intendedRepay = Math.floor(currentGain * repaymentRate);
         if (intendedRepay > Number(user.loan.debt)) intendedRepay = Number(user.loan.debt);
@@ -4770,6 +4775,14 @@ function _runChatBonusLogic(msg, user, data, replier, roomName, targetUid) {
             var multiplier = util_getEcoMultiplier(roomName);
             var basePrize = Math.floor(Math.random() * 201) + 300;
             var prize = Math.floor(basePrize * multiplier);
+
+            // [신규] 신용불량자 페널티: 채팅 보너스 20% 삭감
+            var penaltyMsg = "";
+            if (Number(user.creditScore || 600) < 500) {
+                var penalty = Math.floor(prize * 0.2);
+                prize -= penalty;
+                penaltyMsg = "\n⚠️ 신용불량 페널티 적용 (-20%)";
+            }
             
             var res = processRepayment(user, prize, targetUid, roomName);
             util_updatePoint(user, data.rooms[roomName], Number(res.actualGain), "채팅 보너스", roomName);
@@ -9256,18 +9269,26 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
             var isWin = Math.random() < winProb; 
             var result = isWin ? pick : (pick === "홀" ? "짝" : "홀");
             
-            // 1. 도박 참여 통계 갱신 (게이트웨이 보호 - 중복 연산 ++ 제거)
-            var nextTotalGamble = Number(user.totalGambleCount || 0) + 1;
-            util_setData(user, 'totalGambleCount', nextTotalGamble, "도박 통계 갱신", roomName);
-
-            // 2. 일일 도박 횟수 갱신 (신용도 감점용)
-            var nextDailyGamble = (user.dailyGambleCount || 0) + 1;
-            util_setData(user, 'dailyGambleCount', nextDailyGamble, "홀짝 참여", roomName);
-
-            if (user.dailyGambleCount > 10) {
-                user.creditScore = Math.max(0, Number(user.creditScore || 600) - 1);
-                checkAndHandleDefaulter(user, roomName);
+           var now = Date.now();
+            // 마지막 플레이로부터 1시간(3,600,000ms) 지났으면 카운트 초기화
+            if (now - (user.lastGambleTime || 0) > 3600000) {
+                user.dailyGambleCount = 0;
             }
+            user.lastGambleTime = now; // 시간 갱신
+
+            // 1. 도박 참여 통계 갱신
+            var nextTotalGamble = Number(user.totalGambleCount || 0) + 1;
+            util_setData(user, 'totalGambleCount', nextTotalGamble, "도박 통계 갱신", roomName);
+
+            // 2. 일일 도박 횟수 갱신 및 신용도 차감
+            var nextDailyGamble = (user.dailyGambleCount || 0) + 1;
+            util_setData(user, 'dailyGambleCount', nextDailyGamble, "홀짝 참여", roomName);
+
+            if (user.dailyGambleCount > 10) {
+                // 10판 초과 시 판당 -1점
+                user.creditScore = Math.max(0, Number(user.creditScore || 600) - 1);
+                checkAndHandleDefaulter(user, roomName);
+            }
 
             if (isWin) {
                 user.consecutiveWins = winStreak + 1; // 연승 증가
@@ -10000,21 +10021,28 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
             return true; 
         }
 
-       // [가상 정부] 현재 정책 데이터 로드
-        var pol = util_getActivePolicy(roomData);
+       // [핵심] 보상 계산을 위한 기초 데이터 호출
+        var pol = util_getActivePolicy(roomData); // 정부 정책
+        var multiplier = util_getEcoMultiplier(roomName); // 시장 물가 배율
+        var emergencyMult = util_getEmergencyMultiplier(roomName); // 국고 위기 배율
 
-        var multiplier = util_getEcoMultiplier(roomName); 
-        var minR = SYSTEM_CONFIG.ECO.ATTEND_MIN || 1000;
-        var maxR = SYSTEM_CONFIG.ECO.ATTEND_MAX || 1500;
+        var minR = SYSTEM_CONFIG.ECO.ATTEND_MIN || 1000;
+        var maxR = SYSTEM_CONFIG.ECO.ATTEND_MAX || 1500;
+        var baseReward = Math.floor(Math.random() * (maxR - minR + 1)) + minR;
+        
+        // 1. 시장 물가 및 정부 정책 배율 적용
+        var baseResult = Math.floor(baseReward * multiplier * (pol.attendMult || 1.0));
 
-        var baseReward = Math.floor(Math.random() * (maxR - minR + 1)) + minR;
-        
-        // 정책 배율(pol.attendMult)을 보상 계산에 최종 적용
-        var reward = Math.floor(baseReward * multiplier * (pol.attendMult || 1.0));
+        // 2. 시스템 방어(국고 위기) 배율 적용
+        var reward = Math.floor(baseResult * emergencyMult); 
 
-        var emergencyMult = util_getEmergencyMultiplier(roomName);
-        var baseResult = Math.floor(baseReward * multiplier * (pol.attendMult || 1.0));
-        var reward = Math.floor(baseResult * emergencyMult);
+        // 3. [신규] 신용불량자 페널티: 최종 금액에서 20% 추가 삭감
+        var penaltyMsg = "";
+        if (Number(user.creditScore || 600) < 500) {
+            var penalty = Math.floor(reward * 0.2); 
+            reward -= penalty; 
+            penaltyMsg = "\n⚠️ 신용불량 페널티: -" + fp(penalty) + "P (20% 국고 환원)";
+        }
 
         if (!util_isBankSolvent(roomName, reward)) {
             return replier.reply("🚨 [중앙은행 지불 정지]\n국고가 완전히 고갈되어 출석 보상을 지급할 수 없습니다.\n관리자의 재원 수혈이 필요합니다.");
@@ -10035,8 +10063,8 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
         // 정책 효과가 기본값(1.0)이 아닐 때만 UI에 정책 태그 표시
         var policyTag = (pol.attendMult && pol.attendMult !== 1.0) ? "\n⚖️ 정책 효과: x" + pol.attendMult.toFixed(1) + " (적용 중)" : "";
 
-        var content = fp(reward) + "P가 지급되었습니다! (신용 +2)" + (res.repayMsg || "") + policyTag + "\n" +
-                      "🏦 국고 재원에서 연금이 지급되었습니다.";
+        var content = fp(reward) + "P가 지급되었습니다! (신용 +2)" + (res.repayMsg || "") + penaltyMsg + policyTag + "\n" +
+              "🏦 국고 재원에서 연금이 지급되었습니다.";
 
         replier.reply(formatCommand("✅ 일일 출석 완료", user, content, "내 잔액: " + fp(user.point) + "P"));
         
@@ -10132,12 +10160,17 @@ function _gameGovernmentLogic(msg, user, data, replier, roomName, targetUid) {
 
     // B. [액션] /투표 (생략 - 기존 로직 유지)
     if (msg.indexOf("/투표 ") === 0) {
-        // ... (이전 투표 로직 코드와 동일) ...
+        // [신규] 신용불량자 투표권 박탈 가드
+        if (Number(user.creditScore || 600) < 500) {
+            replier.reply(formatError(user, "투표권 없음", "신용불량자 상태에서는 국가 정책 투표에 참여할 수 없습니다."));
+            return true;
+        }
+
         if (!gov.pendingBill) {
             replier.reply(formatError(user, "투표 불가", "현재 진행 중인 의회 안건이 없습니다."));
             return true;
         }
-        // ... (이후 투표 처리 로직 유지) ...
+
         var choice = msg.substring(4).trim();
         if (choice !== "찬성" && choice !== "반대") {
             replier.reply(formatError(user, "입력 오류", "[/투표 찬성] 또는 [/투표 반대]를 입력하세요."));

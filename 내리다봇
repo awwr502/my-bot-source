@@ -7519,38 +7519,97 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-/* [v12.5] 전체 광부 시간 지능형 자동 복구 엔진 */
-   if (msg === "/전체채굴복구") {
-        var now = Date.now();
-        var totalFixed = 0;
-        
-        for (var r in data.rooms) {
-            var room = data.rooms[r];
-            for (var uid in room.users) {
-                var u = room.users[uid];
-                
-                // 00시 가결산 시점에 개별적으로 저장된 어제 기록(savedTime)이 있는 유저 중 현재 채굴 중인 자 탐색
-                if (u.mining && Number(u.mining.savedTime || 0) > 0 && u.mining.active === true) {
-                    var saved = Number(u.mining.savedTime);
-                    
-                    // [핵심] 유저의 현재 시작시간에서 어제치(saved)만큼 시간을 과거로 소급(rewind)
-                    // 이를 통해 '나갔다 다시 들어온 유저'도 현재 세션에 어제 시간이 합산됨
-                    u.mining.startTime = Number(u.mining.startTime || now) - (saved * 60000);
-                    u.mining.savedTime = 0; // 복구 완료 후 중복 방지 초기화
-                    u.skipHealing = true;
-                    totalFixed++;
+if (msg === "/전체채굴복구") {
+        var backupPath = BACKUP_DIR + "last_stable_backup.json";
+        var backupFile = new java.io.File(backupPath);
+        var logFile = new java.io.File(JOURNAL_PATH);
+
+        if (!backupFile.exists() || backupFile.length() === 0) {
+            replier.reply(formatAdmin("🚫 복구 불가", "2월 2일자 안전 백업 파일이 존재하지 않습니다."));
+            return true;
+        }
+
+        try {
+            var backupData = JSON.parse(FileStream.read(backupPath));
+            var totalFixed = 0;
+            var pointRevokedCount = 0;
+            var titleRevokedCount = 0;
+
+            // [Step 1] 오늘 발생한 광산 수익금 회수를 위한 로그 분석
+            var todayProfits = {}; // { uid: totalAmount }
+            if (logFile.exists()) {
+                var logs = FileStream.read(JOURNAL_PATH).split("\n");
+                logs.forEach(function(line) {
+                    if (!line.trim()) return;
+                    var p = line.split("|");
+                    // 오늘 날짜이면서 '광산 채굴 정산' 사유인 포인트 증가분 추출
+                    if (p.length >= 5 && p[4].indexOf("광산 채굴 정산") !== -1) {
+                        var uid = p[0];
+                        var amt = Math.abs(Number(p[2]));
+                        todayProfits[uid] = (todayProfits[uid] || 0) + amt;
+                    }
+                });
+            }
+
+            for (var rName in data.rooms) {
+                var currentRoom = data.rooms[rName];
+                var backupRoom = backupData.rooms[rName];
+                if (!backupRoom) continue;
+
+                for (var uid in currentRoom.users) {
+                    var u = currentRoom.users[uid];
+                    var bu = backupRoom.users[uid];
+
+                    if (bu && bu.mining) {
+                        u.skipHealing = true;
+
+                        // [Step 2] 부당 이득 포인트 회수
+                        if (todayProfits[uid]) {
+                            var revokeAmt = todayProfits[uid];
+                            u.point = Number(u.point) - revokeAmt;
+                            // 국고(은행재원)로 다시 환수
+                            currentRoom.bankReserve = (currentRoom.bankReserve || 0) + revokeAmt;
+                            pointRevokedCount++;
+                        }
+
+                        // [Step 3] 광산 데이터 2월 2일 23:59 시점으로 완전 롤백
+                        u.totalMiningTime = Number(bu.totalMiningTime || 0);
+                        u.artifactPieces = Number(bu.artifactPieces || 0);
+                        u.mining = JSON.parse(JSON.stringify(bu.mining));
+
+                        // [Step 4] 조건 미달 칭호 강제 회수 (1만분 미만 유저의 채굴왕 박탈)
+                        if (u.totalMiningTime < 10000) {
+                            var originalInvLen = u.inventory.length;
+                            u.inventory = u.inventory.filter(function(it) {
+                                return !(it.effect === "title" && it.title === "채굴왕");
+                            });
+                            if (u.title === "채굴왕") u.title = "";
+                            if (originalInvLen !== u.inventory.length) titleRevokedCount++;
+                        }
+
+                        totalFixed++;
+                    }
                 }
             }
+
+            safeSaveData(data, true); // 복구 직후 즉시 강제 백업
+            if (typeof globalData !== 'undefined') globalData = data;
+
+            var report = "🚨 [광산 시스템 딥 클린 & 롤백 완료]\n" +
+                         "━━━━━━━━━━━━━━━\n" +
+                         "• 데이터 복원: 2월 2일 23:59 기준\n" +
+                         "• 복구 인원: " + totalFixed + "명\n" +
+                         "• 수익 회수: " + pointRevokedCount + "건 (포인트 차감)\n" +
+                         "• 칭호 박탈: " + titleRevokedCount + "건 (채굴왕 회수)\n" +
+                         "━━━━━━━━━━━━━━━\n" +
+                         "💡 00시 초기화 및 부정 수급 기록을 모두 지우고,\n" +
+                         "기존 세션에서 끊김 없이 채굴 중인 상태로 합산되었습니다.";
+            replier.reply(formatAdmin("시스템 정밀 정화 보고", report));
+
+        } catch (e) {
+            Log.error("Mining Deep Clean Error: " + e);
+            replier.reply(formatAdmin("🚫 오류 발생", "정화 로직 실행 중 기술적 결함 발생"));
         }
-        
-        safeSaveData(data);
-        var report = "✅ 유저별 개별 시간 정밀 복구 완료\n" +
-                     "━━━━━━━━━━━━━━━\n" +
-                     "• 복구 대상: " + totalFixed + "명\n" +
-                     "• 복구 방식: 개인별 savedTime 세션 합산\n" +
-                     "━━━━━━━━━━━━━━━\n" +
-                     "💡 이제 각자 [/광산정보] 확인 시 정상 시간이 출력됩니다.";
-        replier.reply(formatAdmin("시스템 정밀 복구", report));
         return true;
     }
 

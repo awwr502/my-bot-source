@@ -12169,24 +12169,21 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
     var validPicks = (gameType === "ladder") ? ["홀", "짝", "좌3짝", "우3홀", "좌4홀", "우4짝"] : ["플레이어", "뱅커", "타이", "P", "B", "T"];
     if (validPicks.indexOf(pick) === -1) return false;
 
-    // 3. 자금 및 한도 검증 (상수 참조 교정)
+    // 3. 자금 및 한도 검증 (상수 참조 교정: CASINO.MIN_BET -> ECO.GAMBLE_MIN)
     var minLimit = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
-    var maxLimit = (gameType === "ladder") ? SYSTEM_CONFIG.CASINO.LADDER.LIMIT : SYSTEM_CONFIG.CASINO.BACCARAT.LIMIT;
+    var maxLimit = (gameType === "ladder") ? (SYSTEM_CONFIG.CASINO.LADDER.LIMIT || 500000) : (SYSTEM_CONFIG.CASINO.BACCARAT.LIMIT || 1000000);
 
-    // 2. 시간 마감 가드 (5초 전 차단)
+    // 4. 시간 마감 가드 (5초 전 차단)
     var now = new Date();
     var secInCycle = (now.getMinutes() % interval) * 60 + now.getSeconds();
     var limit = (interval * 60) - 5;
+    
     if (secInCycle >= limit) {
         replier.reply(formatError(user, "배팅 마감", "회차 마감 5초 전에는 배팅이 불가능합니다."));
         return true;
     }
 
-    // 3. 자금 및 한도 검증
-    var minLimit = SYSTEM_CONFIG.CASINO.MIN_BET;
-    var maxLimit = (gameType === "ladder") ? SYSTEM_CONFIG.CASINO.LADDER.LIMIT : SYSTEM_CONFIG.CASINO.BACCARAT.LIMIT;
-
-    if (user.point < amt) {
+    if (Number(user.point) < amt) {
         replier.reply(formatError(user, "포인트 부족", "보유 포인트가 부족합니다."));
         return true;
     } else if (amt < minLimit) {
@@ -12196,42 +12193,39 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
         replier.reply(formatError(user, "한도 초과", (gameType === "ladder" ? "사다리" : "바카라") + "의 최대 한도는 " + fp(maxLimit) + "P입니다."));
         return true;
     }
-        // 4. 배팅 접수
-        var finalPick = pick;
-        if (gameType === "baccarat") finalPick = { "플레이어": "P", "뱅커": "B", "타이": "T" }[pick];
 
-        // 1. 게이트웨이 및 은행 재원 연동 (베팅금은 즉시 국고 적립)
-        user.skipHealing = true; // 고액 배팅 시 침식 방어로직 우회
-        util_updatePoint(user, data.rooms[roomName], -amt, "카지노 배팅 참여 (" + pick + ")", roomName);
-        
-        // 2. [칭호 연동] 기존 홀짝 통계 계승 (누적 500회 등)
-        user.totalGambleCount = (user.totalGambleCount || 0) + 1;
-        user.totalCasinoBet = (user.totalCasinoBet || 0) + amt;
+    // 5. 배팅 접수 처리 (바카라 한글 매핑 포함)
+    var finalPick = pick;
+    if (gameType === "baccarat") {
+        var bMap = { "플레이어": "P", "뱅커": "B", "타이": "T", "P": "P", "B": "B", "T": "T" };
+        finalPick = bMap[pick] || pick;
+    }
 
-        // 4. [칭호 자동 부여] 기존 도박왕/타짜/꾼 조건 체크
-        var winRate = (user.totalGambleWins / user.totalGambleCount) * 100;
-        if (user.totalGambleCount >= 500) {
-            util_checkAndAwardTitle(user, replier, "도박왕", 4003, "🎲", "내리다 카지노 협회", "도박 횟수 500회", "[효과]: 카지노 당첨금 5% 추가 보너스", roomName);
-        } else if (user.totalGambleCount >= 100 && winRate >= 60) {
-            util_checkAndAwardTitle(user, replier, "타짜", 4002, "🎴", "내리다 카지노 협회", "총 승률 60% 돌파", "냉철한 승부사", roomName);
-        }
-        else if (user.totalGambleCount >= 100) { // [교정] totalCount -> user.totalGambleCount
-            util_checkAndAwardTitle(user, replier, "꾼", 4001, "🃏", "내리다 카지노 협회", "도박 횟수 100회", "카지노의 생리를 깨달은 승부사", roomName);
-        }
-        
-        casino.bets[targetUid] = { pick: finalPick, amount: amt, name: user.name };
-        user.totalCasinoBet = (user.totalCasinoBet || 0) + amt;
-        
-        var title = (gameType === "ladder" ? "사다리" : "바카라");
-        var remain = (interval * 60) - secInCycle;
-        var guide = "선택: " + (gameType === "ladder" ? "홀/짝/좌3짝 등" : "플레이어/뱅커/타이") + "\n예시: " + pick + " " + amt;
-        
-        var successMsg = fp(amt) + "P 배팅 완료\n🕒 " + remain + "초 후 배팅이 마감됩니다.\n\n" +
-                         "• 선택: " + pick + "\n" +
-                         "💰 보유 포인트: " + fp(user.point) + "P\n" +
-                         "🚫 최대 한도: " + fp(maxLimit) + "P";
+    // 6. 포인트 차감 및 통계 기록
+    user.skipHealing = true; 
+    util_updatePoint(user, data.rooms[roomName], -amt, "카지노 배팅 참여 (" + pick + ")", roomName);
+    
+    user.totalGambleCount = (user.totalGambleCount || 0) + 1;
+    user.totalCasinoBet = (user.totalCasinoBet || 0) + amt;
+    casino.bets[targetUid] = { pick: finalPick, amount: amt, name: user.name };
 
-        replier.reply(formatCommand("💰 " + title + " 배팅 참여", user, successMsg, "마감 5초 전에는 배팅이 차단됩니다."));
-        safeSaveData(data);
+    // 7. 칭호 자동 부여 체크
+    var winRate = (user.totalGambleWins / user.totalGambleCount) * 100;
+    if (user.totalGambleCount >= 500) {
+        util_checkAndAwardTitle(user, replier, "도박왕", 4003, "🎲", "내리다 카지노 협회", "도박 횟수 500회", "[효과]: 카지노 당첨금 5% 추가 보너스", roomName);
+    } else if (user.totalGambleCount >= 100 && winRate >= 60) {
+        util_checkAndAwardTitle(user, replier, "타짜", 4002, "🎴", "내리다 카지노 협회", "총 승률 60% 돌파", "냉철한 승부사", roomName);
+    } else if (user.totalGambleCount >= 100) {
+        util_checkAndAwardTitle(user, replier, "꾼", 4001, "🃏", "내리다 카지노 협회", "도박 횟수 100회", "카지노의 생리를 깨달은 승부사", roomName);
+    }
+    
+    var remain = (interval * 60) - secInCycle;
+    var successMsg = fp(amt) + "P 배팅 완료\n🕒 " + remain + "초 후 배팅이 마감됩니다.\n\n" +
+                     "• 선택: " + pick + "\n" +
+                     "💰 보유 포인트: " + fp(user.point) + "P\n" +
+                     "🚫 최대 한도: " + fp(maxLimit) + "P";
+
+    replier.reply(formatCommand("💰 " + (gameType === "ladder" ? "사다리" : "바카라") + " 배팅 참여", user, successMsg, "마감 5초 전에는 배팅이 차단됩니다."));
+    safeSaveData(data);
     return true;
 }

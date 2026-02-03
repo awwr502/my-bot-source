@@ -2579,14 +2579,21 @@ function distributeRepayment(user, amount, roomName) {
     
     var actualRepayed = initialAmount - remainingRepay;
     user.loan.items = newItems;
-    user.loan.debt = 0;
-    var crInfo = getCreditInfo(user.creditScore || 600);
+    var remainingTotal = 0;
+    for (var i = 0; i < newItems.length; i++) { 
+        remainingTotal += Number(newItems[i]); 
+    }
+    user.loan.debt = remainingTotal; 
+
+    // [보정]: getCreditInfo 호출 시 roomName을 전달하여 현재 방의 경제 지표에 맞는 신용 가점을 계산합니다.
+    var crInfo = getCreditInfo(user.creditScore || 600, roomName);
     var restoreThreshold = Math.floor(crInfo.limit * 0.8);
     var appliedGain = (actualRepayed >= restoreThreshold) ? (clearedCount * 15) : 0;
 
     var nextScore = Math.min(1000, Number(user.creditScore || 600) + appliedGain);
     util_setData(user, 'creditScore', nextScore, "대출 상환 가점", roomName);
 
+    // [확정]: 대출금이 완전히 0이 되었을 때만 채무 완납 처리 및 특수 채무 플래그를 해제합니다.
     if (user.loan.debt <= 0) {
         user.loan.debt = 0; 
         user.loan.items = []; 
@@ -5343,11 +5350,8 @@ function _handleBankStep2(msg, user, data, replier, roomName, targetUid) {
                 user.creditScore = Math.max(0, Number(user.creditScore || 600) - 20);
                 checkAndHandleDefaulter(user, roomName);
             }
-            /* [Gemini 요청 사항] 지능형 금리 엔진 연동 */
-            var dynMult = 1.0;
-            if (typeof util_getDynamicRateMultiplier === 'function') {
-                dynMult = util_getDynamicRateMultiplier(roomName);
-            }
+
+            var dynMult = (typeof util_getDynamicRateMultiplier === 'function') ? util_getDynamicRateMultiplier(roomName) : 1.0;
 
             // [기부왕] 실행 시 선이자 30% 감면
             var rateGap = (cr.rate - 1) * dynMult;
@@ -5359,8 +5363,17 @@ function _handleBankStep2(msg, user, data, replier, roomName, targetUid) {
             if (!user.loan.items) user.loan.items = [];
             user.loan.debt = Number(user.loan.debt || 0) + Number(total);
             user.loan.items.push(Number(total));
+            
             util_updatePoint(user, roomData, amt, "은행 대출 실행", roomName);
-            replier.reply(formatCommand("🏦 대출 승인", user, fp(amt) + "P 입금 완료\n(상환 예정액: " + fp(total) + "P)\n\n🏛️ 남은 가용 재원: " + fp(roomData.bankReserve - requiredReserve) + "P", "보유 포인트: " + fp(user.point) + "P"));
+
+            // [추가]: 유저 상태에 따른 자동 상환 비율 판정 및 안내 문구 조립
+            var autoRepayRate = user.isTransferred ? "70%" : (user.creditScore < 500 ? "50%" : "30%");
+            var successContent = fp(amt) + "P 입금 완료\n(상환 예정액: " + fp(total) + "P)\n\n" +
+                                 "📢 [자동 상환 안내]\n" +
+                                 "향후 발생하는 모든 수익의 " + autoRepayRate + "가\n" +
+                                 "대출금으로 자동 상환됩니다.";
+
+            replier.reply(formatCommand("🏦 대출 승인", user, successContent, "보유 포인트: " + fp(user.point) + "P"));
             delete bankProcessState[targetUid];
             safeSaveData(data);
         }
@@ -9335,14 +9348,17 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
 
     /* [기능 1] 은행 시스템 진입 (v5.2 기부 메뉴 추가) */
     if (msg === "/은행") {
+        var cr = getCreditInfo(user.creditScore, roomName); 
+        
         menuWaitState[targetUid] = { type: 'bank_menu', time: Date.now() };
+
         var bankMenu = "1. 💰 예금 (포인트 ➔ 은행)\n" +
                        "2. 🏧 출금 (은행 ➔ 포인트)\n" +
                        "3. 💸 송금 (타인에게 이체)\n" +
-                       "4. 🏦 대출 (신용등급별)\n" +
+                       "4. 🏦 대출 (한도: " + fp(cr.limit) + "P)\n" + // 메뉴에 실시간 한도 직접 표시
                        "5. 📉 상환 (대출금 갚기)\n" +
                        "6. " + (SYSTEM_CONFIG.MSG.PREFIX.LOAN || "🚬") + " 사채 시장 (P2P 대출)\n" +
-                       "7. 🎁 기부 (국고 후원)"; // [신규] 기부 항목 추가
+                       "7. 🎁 기부 (국고 후원)";
         
         var myPoint = Number(user.point || 0);
         var myBank = Number(user.bank || 0);

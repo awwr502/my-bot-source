@@ -371,8 +371,8 @@ var SYSTEM_CONFIG = {
         },
         CREDIT: { // [은행 신용 등급 체계]
             SCORES: [900, 800, 700, 600, 500], // 각 등급을 나누는 기준 점수
-            LIMITS: [300000, 180000, 100000, 80000, 40000, 10000], // 등급별 대출 가능 한도
-            RATES: [1.02, 1.04, 1.08, 1.12, 1.18, 1.30], // 등급별 기본 이율 (시장 승수와 연동되어 최종 산출됨)
+            LIMITS: [1000000, 800000, 600000, 500000, 400000, 300000], // 등급별 대출 가능 한도
+            RATES: [1.02, 1.05, 1.09, 1.13, 1.17, 1.24], // 등급별 기본 이율 (시장 승수와 연동되어 최종 산출됨)
             LABELS: ["1등급", "2등급", "3등급", "4등급", "5등급", "신용불량자"], 
             ICONS: ["👑", "💎", "🥇", "🥈", "🥉", "🚫"] 
         }
@@ -1955,32 +1955,56 @@ function checkEconomicStimulus(user, roomName, isManual) {
 //==========섹터10==========
 
 /* 신용 정보 계산 함수 (상수 연동) */
-function getCreditInfo(score) {
+function getCreditInfo(score, roomName) {
     var s = Number(score || 600);
     var conf = SYSTEM_CONFIG.ECO.CREDIT;
+    var data = getDatabase();
+    var roomData = data.rooms[roomName || "내리다"];
     
+    // 00시에 계산되어 저장된 전날 유저 평균 순자산 호출 (없으면 0)
+    var avgAsset = (roomData && roomData.features && roomData.features.government) ? 
+                   Number(roomData.features.government.dailyAvgAsset || 0) : 0;
+
     for(var i=0; i<conf.SCORES.length; i++) {
         if(s >= conf.SCORES[i]) {
-            return { grade: i+1, limit: conf.LIMITS[i], label: conf.LABELS[i], rate: conf.RATES[i], icon: conf.ICONS[i] };
+            return { 
+                grade: i+1, 
+                limit: conf.LIMITS[i] + avgAsset, // 기본한도 + 유저평균자산
+                label: conf.LABELS[i], 
+                rate: conf.RATES[i], 
+                icon: conf.ICONS[i] 
+            };
         }
     }
     // 마지막 등급 (신용불량)
     var lastIdx = conf.SCORES.length;
-    return { grade: lastIdx+1, limit: conf.LIMITS[lastIdx], label: conf.LABELS[lastIdx], rate: conf.RATES[lastIdx], icon: conf.ICONS[lastIdx] };
+    return { 
+        grade: lastIdx+1, 
+        limit: conf.LIMITS[lastIdx] + avgAsset, 
+        label: conf.LABELS[lastIdx], 
+        rate: conf.RATES[lastIdx], 
+        icon: conf.ICONS[lastIdx] 
+    };
 }
 
-/* 신용 한도 표 생성 함수 (수정 완료) */
-function getCreditLimitTable() {
+/* 신용 한도 표 생성 함수 (유동 한도 반영) */
+function getCreditLimitTable(roomName) {
     var conf = SYSTEM_CONFIG.ECO.CREDIT;
     var list = [];
+    var data = getDatabase();
+    var roomData = data.rooms[roomName || "내리다"];
+    var avgAsset = (roomData && roomData.features && roomData.features.government) ? 
+                   Number(roomData.features.government.dailyAvgAsset || 0) : 0;
+
     for(var i=0; i<conf.SCORES.length; i++) {
         var ratePct = Math.round((conf.RATES[i] - 1) * 100);
-        // conf[i] -> i 로 수정
-        list.push(conf.ICONS[i] + " " + conf.LABELS[i] + " (" + conf.SCORES[i] + "점~): " + fp(conf.LIMITS[i]) + "P (이율 " + ratePct + "%)");
+        var dynamicLimit = conf.LIMITS[i] + avgAsset;
+        list.push(conf.ICONS[i] + " " + conf.LABELS[i] + " (" + conf.SCORES[i] + "점~): " + fp(dynamicLimit) + "P (이율 " + ratePct + "%)");
     }
     var lastIdx = conf.SCORES.length;
     var lastRate = Math.round((conf.RATES[lastIdx] - 1) * 100);
-    list.push(conf.ICONS[lastIdx] + " " + conf.LABELS[lastIdx] + " (<" + conf.SCORES[lastIdx-1] + "): " + fp(conf.LIMITS[lastIdx]) + "P (이율 " + lastRate + "%)");
+    var lastDynamicLimit = conf.LIMITS[lastIdx] + avgAsset;
+    list.push(conf.ICONS[lastIdx] + " " + conf.LABELS[lastIdx] + " (<" + conf.SCORES[lastIdx-1] + "): " + fp(lastDynamicLimit) + "P (이율 " + lastRate + "%)");
     
     return list.join("\n");
 }
@@ -3554,6 +3578,12 @@ function _runSector17Logic(data, ctx) {
         for (var rName in data.rooms) {
             var rObj = data.rooms[rName];
             var eco = calculateEconomy(data, rName); // 섹터 8에서 고친 부동산 합산 엔진 사용
+
+            // [신규] 00시 기준 유저 평균 순자산 확정 (내일 대출 한도의 기준이 됨)
+            if (rObj.features && rObj.features.government) {
+                rObj.features.government.dailyAvgAsset = eco.average;
+                Log.info("[" + rName + "] 내일자 대출 유동 한도 기준점 설정: " + fp(eco.average) + "P");
+            }
             
             if (eco.total > 0) {
                 var oldBase = rObj.economyBase || eco.total;
@@ -9219,7 +9249,9 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
 
     /* [기능 4] 신용 등급 및 대출 한도 조회 */
     if (msg === "/신용등급" || msg === "/대출한도") {
-        var cr = getCreditInfo(user.creditScore);
+        // getCreditInfo와 Table 호출 시 roomName을 전달하여 유동 한도 반영
+        var cr = getCreditInfo(user.creditScore, roomName);
+        var limitTable = getCreditLimitTable(roomName);
         
         // 1. 탄력 금수 승수 계산
         var dynMult = 1.0;

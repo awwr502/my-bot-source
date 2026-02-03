@@ -996,7 +996,7 @@ var SHOP_CATEGORIES = {
     2: "🔂 성장/게임 (승급, 방어)",
     3: "💳 경제/지원 (신용, 인증, 기타)",
     4: "🎁 랜덤 뽑기 (아이콘 박스)",
-    5: "🎫 특수/복권 (로또)"
+    5: "🎫 특수/복권 (로또)",
     6: "🚢 무역 물품 (수출용 상자)"
 };
 
@@ -6269,7 +6269,7 @@ if (msg === "/도움말") {
                "4. 🏦 은행 및 사채\n" +
                "5. 🏗️ 랜드마크\n" +
                "6. ⛏️ 광산 채굴 (방치형)\n" +
-               "7. 🏛️ 정부 및 투표\n"; // 신규 카테고리 추가
+               "7. 🏛️ 정부 및 투표\n" +
                "8. ⚓ 무역 및 해상 교역\n";
     
     if (isAdmin(user.name, data, targetUid)) menu += "8. ⚙️ 관리자 기능\n";
@@ -6287,7 +6287,7 @@ if (msg === "/가이드") {
                "5. ⛏️ 활동 및 수익\n" +
                "6. 🎁 민생 지원 및 복지\n" +
                "7. 🏛️ 정부 및 투표 가이드\n" +
-               "8. 👑 최대주주 배당 및 특권";
+               "8. 👑 최대주주 배당 및 특권\n" +
                "9. ⚓ 무역 및 해상 교역 가이드";
     replier.reply(formatCommand("📔 내리다봇 마스터 가이드", null, "상세 내용을 보고 싶은 항목을 선택하세요.\n\n" + menu, "입력 대기: 30초"));
     return;
@@ -6960,6 +6960,12 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
 
     /* 요청사항 시작: 무역 물품 적재 로직 추가 */
     if (item.effect === "trade_cargo") {
+        // [보안 패치] 항해 중 화물 적재(순간이동) 차단
+        if (user.voyage && user.voyage.active) {
+             replier.reply(formatError(user, "적재 불가", "현재 선박이 항해 중입니다.\n귀항 후 다시 시도해주세요."));
+             return;
+        }
+
         var tradeCfg = SYSTEM_CONFIG.TRADE;
         var shipCfg = tradeCfg.SHIPS[user.shipLevel || 1];
         
@@ -11023,10 +11029,8 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
                 var luckFactor = rawLuck / 100;
                 
                 // 지수 압축 공식 적용 (30% 설정 시 최하 0.657 확보)
-                fishRand = 1 - (fishRand * Math.pow(1 - luckFactor, 3));
-                
-                // 90% 이상은 돗돔급 고정
-                if (luckFactor >= 0.9) fishRand = Math.max(fishRand, 0.999);
+                successRand = 1 - (successRand * Math.pow(1 - luckFactor, 3));
+                if (luckFactor >= 0.9) successRand = Math.max(successRand, 0.999);
             }
 
                 var selectedFish = fishPool[0];
@@ -11254,7 +11258,7 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             _showTradeMarket(user, replier, roomData, tradeCfg);
             menuWaitState[targetUid] = { type: 'trade_market', time: Date.now(), depth: 2 };
         } else if (choice === "2") {
-            _prepareVoyage(user, replier, tradeCfg);
+            _prepareVoyage(user, replier, tradeCfg, roomData);
             menuWaitState[targetUid] = { type: 'trade_depart', time: Date.now(), depth: 2 };
         } else if (choice === "3") {
             _showVoyageStatus(user, replier);
@@ -11305,8 +11309,11 @@ function _showTradeMarket(user, replier, roomData, cfg) {
 /* [서브] 🚢 출항 준비 및 화물 확인 */
 function _prepareVoyage(user, replier, cfg) {
     var cargoList = []; var total = 0;
-    for (var k in (user.cargo || {})) {
-        var q = Number(user.cargo[k]);
+    var myCargo = user.cargo || {};
+    var mySpecialties = user.specialties || {};
+    
+    for (var k in myCargo) {
+        var q = Number(myCargo[k]);
         if (q > 0) { cargoList.push("• " + k + ": " + q + "상자"); total += q; }
     }
     for (var s in (user.specialties || {})) {
@@ -11316,9 +11323,41 @@ function _prepareVoyage(user, replier, cfg) {
         replier.reply(formatError(user, "출항 불가", "실린 화물이 없습니다. 상점에서 물품을 구매하세요."));
         return;
     }
+    // [신규] 국가별 예상 수익 계산 로직
+    var market = (roomData && roomData.features.tradeMarket) ? roomData.features.tradeMarket : cfg.NATIONS;
     var nations = Object.keys(cfg.NATIONS);
-    var nStr = ""; for (var i=0; i<nations.length; i++) nStr += (i+1) + ". " + nations[i] + "\n";
-    replier.reply(formatCommand("🚢 목적지 설정", user, "[내 적재 현황]\n" + cargoList.join("\n") + "\n\n[출항지 선택]\n" + nStr, "국가 번호를 입력하세요."));
+    var nStr = ""; 
+    
+    for (var i = 0; i < nations.length; i++) {
+        var nName = nations[i];
+        var nInfo = market[nName]; // 해당 국가의 선호/기피 정보
+        var estRevenue = 0;
+
+        // 일반 화물 수익 예측
+        for (var good in myCargo) {
+            var cnt = Number(myCargo[good]);
+            if (cnt > 0) {
+                var mult = (good === nInfo.favorite) ? 1.5 : (good === nInfo.hate ? 0.7 : 1.0);
+                estRevenue += Math.floor(cfg.BASE_PRICE * cnt * mult);
+            }
+        }
+        // 특산품 수익 예측
+        for (var sName in mySpecialties) {
+            var sCnt = Number(mySpecialties[sName]);
+            if (sCnt > 0) {
+                var sMult = 1.0;
+                // 특산품은 해당 국가가 선호하는 물품 계열과 맞아야 보너스 적용 (시스템 규칙 기반)
+                if (cfg.NATIONS[nName].specialty === sName && cfg.NATIONS[nName].favorite === nInfo.favorite) {
+                    sMult = cfg.SPECIALTY_PROFIT;
+                }
+                estRevenue += Math.floor(cfg.BASE_PRICE * sCnt * sMult);
+            }
+        }
+        
+        nStr += (i+1) + ". " + nName + " (예상: " + fp(estRevenue) + "P)\n";
+    }
+
+    replier.reply(formatCommand("🚢 목적지 설정 (예상 수익 분석)", user, "[내 적재 현황]\n" + cargoList.join("\n") + "\n\n[출항지 선택]\n" + nStr, "국가 번호를 입력하세요."));
 }
 
 /* [서브] 🌊 항해 시작 (스냅샷 및 순풍 적용) */

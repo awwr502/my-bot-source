@@ -179,6 +179,19 @@ var miningState = {};
 var loanRegisterState = {};
 var loanContractWaitState = {};
 
+
+/**
+ * [개편] 무역 국가별 고정 생산 품목 및 특산품 매핑 (순환 매칭 엔진용)
+ * 설명: 각 국가의 자국 생산물을 정의하며, 스케줄러가 이를 제외한 품목을 선호/기피로 배정합니다.
+ */
+var TRADE_RELATION = {
+    "노르딕": { produce: "식료품", set: "만년설삼" },
+    "샹그릴라": { produce: "공예품", set: "고대찻잎" },
+    "브리타니아": { produce: "공업품", set: "증기기관부품" },
+    "엘도라도": { produce: "보석", set: "황금조각상" },
+    "사막의별": { produce: "귀금속", set: "오아시스수정" }
+};
+
 /**
  * [Gemini 요청 사항] 방별 독립화를 위한 데이터 템플릿
  * 설명: 아래의 구조가 각 방(Room)이 생성될 때마다 독립적으로 복제되어 할당됩니다.
@@ -252,11 +265,11 @@ var SYSTEM_CONFIG = {
     TRADE: {
         PRICE_CYCLE_MIN: 60,        // 시세 변동 주기 (60분)
         NATIONS: {
-            "브리타니아": { favorite: "공업품", hate: "식료품", specialty: "증기기관부품" },
-            "샹그릴라": { favorite: "공예품", hate: "보석", specialty: "고대찻잎" },
-            "엘도라도": { favorite: "보석", hate: "공업품", specialty: "황금조각상" },
-            "노르딕": { favorite: "식료품", hate: "귀금속", specialty: "만년설삼" },
-            "사막의별": { favorite: "귀금속", hate: "공예품", specialty: "오아시스수정" }
+            "브리타니아": { favorite: "", hate: "", specialty: "증기기관부품" },
+            "샹그릴라": { favorite: "", hate: "", specialty: "고대찻잎" },
+            "엘도라도": { favorite: "", hate: "", specialty: "황금조각상" },
+            "노르딕": { favorite: "", hate: "", specialty: "만년설삼" },
+            "사막의별": { favorite: "", hate: "", specialty: "오아시스수정" }
         },
         SHIPS: {
             1: { name: "카라벨", capacity: 10, speedMult: 1.0, upgradeCost: 0 },
@@ -3334,50 +3347,43 @@ function _runSector16Logic(data, ctx) {
         }
     } catch (e) { Log.error("Landmark Engine Error: " + e); }
 
-    /* 무역 시스템 1시간 주기 시세 변동 엔진 */
+    // =====요청사항 시작=====
+    /* 무역 시스템 1시간 주기 순환 시세 변동 엔진 */
     /**
-     * 기능: 매시 30분 정각에 5개 교역국의 선호/기피 품목을 랜덤하게 교체 (1시간 주기)
+     * 기능: 매시 30분 정각에 5개국의 선호/기피 품목을 '순환 매칭' 방식으로 교체 (1시간 주기)
+     * 규칙: 자국 생산 품목은 절대 선호/기피에 포함되지 않음 (수입 필요성 강조)
      */
     try {
         var tradeCfg = SYSTEM_CONFIG.TRADE;
-        // 매시 30분이고, 해당 시간에 아직 업데이트를 하지 않았을 때만 실행
         if (currentMin === 30 && data.lastTradeUpdateHour !== currentHour) {
             data.lastTradeUpdateHour = currentHour;
             
             if (!mainRoomData.features.tradeMarket) mainRoomData.features.tradeMarket = {};
             
-            var nations = Object.keys(tradeCfg.NATIONS); // 5개국
-            var goodsList = JSON.parse(JSON.stringify(tradeCfg.GOODS)); // 5종 품목
+            // 순환 매칭을 위한 표준 배열 정의 (생산품 기준)
+            var nations = ["노르딕", "샹그릴라", "브리타니아", "엘도라도", "사막의별"];
+            var goods = ["식료품", "공예품", "공업품", "보석", "귀금속"];
             
-            // 1. 선호 품목 셔플 배정 (모든 품목이 한 번씩 선호됨)
-            var shuffledFavs = goodsList.slice().sort(function() { return Math.random() - 0.5; });
-            
-            // 2. 기피 품목 셔플 배정 (모든 품목이 한 번씩 기피됨)
-            var shuffledHates = goodsList.slice().sort(function() { return Math.random() - 0.5; });
-            
-            // 3. 중복 방지 교정 (한 국가 내에서 선호 == 기피인 경우 스왑)
-            for (var i = 0; i < nations.length; i++) {
-                if (shuffledFavs[i] === shuffledHates[i]) {
-                    var next = (i + 1) % nations.length;
-                    var temp = shuffledHates[i];
-                    shuffledHates[i] = shuffledHates[next];
-                    shuffledHates[next] = temp;
-                }
-            }
+            // 매 시간 겹치지 않는 랜덤 오프셋(1~3) 결정 (자국 물품 회피용)
+            var offset = Math.floor(Math.random() * 3) + 1; 
+            var hOffset = (offset + 2) % 5; if (hOffset === 0) hOffset = 4;
 
-            // 4. 최종 데이터 반영
-            for (var j = 0; j < nations.length; j++) {
-                var nName = nations[j];
+            for (var i = 0; i < nations.length; i++) {
+                var nName = nations[i];
+                // 생산 인덱스 i를 기준으로 오프셋만큼 밀어서 배정
+                var favIdx = (i + offset) % 5;
+                var hateIdx = (i + hOffset) % 5;
+
                 mainRoomData.features.tradeMarket[nName] = {
-                    favorite: shuffledFavs[j],
-                    hate: shuffledHates[j],
+                    favorite: goods[favIdx],
+                    hate: goods[hateIdx],
                     specialty: tradeCfg.NATIONS[nName].specialty
                 };
             }
 
             var tradeNotice = "⚙️ [내리다 무역 지부 공보]\n━━━━━━━━━━━━━━━\n" +
-                              "🌍 세계 교역 시세가 새롭게 변동되었습니다!\n\n" +
-                              "각 국가의 수요가 변화함에 따라 품목별 가치가 재산정되었으니 출항 전 시세를 재확인하시기 바랍니다.\n" +
+                              "🌍 세계 교역 시세가 '순환 매칭'으로 변동되었습니다!\n\n" +
+                              "각 국가는 현재 부족한 타국 물자를 선호하며,\n자국 생산 품목은 일절 매입하지 않습니다.\n" +
                               "━━━━━━━━━━━━━━━\n" +
                               "💡 확인: [/무역] ➔ 1. 세계 시세 확인\n" +
                               "(※ 시세는 매시 30분 정각에 변동됩니다.)";
@@ -11457,38 +11463,68 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // 재해 판정 (25% 확률)
     var triggeredDisaster = (Math.random() < 0.25) ? ["STORM", "FIRE", "CORRO", "PIRACY"][Math.floor(Math.random() * 4)] : null; 
 
-    // 1. 일반 화물 정산
+   // 1. 일반 화물 정산 (자국 품목 매입 거부 로직 추가)
+    var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
+
     for (var good in (user.cargo || {})) {
         var count = Number(user.cargo[good]); if (count <= 0) continue;
-        var multiplier = (good === nationInfo.favorite) ? 1.5 : (good === nationInfo.hate ? 0.7 : 1.0);
+        var multiplier = 1.0;
+
+        // [A] 자국 생산물 수입 거부 판정
+        if (good === producedByDest) {
+            multiplier = 0;
+            disasterLog += "\n🚫 [수입 거부]: 자국 생산물인 '" + good + "'은 매입하지 않습니다.";
+        } else {
+            multiplier = (good === nationInfo.favorite) ? 1.5 : (good === nationInfo.hate ? 0.7 : 1.0);
+        }
 
         // 재해 로직 (수량/가치 10% 손실)
-        if (triggeredDisaster === "FIRE" && (good === "식료품" || good === "공예품")) {
-            var lost = Math.ceil(count * 0.1); count -= lost;
-            disasterLog += "\n🔥 [재해: 화재]: " + good + " " + lost + "상자가 소실되었습니다.";
-        } else if (triggeredDisaster === "CORRO" && (good === "공업품" || good === "귀금속")) {
-            multiplier *= 0.9;
-            disasterLog += "\n🧪 [재해: 부식]: 바닷바람에 " + good + " 가치가 10% 하락했습니다.";
+        if (multiplier > 0) {
+            if (triggeredDisaster === "FIRE" && (good === "식료품" || good === "공예품")) {
+                var lost = Math.ceil(count * 0.1); count -= lost;
+                disasterLog += "\n🔥 [재해: 화재]: " + good + " " + lost + "상자가 소실되었습니다.";
+            } else if (triggeredDisaster === "CORRO" && (good === "공업품" || good === "귀금속")) {
+                multiplier *= 0.9;
+                disasterLog += "\n🧪 [재해: 부식]: 바닷바람에 " + good + " 가치가 10% 하락했습니다.";
+            }
         }
 
         var earn = Math.floor(cfg.BASE_PRICE * count * multiplier);
         totalRevenue += earn;
-        if (count > 0) soldLog.push("• " + good + " x" + count + ": " + fp(earn) + "P " + (multiplier > 1 ? "🔺" : (multiplier < 1 ? "🔹" : "")));
+        if (count > 0 && multiplier > 0) {
+            soldLog.push("• " + good + " x" + count + ": " + fp(earn) + "P " + (multiplier > 1 ? "🔺" : (multiplier < 1 ? "🔹" : "")));
+        }
         user.cargo[good] = 0;
     }
 
-    // 2. 특산품 정산
+    // 2. 특산품 정산 (순환 세트 매칭 및 통관 거부 방식)
     for (var sName in (user.specialties || {})) {
         var sCount = Number(user.specialties[sName]); if (sCount <= 0) continue;
         var sMult = 1.0; var sTag = "";
-        for (var nKey in cfg.NATIONS) {
-            if (cfg.NATIONS[nKey].specialty === sName && cfg.NATIONS[nKey].favorite === nationInfo.favorite) {
-                sMult = cfg.SPECIALTY_PROFIT; sTag = "⭐"; break;
-            }
+
+        // 해당 특산품의 상위 품목 카테고리 식별
+        var parentGood = "";
+        for (var n in TRADE_RELATION) {
+            if (TRADE_RELATION[n].set === sName) { parentGood = TRADE_RELATION[n].produce; break; }
         }
+
+        // [B] 특산품 통관 및 보너스 판정
+        if (parentGood === producedByDest) {
+            sMult = 0; // 자국 특산품 역수입 금지
+            disasterLog += "\n🚫 [통관 거부]: 자국 특산품 '" + sName + "'은 반입이 금지되어 전량 압수되었습니다.";
+        } else if (parentGood === nationInfo.favorite) {
+            sMult = cfg.SPECIALTY_PROFIT; // 3.0배 보너스
+            sTag = "⭐ [세트수요]";
+        } else if (parentGood === nationInfo.hate) {
+            sMult = 0.5; // 기피 품목 세트 페널티
+            sTag = "🔹 [수요급감]";
+        }
+
         var sRev = Math.floor(cfg.BASE_PRICE * sCount * sMult);
         totalRevenue += sRev;
-        soldLog.push("• [특] " + sName + " x" + sCount + ": " + fp(sRev) + "P " + sTag);
+        if (sMult > 0) {
+            soldLog.push("• [특] " + sName + " x" + sCount + ": " + fp(sRev) + "P " + sTag);
+        }
         user.specialties[sName] = 0;
     }
 
@@ -11523,11 +11559,31 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     util_updatePoint(user, roomData, netProfit, "무역 정산 수익", roomName);
     util_updateReserve(roomData, taxAmount, "무역세 국고 귀속", roomName);
 
-    // [폭풍우]: 정산 후 수리비 지출
+    // [폭풍우]: 정산 후 수리비 지출 (부족 시 은행 대납 로직 통합)
     if (triggeredDisaster === "STORM") {
         var repairFee = Math.floor(netProfit * 0.1 + 10000);
-        util_updatePoint(user, roomData, -repairFee, "선박 수리비 지출", roomName);
-        disasterLog += "\n🌊 [재해: 폭풍우]: 선체 파손 수리비로 " + fp(repairFee) + "P가 지출되었습니다.";
+        var currentPoints = Number(user.point);
+        
+        if (currentPoints < repairFee) {
+            // 자금이 부족한 경우: 잔액 전액 차감 후 부족분 대출 전환
+            var loanGap = repairFee - currentPoints;
+            
+            // 1. 보유 포인트 전액 차감 (0원이 됨)
+            util_updatePoint(user, roomData, -currentPoints, "폭풍우 수리비(잔액 전액)", roomName);
+            
+            // 2. 부족분 대출 객체 생성 및 부채 가산
+            if (!user.loan || typeof user.loan !== 'object') user.loan = { debt: 0, items: [] };
+            if (!user.loan.items) user.loan.items = [];
+            
+            user.loan.debt = Number(user.loan.debt || 0) + loanGap;
+            user.loan.items.push(loanGap);
+            
+            disasterLog += "\n🌊 [재해: 폭풍우]: 수리비가 부족하여 " + fp(loanGap) + "P가 은행 대출(대납)로 처리되었습니다.";
+        } else {
+            // 자금이 충분한 경우: 정상 차감
+            util_updatePoint(user, roomData, -repairFee, "선박 수리비 지출", roomName);
+            disasterLog += "\n🌊 [재해: 폭풍우]: 선체 파손 수리비로 " + fp(repairFee) + "P가 지출되었습니다.";
+        }
     }
 
     // 5. 특산품 발견 (15% 확률)

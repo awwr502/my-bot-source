@@ -310,11 +310,11 @@ var SYSTEM_CONFIG = {
          * - 기피(hate): 강력한 손실 부여 (0.8)
          */
         PROFIT_RATES: {
-            "식료품": { pref: 1.28, norm: 1.05, hate: 0.8 },
-            "공업품": { pref: 1.24, norm: 1.05, hate: 0.8 },
-            "공예품": { pref: 1.21, norm: 1.05, hate: 0.8 },
-            "귀금속": { pref: 1.20, norm: 1.05, hate: 0.8 },
-            "보석":   { pref: 1.19, norm: 1.05, hate: 0.8 }
+            "식료품": { pref: 1.34, norm: 1.08, hate: 0.8 }, 
+            "공업품": { pref: 1.27, norm: 1.08, hate: 0.8 },
+            "공예품": { pref: 1.25, norm: 1.05, hate: 0.8 },
+            "귀금속": { pref: 1.24, norm: 1.05, hate: 0.8 },
+            "보석":   { pref: 1.23, norm: 1.05, hate: 0.8 }
         },
 
     MANIPULATION: {
@@ -11523,12 +11523,14 @@ function _departVoyage(user, data, replier, roomName, dest, cfg) {
 
     var arrival = Date.now() + (timeMin * 60 * 1000);
     
-    // 시세 스냅샷 생성
+    // 시세 및 출항 당시 물가 배율 스냅샷 생성 (수익률 박제)
     var marketSnapshot = JSON.parse(JSON.stringify(roomData.features.tradeMarket || cfg.NATIONS));
+    var ecoMultSnapshot = util_getEcoMultiplier(roomName); 
 
     user.voyage = {
         active: true, dest: dest, arrival: arrival, startTime: Date.now(),
         marketSnapshot: marketSnapshot, 
+        ecoMultSnapshot: ecoMultSnapshot, // 추가됨
         isSmooth: isSmooth
     };
     
@@ -11552,54 +11554,57 @@ function _showVoyageStatus(user, replier) {
         var remain = (v.arrival || 0) - Date.now();
         
         // [신규] 예상 수익 계산 (재해 제외 기본치)
-        var estRev = 0;
+        var estRev = 0;   // 예상 매출
+        var totalCost = 0; // 투자 원가 (지니세 포함)
         var cfg = SYSTEM_CONFIG.TRADE;
-        var roomName = "내리다"; // 기본 운영방 기준
+        var roomName = "내리다"; 
         var roomData = globalData.rooms[roomName];
         var market = v.marketSnapshot || {};
         var nationInfo = market[v.dest] || { favorite: "", hate: "" };
-        var ecoMult = util_getEcoMultiplier(roomName); 
         var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
 
-        // 1. 일반 화물 예상 수익 계산
+        // 출항 당시 물가 참조 (기존 항해자는 현재 물가 참조)
+        var eMult = v.ecoMultSnapshot || util_getEcoMultiplier(roomName); 
+        var gini = util_getGiniCorrection(user, roomName);
+
+        // 1. 일반 화물 순수익 시뮬레이션
         for (var good in (user.cargo || {})) {
             var count = Number(user.cargo[good]); if (count <= 0) continue;
-            var basePrice = (cfg.GOODS_COST[good] || 10000) * ecoMult;
+            
+            // 실제 유저가 구매 시 지불했을 예상 비용 (원가)
+            var unitCost = Math.floor((cfg.GOODS_COST[good] || 10000) * eMult * gini.tax);
             var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
             
-            var mult = 1.0;
-            if (good === producedByDest) mult = 0; // 수입 거부
-            else if (good === nationInfo.favorite) mult = rateInfo.pref;
-            else if (good === nationInfo.hate) mult = rateInfo.hate;
-            else mult = rateInfo.norm;
+            var mult = (good === producedByDest) ? 0 : 
+                       (good === nationInfo.favorite) ? rateInfo.pref : 
+                       (good === nationInfo.hate) ? rateInfo.hate : rateInfo.norm;
 
-            estRev += Math.floor(basePrice * mult * count);
+            totalCost += (unitCost * count);
+            estRev += Math.floor(((cfg.GOODS_COST[good] || 10000) * eMult) * mult * count);
         }
 
-        // 2. 특산품 예상 수익 계산
+        // 2. 특산품 가치 합산 (발견 확률 제외, 현재 보유분 기준)
         for (var sName in (user.specialties || {})) {
             var sCount = Number(user.specialties[sName]); if (sCount <= 0) continue;
-            var parentGood = "";
-            for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === sName) { parentGood = TRADE_RELATION[n].produce; break; } }
-
-            var sMult = 1.0;
-            if (parentGood === producedByDest) sMult = 0;
-            else if (parentGood === nationInfo.favorite) sMult = cfg.SPECIALTY_PROFIT; // 3.0배
-            else if (parentGood === nationInfo.hate) sMult = 0.5;
-
+            var sMult = (v.dest === sName) ? cfg.SPECIALTY_PROFIT : 1.0; // 목적지 특산품이면 3배
             estRev += Math.floor(cfg.BASE_PRICE * sCount * sMult);
         }
 
-        // 3. 지능형 세율 적용 (정산 엔진과 동일)
+        // 3. 지능형 세율 적용 및 최종 순수익 산출
         var eco = calculateEconomy(globalData, roomName);
         var myNetWorth = util_calculateNetWorth(user, roomData);
-        var taxRate = (myNetWorth > eco.average * 2) ? (cfg.MAX_TAX || 0.15) : (cfg.BASE_TAX || 0.1);
+        var taxRate = (myNetWorth > eco.average * 2) ? 0.15 : 0.1;
         
-        var estNet = Math.floor(estRev * (1 - taxRate));
+        var estNetPayout = Math.floor(estRev * (1 - taxRate)); // 세후 수령액
+        var pureProfit = estNetPayout - totalCost; // 수령액 - 구매비용
 
-        msg = "현재 [" + v.dest + "]로 항해 중\n\n" +
-              "예상 수익: " + fp(estNet) + "P" + (taxRate > 0.1 ? " (누진세 적용)" : "") + "\n" +
-              "남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
+        msg = "현재 [" + v.dest + "]로 항해 중\n" +
+              "━━━━━━━━━━━━━━━\n" +
+              "💰 예상 수령액: " + fp(estNetPayout) + "P\n" +
+              "💵 순수익 기대: " + (pureProfit >= 0 ? "+" : "") + fp(pureProfit) + "P\n" +
+              "📈 기대 수익률: " + (totalCost > 0 ? ((pureProfit / totalCost) * 100).toFixed(1) : "0.0") + "%\n" +
+              "━━━━━━━━━━━━━━━\n" +
+              "🕒 남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
     }
     
     replier.reply(formatCommand("📦 항해 현황", user, msg, "(↩️ 뒤로 / 🏠 처음으로)"));

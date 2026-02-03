@@ -7500,18 +7500,21 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         var midnight = new Date(); midnight.setHours(0,0,0,0);
         var todayElapsedMin = Math.floor((now - midnight.getTime()) / 60000);
         
-        var lostBeforeResetMin = 9000; 
-        var totalCombinedMin = todayElapsedMin + lostBeforeResetMin;
-
         var totalFixed = 0;
         for (var r in data.rooms) {
             for (var uid in data.rooms[r].users) {
                 var u = data.rooms[r].users[uid];
+                
+                // 채굴 중이며 백업된 시간(savedTime)이 있는 유저만 정밀 복구
                 if (u.mining && u.mining.active === true) {
-                    // [핵심] startTime을 전체 합산 시간만큼 과거로 밀어버림으로써 /광산정보 표시를 복구
-                    u.mining.startTime = now - (totalCombinedMin * 60000);
+                    var lastSaved = Number(u.mining.savedTime || 0);
+                    var individualTotal = lastSaved + todayElapsedMin;
+
+                    // 유저 각자의 어제 시간 + 오늘 시간을 합쳐서 startTime을 소급 적용
+                    u.mining.startTime = now - (individualTotal * 60000);
                     
-                    // 칭호용 누적 시간(totalMiningTime)은 중복 합산 방지를 위해 건드리지 않거나 선택적 보정
+                    // 복구 완료 후 백업 데이터 초기화 (중복 복구 방지)
+                    u.mining.savedTime = 0; 
                     u.skipHealing = true;
                     totalFixed++;
                 }
@@ -7519,14 +7522,13 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         }
         
         safeSaveData(data);
-        var report = "✅ 채굴 진행 시간(Timer) 연속 복구 완료\n" +
+        var report = "✅ 유저별 맞춤형 시간 복구 완료\n" +
                      "━━━━━━━━━━━━━━━\n" +
                      "• 복구 대상: " + totalFixed + "명\n" +
-                     "• 복구 기준: 정산전 " + lostBeforeResetMin + "분 + 오늘 " + todayElapsedMin + "분\n" +
-                     "✨ 최종 표시: " + totalCombinedMin + "분부터 이어서 채굴 중\n" +
+                     "• 복구 방식: [개별 어제 시간] + [오늘 경과]\n" +
                      "━━━━━━━━━━━━━━━\n" +
-                     "💡 유저가 /광산정보 확인 시 시간이 합산되어 나타납니다.";
-        replier.reply(formatAdmin("시스템 시간 복구", report));
+                     "💡 유저마다 리셋 전 본인의 시간부터 끊김 없이 이어집니다.";
+        replier.reply(formatAdmin("시스템 정밀 복구", report));
         return true;
     }
 

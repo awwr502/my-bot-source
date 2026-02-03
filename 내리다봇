@@ -3749,6 +3749,86 @@ function _runSector16Logic(data, ctx) {
         }
     } catch (e) { Log.error("Racing Logic Error: " + e); }
 
+    /* [5. 통합 카지노 백그라운드 엔진] */
+    /**
+     * 기능: 사다리(2분), 바카라(3분) 주기에 맞춰 당첨 결과 생성 및 정산
+     * 특징: 채팅방 알림 없이 '조용히' 데이터만 갱신하며, 결과는 유저가 메뉴 진입 시 확인
+     */
+    try {
+        if (!mainRoomData.features.casino) {
+            mainRoomData.features.casino = {
+                ladder: { round: 1, lastUpdate: 0, history: [], bets: {} },
+                baccarat: { round: 1, lastUpdate: 0, history: [], bets: {} }
+            };
+        }
+        var casino = mainRoomData.features.casino;
+
+        // --- [A] 사다리 게임 엔진 (2분 주기) ---
+        if (currentMin % 2 === 0 && currentSec === 0 && casino.ladder.lastUpdate !== currentMin) {
+            casino.ladder.lastUpdate = currentMin;
+            
+            // 1. 결과 생성 (좌/우, 3/4줄, 홀/짝 조합)
+            var start = Math.random() < 0.5 ? "좌" : "우";
+            var lines = Math.random() < 0.5 ? 3 : 4;
+            var oe = ((start === "좌" && lines === 3) || (start === "우" && lines === 4)) ? "짝" : "홀";
+            var result = { start: start, lines: lines, oe: oe, full: start + lines + oe };
+
+            // 2. 당첨자 정산 (조용히 포인트 지급)
+            for (var uid in casino.ladder.bets) {
+                var bet = casino.ladder.bets[uid];
+                var u = mainRoomData.users[uid];
+                if (!u) continue;
+
+                var isWin = (bet.pick === oe || bet.pick === result.full);
+                if (isWin) {
+                    var mult = (bet.pick.length > 1) ? 4.0 : 1.9; // 조합 4배, 단일 1.9배
+                    var winAmt = Math.floor(bet.amount * mult);
+                    util_updatePoint(u, mainRoomData, winAmt, "사다리 당첨 (" + result.full + ")", ctx.targetRoom);
+                    u.totalCasinoWin = (u.totalCasinoWin || 0) + winAmt;
+                }
+            }
+
+            // 3. 기록 아카이빙 및 초기화
+            casino.ladder.history.unshift({ round: casino.ladder.round, res: result.full, time: Date.now() });
+            if (casino.ladder.history.length > 10) casino.ladder.history.pop();
+            casino.ladder.round++;
+            casino.ladder.bets = {};
+            ctx.isUpdated = true;
+        }
+
+        // --- [B] 바카라 게임 엔진 (3분 주기) ---
+        if (currentMin % 3 === 0 && currentSec === 0 && casino.baccarat.lastUpdate !== currentMin) {
+            casino.baccarat.lastUpdate = currentMin;
+
+            // 1. 결과 생성 (P: 플레이어, B: 뱅커, T: 타이)
+            var pScore = Math.floor(Math.random() * 10);
+            var bScore = Math.floor(Math.random() * 10);
+            var resTag = (pScore > bScore) ? "P" : (pScore < bScore ? "B" : "T");
+            var resName = { "P": "플레이어", "B": "뱅커", "T": "타이" }[resTag];
+
+            // 2. 당첨자 정산
+            for (var uid in casino.baccarat.bets) {
+                var bBet = casino.baccarat.bets[uid];
+                var bu = mainRoomData.users[uid];
+                if (!bu) continue;
+
+                if (bBet.pick === resTag) {
+                    var bMult = (resTag === "T") ? 8.0 : (resTag === "P" ? 2.0 : 1.95);
+                    var bWinAmt = Math.floor(bBet.amount * bMult);
+                    util_updatePoint(bu, mainRoomData, bWinAmt, "바카라 당첨 (" + resName + ")", ctx.targetRoom);
+                    bu.totalCasinoWin = (bu.totalCasinoWin || 0) + bWinAmt;
+                }
+            }
+
+            // 3. 기록 아카이빙 및 초기화
+            casino.baccarat.history.unshift({ round: casino.baccarat.round, res: resTag, p: pScore, b: bScore, time: Date.now() });
+            if (casino.baccarat.history.length > 10) casino.baccarat.history.pop();
+            casino.baccarat.round++;
+            casino.baccarat.bets = {};
+            ctx.isUpdated = true;
+        }
+    } catch (e) { Log.error("Casino Background Engine Error: " + e); }
+
     /* [4. 피버타임 및 결투 체크] */
     try {
         if (!data.feverData) data.feverData = { active: false, endTime: 0, scheduled: [] };

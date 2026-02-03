@@ -11457,18 +11457,35 @@ function _departVoyage(user, data, replier, roomName, dest, cfg) {
     replier.reply(formatCommand("🌊 출항 명령 하달", user, msg, "항해 중 타 활동이 가능합니다."));
 }
 
-/* [서브] 📦 항해 현황판 (미출항 상태 분기 추가) */
+/* [서브] 📦 항해 현황판 (예상 수익 분기 추가) */
 function _showVoyageStatus(user, replier) {
     var msg = "";
     
-    // 1. 현재 항해 중(active)인지 먼저 체크
     if (!user.voyage || user.voyage.active !== true) {
         msg = "현재 운항 중인 선박이 없습니다.\n무역 물자를 싣고 넓은 바다로 나가보세요!";
     } else {
-        // 2. 항해 중이라면 남은 시간 계산
-        var remain = (user.voyage.arrival || 0) - Date.now();
-        msg = (remain > 0) ? "현재 [" + user.voyage.dest + "]로 항해 중\n남은 시간: 약 " + Math.ceil(remain/60000) + "분" 
-                           : "[" + user.voyage.dest + "]에 입항했습니다!\n아무 메시지나 입력하여 정산을 완료하세요.";
+        var v = user.voyage;
+        var remain = (v.arrival || 0) - Date.now();
+        
+        // [신규] 예상 수익 계산 (재해 제외 기본치)
+        var estRev = 0;
+        var cfg = SYSTEM_CONFIG.TRADE;
+        var market = v.marketSnapshot || {};
+        var nationInfo = market[v.dest] || { favorite: "", hate: "" };
+        var ecoMult = util_getEcoMultiplier("내리다"); 
+
+        for (var good in (user.cargo || {})) {
+            var count = Number(user.cargo[good]); if (count <= 0) continue;
+            var basePrice = (cfg.GOODS_COST[good] || 10000) * ecoMult;
+            var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
+            var mult = (good === nationInfo.favorite) ? rateInfo.pref : (good === nationInfo.hate ? rateInfo.hate : rateInfo.norm);
+            estRev += Math.floor(basePrice * mult * count);
+        }
+        var estNet = Math.floor(estRev * 0.9); // 기본 무역세 10% 제외
+
+        msg = "현재 [" + v.dest + "]로 항해 중\n\n" +
+              "예상 수익: " + fp(estNet) + "P\n" +
+              "남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
     }
     
     replier.reply(formatCommand("📦 항해 현황", user, msg, "(↩️ 뒤로 / 🏠 처음으로)"));
@@ -11508,6 +11525,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var nationInfo = market[v.dest];
     
     var totalRevenue = 0; var soldLog = []; var disasterLog = "";
+    var cargoSummary = []; // 화물 요약용
     
     // 재해 판정 (25% 확률)
     var triggeredDisaster = (Math.random() < 0.25) ? ["STORM", "FIRE", "CORRO", "PIRACY"][Math.floor(Math.random() * 4)] : null; 
@@ -11518,6 +11536,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     for (var good in (user.cargo || {})) {
         var count = Number(user.cargo[good]); if (count <= 0) continue;
+        cargoSummary.push(good + " x" + count);
         
         var finalPurchasePrice = (cfg.GOODS_COST[good] || 10000) * ecoMult;
         // [교정]: cfg.PROFIT_RATES 대신 SYSTEM_CONFIG.PROFIT_RATES를 직접 참조하여 undefined 오류 해결
@@ -11589,11 +11608,14 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         user.specialties[sName] = 0;
     }
 
+    var grossRevenue = totalRevenue; // 해적 약탈 전 총 매출 보존
+    var piracyLog = "";
+
     // [해적 습격]: 최종 매출 10% 약탈
     if (triggeredDisaster === "PIRACY") {
         var loot = Math.floor(totalRevenue * 0.1);
         totalRevenue -= loot;
-        disasterLog += "\n🏴‍☠️ [인재: 해적]: 습격을 받아 대금의 10%(-" + fp(loot) + "P)를 약탈당했습니다.";
+        piracyLog = "\n🏴‍☠️ [인재: 해적]: 습격을 받아 대금의 10%(-" + fp(loot) + "P)를 약탈당했습니다.";
     }
 
     if (totalRevenue <= 0 && !disasterLog) { 
@@ -11661,11 +11683,14 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     // 출력 메시지 자동화: taxRate에 따라 (10%), (15%) 등이 가변적으로 표시됨
     var taxTag = (taxRate > baseTax) ? " (자산가 누진 적용)" : "";
-    var report = "📍 도착지: " + v.dest + "\n" +
-                 soldLog.join("\n") + "\n━━━━━━━━━━━━━━━\n" +
-                 "💰 총 매출: " + fp(totalRevenue) + "P\n" +
-                 "⚖️ 무역세(" + (taxRate * 100).toFixed(0) + "%): -" + fp(taxAmount) + "P" + taxTag + "\n" +
-                 "💵 최종 수익: +" + fp(netProfit) + "P" + disasterLog + specialtyFound;
+    var report = "📍 도착지: " + v.dest + " (" + cargoSummary.join(", ") + ")\n\n" +
+                 "💰 총 매출: " + fp(grossRevenue) + "P" + 
+                 piracyLog + 
+                 disasterLog + "\n" +
+                 "⚖️ 무역세(" + (taxRate * 100).toFixed(0) + "%): -" + fp(taxAmount) + "P" + taxTag + "\n\n" +
+                 "💵 최종 수익: +" + fp(netProfit) + "P" + 
+                 repairLog + 
+                 specialtyFound;
 
     replier.reply(formatCommand("🌊 [항해 일지: 무역 보고]", user, report, "누적 무역: " + user.tradeCount + "회 / 잔액: " + fp(user.point) + "P"));
 }

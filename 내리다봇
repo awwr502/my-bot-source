@@ -1961,15 +1961,19 @@ function getCreditInfo(score, roomName) {
     var data = getDatabase();
     var roomData = data.rooms[roomName || "내리다"];
     
-    // 00시에 계산되어 저장된 전날 유저 평균 순자산 호출 (없으면 0)
+    // 00시에 확정된 평균 자산 호출
     var avgAsset = (roomData && roomData.features && roomData.features.government) ? 
-                   Number(roomData.features.government.dailyAvgAsset || 0) : 0;
+                   Number(roomData.features.government.dailyAvgAsset || 420000) : 420000;
+
+    // [핵심 비율 공식]: 현재 평균 자산 / 기준점(420,000P)
+    // 예: 평균이 63만P면 배율은 1.5배가 됨
+    var assetRatio = avgAsset / 420000;
 
     for(var i=0; i<conf.SCORES.length; i++) {
         if(s >= conf.SCORES[i]) {
             return { 
                 grade: i+1, 
-                limit: conf.LIMITS[i] + avgAsset, // 기본한도 + 유저평균자산
+                limit: Math.floor(conf.LIMITS[i] * assetRatio), // 기본한도 * 비율 적용
                 label: conf.LABELS[i], 
                 rate: conf.RATES[i], 
                 icon: conf.ICONS[i] 
@@ -1980,30 +1984,32 @@ function getCreditInfo(score, roomName) {
     var lastIdx = conf.SCORES.length;
     return { 
         grade: lastIdx+1, 
-        limit: conf.LIMITS[lastIdx] + avgAsset, 
+        limit: Math.floor(conf.LIMITS[lastIdx] * assetRatio), 
         label: conf.LABELS[lastIdx], 
         rate: conf.RATES[lastIdx], 
         icon: conf.ICONS[lastIdx] 
     };
 }
 
-/* 신용 한도 표 생성 함수 (유동 한도 반영) */
+/* 신용 한도 표 생성 함수 (비율제 반영) */
 function getCreditLimitTable(roomName) {
     var conf = SYSTEM_CONFIG.ECO.CREDIT;
     var list = [];
     var data = getDatabase();
     var roomData = data.rooms[roomName || "내리다"];
     var avgAsset = (roomData && roomData.features && roomData.features.government) ? 
-                   Number(roomData.features.government.dailyAvgAsset || 0) : 0;
+                   Number(roomData.features.government.dailyAvgAsset || 420000) : 420000;
+    
+    var assetRatio = avgAsset / 420000;
 
     for(var i=0; i<conf.SCORES.length; i++) {
         var ratePct = Math.round((conf.RATES[i] - 1) * 100);
-        var dynamicLimit = conf.LIMITS[i] + avgAsset;
+        var dynamicLimit = Math.floor(conf.LIMITS[i] * assetRatio);
         list.push(conf.ICONS[i] + " " + conf.LABELS[i] + " (" + conf.SCORES[i] + "점~): " + fp(dynamicLimit) + "P (이율 " + ratePct + "%)");
     }
     var lastIdx = conf.SCORES.length;
     var lastRate = Math.round((conf.RATES[lastIdx] - 1) * 100);
-    var lastDynamicLimit = conf.LIMITS[lastIdx] + avgAsset;
+    var lastDynamicLimit = Math.floor(conf.LIMITS[lastIdx] * assetRatio);
     list.push(conf.ICONS[lastIdx] + " " + conf.LABELS[lastIdx] + " (<" + conf.SCORES[lastIdx-1] + "): " + fp(lastDynamicLimit) + "P (이율 " + lastRate + "%)");
     
     return list.join("\n");
@@ -5123,6 +5129,8 @@ function _handleBankStep2(msg, user, data, replier, roomName, targetUid) {
         for (var id in roomData.users) { totalDeposits += (roomData.users[id].bank || 0); }
         var requiredReserve = Math.floor(totalDeposits * bConf.RESERVE_RATIO);
         var lendableAmount = roomData.bankReserve - requiredReserve;
+
+        var cr = getCreditInfo(user.creditScore, roomName);
 
         if (isNaN(amt) || amt <= 0) {
             replier.reply(formatError(user, "금액 오류", "대출받을 숫자를 입력하세요."));
@@ -9253,11 +9261,15 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         var cr = getCreditInfo(user.creditScore, roomName);
         var limitTable = getCreditLimitTable(roomName);
         
-        // 1. 탄력 금수 승수 계산
+        // 1. 비율 체감 메시지를 위한 배율 계산
+        var data = getDatabase();
+        var roomData = data.rooms[roomName];
+        var avgAsset = (roomData && roomData.features && roomData.features.government) ? 
+                       Number(roomData.features.government.dailyAvgAsset || 420000) : 420000;
+        var assetRatio = (avgAsset / 420000).toFixed(2);
+        
+        // 이율 고정 (이전 요청사항 준수)
         var dynMult = 1.0;
-        if (typeof util_getDynamicRateMultiplier === 'function') {
-            dynMult = util_getDynamicRateMultiplier(roomName);
-        }
 
         // 2. 시장 상황 메시지 생성
         var marketStatus = "🟢 경제 안정";

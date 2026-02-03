@@ -3781,12 +3781,18 @@ function _runSector16Logic(data, ctx) {
 
                 var isWin = (bet.pick === oe || bet.pick === result.full);
                 if (isWin) {
-                    var mult = (bet.pick.length > 1) ? 4.0 : 1.9; // 조합 4배, 단일 1.9배
+                    var mult = (bet.pick.length > 1) ? 4.0 : 1.9;
+                    if (u.title === "도박왕") mult += 0.05; // 칭호 효과 연동
+                    
                     var winAmt = Math.floor(bet.amount * mult);
-                    util_updatePoint(u, mainRoomData, winAmt, "사다리 당첨 (" + result.full + ")", ctx.targetRoom);
-                    u.totalCasinoWin = (u.totalCasinoWin || 0) + winAmt;
+                    
+                    // 중앙은행 지불 능력 체크 (부도 방지)
+                    if (util_isBankSolvent(ctx.targetRoom, winAmt)) {
+                        util_updatePoint(u, mainRoomData, winAmt, "사다리 당첨 (" + result.full + ")", ctx.targetRoom);
+                        u.totalCasinoWin = (u.totalCasinoWin || 0) + winAmt;
+                        u.totalGambleWins = (u.totalGambleWins || 0) + 1;
+                    }
                 }
-            }
 
             // 3. 기록 아카이빙 및 초기화
             casino.ladder.history.unshift({ round: casino.ladder.round, res: result.full, time: Date.now() });
@@ -12022,7 +12028,29 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
         var finalPick = pick;
         if (gameType === "baccarat") finalPick = { "플레이어": "P", "뱅커": "B", "타이": "T" }[pick];
 
+        // 1. 게이트웨이 및 은행 재원 연동 (베팅금은 즉시 국고 적립)
         util_updatePoint(user, data.rooms[roomName], -amt, "카지노 배팅 참여 (" + pick + ")", roomName);
+        
+        // 2. [칭호 연동] 기존 홀짝 통계 계승 (누적 500회 등)
+        user.totalGambleCount = (user.totalGambleCount || 0) + 1;
+        user.totalCasinoBet = (user.totalCasinoBet || 0) + amt;
+
+        // 3. [배당 연동] 카지노 최대주주를 위한 활동 적립금 누적
+        if (data.rooms[roomName].features.dailyPools) {
+            var cRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.CASINO || 0.07;
+            data.rooms[roomName].features.dailyPools.casino += Math.floor(amt * cRate);
+        }
+
+        // 4. [칭호 자동 부여] 기존 도박왕/타짜/꾼 조건 체크
+        var winRate = (user.totalGambleWins / user.totalGambleCount) * 100;
+        if (user.totalGambleCount >= 500) {
+            util_checkAndAwardTitle(user, replier, "도박왕", 4003, "🎲", "내리다 카지노 협회", "도박 횟수 500회", "[효과]: 카지노 당첨금 5% 추가 보너스", roomName);
+        } else if (user.totalGambleCount >= 100 && winRate >= 60) {
+            util_checkAndAwardTitle(user, replier, "타짜", 4002, "🎴", "내리다 카지노 협회", "총 승률 60% 돌파", "냉철한 승부사", roomName);
+        }
+        else if (totalCount >= 100) {
+            util_checkAndAwardTitle(user, replier, "꾼", 4001, "🃏", "내리다 카지노 협회", "도박 횟수 100회", "카지노의 생리를 깨달은 승부사", roomName);
+        }
         casino.bets[targetUid] = { pick: finalPick, amount: amt, name: user.name };
         user.totalCasinoBet = (user.totalCasinoBet || 0) + amt;
         

@@ -319,7 +319,7 @@ var SYSTEM_CONFIG = {
             WINLESS_JACKPOT_RATE: 0.7, // [무승자 이월액]: 우승자 없을 시 판돈의 70%를 다음 회차 carryOver로 누적
             OPEN_HOUR: 9,        // 경마장 자동 개장 시각 (오전 9시)
             CLOSE_HOUR: 23,       // 경마장 마지막 배팅 마감 시각 (오후 11시 59분)
-            MAX_PAYOUT_MULT: 7   // [신규: 배당 상한선]: 배팅 금액의 최대 7배까지만 당첨금 수령 가능 (독식 방지)
+            MAX_PAYOUT_MULT: 7   // [배당 기준점]: 당첨 시 지급되는 고정 배율 (현재 7배 고정 지급)
         },
         
         /* [개편] 랜드마크 부동산 시스템 설정 */
@@ -3462,9 +3462,11 @@ function _runSector16Logic(data, ctx) {
                 var resultBody = "";
                 
                 if(winnerUids.length > 0) {
-                    var minDiv = 3.0; 
-                    var totalRequiredFor3x = Math.floor(winPool * minDiv);
-                    var subsidyNeeded = Math.max(0, totalRequiredFor3x - basePool);
+                    // [동기화]: 최저 보장 배율을 최대 상한 배율(MAX_PAYOUT_MULT)과 일치시킵니다.
+                    var targetMult = Number(rConf.MAX_PAYOUT_MULT || 7); 
+                    var totalRequiredForPrize = Math.floor(winPool * targetMult);
+                    
+                    var subsidyNeeded = Math.max(0, totalRequiredForPrize - basePool);
                     var actualSubsidy = 0;
                     if (subsidyNeeded > 0 && mainRoom) {
                         actualSubsidy = Math.min(subsidyNeeded, mainRoom.bankReserve || 0);
@@ -3474,7 +3476,7 @@ function _runSector16Logic(data, ctx) {
                     var totalActuallyPaid = 0;
 
                     resultBody += "🏛️ 국고 수수료(10%): " + fp(tax) + "P 입고\n";
-                    if (actualSubsidy > 0) resultBody += "🛡️ 3배 배당 보전 지원: " + fp(actualSubsidy) + "P\n";
+                    if (actualSubsidy > 0) resultBody += "🛡️ " + targetMult + "배 배당 보전 지원: " + fp(actualSubsidy) + "P\n";
                     else if (racingData.carryOver > 0) resultBody += "💰 이월금 포함: " + fp(racingData.carryOver) + "P 방출!\n";
                     
                     resultBody += "\n[🎖️ 주요 당첨자]";
@@ -3484,7 +3486,8 @@ function _runSector16Logic(data, ctx) {
                         if(u){
                             var share = b.amount / winPool;
                             var prize = Math.floor(share * finalDistributePool);
-                            var maxLimit = b.amount * (rConf.MAX_PAYOUT_MULT || 10);
+                            // [상한선 동기화]: 최대치도 동일한 상수를 참조하도록 확정
+                            var maxLimit = b.amount * targetMult;
                             if (prize > maxLimit) prize = maxLimit;
 
                             // [수정] 경마는 배팅금이 들어가는 투자형이므로 삭감(emergencyMult) 제거

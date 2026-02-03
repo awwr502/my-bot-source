@@ -491,6 +491,14 @@ BACKUP: {
         ERR_TIMEOUT: "도배로 인해 이용이 일시 제한되었습니다." 
         },
 
+    /* [v10.7] 카지노 지능형 확률 보정 정밀 세팅 */
+    ADJUST: {
+            ENABLED: true,
+            STEP_AMOUNT: 100000,  // 10만P 단위
+            STEP_RATE: 0.01,      // 단위당 -1%
+            PROB_FLOOR: 0.35      // 최소 승률 하한선 (35%)
+        },
+
     /* [신규] 통합 카지노 시스템 상세 설정 */
     CASINO: {
         LADDER: { 
@@ -3768,10 +3776,37 @@ function _runSector16Logic(data, ctx) {
         if (currentMin % 2 === 0 && currentSec === 0 && casino.ladder.lastUpdate !== currentMin) {
             casino.ladder.lastUpdate = currentMin;
             
-            // 1. 결과 생성 (좌/우, 3/4줄, 홀/짝 조합)
-            var start = Math.random() < 0.5 ? "좌" : "우";
-            var lines = Math.random() < 0.5 ? 3 : 4;
-            var oe = ((start === "좌" && lines === 3) || (start === "우" && lines === 4)) ? "짝" : "홀";
+            var adj = SYSTEM_CONFIG.CASINO.ADJUST;
+            var oddSum = 0, evenSum = 0;
+
+            // 1. 현재 회차의 홀/짝별 총 배팅액 집계
+            for (var uid in casino.ladder.bets) {
+                var b = casino.ladder.bets[uid];
+                if (b.pick.indexOf("홀") !== -1) oddSum += b.amount;
+                else evenSum += b.amount;
+            }
+
+            // 2. 10만P당 1% 페널티 계산 (상대적 승률 조정)
+            var winProb = 0.5; // 기본 50%
+            if (adj.ENABLED) {
+                var penalty = (Math.floor(oddSum / 100000) * 0.01) - 
+                              (Math.floor(evenSum / 100000) * 0.01);
+                // 홀 판돈이 많으면 penalty가 양수가 되어 winProb(홀 확률)이 낮아짐
+                winProb = Math.max(0.30, Math.min(0.70, 0.5 - penalty));
+            }
+
+            // 3. 보정된 확률에 따라 결과(oe) 먼저 결정
+            var oe = (Math.random() < winProb) ? "홀" : "짝"; 
+
+            // 4. 결정된 결과에 맞는 시각적 경로(좌/우, 3/4줄) 역산
+            var start, lines;
+            if (oe === "짝") {
+                if (Math.random() < 0.5) { start = "좌"; lines = 3; }
+                else { start = "우"; lines = 4; }
+            } else {
+                if (Math.random() < 0.5) { start = "좌"; lines = 4; }
+                else { start = "우"; lines = 3; }
+            }
             var result = { start: start, lines: lines, oe: oe, full: start + lines + oe };
 
             // 2. 당첨자 정산 (조용히 포인트 지급)
@@ -3809,9 +3844,38 @@ function _runSector16Logic(data, ctx) {
             casino.baccarat.lastUpdate = currentMin;
 
             // 1. 결과 생성 (P: 플레이어, B: 뱅커, T: 타이)
-            var pScore = Math.floor(Math.random() * 10);
-            var bScore = Math.floor(Math.random() * 10);
-            var resTag = (pScore > bScore) ? "P" : (pScore < bScore ? "B" : "T");
+            var adj = SYSTEM_CONFIG.CASINO.ADJUST;
+            
+            // 결과 생성을 함수화하여 재사용
+            var generateBaccarat = function() {
+                var ps = Math.floor(Math.random() * 10);
+                var bs = Math.floor(Math.random() * 10);
+                var res = (ps > bs) ? "P" : (ps < bs ? "B" : "T");
+                return { ps: ps, bs: bs, res: res };
+            };
+
+            // 1. 1차 결과 생성
+            var r = generateBaccarat();
+
+            // 2. 승리팀 판돈 확인 및 은밀한 재추첨(Nerf)
+            if (adj.ENABLED) {
+                var totalOnWin = 0;
+                for (var uid in casino.baccarat.bets) {
+                    if (casino.baccarat.bets[uid].pick === r.res) {
+                        totalOnWin += casino.baccarat.bets[uid].amount;
+                    }
+                }
+                
+                // 10만P당 1% 확률로 결과 뒤집기 시도
+                var nerfProb = Math.floor(totalOnWin / 100000) * 0.01;
+                if (Math.random() < nerfProb) {
+                    r = generateBaccarat(); // 재추첨을 통해 결과 변경 기회 부여
+                }
+            }
+
+            var pScore = r.ps;
+            var bScore = r.bs;
+            var resTag = r.res;
             var resName = { "P": "플레이어", "B": "뱅커", "T": "타이" }[resTag];
 
             // 2. 당첨자 정산

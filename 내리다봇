@@ -725,8 +725,10 @@ function safeSaveData(data, isForceBackup) {
                 var maxAllowDrop = Math.max(cr.limit * 1.5, lastPoint * 0.5);
 
                 if (dropAmount > maxAllowDrop) {
-                    u.point = lastPoint; isHealed = true;
-                    healReports.push(u.name + " (비인가 과다 지출 차단: " + cr.label + " 한도 초과)");
+                    room.users[uid] = JSON.parse(JSON.stringify(safeU)); 
+                    isHealed = true;
+                    healReports.push(u.name + " (비인가 과다 지출 감지: 전체 롤백)");
+                    continue; // 롤백 완료 후 다음 유저로 이동
                 }
             }
         }
@@ -738,10 +740,9 @@ function safeSaveData(data, isForceBackup) {
                 if (isPointBroken || isBankBroken) {
                     if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
                         var safeU = DB_DATA.rooms[rName].users[uid];
-                        if (isPointBroken) u.point = Number(safeU.point || 0);
-                        if (isBankBroken) u.bank = Number(safeU.bank || 0);
+                        room.users[uid] = JSON.parse(JSON.stringify(safeU));
                         isHealed = true;
-                        healReports.push(u.name + " (자산 데이터 오염 수리)");
+                        healReports.push(u.name + " (자산 데이터 오염 수리: 전체 롤백)");
                     }
                     continue;
                 }
@@ -759,14 +760,18 @@ function safeSaveData(data, isForceBackup) {
                     // A. 포인트 급감 체크
                     var lastPoint = Number(safeU.point || 0);
                     if (lastPoint > 10000 && (lastPoint - u.point) / lastPoint >= 0.8) {
-                        u.point = lastPoint; isHealed = true;
-                        healReports.push(u.name + " (포인트 80%↑ 급감 복구)");
+                        room.users[uid] = JSON.parse(JSON.stringify(safeU));
+                        isHealed = true;
+                        healReports.push(u.name + " (포인트 80%↑ 급감 감지: 전체 롤백)");
+                        continue;
                     }
                     // B. 은행 잔고 급감 체크
                     var lastBank = Number(safeU.bank || 0);
                     if (lastBank > 10000 && (lastBank - u.bank) / lastBank >= 0.8) {
-                        u.bank = lastBank; isHealed = true;
-                        healReports.push(u.name + " (은행잔고 80%↑ 급감 복구)");
+                        room.users[uid] = JSON.parse(JSON.stringify(safeU));
+                        isHealed = true;
+                        healReports.push(u.name + " (은행잔고 80%↑ 급감 감지: 전체 롤백)");
+                        continue;
                     }
                     // C. 랜드마크(부동산) 보유량 증발 체크
                     if (safeU.landHoldings) {
@@ -775,20 +780,22 @@ function safeSaveData(data, isForceBackup) {
                             var lastQty = Number(safeU.landHoldings[lName] || 0);
                             var curQty = Number((u.landHoldings || {})[lName] || 0);
                             if (lastQty >= 10 && (lastQty - curQty) / lastQty >= 0.8) {
-                                if (!u.landHoldings) u.landHoldings = {};
-                                u.landHoldings[lName] = lastQty;
+                                room.users[uid] = JSON.parse(JSON.stringify(safeU));
                                 isHealed = true;
-                                healReports.push(u.name + " (" + lName + " 지분 증발 복구)");
+                                healReports.push(u.name + " (" + lName + " 지분 증발 감지: 전체 롤백)");
+                                break;
                             }
                         }
+                        if (isHealed) continue;
                     }
                     // D. 인벤토리 증발 체크
                     var lastInvCount = Array.isArray(safeU.inventory) ? safeU.inventory.length : 0;
                     var curInvCount = Array.isArray(u.inventory) ? u.inventory.length : 0;
                     if (lastInvCount >= 5 && (curInvCount / lastInvCount) <= 0.2) {
-                        u.inventory = JSON.parse(JSON.stringify(safeU.inventory));
+                        room.users[uid] = JSON.parse(JSON.stringify(safeU));
                         isHealed = true;
-                        healReports.push(u.name + " (가방 아이템 유실 복구)");
+                        healReports.push(u.name + " (가방 아이템 유실 감지: 전체 롤백)");
+                        continue;
                     }
                 }
             }
@@ -1370,7 +1377,8 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
         "매수", "매도", "상점", "구매", "예금", "출금", "송금", "이체", "배팅", "기부", 
         "차감", "홀짝", "결투", "벌금", "상환", "패널티", "분해", "줍기", "도둑질", "수수료", 
         "수거", "정산", "환수", "징수", "스피또", "로또", "낚시", "인증", "거마비", "사채", 
-        "등록", "취소", "대납", "복구", "교정", "이전", "리셋", "시즌", "시스템", "배당", "장려", "지원", "몰수"
+        "등록", "취소", "대납", "복구", "교정", "이전", "리셋", "시즌", "시스템", "배당", 
+        "장려", "지원", "몰수", "박스", "랜덤박스", "뽑기", "아이콘", "개봉", "지급"
     ];
     var isVerifiedAction = (delta > 0) || normalKeywords.some(function(k) { return reason && reason.indexOf(k) !== -1; });
 
@@ -1412,8 +1420,8 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
             var safeUser = null;
             for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
             if (safeUser) {
-                if (roomData) roomData.users[user.uid] = JSON.parse(JSON.stringify(safeUser));
-                try { Api.replyRoom(roomName, "🛡️ [보안 엔진] 비정상 변동 차단 및 롤백 완료"); } catch(e){}
+                if (roomData) roomData.users[user.uid] = JSON.parse(JSON.stringify(safeUser)); // 해당 유저만 롤백
+                try { Api.replyRoom(roomName, "🛡️ [보안 엔진] 비정상 변동 차단 및 해당 유저 데이터 롤백 완료"); } catch(e){}
             }
         }
     }

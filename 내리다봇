@@ -3650,8 +3650,10 @@ function _runSector17Logic(data, ctx) {
                             roomObj.features.dailyPools.mine += Math.floor(midEarn * accumRate);
                         }
                         
-                        u.mining.startTime = nowTs;
-                        Log.info("[Mining Mid-Settlement] " + u.name + "님 가결산 완료: +" + midEarn + "P 분량");
+                        // [v11.9.5] 정산은 진행하되, 복구 명령어를 위해 이전 startTime을 임시 백업하거나 유지할 수 있도록 처리
+                        u.mining.lastResetTime = u.mining.startTime; // 만약을 대비해 리셋 전 시작점 백업
+                        u.mining.startTime = nowTs; 
+                        Log.info("[Mining Mid-Settlement] " + u.name + "님 00시 가결산 및 타이머 갱신");
                     }
                 }
 
@@ -7493,27 +7495,23 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
     }
 
 /* [v12.5] 전체 광부 시간 지능형 자동 복구 엔진 */
-    if (msg === "/전체채굴복구") {
-        var now = new Date();
-        var midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).getTime();
+   if (msg === "/전체채굴복구") {
+        var now = Date.now();
+        var midnight = new Date(); midnight.setHours(0,0,0,0);
+        var todayElapsedMin = Math.floor((now - midnight.getTime()) / 60000);
         
-        // 1. 00시부터 현재까지 흐른 시간 자동 계산
-        var todayElapsedMin = Math.floor((Date.now() - midnight) / 60000);
-        
-        // 2. 어제 정산 때 누락된 평균 시간 (이건 로그가 없어서 약 3시간(180분) 보상으로 설정)
-        // 만약 어제 누락된 시간이 더 많다면 아래 180 숫자를 수정하세요.
-        var lostYesterdayMin = 180; 
-        var totalRecoveryMin = todayElapsedMin + lostYesterdayMin;
+        var lostBeforeResetMin = 9000; 
+        var totalCombinedMin = todayElapsedMin + lostBeforeResetMin;
 
         var totalFixed = 0;
         for (var r in data.rooms) {
             for (var uid in data.rooms[r].users) {
                 var u = data.rooms[r].users[uid];
-                // 현재 광산에서 채굴 중인 유저만 필터링
                 if (u.mining && u.mining.active === true) {
-                    u.totalMiningTime = (u.totalMiningTime || 0) + totalRecoveryMin;
-                    // [v11.9.4 교정] startTime을 현재가 아닌 '현재-복구분'으로 소급 설정하여 진행 시간(Min) 리셋 방지
-                    u.mining.startTime = Date.now() - (totalRecoveryMin * 60000); 
+                    // [핵심] startTime을 전체 합산 시간만큼 과거로 밀어버림으로써 /광산정보 표시를 복구
+                    u.mining.startTime = now - (totalCombinedMin * 60000);
+                    
+                    // 칭호용 누적 시간(totalMiningTime)은 중복 합산 방지를 위해 건드리지 않거나 선택적 보정
                     u.skipHealing = true;
                     totalFixed++;
                 }
@@ -7521,15 +7519,14 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         }
         
         safeSaveData(data);
-        var report = "✅ 지능형 채굴 복구 완료\n" +
+        var report = "✅ 채굴 진행 시간(Timer) 연속 복구 완료\n" +
                      "━━━━━━━━━━━━━━━\n" +
                      "• 복구 대상: " + totalFixed + "명\n" +
-                     "• 오늘 채굴분: " + todayElapsedMin + "분 (00시~현재)\n" +
-                     "• 어제 누락분: " + lostYesterdayMin + "분 (고정 보상)\n" +
-                     "✨ 인당 합산: " + totalRecoveryMin + "분 추가 완료\n" +
+                     "• 복구 기준: 정산전 " + lostBeforeResetMin + "분 + 오늘 " + todayElapsedMin + "분\n" +
+                     "✨ 최종 표시: " + totalCombinedMin + "분부터 이어서 채굴 중\n" +
                      "━━━━━━━━━━━━━━━\n" +
-                     "💡 모든 광부의 startTime을 현재로 동기화했습니다.";
-        replier.reply(formatAdmin("시스템 긴급 복구", report));
+                     "💡 유저가 /광산정보 확인 시 시간이 합산되어 나타납니다.";
+        replier.reply(formatAdmin("시스템 시간 복구", report));
         return true;
     }
 

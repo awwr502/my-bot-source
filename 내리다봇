@@ -7502,24 +7502,21 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 /* [v12.5] 전체 광부 시간 지능형 자동 복구 엔진 */
    if (msg === "/전체채굴복구") {
         var now = Date.now();
-        var midnight = new Date(); midnight.setHours(0,0,0,0);
-        var todayElapsedMin = Math.floor((now - midnight.getTime()) / 60000);
-        
         var totalFixed = 0;
+        
         for (var r in data.rooms) {
-            for (var uid in data.rooms[r].users) {
-                var u = data.rooms[r].users[uid];
+            var room = data.rooms[r];
+            for (var uid in room.users) {
+                var u = room.users[uid];
                 
-                // 채굴 중이며 백업된 시간(savedTime)이 있는 유저만 정밀 복구
-                if (u.mining && u.mining.active === true) {
-                    var lastSaved = Number(u.mining.savedTime || 0);
-                    var individualTotal = lastSaved + todayElapsedMin;
-
-                    // 유저 각자의 어제 시간 + 오늘 시간을 합쳐서 startTime을 소급 적용
-                    u.mining.startTime = now - (individualTotal * 60000);
+                // 00시 가결산 시점에 개별적으로 저장된 어제 기록(savedTime)이 있는 유저 중 현재 채굴 중인 자 탐색
+                if (u.mining && Number(u.mining.savedTime || 0) > 0 && u.mining.active === true) {
+                    var saved = Number(u.mining.savedTime);
                     
-                    // 복구 완료 후 백업 데이터 초기화 (중복 복구 방지)
-                    u.mining.savedTime = 0; 
+                    // [핵심] 유저의 현재 시작시간에서 어제치(saved)만큼 시간을 과거로 소급(rewind)
+                    // 이를 통해 '나갔다 다시 들어온 유저'도 현재 세션에 어제 시간이 합산됨
+                    u.mining.startTime = Number(u.mining.startTime || now) - (saved * 60000);
+                    u.mining.savedTime = 0; // 복구 완료 후 중복 방지 초기화
                     u.skipHealing = true;
                     totalFixed++;
                 }
@@ -7527,12 +7524,12 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         }
         
         safeSaveData(data);
-        var report = "✅ 유저별 맞춤형 시간 복구 완료\n" +
+        var report = "✅ 유저별 개별 시간 정밀 복구 완료\n" +
                      "━━━━━━━━━━━━━━━\n" +
                      "• 복구 대상: " + totalFixed + "명\n" +
-                     "• 복구 방식: [개별 어제 시간] + [오늘 경과]\n" +
+                     "• 복구 방식: 개인별 savedTime 세션 합산\n" +
                      "━━━━━━━━━━━━━━━\n" +
-                     "💡 유저마다 리셋 전 본인의 시간부터 끊김 없이 이어집니다.";
+                     "💡 이제 각자 [/광산정보] 확인 시 정상 시간이 출력됩니다.";
         replier.reply(formatAdmin("시스템 정밀 복구", report));
         return true;
     }

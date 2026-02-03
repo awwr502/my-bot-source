@@ -3115,15 +3115,25 @@ function runScheduler() {
                 }
 
                 // B. 블랙박스 로그 백업 (1분 주기: 매분 00초)
-                // transaction.log 파일이 존재하고 내용이 있을 때만 전송
-                if (ctx.now.getSeconds() === 0) {
-                    var historyPath = BASE_DIR + "total_history.log";
-                    var logFile = new java.io.File(historyPath);
-                    if (logFile.exists() && logFile.length() > 0) {
-                        _sendDiscordFile(webhookUrl, historyPath, "HISTORY_LOG_" + ctx.now.getHours() + "h" + currentMin + "m.txt");
+                if (data.lastLogBackupMin !== currentMin) {
+                    data.lastLogBackupMin = currentMin;
+                    
+                    logLock.lock();
+                    try {
+                        var logFile = new java.io.File(JOURNAL_PATH);
+                        if (logFile.exists() && logFile.length() > 0) {
+                            // 1. 현재 1분간 쌓인 실시간 로그 전송
+                            _sendDiscordFile(webhookUrl, JOURNAL_PATH, "LOG_" + ctx.now.getHours() + "h" + currentMin + "m.txt");
+                            
+                            // 2. 전송된 데이터를 누적 보관 파일로 이관 후 초기화 (로테이션)
+                            var rawLogs = FileStream.read(JOURNAL_PATH);
+                            FileStream.append(BASE_DIR + "total_history.log", rawLogs);
+                            FileStream.write(JOURNAL_PATH, ""); // 파일 비우기
+                        }
+                    } finally {
+                        logLock.unlock();
                     }
                 }
-            }
 
             /* [최종 저장] 하이브리드 비동기 저장 처리 */
             if (ctx.isUpdated) {

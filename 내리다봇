@@ -1613,23 +1613,24 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
             if (bankInput.some(function(r){ return reason.indexOf(r) !== -1; })) brDelta = Math.abs(actualDelta);
         }
 
-        /* [v11.9.15] 모든 배당 적립을 SYSTEM_CONFIG 상수에 완전히 종속시킴 */
-        if (roomData.features && roomData.features.dailyPools) {
-            var dp = roomData.features.dailyPools;
-            var cfg = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES; // 섹터 1 참조
-            var r = reason || "";
-            var absAmt = Math.abs(actualDelta);
+        * [v11.9.20] 배당 적립 변수 정의 및 키워드 감지 보강 */
+    if (roomData.features && roomData.features.dailyPools) {
+        var dp = roomData.features.dailyPools;
+        // [핵심] cfg 변수를 섹터 1 상수를 직접 바라보게 명시적으로 선언
+        var cfg = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES; 
+        var r = reason || "";
+        var absAmt = Math.abs(actualDelta);
 
-            // 상수에 설정된 비율(0.05 등)을 정확히 곱하여 적립
-            if (r.indexOf("광산") !== -1) dp.mine += Math.floor(absAmt * cfg.MINE);
-            else if (r.indexOf("낚시") !== -1) dp.fish += Math.floor(absAmt * cfg.FISH);
-            else if (r.indexOf("카지노") !== -1 || r.indexOf("사다리") !== -1 || r.indexOf("바카라") !== -1 || r.indexOf("홀짝") !== -1 || r.indexOf("적중") !== -1) {
-                dp.casino += Math.floor(absAmt * cfg.CASINO);
-            }
-            else if (r.indexOf("이자") !== -1) dp.bank += Math.floor(absAmt * cfg.BANK);
-            else if (r.indexOf("상점") !== -1 || r.indexOf("구매") !== -1) dp.shop += Math.floor(absAmt * cfg.SHOP);
-            else if (r.indexOf("경마") !== -1) dp.race += Math.floor(absAmt * cfg.RACING);
+        if (r.indexOf("광산") !== -1) dp.mine += Math.floor(absAmt * cfg.MINE);
+        else if (r.indexOf("낚시") !== -1) dp.fish += Math.floor(absAmt * cfg.FISH);
+        // 카지노: 배팅뿐만 아니라 모든 카지노 관련 변동을 상수의 %만큼 적립
+        else if (r.indexOf("카지노") !== -1 || r.indexOf("사다리") !== -1 || r.indexOf("바카라") !== -1 || r.indexOf("홀짝") !== -1) {
+            dp.casino += Math.floor(absAmt * cfg.CASINO);
         }
+        else if (r.indexOf("상점") !== -1 || r.indexOf("구매") !== -1) dp.shop += Math.floor(absAmt * cfg.SHOP);
+        else if (r.indexOf("이자") !== -1) dp.bank += Math.floor(absAmt * cfg.BANK);
+        else if (r.indexOf("경마") !== -1) dp.race += Math.floor(absAmt * cfg.RACING);
+    }
         util_updateReserve(roomData, brDelta, reason, roomName);
     }
 
@@ -8928,39 +8929,39 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         var displayMineBasis = Number(pools.mine) + Math.floor(pendingMineEarn * rates.MINE);
 
     var targets = [
-        { name: "광산", key: "mine", icon: "⛏️" },
-        { name: "낚시터", key: "fish", icon: "🎣" },
-        { name: "카지노", key: "casino", icon: "🎰" },
-        { name: "중앙은행", key: "bank", icon: "🏦" },
-        { name: "백화점", key: "shop", icon: "🏢" },
-        { name: "경마장", key: "race", icon: "🏇" }
-    ].sort(function(a, b) { return a.name.localeCompare(b.name); });
+            { name: "광산", key: "mine", icon: "⛏️", pending: Math.floor(pendingMineEarn * rates.MINE) },
+            { name: "낚시터", key: "fish", icon: "🎣", pending: 0 },
+            { name: "카지노", key: "casino", icon: "🎰", pending: 0 },
+            { name: "중앙은행", key: "bank", icon: "🏦", pending: 0 },
+            { name: "백화점", key: "shop", icon: "🏢", pending: 0 },
+            { name: "경마장", key: "race", icon: "🏇", pending: 0 }
+        ].sort(function(a, b) { return a.name.localeCompare(b.name); });
 
-    /* [v11.9.14] 00시 정산과 100% 일치하는 실시간 계산 엔진 */
         var report = [];
         targets.forEach(function(t) {
-            var basis = (t.key === "mine") ? displayMineBasis : Number(pools[t.key] || 0); 
+            // 원본(pools[t.key]) + 실시간 예상치(t.pending)
+            var currentBasis = Number(pools[t.key] || 0) + t.pending;
             var landData = data.landmarkMarket[t.name];
             var curPrice = landData ? Number(landData.price) : 0;
             
-            // 1. 기초 배당 = 시세배당(7.5%) + 활동적립금(100%)
-            var marketPart = Math.floor(curPrice * SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE);
-            var activityPart = Math.floor(basis * SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO);
+            // 00시 정산 공식과 100% 동일하게 세팅
+            var marketPart = Math.floor(curPrice * ecoCfg.MARKET_DIVIDEND_RATE);
+            var activityPart = Math.floor(currentBasis * ecoCfg.DIVIDEND_PAYOUT_RATIO);
             var totalDividend = marketPart + activityPart;
 
             var owner = util_getMajorityOwner(roomData, t.name);
             var finalDividend = totalDividend;
-            var ownerName = "⚠️ 주인 없음";
+            var ownerTag = "⚠️ 주인 없음";
 
             if (owner && owner.data) {
-                ownerName = "👑 " + getDisplayName(owner.data) + " (" + owner.qty + "지분)";
-                // [교정 2] 지분 보너스 배율 적용 (5지분 초과 시 1지분당 +0.2배)
-            var shareMult = owner.qty > 5 ? 1.0 + (owner.qty - 5) * 0.2 : 1.0;
-            finalDividend = Math.floor(totalDividend * shareMult);
-            if (owner.data.title === "갓물주") finalDividend = Math.floor(finalDividend * 1.1);
-        }
+                ownerTag = "👑 " + getDisplayName(owner.data) + " (" + owner.qty + "지분)";
+                var shareMult = owner.qty > 5 ? 1.0 + (owner.qty - 5) * 0.5 : 1.0;
+                finalDividend = Math.floor(totalDividend * shareMult);
+                if (owner.data.title === "갓물주") finalDividend = Math.floor(finalDividend * 1.1);
+            }
 
-            report.push(t.icon + " " + t.name + "\n  💰 예상 수령액: " + fp(finalDividend) + "P\n  👤 현재 주주: " + ownerName);
+            // [디버깅] (주머니: N P) 정보를 추가하여 적립 여부를 확인하게 함
+            report.push(t.icon + " " + t.name + "\n  💰 예상 수령액: " + fp(finalDividend) + "P\n  📊 누적 적립금: " + fp(currentBasis) + "P\n  👤 현재 주주: " + ownerTag);
         });
         var header = "📊 실시간 랜드마크 배당 현황\n" + 
                      "━━━━━━━━━━━━━━━\n" +

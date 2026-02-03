@@ -8898,22 +8898,24 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         }
     }
 
-    /* [v11.5] 6대 핵심 랜드마크 실시간 배당 현황 조회 (문법 완전 수정본) */
-   if (msg === "/배당현황") {
+    /* [v11.5] 6대 핵심 랜드마크 실시간 배당 현황 조회 (문법 오류 수정본) */
+    if (msg === "/배당현황") {
         var roomData = data.rooms[roomName];
         if (!roomData || !roomData.features || !roomData.features.dailyPools) return true;
-        // [교정 1] 중복 합산 방지를 위해 0P부터 새로 집계 (로그 기반 재구성)
-    var pools = roomData.features.dailyPools; 
-        var nowTs = Date.now();
-        var rates = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES;
 
-    // 2. [광산 가집계 연동] 현재 채굴 중인 유저의 미정산 수익 실시간 합산
+        var pools = roomData.features.dailyPools;
+        var nowTs = Date.now();
+        
+        // =====요청사항 시작=====
+        var ecoCfg = SYSTEM_CONFIG.ECO; // ecoCfg 정의 추가
+        var rates = ecoCfg.ACTIVITY_ACCUM_RATES;
+
+        // 2. [광산 가집계 연동] 현재 채굴 중인 유저의 미정산 수익 실시간 합산
         var pendingMineEarn = 0;
         var pol = util_getActivePolicy(roomData);
         var mineMult = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
         var mCfg = SYSTEM_CONFIG.ECO.MINE;
 
-        // 광물 기대값 반영 (평균 수익 배율)
         var expMult = 1 + (mCfg.COPPER_PROB * (mCfg.COPPER_MULT-1)) + (mCfg.GOLD_PROB * (mCfg.GOLD_MULT-1)) + (mCfg.DIA_PROB * (mCfg.DIA_MULT-1));
 
         for (var uid in roomData.users) {
@@ -8925,26 +8927,25 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
                 }
             }
         }
-        // [보안]: 원본 pools.mine을 수정하지 않고 가상 변수(displayMineBasis)에 합산하여 출력만 수행
-        var displayMineBasis = Number(pools.mine) + Math.floor(pendingMineEarn * rates.MINE);
 
-    var targets = [
+        var targets = [
             { name: "광산", key: "mine", icon: "⛏️", pending: Math.floor(pendingMineEarn * rates.MINE) },
             { name: "낚시터", key: "fish", icon: "🎣", pending: 0 },
             { name: "카지노", key: "casino", icon: "🎰", pending: 0 },
             { name: "중앙은행", key: "bank", icon: "🏦", pending: 0 },
             { name: "백화점", key: "shop", icon: "🏢", pending: 0 },
             { name: "경마장", key: "race", icon: "🏇", pending: 0 }
-        ].sort(function(a, b) { return a.name.localeCompare(b.name); });
+        ];
+
+        // 정렬 로직 분리 (안전성)
+        targets.sort(function(a, b) { return a.name.localeCompare(b.name); });
 
         var report = [];
         targets.forEach(function(t) {
-            // 원본(pools[t.key]) + 실시간 예상치(t.pending)
             var currentBasis = Number(pools[t.key] || 0) + t.pending;
             var landData = data.landmarkMarket[t.name];
             var curPrice = landData ? Number(landData.price) : 0;
-            
-            // 00시 정산 공식과 100% 동일하게 세팅
+
             var marketPart = Math.floor(curPrice * ecoCfg.MARKET_DIVIDEND_RATE);
             var activityPart = Math.floor(currentBasis * ecoCfg.DIVIDEND_PAYOUT_RATIO);
             var totalDividend = marketPart + activityPart;
@@ -8960,12 +8961,10 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
                 if (owner.data.title === "갓물주") finalDividend = Math.floor(finalDividend * 1.1);
             }
 
-            // [디버깅] (주머니: N P) 정보를 추가하여 적립 여부를 확인하게 함
             report.push(t.icon + " " + t.name + "\n  💰 예상 수령액: " + fp(finalDividend) + "P\n  📊 누적 적립금: " + fp(currentBasis) + "P\n  👤 현재 주주: " + ownerTag);
         });
-        var header = "📊 실시간 랜드마크 배당 현황\n" + 
-                     "━━━━━━━━━━━━━━━\n" +
-                     "※ 오늘 누적된 수익을 바탕으로 계산된 예상치입니다.";
+
+        var header = "📊 실시간 랜드마크 배당 현황\n━━━━━━━━━━━━━━━\n※ 오늘 누적된 수익을 바탕으로 계산된 예상치입니다.";
         var footer = "━━━━━━━━━━━━━━━\n✨ 자정(00:00) 정산 순간의 최대주주가 위 금액을 전액 수령합니다.";
 
         replier.reply(formatAdmin("배당 리포트", header + "\n\n" + report.join("\n\n") + "\n" + footer));

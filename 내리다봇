@@ -3061,6 +3061,8 @@ function runScheduler() {
                 }
             }
 
+            util_stamp("mainLoop"); // 로직 시작 시점에 도장을 찍어 무한 경고를 방지합니다.
+
             // 모든 섹터가 공유할 상태 객체 (Context)
             var ctx = {
                 isUpdated: false,
@@ -3073,6 +3075,41 @@ function runScheduler() {
                 // 아래 URL에 본인의 구글 웹 앱 URL을 입력하세요.
                 dashboardUrl: "https://script.google.com/macros/s/AKfycbyoURblg3-nLNgSE57Pb9RmjqK3wXyMSRpm9WrkWe3z2kyE_q_wmoabNECLNXWQ2SBZ/exec"
             };
+
+            /* [신규] 하이브리드 디스코드 원격 백업 (30분 전체 / 1분 로그) */
+            /* [3. 디스코드 백업 - 에러 격리 보호막 설치] */
+            try {
+                var webhookUrl = SYSTEM_CONFIG.BACKUP ? SYSTEM_CONFIG.BACKUP.DISCORD_WEBHOOK_URL : "";
+                if (webhookUrl && webhookUrl.indexOf("http") === 0) {
+                    var currentMin = ctx.now.getMinutes();
+                    
+                    // A. 전체 데이터 백업 (30분 주기)
+                    if ((currentMin === 0 || currentMin === 30) && data.lastFullBackupMin !== currentMin) {
+                        data.lastFullBackupMin = currentMin;
+                        _sendDiscordFile(webhookUrl, FILE_PATH, "FULL_DATA_" + ctx.today + "_" + ctx.now.getHours() + "h" + currentMin + "m.json");
+                    }
+
+                    // B. 블랙박스 로그 백업 (1분 주기)
+                    if (data.lastLogBackupMin !== currentMin) {
+                        data.lastLogBackupMin = currentMin;
+                        logLock.lock();
+                        try {
+                            var logFile = new java.io.File(JOURNAL_PATH);
+                            if (logFile.exists() && logFile.length() > 0) {
+                                _sendDiscordFile(webhookUrl, JOURNAL_PATH, "LOG_" + ctx.now.getHours() + "h" + currentMin + "m.txt");
+                                var rawLogs = FileStream.read(JOURNAL_PATH);
+                                FileStream.append(BASE_DIR + "total_history.log", rawLogs);
+                                FileStream.write(JOURNAL_PATH, ""); 
+                            }
+                        } finally {
+                            logLock.unlock();
+                        }
+                    }
+                }
+            } catch (backupError) {
+                // 백업에서 에러가 나더라도 로그만 남기고 아래 게임 로직으로 정상 진행
+                Log.error("🚨 백업 엔진 일시 오류 (격리됨): " + backupError);
+            }
 
             // 1. 경제/경마 (섹터 16-2)
             try {
@@ -3093,40 +3130,6 @@ function runScheduler() {
                 if (typeof _runSector18Logic === 'function') _runSector18Logic(data, ctx);
             } catch (e) {
                 Log.error("Sector 18 Logic Crash: " + e);
-            }
-
-            /* [신규] 하이브리드 디스코드 원격 백업 (30분 전체 / 1분 로그) */
-            var webhookUrl = SYSTEM_CONFIG.BACKUP ? SYSTEM_CONFIG.BACKUP.DISCORD_WEBHOOK_URL : "";
-            
-            if (webhookUrl && webhookUrl.indexOf("http") === 0) {
-                
-                // A. 전체 데이터 백업 (30분 주기: 매시 00분, 30분)
-                if ((currentMin === 0 || currentMin === 30) && data.lastFullBackupMin !== currentMin) {
-                    data.lastFullBackupMin = currentMin;
-                    // 저장된 최신 파일(attendance.json) 전송
-                    _sendDiscordFile(webhookUrl, FILE_PATH, "FULL_DATA_" + ctx.today + "_" + ctx.now.getHours() + "h" + currentMin + "m.json");
-                }
-
-                // B. 블랙박스 로그 백업 (1분 주기: 매분 00초)
-                if (data.lastLogBackupMin !== currentMin) {
-                    data.lastLogBackupMin = currentMin;
-                    
-                    logLock.lock();
-                    try {
-                        var logFile = new java.io.File(JOURNAL_PATH);
-                        if (logFile.exists() && logFile.length() > 0) {
-                            // 1. 현재 1분간 쌓인 실시간 로그 전송
-                            _sendDiscordFile(webhookUrl, JOURNAL_PATH, "LOG_" + ctx.now.getHours() + "h" + currentMin + "m.txt");
-                            
-                            // 2. 전송된 데이터를 누적 보관 파일로 이관 후 초기화 (로테이션)
-                            var rawLogs = FileStream.read(JOURNAL_PATH);
-                            FileStream.append(BASE_DIR + "total_history.log", rawLogs);
-                            FileStream.write(JOURNAL_PATH, ""); // 파일 비우기
-                        }
-                    } finally {
-                        logLock.unlock();
-                    }
-                }
             }
 
             /* [최종 저장] 하이브리드 비동기 저장 처리 */

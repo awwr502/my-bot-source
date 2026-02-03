@@ -404,6 +404,13 @@ var SYSTEM_CONFIG = {
                 "bluechip": { label: "비즈니스타워", volatility: 1, prob: 28, icon: "🏨" },
                 "hotspot": { label: "상가", volatility: 1.8, prob: 28, icon: "🏚️" }
             },
+
+           /* [Gemini] 랜드마크 고정가 및 지분 상승 정책 */
+            FIXED_POLICY: {
+                BASE_PRICE: 200000,   // 0지분 기준 기본가
+                PER_SHARE_RATE: 0.05  // 1지분당 상승률 (5%)
+            },
+
             MANIPULATION: { 
                 TARGET: "서울타워", 
                 IS_UP: true,       
@@ -2699,6 +2706,17 @@ function generateLandmarkList(data, roomName) {
     var keys = Object.keys(data.landmarkMarket || {});
     if (keys.length === 0) return null;
 
+    // [Gemini] 전 구역 특정 건물의 총 지분 합계 계산 함수
+    var getTotalShares = function(landName) {
+        var total = 0;
+        for (var r in data.rooms) {
+            for (var u in data.rooms[r].users) {
+                total += Number((data.rooms[r].users[u].landHoldings || {})[landName] || 0);
+            }
+        }
+        return total;
+    };
+
     // 타입별 우선순위 정의 (낮을수록 상단)
     var getTypePriority = function(name) {
         var fixed = ["광산", "낚시터", "카지노", "중앙은행", "백화점", "경마장"];
@@ -2739,9 +2757,21 @@ function generateLandmarkList(data, roomName) {
             }
         }
         
-        var diff = Number(landmark.price) - Number(landmark.lastPrice);
-        var rate = landmark.lastPrice > 0 ? ((diff / landmark.lastPrice) * 100).toFixed(1) : "0.0";
-        var sign = diff > 0 ? "🔺" : (diff < 0 ? "🔹" : "➖");
+        var displayPrice = Number(landmark.price);
+        var statusInfo = "";
+
+        if (landmark.type === "normal") {
+            // [랜드마크 전용] 실시간 지분가 계산: 기본가 + (총지분 * (기본가 * 5%))
+            var totalShares = getTotalShares(name);
+            displayPrice = fixCfg.BASE_PRICE + (totalShares * (fixCfg.BASE_PRICE * fixCfg.PER_SHARE_RATE));
+            statusInfo = " (총 " + totalShares + "지분)";
+        } else {
+            // [비즈니스/상가] 기존 주식형 등락 표시 유지
+            var diff = displayPrice - Number(landmark.lastPrice);
+            var rate = landmark.lastPrice > 0 ? ((diff / landmark.lastPrice) * 100).toFixed(1) : "0.0";
+            var sign = diff > 0 ? "🔺" : (diff < 0 ? "🔹" : "➖");
+            statusInfo = " (" + sign + " " + Math.abs(rate) + "%)";
+        }
         
         var warningMark = "";
         if (landmark.delistTick && landmark.delistTick > 0) {
@@ -2749,7 +2779,7 @@ function generateLandmarkList(data, roomName) {
             dangerLandmarks.push(name);
         }
         
-        list.push(trait.icon + " " + name + ": " + fp(landmark.price) + "P (" + sign + " " + Math.abs(rate) + "%)" + warningMark + ownerTag);
+        list.push(trait.icon + " " + name + ": " + fp(displayPrice) + "P" + statusInfo + warningMark + ownerTag);
     }
 
     var result = list.join("\n");

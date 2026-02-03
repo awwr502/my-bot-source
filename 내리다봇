@@ -2742,6 +2742,8 @@ function generateLandmarkList(data, roomName) {
     var roomData = data.rooms[roomName]; // 해당 방의 유저 데이터를 참조하기 위해 가져옴
     var landmarkTraits = SYSTEM_CONFIG.ECO.LANDMARK.TRAITS;
 
+    var fixCfg = SYSTEM_CONFIG.ECO.LANDMARK.FIXED_POLICY; // 누락된 변수 정의 추가
+
     for (var i = 0; i < keys.length; i++) {
         var name = keys[i];
         var landmark = data.landmarkMarket[name];
@@ -3904,22 +3906,16 @@ function _runSector17Logic(data, ctx) {
                     
                     if (durationMin >= 1) {
                         var pol = util_getActivePolicy(roomObj);
-                        var multiplier = util_getEcoMultiplier(rName) * (pol.mineMult || 1.0);
-                        var midEarn = Math.floor(durationMin * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * multiplier);
-                        
-                        // [핵심] 누적 시간은 유지하고, 오늘치 정산분만 totalMiningTime에 합산
-                        u.totalMiningTime = (u.totalMiningTime || 0) + durationMin;
-                        u.mining.startTime = nowTs; // 기준점만 00시로 이동 (채굴은 지속됨)
-                        
-                        if (roomObj.features.dailyPools) {
-                            var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.MINE || 0.01;
-                            roomObj.features.dailyPools.mine += Math.floor(midEarn * accumRate);
-                        }
-                        
-                        // [v11.9.5] 정산은 진행하되, 복구 명령어를 위해 이전 startTime을 임시 백업하거나 유지할 수 있도록 처리
-                        u.mining.lastResetTime = u.mining.startTime; // 만약을 대비해 리셋 전 시작점 백업
-                        u.mining.startTime = nowTs; 
-                        Log.info("[Mining Mid-Settlement] " + u.name + "님 00시 가결산 및 타이머 갱신");
+        var multiplier = util_getEcoMultiplier(rName) * (pol.mineMult || 1.0);
+        var midEarn = Math.floor(durationMin * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * multiplier);
+        
+        // 정산분만 합산하고 startTime은 유지하여 시간 흐름을 보존함
+        if (roomObj.features.dailyPools) {
+            var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.MINE || 0.01;
+            roomObj.features.dailyPools.mine += Math.floor(midEarn * accumRate);
+        }
+        
+        Log.info("[Mining Mid-Settlement] " + u.name + "님 00시 가결산 완료 (시간 유지)");
                     }
                 }
 
@@ -11158,21 +11154,15 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
                     { name: "돗돔", min: 50000, max: 60000, prob: 0.001, desc: "심해의 전설," }
                 ];
 
-                var fishRand = Math.random();
+                var fishRand = Math.random(); // 변수를 먼저 선언
 
-                // [조작 엔진 v2.2] 변수명 불일치 수정 및 지수 압축 로직 정상화
-                if (user.isManipulated === true) {
-                    // 개인 설정이 없으면 시스템 기본값(SYSTEM_CONFIG) 참조
-                    var rawLuck = (user.fishLuck !== undefined && user.fishLuck !== null) ? user.fishLuck : SYSTEM_CONFIG.MANIPULATION.DEFAULT_FISH;
-                    var luckFactor = rawLuck / 100;
-                    
-                    // 핵심 수정: successRand가 아닌 fishRand를 직접 조작
-                    // 조작치가 높을수록 fishRand 값은 1.0(최상위 등급)에 가까워집니다.
-                    fishRand = 1 - (fishRand * Math.pow(1 - luckFactor, 3));
-                    
-                    // 극단적 조작(90% 이상) 시 최소 철갑상어 이상 보장
-                    if (luckFactor >= 0.9) fishRand = Math.max(fishRand, 0.985);
-                }
+        // [조작 엔진 v2.2] 선언된 fishRand 뒤로 로직 이동
+        if (user.isManipulated === true) {
+            var rawLuck = (user.fishLuck !== undefined) ? user.fishLuck : SYSTEM_CONFIG.MANIPULATION.DEFAULT_FISH;
+            var luckFactor = rawLuck / 100;
+            fishRand = 1 - (fishRand * Math.pow(1 - luckFactor, 3));
+            if (luckFactor >= 0.9) fishRand = Math.max(fishRand, 0.985);
+        }
 
                 var selectedFish = fishPool[0];
                 var cumulative = 0;

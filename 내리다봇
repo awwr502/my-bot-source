@@ -6551,6 +6551,10 @@ if (msg === "/가이드") {
             if (typeof _handleMenuStep2 === 'function' && _handleMenuStep2(msg, user, data, replier, roomName, targetUid)) return;
             if (typeof _handleMenuStep3 === 'function' && _handleMenuStep3(msg, user, data, replier, roomName, targetUid)) return;
             if (typeof _handleMenuStep4 === 'function' && _handleMenuStep4(msg, user, data, replier, roomName, targetUid)) return;
+
+            // C. 통합 카지노 채팅 배팅 처리
+            // 기능: 사다리/바카라 화면에서 "홀 50000"과 같이 입력한 배팅을 인식합니다.
+            if (typeof _handleCasinoBet === 'function' && _handleCasinoBet(msg, user, data, replier, roomName, targetUid)) return;
             
         } // <--- [필수] 섹터 24의 if문을 닫는 중괄호입니다. (이게 없어서 에러가 났을 확률 99%)
 
@@ -11962,4 +11966,218 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                  specialtyFound; // [교정]: 존재하지 않는 repairLog 제거
 
     replier.reply(formatCommand("🌊 [항해 일지: 무역 보고]", user, report, "누적 무역: " + (user.tradeCount || 0) + "회 / 잔액: " + fp(user.point) + "P"));
+}
+
+//==========섹터52==========
+
+/**
+ * [핵심 모듈] 통합 카지노 엔진 (사다리 & 바카라)
+ * 기능: 메뉴 출력, 배팅 검증, 최근 결과 조회
+ */
+
+/* [메인] 카지노 로직 진입점 */
+function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    var mState = roomData.features.states.menuWait;
+    
+    // 카지노 데이터 초기화 확인
+    if (!roomData.features.casino) {
+        roomData.features.casino = {
+            ladder: { round: 1, history: [], bets: {} },
+            baccarat: { round: 1, history: [], bets: {} }
+        };
+    }
+    var casino = roomData.features.casino;
+
+    // 1. 메인 메뉴 호출
+    if (msg === "/카지노") {
+        mState[targetUid] = { type: 'casino_main', time: Date.now() };
+        var body = "현재 입장 가능한 게임룸입니다.\n\n" +
+                   "1. 🌓 사다리 (2분 주기 / 1.90~4.0배)\n" +
+                   "2. 🃏 바카라 (3분 주기 / 2.0~8.0배)";
+        
+        replier.reply(formatCommand("🎰 내리다 중앙 카지노", user, body, "이동하실 게임 번호를 입력하세요."));
+        return true;
+    }
+
+    var state = mState[targetUid];
+    if (!state) return false;
+
+    // 2. 사다리 메뉴 (casino_main에서 1번 선택 시)
+    if (state.type === 'casino_main' && msg === "1") {
+        mState[targetUid] = { type: 'casino_ladder', time: Date.now() };
+        _showCasinoSubMenu(replier, user, "사다리", casino.ladder, 2);
+        return true;
+    }
+
+    // 3. 바카라 메뉴 (casino_main에서 2번 선택 시)
+    if (state.type === 'casino_main' && msg === "2") {
+        mState[targetUid] = { type: 'casino_baccarat', time: Date.now() };
+        _showCasinoSubMenu(replier, user, "바카라", casino.baccarat, 3);
+        return true;
+    }
+
+    // 4. 게임별 세부 기능 선택 (회차정보 / 결과조회)
+    if (state.type === 'casino_ladder' || state.type === 'casino_baccarat') {
+        var gameType = (state.type === 'casino_ladder') ? "ladder" : "baccarat";
+        var gameObj = casino[gameType];
+        var interval = (gameType === "ladder") ? 2 : 3;
+
+        if (msg === "1") { // 진행 중인 회차 상세 (배팅 현황)
+            _showCasinoRoundInfo(replier, user, gameType, gameObj, interval, roomName);
+        } else if (msg === "2") { // 최근 10경기 결과
+            _showCasinoHistory(replier, user, gameType, gameObj);
+        }
+        return true;
+    }
+
+    return false;
+}
+
+/* [서브] 카지노 게임별 2단계 메뉴 출력 */
+function _showCasinoSubMenu(replier, user, title, obj, interval) {
+    var now = new Date();
+    var remainSec = (interval * 60) - ((now.getMinutes() % interval) * 60 + now.getSeconds());
+    var min = Math.floor(remainSec / 60);
+    var sec = remainSec % 60;
+
+    var totalBet = 0;
+    for (var uid in obj.bets) { totalBet += Number(obj.bets[uid].amount); }
+
+    var body = "진행 중인 회차 및 메뉴를 선택하세요.\n\n" +
+               "[현재 회차 정보]\n" +
+               "• 회차: 제 " + (obj.round || 1) + "회차\n" +
+               "• 남은 시간: " + (min > 0 ? min + "분 " : "") + sec + "초\n" +
+               "• 총 판돈: " + fp(totalBet) + "P\n\n" +
+               "1. 📈 진행 중인 회차 정보 (배팅 현황)\n" +
+               "2. 📋 최근 10경기 결과";
+
+    replier.reply(formatCommand((title === "사다리" ? "🪜 " : "🃏 ") + title + " 게임실", user, body, "원하시는 번호를 입력하세요."));
+}
+
+/* [서브] 실시간 배팅 현황판 및 배팅 가이드 */
+function _showCasinoRoundInfo(replier, user, type, obj, interval, roomName) {
+    var now = new Date();
+    var remainSec = (interval * 60) - ((now.getMinutes() % interval) * 60 + now.getSeconds());
+    var totalBet = 0;
+    var stats = {};
+
+    // 배팅 리포트 집계
+    for (var uid in obj.bets) {
+        var b = obj.bets[uid];
+        totalBet += Number(b.amount);
+        stats[b.pick] = (stats[b.pick] || 0) + Number(b.amount);
+    }
+
+    var report = "";
+    if (type === "ladder") {
+        var picks = ["홀", "우3홀", "좌4홀", "짝", "좌3짝", "우4짝"];
+        picks.forEach(function(p) {
+            var amt = stats[p] || 0;
+            var per = totalBet > 0 ? Math.floor((amt / totalBet) * 100) : 0;
+            var icon = (p.indexOf("홀") !== -1) ? "🔵" : "🔴";
+            report += icon + " " + p + " : " + fp(amt) + "P (" + per + "%)\n";
+        });
+    } else {
+        var bPicks = { "P": "플레이어", "B": "뱅커", "T": "타이" };
+        for (var k in bPicks) {
+            var amt = stats[k] || 0;
+            var per = totalBet > 0 ? Math.floor((amt / totalBet) * 100) : 0;
+            report += "• " + bPicks[k] + " : " + fp(amt) + "P (" + per + "%)\n";
+        }
+    }
+
+    var title = (type === "ladder" ? "사다리" : "바카라");
+    var payoutMsg = (type === "ladder" ? "단일 x1.9 / 조합 x4.0" : "P x2.0 / B x1.95 / T x8.0");
+
+    var body = "실시간으로 집계된 배팅 비율입니다.\n" +
+               "🕒 " + remainSec + "초 후 배팅이 마감됩니다.\n\n" +
+               "[배팅 리포트]\n" + report + "\n" +
+               "🏦 총 배팅액 : " + fp(totalBet) + "P\n" +
+               "⚖️ 현재 배당률 : " + payoutMsg + "\n\n" +
+               "채팅으로 배팅을 입력하세요.";
+
+    replier.reply(formatCommand("📈 제 " + obj.round + "회차 " + title + " 현황", user, body, "(↩️ 뒤로 / 🏠 처음으로)"));
+}
+
+/* [서브] 최근 10경기 결과 내역 */
+function _showCasinoHistory(replier, user, type, obj) {
+    var list = [];
+    var history = obj.history || [];
+    
+    if (history.length === 0) {
+        list.push("데이터가 없습니다.");
+    } else {
+        history.forEach(function(h) {
+            var icon = (h.res.indexOf("홀") !== -1 || h.res === "P" || h.res === "T") ? "🔵" : "🔴";
+            var resName = h.res;
+            if (type === "baccarat") resName = { "P": "플레이어", "B": "뱅커", "T": "타이" }[h.res];
+            list.push("• " + h.round + "회차 : [" + resName + "] " + icon);
+        });
+    }
+
+    var range = history.length > 0 ? " [" + history[history.length-1].round + " ~ " + history[0].round + "회차]" : "";
+    var body = "[최근 경기 결과]" + range + "\n\n" + list.join("\n");
+    
+    replier.reply(formatCommand("📋 최근 10경기 결과 내역", user, body, "결과는 실시간 갱신됩니다."));
+}
+
+/* [입력 핸들러] 채팅 직접 배팅 처리 엔진 */
+function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
+    var mState = data.rooms[roomName].features.states.menuWait;
+    if (!mState[targetUid] || mState[targetUid].type.indexOf("casino_") === -1) return false;
+
+    var state = mState[targetUid];
+    var parts = msg.split(" ");
+    if (parts.length < 2) return false;
+
+    var pick = parts[0];
+    var amt = parseInt(parts[1].replace(/,/g, ""));
+    if (isNaN(amt) || amt <= 0) return false;
+
+    var gameType = (state.type === "casino_ladder") ? "ladder" : "baccarat";
+    var casino = data.rooms[roomName].features.casino[gameType];
+    var interval = (gameType === "ladder") ? 2 : 3;
+
+    // 1. 배팅 가능 선택지 검증
+    var validPicks = (gameType === "ladder") ? ["홀", "짝", "좌3짝", "우3홀", "좌4홀", "우4짝"] : ["플레이어", "뱅커", "타이"];
+    if (validPicks.indexOf(pick) === -1) return false;
+
+    // 2. 시간 마감 가드 (5초 전 차단)
+    var now = new Date();
+    var secInCycle = (now.getMinutes() % interval) * 60 + now.getSeconds();
+    var limit = (interval * 60) - 5;
+    if (secInCycle >= limit) {
+        replier.reply(formatError(user, "배팅 마감", "회차 마감 5초 전에는 배팅이 불가능합니다."));
+        return true;
+    }
+
+    // 3. 자금 및 한도 검증
+    var maxLimit = (gameType === "ladder") ? 500000 : 1000000;
+    if (user.point < amt) {
+        replier.reply(formatError(user, "포인트 부족", "보유 포인트가 부족합니다."));
+    } else if (amt > maxLimit) {
+        replier.reply(formatError(user, "한도 초과", (gameType === "ladder" ? "사다리" : "바카라") + "의 최대 한도는 " + fp(maxLimit) + "P입니다."));
+    } else {
+        // 4. 배팅 접수
+        var finalPick = pick;
+        if (gameType === "baccarat") finalPick = { "플레이어": "P", "뱅커": "B", "타이": "T" }[pick];
+
+        util_updatePoint(user, data.rooms[roomName], -amt, "카지노 배팅 참여 (" + pick + ")", roomName);
+        casino.bets[targetUid] = { pick: finalPick, amount: amt, name: user.name };
+        user.totalCasinoBet = (user.totalCasinoBet || 0) + amt;
+        
+        var title = (gameType === "ladder" ? "사다리" : "바카라");
+        var remain = (interval * 60) - secInCycle;
+        var guide = "선택: " + (gameType === "ladder" ? "홀/짝/좌3짝 등" : "플레이어/뱅커/타이") + "\n예시: " + pick + " " + amt;
+        
+        var successMsg = fp(amt) + "P 배팅 완료\n🕒 " + remain + "초 후 배팅이 마감됩니다.\n\n" +
+                         "• 선택: " + pick + "\n" +
+                         "💰 보유 포인트: " + fp(user.point) + "P\n" +
+                         "🚫 최대 한도: " + fp(maxLimit) + "P";
+
+        replier.reply(formatCommand("💰 " + title + " 배팅 참여", user, successMsg, "마감 5초 전에는 배팅이 차단됩니다."));
+        safeSaveData(data);
+    }
+    return true;
 }

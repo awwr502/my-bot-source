@@ -320,10 +320,10 @@ var SYSTEM_CONFIG = {
         },
 
     MANIPULATION: {
-        DEFAULT_GAMBLE: 65, // 홀짝 적중 보정치
-        DEFAULT_FISH: 40,   // 낚시 높은거 낚을 보정치
-        DEFAULT_RACING: 5, // 경마 기본 우승 보정치
-        DEFAULT_SPITTO: 65, // 스피또 기본 당첨 보정치
+        DEFAULT_GAMBLE: 65, // 홀짝(사다리/바카라) 적중 보정치
+        DEFAULT_FISH: 40,   // 낚시 높은 등급 낚을 보정치
+        DEFAULT_RACING: 5,  // 경마 우승 가중치 보너스
+        DEFAULT_SPITTO: 65, // 스피또 당첨 보정치
         MAX_RATE: 100,
         MIN_RATE: 0
     },
@@ -3786,15 +3786,24 @@ function _runSector16Logic(data, ctx) {
                 else evenSum += b.amount;
             }
 
-            // 2. 피버타임 및 10만P당 1% 페널티 계산
-            var baseProb = (feverData && feverData.active) ? SYSTEM_CONFIG.PROB.ODD_EVEN_FEVER : SYSTEM_CONFIG.PROB.ODD_EVEN_WIN;
-            var winProb = baseProb; 
+            var rigProb = null;
+            // 해당 회차 배팅 유저 중 조작 대상이 있는지 스캔
+            for (var uid in casino.ladder.bets) {
+                var u = mainRoomData.users[uid];
+                if (u && u.isManipulated) {
+                    rigProb = u.gambleWinRate / 100; // 유저 개별 설정값(예: 0.65) 사용
+                    break; 
+                }
+            }
+
+            // 우선순위: 1순위 조작확률 / 2순위 피버타임 / 3순위 기본승률
+            var winProb = (rigProb !== null) ? rigProb : 
+                          ((feverData && feverData.active) ? SYSTEM_CONFIG.PROB.ODD_EVEN_FEVER : SYSTEM_CONFIG.PROB.ODD_EVEN_WIN);
             
-            if (adj && adj.ENABLED) {
-                var penalty = (Math.floor(oddSum / 100000) * 0.01) - 
-                              (Math.floor(evenSum / 100000) * 0.01);
-                // 기본 승률(baseProb)에서 페널티를 가감함
-                winProb = Math.max(0.30, Math.min(0.70, baseProb - penalty));
+            // 조작 대상자가 없을 때만 고액 배팅 페널티(10만P당 -1%) 작동
+            if (rigProb === null && adj && adj.ENABLED) {
+                var penalty = (Math.floor(oddSum / 100000) * 0.01) - (Math.floor(evenSum / 100000) * 0.01);
+                winProb = Math.max(0.30, Math.min(0.70, winProb - penalty));
             }
 
             // 3. 보정된 확률에 따라 결과(oe) 먼저 결정
@@ -11426,10 +11435,9 @@ function _handleAdminManiStep(msg, user, data, replier, roomName, targetUid) {
                 extra: { cat: choice, targetId: state.extra.targetId, targetRoom: state.extra.targetRoom } 
             };
             delete menuWaitState[targetUid];
-            replier.reply(formatAdmin("🎯 수치 입력", "[" + cats[parseInt(choice)] + "] 수치를 입력하세요. (0~100)"));
+            replier.reply(formatAdmin("🎯 " + cats[parseInt(choice)] + " 설정", "변경할 수치를 입력하세요. (0~100)\n* 현재 기본값: " + SYSTEM_CONFIG.MANIPULATION["DEFAULT_" + (choice=="1"?"GAMBLE":choice=="2"?"FISH":choice=="3"?"RACING":"SPITTO")] + "%"));
             return true;
         }
-    }
 
     // 2단계: 실제 퍼센트 수치 입력
     if (bankProcessState[targetUid] && bankProcessState[targetUid].type === 'admin_mani_input') {

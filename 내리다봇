@@ -1708,77 +1708,57 @@ function util_calculateGini(roomName) {
  * 반영: 랜드마크, 경마 배팅액, 로또 잭팟, 은행 재원 등을 모두 합산하여 물가 왜곡 방지
  */
 function calculateEconomy(data, roomName) {
-    var totalAssets = 0;
-    var userCount = 0;
+    var totalAssets = 0;      // [물가용] 시스템 전체 통화량 (국고+판돈+유저현금+부동산)
+    var totalUserWealth = 0;  // [평균용] 유저들의 순자산 총합 (유저 지갑 사정)
+    var userCount = 0;
+
     if (!data || !data.rooms) return { total: 0, count: 0, average: 0 };
-    // 1. 스캔 대상 방 결정 (roomName이 있으면 해당 방만, 없으면 전체)
     var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
     
-    // 2. 전역 자산 합산 (방별 분리 시에는 로또 잭팟 등 공용 자산을 제외하여 물가 왜곡 방지)
-    if (!roomName) {
-        totalAssets += Number(data.lotto_jackpot_pool || 0);
-    }
+    if (!roomName) totalAssets += Number(data.lotto_jackpot_pool || 0);
 
     for (var i = 0; i < roomsToScan.length; i++) {
         var r = roomsToScan[i];
         var roomData = data.rooms[r];
         if (!roomData) continue;
 
-        // A. 해당 방의 중앙은행 금고 자산 합산
-        if (roomData.bankReserve !== undefined) {
-            totalAssets += Number(roomData.bankReserve);
-        }
-
-        // B. 해당 방의 진행 중인 시스템 판돈 합산
+        // A. 시스템 공용 자금 합산 (국고 및 판돈)
+        totalAssets += Number(roomData.bankReserve || 0);
         if (roomData.features) {
             if (roomData.features.racing) {
                 totalAssets += Number(roomData.features.racing.totalPool || 0);
                 totalAssets += Number(roomData.features.racing.carryOver || 0);
             }
-            if (roomData.features.lotto) {
-                totalAssets += Number(roomData.features.lotto.dailyPool || 0);
-            }
+            if (roomData.features.lotto) totalAssets += Number(roomData.features.lotto.dailyPool || 0);
         }
 
-        // C. 해당 방에 소속된 유저별 순자산 합산
+        // B. 유저별 데이터 정밀 합산 루프
         for (var uid in roomData.users) {
             var u = roomData.users[uid];
             if (!u) continue;
-            // [중복 제거 로직] 예금을 제외한 [현금 + 랜드마크 가치]만 합산
-            var pureUserAssets = Number(u.point || 0); // 보유 현금
-            
-            // 부동산 지분 가치 합산
+
+            // 1. [평균자산용]: 유저의 '실질적 순자산' 합산 (현금+예금+부동산+채권-부채)
+            totalUserWealth += util_calculateNetWorth(u, roomData);
+
+            // 2. [물가용]: 중복 방지를 위해 국고에 없는 '현금'과 '부동산 가치'만 통화량에 추가
+            var cash = Number(u.point || 0);
+            var landmarkVal = 0;
             var market = data.landmarkMarket || (roomData.features ? roomData.features.landmarkMarket : null);
             if (u.landHoldings && market) {
                 for (var lName in u.landHoldings) {
-                    var landmark = market[lName];
-                    if (landmark) pureUserAssets += (Number(u.landHoldings[lName] || 0) * Number(landmark.price || 0));
+                    if (market[lName]) landmarkVal += (Number(u.landHoldings[lName]) * Number(market[lName].price));
                 }
             }
-            
-            // 채무 관계 정산 (사채 등)
-            var sacheDebt = 0;
-            var sacheClaims = 0;
-            if (roomData.loanContracts) {
-                for (var cid in roomData.loanContracts) {
-                    var c = roomData.loanContracts[cid];
-                    if (c.borrowerUid === uid) pureUserAssets -= Number(c.currentDebt || 0); // 빚은 자산에서 제외
-                    if (c.lenderUid === uid) pureUserAssets += Number(c.currentDebt || 0);   // 받을 돈은 자산에 포함
-                }
-            }
-
-            totalAssets += pureUserAssets;
+            totalAssets += (cash + landmarkVal);
             userCount++;
         }
     }
 
-    var pureUserAssets = totalAssets - Number(roomData.bankReserve);
-return {
-    total: Math.max(0, totalAssets),
-    count: userCount,
-    average: userCount > 0 ? Math.floor(pureUserAssets / userCount) : 0
-};
-}
+    return {
+        total: Math.max(0, totalAssets), // 물가 배율의 기준이 되는 전체 통화량
+        count: userCount,
+        average: userCount > 0 ? Math.floor(totalUserWealth / userCount) : 0 // 유저들의 순자산 평균
+    };
 
 /**
  * [v10.0 지능형 엔진] 지니 계수(Gini Coefficient) 계산 함수

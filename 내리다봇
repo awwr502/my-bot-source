@@ -11554,21 +11554,51 @@ function _showVoyageStatus(user, replier) {
         // [신규] 예상 수익 계산 (재해 제외 기본치)
         var estRev = 0;
         var cfg = SYSTEM_CONFIG.TRADE;
+        var roomName = "내리다"; // 기본 운영방 기준
+        var roomData = globalData.rooms[roomName];
         var market = v.marketSnapshot || {};
         var nationInfo = market[v.dest] || { favorite: "", hate: "" };
-        var ecoMult = util_getEcoMultiplier("내리다"); 
+        var ecoMult = util_getEcoMultiplier(roomName); 
+        var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
 
+        // 1. 일반 화물 예상 수익 계산
         for (var good in (user.cargo || {})) {
             var count = Number(user.cargo[good]); if (count <= 0) continue;
             var basePrice = (cfg.GOODS_COST[good] || 10000) * ecoMult;
             var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
-            var mult = (good === nationInfo.favorite) ? rateInfo.pref : (good === nationInfo.hate ? rateInfo.hate : rateInfo.norm);
+            
+            var mult = 1.0;
+            if (good === producedByDest) mult = 0; // 수입 거부
+            else if (good === nationInfo.favorite) mult = rateInfo.pref;
+            else if (good === nationInfo.hate) mult = rateInfo.hate;
+            else mult = rateInfo.norm;
+
             estRev += Math.floor(basePrice * mult * count);
         }
-        var estNet = Math.floor(estRev * 0.9); // 기본 무역세 10% 제외
+
+        // 2. 특산품 예상 수익 계산
+        for (var sName in (user.specialties || {})) {
+            var sCount = Number(user.specialties[sName]); if (sCount <= 0) continue;
+            var parentGood = "";
+            for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === sName) { parentGood = TRADE_RELATION[n].produce; break; } }
+
+            var sMult = 1.0;
+            if (parentGood === producedByDest) sMult = 0;
+            else if (parentGood === nationInfo.favorite) sMult = cfg.SPECIALTY_PROFIT; // 3.0배
+            else if (parentGood === nationInfo.hate) sMult = 0.5;
+
+            estRev += Math.floor(cfg.BASE_PRICE * sCount * sMult);
+        }
+
+        // 3. 지능형 세율 적용 (정산 엔진과 동일)
+        var eco = calculateEconomy(globalData, roomName);
+        var myNetWorth = util_calculateNetWorth(user, roomData);
+        var taxRate = (myNetWorth > eco.average * 2) ? (cfg.MAX_TAX || 0.15) : (cfg.BASE_TAX || 0.1);
+        
+        var estNet = Math.floor(estRev * (1 - taxRate));
 
         msg = "현재 [" + v.dest + "]로 항해 중\n\n" +
-              "예상 수익: " + fp(estNet) + "P\n" +
+              "예상 수익: " + fp(estNet) + "P" + (taxRate > 0.1 ? " (누진세 적용)" : "") + "\n" +
               "남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
     }
     

@@ -1997,21 +1997,34 @@ function getCreditLimitTable(roomName) {
     var list = [];
     var data = getDatabase();
     var roomData = data.rooms[roomName || "내리다"];
+    
+    // 1. 평균 자산 비례 배율 계산 (기준점 420,000P)
     var avgAsset = (roomData && roomData.features && roomData.features.government) ? 
                    Number(roomData.features.government.dailyAvgAsset || 420000) : 420000;
-    
     var assetRatio = avgAsset / 420000;
 
-    for(var i=0; i<conf.SCORES.length; i++) {
-        // 소수점 첫째 자리까지 정확히 표시 (예: 1.025 -> 2.5%)
-        var ratePct = ((conf.RATES[i] - 1) * 100).toFixed(1);
-        var dynamicLimit = Math.floor(conf.LIMITS[i] * assetRatio);
-        list.push(conf.ICONS[i] + " " + conf.LABELS[i] + " (" + conf.SCORES[i] + "점~): " + ratePct + "% (한도 " + fp(dynamicLimit) + "P)");
+    // 2. 현재 시장 승수(dynMult) 실시간 호출
+    var dynMult = 1.0;
+    if (typeof util_getDynamicRateMultiplier === 'function') {
+        dynMult = util_getDynamicRateMultiplier(roomName);
     }
-    var lastIdx = conf.SCORES.length;
-    var lastRate = ((conf.RATES[lastIdx] - 1) * 100).toFixed(1);
+
+    // 3. 1등급 ~ 5등급 루프 처리
+    for(var i=0; i<conf.SCORES.length; i++) {
+        var baseRatePct = (conf.RATES[i] - 1) * 100;
+        var appliedRate = (baseRatePct * dynMult).toFixed(1); // 시장 승수 적용 및 소수점 고정
+        var dynamicLimit = Math.floor(conf.LIMITS[i] * assetRatio); // 평균 자산 비례 한도 적용
+        
+        list.push(conf.ICONS[i] + " " + conf.LABELS[i] + " (" + conf.SCORES[i] + "점~): " + appliedRate + "% (한도 " + fp(dynamicLimit) + "P)");
+    }
+    
+    // 4. [핵심] 마지막 신용불량자(6번째 항목) 별도 처리
+    var lastIdx = conf.SCORES.length; // 인덱스 5 (6번째 데이터)
+    var lastBaseRate = (conf.RATES[lastIdx] - 1) * 100;
+    var lastApplied = (lastBaseRate * dynMult).toFixed(1); // 신불자도 시장 승수 적용
     var lastDynamicLimit = Math.floor(conf.LIMITS[lastIdx] * assetRatio);
-    list.push(conf.ICONS[lastIdx] + " " + conf.LABELS[lastIdx] + " (<" + conf.SCORES[lastIdx-1] + "): " + lastRate + "% (한도 " + fp(lastDynamicLimit) + "P)");
+    
+    list.push(conf.ICONS[lastIdx] + " " + conf.LABELS[lastIdx] + " (<" + conf.SCORES[lastIdx-1] + "): " + lastApplied + "% (한도 " + fp(lastDynamicLimit) + "P)");
     
     return list.join("\n");
 }
@@ -9258,48 +9271,31 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
 
     /* [기능 4] 신용 등급 및 대출 한도 조회 */
     if (msg === "/신용등급" || msg === "/대출한도") {
-        // getCreditInfo와 Table 호출 시 roomName을 전달하여 유동 한도 반영
-        var cr = getCreditInfo(user.creditScore, roomName);
+        // 1. 섹터 10의 통합 엔진 호출 (이미 승수와 신불자가 계산되어 있음)
         var limitTable = getCreditLimitTable(roomName);
+        var cr = getCreditInfo(user.creditScore, roomName);
         
-        // 1. 비율 체감 메시지를 위한 배율 계산
-        var data = getDatabase();
-        var roomData = data.rooms[roomName];
-        var avgAsset = (roomData && roomData.features && roomData.features.government) ? 
-                       Number(roomData.features.government.dailyAvgAsset || 420000) : 420000;
-        var assetRatio = (avgAsset / 420000).toFixed(2);
-        
-        // 이율 고정 (이전 요청사항 준수)
+        // 2. 현재 시장 승수 확인 (메시지 상단 상태 표시용)
         var dynMult = 1.0;
+        if (typeof util_getDynamicRateMultiplier === 'function') {
+            dynMult = util_getDynamicRateMultiplier(roomName);
+        }
 
-        // 2. 시장 상황 메시지 생성
+        // 3. 시장 상황 텍스트 판별
         var marketStatus = "🟢 경제 안정";
         if (dynMult > 1.2) marketStatus = "🚨 국고 위기 (고금리)";
         else if (dynMult < 0.8) marketStatus = "✅ 유동성 풍부 (저금리)";
 
-        // 3. 동적 이율 테이블 생성
-        var conf = SYSTEM_CONFIG.ECO.CREDIT;
-        var dynamicTable = [];
-        for(var i=0; i<conf.SCORES.length; i++) {
-            var baseRatePct = Math.round((conf.RATES[i] - 1) * 100);
-            var appliedRate = (baseRatePct * dynMult).toFixed(1);
-            dynamicTable.push(conf.ICONS[i] + " " + conf.LABELS[i] + ": " + appliedRate + "% (한도 " + fp(conf.LIMITS[i]) + "P)");
-        }
-        
-        // 마지막 인덱스(신불자) 추가 처리
-        var lastIdx = conf.SCORES.length;
-        var lastBaseRate = Math.round((conf.RATES[lastIdx] - 1) * 100);
-        var lastApplied = (lastBaseRate * dynMult).toFixed(1);
-        dynamicTable.push(conf.ICONS[lastIdx] + " " + conf.LABELS[lastIdx] + ": " + lastApplied + "% (한도 " + fp(conf.LIMITS[lastIdx]) + "P)");
-
+        // 4. 최종 메시지 조립 (중복 루프 제거)
         var header = "[📊 실시간 대출 금리 리포트]\n" +
                      "🌐 시장 상황: " + marketStatus + " (x" + dynMult.toFixed(2) + ")\n" +
                      "━━━━━━━━━━━━━━━\n" +
-                     dynamicTable.join("\n");
+                     limitTable; // 섹터 10에서 만든 완벽한 리스트 삽입
 
+        var myAppliedRate = ((cr.rate - 1) * 100 * dynMult).toFixed(1);
         var myCredit = "\n\n[내 실시간 적용 상태]\n" +
                        "• 신용점수: " + user.creditScore + "점 (" + cr.label + ")\n" +
-                       "• 적용이율: " + (Math.round((cr.rate - 1) * 100) * dynMult).toFixed(1) + "%\n" +
+                       "• 적용이율: " + myAppliedRate + "%\n" +
                        "• 가능액수: " + fp(cr.limit) + "P";
 
         replier.reply(formatCommand("💳 신용 등급 및 실시간 한도", user, header + myCredit, "대출 실행: [/은행]"));

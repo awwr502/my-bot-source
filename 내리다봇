@@ -10564,16 +10564,36 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
         var landmark = data.landmarkMarket[sName];
         if (isNaN(count) || count <= 0) { replier.reply(formatError(user, "수량 오류", "매입하실 지분 수량을 정확히 입력하세요.")); return true; }
         
-        var totalPrice = Math.floor(Number(landmark.price) * count);
+        var totalPrice = 0;
+        var fixCfg = SYSTEM_CONFIG.ECO.LANDMARK.FIXED_POLICY;
+
+        if (landmark.type === "normal") {
+            /* [랜드마크 전용] 점진적 가격 상승 매입 공식 적용 */
+            var currentGlobalShares = getTotalShares(sName);
+            var unitIncr = fixCfg.BASE_PRICE * fixCfg.PER_SHARE_RATE; // 지분당 상승액 (10,000P)
+
+            for (var i = 0; i < count; i++) {
+                // 한 지분을 살 때마다 가격이 unitIncr만큼 상승한 값을 누적
+                totalPrice += (fixCfg.BASE_PRICE + ((currentGlobalShares + i) * unitIncr));
+            }
+        } else {
+            /* [비즈니스/상가] 기존 고정 시세 매입 */
+            totalPrice = Math.floor(Number(landmark.price) * count);
+        }
         if (Number(user.point) < totalPrice) { replier.reply(formatError(user, "자금 부족", "필요: " + fp(totalPrice) + "P")); return true; }
         
         /* [중앙은행 연동] 매입 대금을 국고로 입고 */
         util_updatePoint(user, roomData, -totalPrice, "부동산 매입", roomName);
 
-        // 평단가 계산 및 수량 업데이트
-        var curCount = Number(user.landHoldings[sName] || 0);
-        var curAvg = Number(user.landAvg[sName] || 0);
-        user.landAvg[sName] = Math.floor(((curAvg * curCount) + totalPrice) / (curCount + count));
+        // 수량 및 평단가 업데이트 (랜드마크 타입은 평단가 기록 제외)
+        if (landmark.type !== "normal") {
+            var curCount = Number(user.landHoldings[sName] || 0);
+            var curAvg = Number(user.landAvg[sName] || 0);
+            user.landAvg[sName] = Math.floor(((curAvg * curCount) + totalPrice) / (curCount + count));
+        } else {
+            // 랜드마크는 평단가 대신 0P로 세팅하거나 기존값 유지
+            user.landAvg[sName] = fixCfg.BASE_PRICE; 
+        }
         
         util_updateLandmark(user, sName, count, "부동산 매입", roomName);
 
@@ -10653,8 +10673,18 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
         if (holdings < count || count <= 0) { replier.reply(formatError(user, "지분 부족", "보유하신 지분보다 많은 수량을 매각할 수 없습니다.")); return true; }
 
         var landmark = data.landmarkMarket[sName];
-        var sellPrice = landmark ? Math.floor(Number(landmark.price)) : 0;
-        var totalSell = sellPrice * count; 
+        var sellUnitPrice = 0;
+        if (landmark && landmark.type === "normal") {
+            /* [랜드마크 전용] 현재 전 서버 지분가 기준 매각 */
+            var fixCfg = SYSTEM_CONFIG.ECO.LANDMARK.FIXED_POLICY;
+            var totalShares = getTotalShares(sName);
+            sellUnitPrice = fixCfg.BASE_PRICE + (totalShares * (fixCfg.BASE_PRICE * fixCfg.PER_SHARE_RATE));
+        } else {
+            /* [비즈니스/상가] 현재 시장가 기준 매각 */
+            sellUnitPrice = landmark ? Math.floor(Number(landmark.price)) : 0;
+        }
+        
+        var totalSell = sellUnitPrice * count;
 
         // 세금 계산 (갓물주 칭호 효과 반영)
         var pol = util_getActivePolicy(roomData);
@@ -10725,8 +10755,16 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
     if (!roomData || !roomData.features) return false;
 
-    // [상태 로컬라이징] 방별 독립 메뉴 대기 상태 참조
-    var menuWaitState = roomData.features.states.menuWait;
+    /* [Gemini] 전 구역 총 지분 합계 계산 내부 함수 */
+    var getTotalShares = function(landName) {
+        var total = 0;
+        for (var r in data.rooms) {
+            for (var u in data.rooms[r].users) {
+                total += Number((data.rooms[r].users[u].landHoldings || {})[landName] || 0);
+            }
+        }
+        return total;
+    };
 
     // 중앙은행 재원 초기화 (안전장치)
     if (roomData.bankReserve === undefined || roomData.bankReserve === null) {

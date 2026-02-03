@@ -1708,13 +1708,15 @@ function util_calculateGini(roomName) {
  * 반영: 랜드마크, 경마 배팅액, 로또 잭팟, 은행 재원 등을 모두 합산하여 물가 왜곡 방지
  */
 function calculateEconomy(data, roomName) {
-    var totalAssets = 0;      // [물가용] 시스템 전체 통화량 (국고+판돈+유저현금+부동산)
-    var totalUserWealth = 0;  // [평균용] 유저들의 순자산 총합 (유저 지갑 사정)
+    var totalAssets = 0;      // [물가용] 시스템 전체 통화량
+    var totalUserWealth = 0;  // [평균용] 유저들의 실질 순자산 합계
     var userCount = 0;
+    var economyBase = 0;      // [조회용] 현재 방의 물가 기준점
 
-    if (!data || !data.rooms) return { total: 0, count: 0, average: 0 };
+    if (!data || !data.rooms) return { total: 0, count: 0, average: 0, base: 0 };
     var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
     
+    // 1. 전역 잭팟 판돈 합산
     if (!roomName) totalAssets += Number(data.lotto_jackpot_pool || 0);
 
     for (var i = 0; i < roomsToScan.length; i++) {
@@ -1722,7 +1724,10 @@ function calculateEconomy(data, roomName) {
         var roomData = data.rooms[r];
         if (!roomData) continue;
 
-        // A. 시스템 공용 자금 합산 (국고 및 판돈)
+        // 물가 기준점 확보
+        economyBase = Number(roomData.economyBase || 0);
+
+        // A. 시스템 금고 및 진행 중인 판돈 합산
         totalAssets += Number(roomData.bankReserve || 0);
         if (roomData.features) {
             if (roomData.features.racing) {
@@ -1732,12 +1737,12 @@ function calculateEconomy(data, roomName) {
             if (roomData.features.lotto) totalAssets += Number(roomData.features.lotto.dailyPool || 0);
         }
 
-        // B. 유저별 데이터 정밀 합산 루프
+        // B. 유저 데이터 합산 루프
         for (var uid in roomData.users) {
             var u = roomData.users[uid];
             if (!u) continue;
 
-            // 1. [평균자산용]: 유저의 '실질적 순자산' 합산 (현금+예금+부동산+채권-부채)
+            // 1. [평균자산용]: 채권/채무가 포함된 유저의 실질 순자산 합산
             totalUserWealth += util_calculateNetWorth(u, roomData);
 
             // 2. [물가용]: 중복 방지를 위해 국고에 없는 '현금'과 '부동산 가치'만 통화량에 추가
@@ -1751,13 +1756,14 @@ function calculateEconomy(data, roomName) {
             }
             totalAssets += (cash + landmarkVal);
             userCount++;
-        }
+        } // 유저 루프 종료
     }
 
     return {
-        total: Math.max(0, totalAssets), // 물가 배율의 기준이 되는 전체 통화량
+        total: Math.max(0, totalAssets), 
         count: userCount,
-        average: userCount > 0 ? Math.floor(totalUserWealth / userCount) : 0 // 유저들의 순자산 평균
+        average: userCount > 0 ? Math.floor(totalUserWealth / userCount) : 0,
+        base: economyBase // 요청하신 물가기준 필드 추가
     };
 
 /**

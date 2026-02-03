@@ -3476,8 +3476,11 @@ function _runSector16Logic(data, ctx) {
                     var totalActuallyPaid = 0;
 
                     resultBody += "🏛️ 국고 수수료(10%): " + fp(tax) + "P 입고\n";
-                    if (actualSubsidy > 0) resultBody += "🛡️ " + targetMult + "배 배당 보전 지원: " + fp(actualSubsidy) + "P\n";
-                    else if (racingData.carryOver > 0) resultBody += "💰 이월금 포함: " + fp(racingData.carryOver) + "P 방출!\n";
+                    if (actualSubsidy > 0) {
+                        resultBody += "🛡️ " + targetMult + "배 배당 보전 지원: " + fp(actualSubsidy) + "P\n";
+                    } else if (racingData.carryOver > 0) {
+                        resultBody += "💰 이월금 포함: " + fp(racingData.carryOver) + "P 방출!\n";
+                    }
                     
                     resultBody += "\n[🎖️ 주요 당첨자]";
                     winnerUids.forEach(function(uId){
@@ -3486,27 +3489,28 @@ function _runSector16Logic(data, ctx) {
                         if(u){
                             var share = b.amount / winPool;
                             var prize = Math.floor(share * finalDistributePool);
-                            // [상한선 동기화]: 최대치도 동일한 상수를 참조하도록 확정
-                            var maxLimit = b.amount * targetMult;
-                            if (prize > maxLimit) prize = maxLimit;
+                            
+                            // [고정 배당 핵심]: 상한선과 보장액을 동일하게 설정 (targetMult 배 고정)
+                            var fixedLimit = b.amount * targetMult; 
+                            
+                            // 계산된 당첨금이 보장액보다 크면 보장액(7배)으로 깎고, 
+                            // 부족하면 보전금이 포함된 prize를 그대로 지급하여 결과적으로 7배를 맞춤
+                            if (prize > fixedLimit) prize = fixedLimit;
 
-                            // [수정] 경마는 배팅금이 들어가는 투자형이므로 삭감(emergencyMult) 제거
-                            var finalPrize = Math.floor(prize); 
-
-                            if (!util_isBankSolvent(ctx.targetRoom, finalPrize)) {
-                                try { Api.replyRoom(ctx.targetRoom, "🚨 [국고 부도] 경마 당첨금 지급이 정지되었습니다."); } catch(e){}
+                            if (!util_isBankSolvent(ctx.targetRoom, prize)) {
+                                try { Api.replyRoom(ctx.targetRoom, "🚨 [국고 부도] 경마 당첨금 지급 능력이 부족하여 이월 처리됩니다."); } catch(e){}
                                 return;
                             }
 
                             var res = processRepayment(u, prize, uId, ctx.targetRoom);
-                            // [교정] mainRoomData를 인자로 전달하여 게이트웨이 국고 연동 및 저널링 보장
                             util_updatePoint(u, mainRoomData, Number(res.actualGain), "경마 당첨금", ctx.targetRoom);
                             totalActuallyPaid += prize;
                             
-                            var tag = (prize === maxLimit) ? " ⚠️최대배당" : (actualSubsidy > 0 ? " ✨3배보전" : "");
-                            resultBody += "\n• " + b.name + " (+" + fp(res.actualGain) + "P)" + tag;
+                            resultBody += "\n• " + b.name + " (+" + fp(res.actualGain) + "P) ✨" + targetMult + "배보장";
                         }
                     });
+                    
+                    // 정산 후 남은 금액은 다음 회차로 이월 (판돈이 넘쳤을 경우 대비)
                     racingData.carryOver = Math.max(0, finalDistributePool - totalActuallyPaid);
                     if (racingData.carryOver > 10) {
                         resultBody += "\n\n💰 상한 초과분 " + fp(racingData.carryOver) + "P는\n다음 회차 배당으로 이월되었습니다!";

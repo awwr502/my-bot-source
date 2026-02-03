@@ -330,17 +330,10 @@ var SYSTEM_CONFIG = {
 
     ECO: {
 
-        /* [신규] 랜드마크 최대주주 배당 비율 설정 */
-        MARKET_DIVIDEND_RATE: 0.075,      // [시세배당] 건물 시세의 7.5% (50만P 건물이면 37,500P)
-        ACTIVITY_ACCUM_RATES: {          // [활동적립] 발생 수익의 N%만 주머니에 적립
-            MINE: 0.10,    // 채굴량의 10%
-            FISH: 0.05,    // 낚시금의 5%
-            CASINO: 0.10,  // 카지노 수수료의 10%
-            BANK: 0.10,    // 이자 발생액의 10%
-            SHOP: 0.001,   // 쇼핑액의 0.1%
-            RACING: 0.01   // 배팅금의 1%
-        },
-        DIVIDEND_PAYOUT_RATIO: 1.0,       // [최종지급] 주머니 적립금의 100% 지급
+        /* [Gemini 요청 사항] 시간 기반 확정 배당 시스템 설정 */
+        HOURLY_DIVIDEND: 10000,           // 시간당 기본 배당금 (10,000P)
+        DIVIDEND_BONUS_THRESHOLD: 10,     // 지분 보너스 시작 임계값 (10지분)
+        DIVIDEND_BONUS_RATE: 0.1,         // 초과 1지분당 가산 배율 (10%)
 
         /* [기초 경제 설정] */
         ATTEND_MIN: 8000, // [출석 최소 지급]: 하한선 8,000P
@@ -4273,61 +4266,52 @@ function _runSector17Logic(data, ctx) {
                 }
             }
 
-            /* [v11.0] 6대 랜드마크 최대주주 일일 배당 정산 엔진 */
-            // 설명: 하루 동안 쌓인 분야별 수익금(dailyPools)을 각 건물 지분 1위에게 배당합니다.
-            var pools = roomObj.features.dailyPools;
-            var ecoCfg = SYSTEM_CONFIG.ECO; // SYSTEM_CONFIG 참조로 교정
+            /* [v11.9.28] 6대 랜드마크 24시간 확정 배당 정산 엔진 (Hourly Fixed Model) */
+            // 설명: 매일 자정, 각 랜드마크 주인에게 24시간치(240,000P) 배당을 일괄 지급합니다.
+            var ecoCfg = SYSTEM_CONFIG.ECO;
             var divReport = [];
 
-            if (pools && ecoCfg) {
-                var targets = {
-                    "광산": { key: "mine", rate: ecoCfg.ACTIVITY_ACCUM_RATES.MINE },
-                    "낚시터": { key: "fish", rate: ecoCfg.ACTIVITY_ACCUM_RATES.FISH },
-                    "카지노": { key: "casino", rate: ecoCfg.ACTIVITY_ACCUM_RATES.CASINO },
-                    "중앙은행": { key: "bank", rate: ecoCfg.ACTIVITY_ACCUM_RATES.BANK },
-                    "백화점": { key: "shop", rate: ecoCfg.ACTIVITY_ACCUM_RATES.SHOP },
-                    "경마장": { key: "race", rate: ecoCfg.ACTIVITY_ACCUM_RATES.RACING }
-                };
+            if (ecoCfg && ecoCfg.HOURLY_DIVIDEND) {
+                var targetNames = ["광산", "낚시터", "카지노", "중앙은행", "백화점", "경마장"];
+                var baseDailyPayout = ecoCfg.HOURLY_DIVIDEND * 24; // 하루치 기본금 (240,000P)
 
-                for (var landName in targets) {
-                    var info = targets[landName];
-                    var poolAmount = Number(pools[info.key] || 0);
-                    
-                    /* [v11.9] 하이브리드 배당 정산: 시세 고정분(0.5%) + 활동 성과분(N%) */
-                    var landData = data.landmarkMarket[landName];
+                targetNames.forEach(function(landName) {
                     var owner = util_getMajorityOwner(roomObj, landName);
                     
                     if (owner && owner.data) {
-                        var curPrice = landData ? Number(landData.price) : 0;
+                        // [지분 보너스]: 10지분 초과 시 1지분당 10%(0.1) 가산
+                        var threshold = ecoCfg.BONUS_THRESHOLD || 10;
+                        var bonusRate = ecoCfg.BONUS_RATE || 0.1;
+                        var shareMult = owner.qty > threshold ? 1.0 + (owner.qty - threshold) * bonusRate : 1.0;
                         
-                        var marketPart = Math.floor(curPrice * SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE);
-                        var activityPart = Math.floor(poolAmount * SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO);
-                        var totalDividend = marketPart + activityPart;
-
-                        // 조회 화면과 동일한 보너스 배율(0.5) 적용
-                        var shareMult = owner.qty > 5 ? 1.0 + (owner.qty - 5) * 0.5 : 1.0;
-                        var finalDividend = Math.floor(totalDividend * shareMult);
+                        // 최종 지급액 계산
+                        var finalDividend = Math.floor(baseDailyPayout * shareMult);
                         
+                        // 갓물주 칭호 보너스 (10% 추가)
                         if (owner.data.title === "갓물주") finalDividend = Math.floor(finalDividend * 1.1);
 
                         if (finalDividend > 0) {
-                            util_updatePoint(owner.data, roomObj, finalDividend, "랜드마크 일일 배당: " + landName, rName);
+                            util_updatePoint(owner.data, roomObj, finalDividend, "랜드마크 일일 확정 배당: " + landName, rName);
                             divReport.push("• " + landName + ": " + owner.data.name + " (+" + fp(finalDividend) + "P)");
                         }
                     }
-                    // [v11.9 중요] 주인이 있든 없든 적립금 주머니는 매일 자정에 초기화 (이월 방지)
-                    pools[info.key] = 0;
+                });
+
+                // 주머니 초기화 로직 (활동 적립 방식은 폐기했으나, 데이터 정리를 위해 초기화 유지)
+                if (roomObj.features.dailyPools) {
+                    var pools = roomObj.features.dailyPools;
+                    for (var key in pools) { pools[key] = 0; }
                 }
 
-                // 배당 결과 발표 (수익이 발생한 경우에만)
+                // 배당 결과 발표
                 if (divReport.length > 0) {
-                    var msg = "🌙 [내리다 경제 위원회: 일일 배당 보고]\n" +
+                    var msg = "🌙 [내리다 경제 위원회: 일일 확정 배당 보고]\n" +
                               "━━━━━━━━━━━━━━━\n" +
-                              "오늘 발생한 국가 수익의 일부를\n" +
-                              "각 구역 최대주주분들께 배당하였습니다.\n\n" +
+                              "금일 24시간 동안 건물을 보유하신\n" +
+                              "각 구역 최대주주분들께 배당을 완료했습니다.\n\n" +
                               divReport.join("\n") + "\n" +
                               "━━━━━━━━━━━━━━━\n" +
-                              "💡 지분을 늘려 시스템의 주인이 되어보세요!";
+                              "💡 시간당 " + fp(ecoCfg.HOURLY_DIVIDEND) + "P가 안정적으로 적립됩니다.";
                     Api.replyRoom(rName, msg);
                 }
             }
@@ -8901,30 +8885,16 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         var roomData = data.rooms[roomName];
         if (!roomData || !roomData.features || !roomData.features.dailyPools) return true;
 
-        var pools = roomData.features.dailyPools;
-        var nowTs = Date.now();
-        
-        // =====요청사항 시작=====
-        var ecoCfg = SYSTEM_CONFIG.ECO; // ecoCfg 정의 추가
-        var rates = ecoCfg.ACTIVITY_ACCUM_RATES;
+        // 1. 시간 계산: 오늘 00:00부터 현재까지 흐른 시간(ms)을 구해 시간(hour) 단위로 변환
+        var now = new Date();
+        var startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        var hoursPassed = (now - startOfDay) / 3600000; 
 
-        // 2. [광산 가집계 연동] 현재 채굴 중인 유저의 미정산 수익 실시간 합산
-        var pendingMineEarn = 0;
-        var pol = util_getActivePolicy(roomData);
-        var mineMult = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
-        var mCfg = SYSTEM_CONFIG.ECO.MINE;
-
-        var expMult = 1 + (mCfg.COPPER_PROB * (mCfg.COPPER_MULT-1)) + (mCfg.GOLD_PROB * (mCfg.GOLD_MULT-1)) + (mCfg.DIA_PROB * (mCfg.DIA_MULT-1));
-
-        for (var uid in roomData.users) {
-            var u = roomData.users[uid];
-            if (u.mining && u.mining.active === true) {
-                var mDur = Math.floor((nowTs - u.mining.startTime) / 60000);
-                if (mDur >= 1) {
-                    pendingMineEarn += Math.floor(mDur * mCfg.BASE_PER_MIN * mineMult * expMult);
-                }
-            }
-        }
+        // 2. 환경 설정 로드 (Sector 1 상수 참조)
+        var ecoCfg = SYSTEM_CONFIG.ECO;
+        var baseHourly = ecoCfg.HOURLY_DIVIDEND; // 시간당 10,000P
+        var threshold = ecoCfg.BONUS_THRESHOLD;  // 10지분
+        var bonusRate = ecoCfg.BONUS_RATE;       // 0.1 (10%)
 
         var targets = [
             { name: "광산", key: "mine", icon: "⛏️", pending: Math.floor(pendingMineEarn * rates.MINE) },
@@ -8940,29 +8910,25 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
 
         var report = [];
         targets.forEach(function(t) {
-            var rawRevenue = Number(pools[t.key] || 0) + (t.pending || 0); 
-            
-            // 2. [실시간 상수 적용] 리로드 시점에 바뀐 상수를 즉시 매출에 곱함
-            var currentRate = rates[t.key.toUpperCase()] || 0;
-            var currentBasis = Math.floor(rawRevenue * currentRate); 
-
-            var landData = data.landmarkMarket[t.name];
-            var curPrice = landData ? Number(landData.price) : 0;
-            
-            // 3. [최종 배당금 산출 공식]
-            // 시세배당액 + (누적매출 * 적립률 * 지급률)
-            var marketPart = Math.floor(curPrice * ecoCfg.MARKET_DIVIDEND_RATE);
-            var activityPart = Math.floor(currentBasis * ecoCfg.DIVIDEND_PAYOUT_RATIO);
-            var totalDividend = marketPart + activityPart;
 
             var owner = util_getMajorityOwner(roomData, t.name);
             var finalDividend = totalDividend;
             var ownerTag = "⚠️ 주인 없음";
 
+            var owner = util_getMajorityOwner(roomData, t.name);
+            var ownerTag = "⚠️ 주인 없음";
+            var finalDividend = 0;
+
             if (owner && owner.data) {
                 ownerTag = "👑 " + getDisplayName(owner.data) + " (" + owner.qty + "지분)";
-                var shareMult = owner.qty > 5 ? 1.0 + (owner.qty - 5) * 0.5 : 1.0;
-                finalDividend = Math.floor(totalDividend * shareMult);
+                
+                // [보너스 공식]: 10지분 초과 시 1지분당 10%(0.1) 가산
+                var shareMult = owner.qty > threshold ? 1.0 + (owner.qty - threshold) * bonusRate : 1.0;
+                
+                // 실시간 예상액 = (시간당 기본금 * 오늘 경과 시간 * 지분 보너스)
+                finalDividend = Math.floor(baseHourly * hoursPassed * shareMult);
+                
+                // 갓물주 칭호 보너스 (10% 추가) - 기존 정책 유지
                 if (owner.data.title === "갓물주") finalDividend = Math.floor(finalDividend * 1.1);
             }
 

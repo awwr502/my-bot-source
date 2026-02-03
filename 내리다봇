@@ -3962,14 +3962,29 @@ function _runSector17Logic(data, ctx) {
                 var netWorth = util_calculateNetWorth(u, roomObj);
                 var taxRate = 0;
                 
-                if (netWorth > 1000000) taxRate = 0.02;      // 100만P 초과: 2%
-                else if (netWorth > 500000) taxRate = 0.01;  // 50만P 초과: 1%
-                else if (netWorth > 100000) taxRate = 0.005; // 10만P 초과: 0.5%
+                if (netWorth > 1000000) taxRate = 0.05;      // 100만P 초과: 5%
+                else if (netWorth > 500000) taxRate = 0.03;  // 50만P 초과: 3%
+                else if (netWorth > 100000) taxRate = 0.01;  // 10만P 초과: 1%
 
-                if (taxRate > 0 && Number(u.point) > 100000) {
-                    var tax = Math.floor(Number(u.point) * taxRate);
+                if (taxRate > 0) {
+                    var tax = Math.floor(netWorth * taxRate);
                     if (tax > 0) {
-                        util_updatePoint(u, roomObj, -tax, "부동산 보유세 징수", rName);
+                        var currentCash = Number(u.point);
+                        if (currentCash >= tax) {
+                            // 현금이 충분한 경우 정상 징수
+                            util_updatePoint(u, roomObj, -tax, "부동산 보유세 징수", rName);
+                        } else {
+                            // 현금이 부족한 경우: 잔액 전액 납부 + 부족분 대출 전환
+                            var loanGap = tax - currentCash;
+                            if (currentCash > 0) util_updatePoint(u, roomObj, -currentCash, "부동산 보유세(부분납부)", rName);
+                            
+                            if (!u.loan) u.loan = { debt: 0, items: [] };
+                            u.loan.debt = Number(u.loan.debt || 0) + loanGap;
+                            u.loan.items.push(loanGap);
+                            
+                            // 은행이 대납한 것으로 간주하여 국고에 부족분 입고
+                            util_updateReserve(roomObj, loanGap, "보유세 부족분 대출 전환", rName);
+                        }
                         reportTotalTax += tax;
                         reportTaxCount++;
                     }
@@ -11784,17 +11799,11 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         return replier.reply(formatSimple("🌊 무역 결과", v.dest + "에서 소득 없이 귀항했습니다.")); 
     }
 
-    // 3. 지능형 누진세 계산 (상수 참조형으로 교정)
+    // 3. 무역세 계산 (누진세 폐지 및 단일 세율 적용)
     var tradeCfg = SYSTEM_CONFIG.TRADE;
-    var eco = calculateEconomy(data, roomName);
-    var myNetWorth = util_calculateNetWorth(user, roomData);
     
-    // 하드코딩 제거: 상수의 BASE_TAX(기본)와 MAX_TAX(최대)를 참조
-    var baseTax = Number(tradeCfg.BASE_TAX || 0.1);
-    var maxTax = Number(tradeCfg.MAX_TAX || 0.1);
-
-    // 자산가 판정 시 MAX_TAX 적용, 일반은 BASE_TAX 적용
-    var taxRate = (myNetWorth > eco.average * 2) ? maxTax : baseTax;
+    // 순자산 비교 로직을 삭제하고 무조건 기본 세율(기본 10%)을 적용합니다.
+    var taxRate = Number(tradeCfg.BASE_TAX || 0.1); 
     var taxAmount = Math.floor(totalRevenue * taxRate);
     var netProfit = totalRevenue - taxAmount;
 

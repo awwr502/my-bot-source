@@ -468,8 +468,21 @@ function recoverFromJournal(data) {
 
         if (recoveryCount > 0 || skipCount > 0) {
             Log.info("[Recovery] 블랙박스 엔진: " + recoveryCount + "건 복구 완료 (부당 이득 및 보너스 " + skipCount + "건 필터링)");
-            journalFile.delete(); 
-            Log.info("[Recovery] 중복 반영 방지를 위해 블랙박스 로그 파기 완료.");
+            // [중복 복구 방지 및 기록 보존 로직]:
+            // 1. 현재 복구에 사용된 로그를 '전체 보관용 파일'에 따로 저장합니다. (디스코드 전송용)
+            var historyPath = BASE_DIR + "total_history.log";
+            var rawLogs = FileStream.read(JOURNAL_PATH);
+            FileStream.append(historyPath, rawLogs);
+
+            // 2. 물리 파일(attendance.json)에 복구된 잔액을 즉시 확정 저장합니다.
+            safeSaveData(data, true); 
+
+            // 3. 복구용 로그(transaction.log)만 비워서 다음 리로드 시 중복 연산을 차단합니다.
+            var jFile = new java.io.File(JOURNAL_PATH);
+            if (jFile.exists()) {
+                jFile.delete(); 
+                Log.info("[Recovery] 로그 이관 및 복구용 파일 초기화 완료.");
+            }
         }
     } catch (e) {
         Log.error("Journal Recovery Error: " + e);

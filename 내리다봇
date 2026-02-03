@@ -4520,6 +4520,24 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             var info = "📍 소속: " + targetRoom + "\n💰 포인트: " + fp(targetUser.point) + "P\n🏦 예금: " + fp(targetUser.bank) + "P\n💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n🏅 티어: " + (TIERS[targetUser.tier] || "아이언");
             replier.reply(formatCommand("🔍 유저 상세 정보", targetUser, info, null));
         }
+        else if (type === "mining_info") {
+            var isMin = (targetUser.mining && targetUser.mining.active === true);
+            var dur = isMin ? Math.floor((Date.now() - targetUser.mining.startTime) / 60000) : 0;
+            var tot = (targetUser.totalMiningTime || 0) + dur;
+            var pol = util_getActivePolicy(targetRoomData);
+            var mult = util_getEcoMultiplier(targetRoom) * (pol.mineMult || 1.0);
+            if (targetUser.loan && Number(targetUser.loan.debt) > 0) mult *= 1.5;
+            var est = isMin ? Math.floor(dur * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * mult) : 0;
+
+            var body = "📍 소속: " + targetRoom + "\n" +
+                       "✨ 상태: " + (isMin ? "🟢 채굴 중" : "⚪ 휴식 중") + "\n" +
+                       "⏱️ 현재 세션: " + dur + "분\n" +
+                       "📈 누적 채굴: " + fp(tot) + "분\n" +
+                       "🧩 유물 조각: " + (targetUser.artifactPieces || 0) + "개\n" +
+                       "💰 예상 수익: +" + fp(est) + "P\n" +
+                       "⚖️ 현재 효율: x" + mult.toFixed(2);
+            replier.reply(formatCommand("🔍 유저 광산 정보", targetUser, body, null));
+        }
         else if (type === "transfer") {
             if (selected.id === targetUid) return replier.reply(formatError(user, "송금 불가", "자기 자신에게는 송금할 수 없습니다."));
             util_updatePoint(user, roomData, -extra.amount, "송금 보냄", roomName);
@@ -6408,38 +6426,45 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 2. 광산 정보 (누적 채굴 시간 표시 추가)
-    if (msg === "/광산정보") {
-        if (!user.mining || !user.mining.active) {
-            replier.reply(formatError(user, "상태 오류", "현재 광산에서 작업 중이 아닙니다."));
-            return true;
-        }
+    // 2. 광산 정보 (상대방 조회 기능 추가)
+    if (msg.indexOf("/광산정보") === 0) {
+        var parts = msg.trim().split(/\s+/);
+        var tData = user, tIdR = targetUid;
 
-        var durationMin = Math.floor((Date.now() - user.mining.startTime) / 60000);
-        var totalMin = (user.totalMiningTime || 0) + durationMin;
-        
-        // [가상 정부] 현재 정책 배율 로드
-        var pol = util_getActivePolicy(roomData);
-        var multiplier = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
-
-        var hasDebt = (user.loan && Number(user.loan.debt) > 0);
-        if (!hasDebt && roomData.loanContracts) {
-            for (var cid in roomData.loanContracts) {
-                if (roomData.loanContracts[cid].borrowerUid === targetUid) { hasDebt = true; break; }
+        if (parts.length > 1) {
+            var sNick = parts.slice(1).join(" ").trim();
+            var fnd = findUserByName(roomData, sNick);
+            if (fnd.length === 0) { 
+                replier.reply(formatError(user, "조회 실패", "[" + sNick + "] 유저를 찾을 수 없습니다.")); 
+                return true; 
             }
+            if (fnd.length > 1) { 
+                handleUserSelection(replier, targetUid, fnd, "mining_info", null, user, roomName); 
+                return true; 
+            }
+            tData = fnd[0].data; tIdR = fnd[0].id;
         }
-        if (hasDebt) multiplier *= 1.5;
 
-        var basePrice = SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN; 
-        var estimatedEarn = Math.floor(durationMin * basePrice * multiplier);
+        var isMe = (tIdR === targetUid);
+        var isMin = (tData.mining && tData.mining.active === true);
+        var dur = isMin ? Math.floor((Date.now() - tData.mining.startTime) / 60000) : 0;
+        var tot = (tData.totalMiningTime || 0) + dur;
+        
+        var pol = util_getActivePolicy(roomData);
+        var mult = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
+        if (tData.loan && Number(tData.loan.debt) > 0) mult *= 1.5;
 
-        var infoBody = "\n채굴 진행: " + durationMin + "분째...\n" +
-                       "📈 누적 채굴: " + fp(totalMin) + "분 경과\n" +
-                       "💰 예상 기본수익: +" + fp(estimatedEarn) + "P\n" +
-                       "⚖️ 정책 효과: x" + (pol.mineMult || 1.0).toFixed(1) + " (적용 중)\n\n" +
-                       "✨ 광물 발견 수익은 종료 시 합산됩니다.";
+        var est = isMin ? Math.floor(dur * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * mult) : 0;
 
-        replier.reply(formatCommand("⛏️ 광산 진행 현황", user, infoBody, "종료 및 정산은 [/광산종료]"));
+        var body = "👤 대상: " + getDisplayName(tData) + "\n" +
+                   "✨ 상태: " + (isMin ? "🟢 채굴 중" : "⚪ 휴식 중") + "\n" +
+                   "⏱️ 현재 세션: " + dur + "분\n" +
+                   "📈 누적 채굴: " + fp(tot) + "분\n" +
+                   "🧩 유물 조각: " + (tData.artifactPieces || 0) + "개\n" +
+                   "💰 예상 수익: +" + fp(est) + "P\n" +
+                   "⚖️ 현재 효율: x" + mult.toFixed(2);
+
+        replier.reply(formatCommand(isMe ? "⛏️ 내 광산 정보" : "🔍 유저 광산 정보", null, body, isMe ? "종료: [/광산종료]" : null));
         return true;
     }
 

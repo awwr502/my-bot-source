@@ -331,7 +331,7 @@ var SYSTEM_CONFIG = {
     ECO: {
 
         /* [신규] 랜드마크 최대주주 배당 비율 설정 */
-        MARKET_DIVIDEND_RATE: 0.075,      // [시세배당] 건물 시세의 7.5% (50만P 건물이면 2,500P)
+        MARKET_DIVIDEND_RATE: 0.075,      // [시세배당] 건물 시세의 7.5% (50만P 건물이면 37,500P)
         ACTIVITY_ACCUM_RATES: {          // [활동적립] 발생 수익의 N%만 주머니에 적립
             MINE: 0.10,    // 채굴량의 10%
             FISH: 0.10,    // 낚시금의 10%
@@ -8848,31 +8848,32 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         { name: "경마장", key: "race", icon: "🏇" }
     ].sort(function(a, b) { return a.name.localeCompare(b.name); });
 
-    var report = [];
-    targets.forEach(function(t) {
-        var basis = Number(pools[t.key] || 0); 
-        var landData = data.landmarkMarket[t.name];
-        var curPrice = landData ? Number(landData.price) : 0;
-        
-        // 배당금 산출: (시세배당 7.5%) + (활동적립금 10%)
-        var marketPart = Math.floor(curPrice * SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE);
-        var activityPart = Math.floor(basis * SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO);
-        var totalDividend = marketPart + activityPart;
+    /* [v11.9.14] 00시 정산과 100% 일치하는 실시간 계산 엔진 */
+        var report = [];
+        targets.forEach(function(t) {
+            var basis = (t.key === "mine") ? displayMineBasis : Number(pools[t.key] || 0); 
+            var landData = data.landmarkMarket[t.name];
+            var curPrice = landData ? Number(landData.price) : 0;
+            
+            // 1. 기초 배당 = 시세배당(7.5%) + 활동적립금(100%)
+            var marketPart = Math.floor(curPrice * SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE);
+            var activityPart = Math.floor(basis * SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO);
+            var totalDividend = marketPart + activityPart;
 
-        var ownerName = "⚠️ 주인 없음";
-        var finalDividend = totalDividend;
-        var owner = util_getMajorityOwner(roomData, t.name);
+            var owner = util_getMajorityOwner(roomData, t.name);
+            var finalDividend = totalDividend;
+            var ownerName = "⚠️ 주인 없음";
 
-        if (owner && owner.data) {
-            ownerName = "👑 " + getDisplayName(owner.data) + " (" + owner.qty + "지분)";
-            // [교정 2] 지분 보너스 배율 적용 (5지분 초과 시 1지분당 +0.2배)
+            if (owner && owner.data) {
+                ownerName = "👑 " + getDisplayName(owner.data) + " (" + owner.qty + "지분)";
+                // [교정 2] 지분 보너스 배율 적용 (5지분 초과 시 1지분당 +0.2배)
             var shareMult = owner.qty > 5 ? 1.0 + (owner.qty - 5) * 0.2 : 1.0;
             finalDividend = Math.floor(totalDividend * shareMult);
             if (owner.data.title === "갓물주") finalDividend = Math.floor(finalDividend * 1.1);
         }
 
-        report.push(t.icon + " " + t.name + "\n  💰 예상 수령액: " + fp(finalDividend) + "P\n  👤 현재 주주: " + ownerName);
-    });
+            report.push(t.icon + " " + t.name + "\n  💰 예상 수령액: " + fp(finalDividend) + "P\n  👤 현재 주주: " + ownerName);
+        });
         var header = "📊 실시간 랜드마크 배당 현황\n" + 
                      "━━━━━━━━━━━━━━━\n" +
                      "※ 오늘 누적된 수익을 바탕으로 계산된 예상치입니다.";

@@ -733,26 +733,33 @@ function safeSaveData(data, isForceBackup) {
             for (var uid in room.users) {
                 var u = room.users[uid];
 
-                // [점진적 침식 방어] 면제권(skipHealing)이 없을 때만 작동
-        if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid] && !u.skipHealing) {
-            var safeU = DB_DATA.rooms[rName].users[uid];
-            var lastPoint = Number(safeU.point || 0);
-            var dropAmount = lastPoint - u.point;
-
-            if (dropAmount > 0) {
-                // 신용 등급 정보 호출 (Sector 10 연동)
-                var cr = getCreditInfo(u.creditScore || 600);
-                // 1회 최대 허용 지출액: 신용 한도의 150% 또는 자산의 50% 중 큰 값으로 유연하게 설정
-                var maxAllowDrop = Math.max(cr.limit * 1.5, lastPoint * 0.5);
-
-                if (dropAmount > maxAllowDrop) {
-                    room.users[uid] = JSON.parse(JSON.stringify(safeU)); 
-                    isHealed = true;
-                    healReports.push(u.name + " (비인가 과다 지출 감지: 전체 롤백)");
-                    continue; // 롤백 완료 후 다음 유저로 이동
+                // [최우선 순위] 정상 활동 면제권(skipHealing) 체크
+                // 로직상 포인트 차감/지급이 정상적으로 완료되었다면, 아래의 모든 검역 로직을 생략합니다.
+                if (u.skipHealing === true) {
+                    u.skipHealing = false; // 1회 면제 후 플래그 초기화
+                    continue; // 즉시 다음 유저 검사로 이동 (아래 복구 로직 미실행)
                 }
-            }
-        }
+
+                /* [여기서부터는 면제권이 없는 '의심스러운 변동'만 검사합니다] */
+
+                // 1. [점진적 침식 방어] 신용 등급 기반 과다 지출 감지
+                if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
+                    var safeU = DB_DATA.rooms[rName].users[uid];
+                    var lastPoint = Number(safeU.point || 0);
+                    var dropAmount = lastPoint - u.point;
+
+                    if (dropAmount > 0) {
+                        var cr = getCreditInfo(u.creditScore || 600);
+                        var maxAllowDrop = Math.max(cr.limit * 1.5, lastPoint * 0.5);
+
+                        if (dropAmount > maxAllowDrop) {
+                            room.users[uid] = JSON.parse(JSON.stringify(safeU)); 
+                            isHealed = true;
+                            healReports.push(u.name + " (비인가 과다 지출 감지: 전체 롤백)");
+                            continue;
+                        }
+                    }
+                }
                 
                 // 2. 변수 오염(NaN) 체크 및 복구
                 var isPointBroken = isNaN(u.point) || u.point === null || typeof u.point !== 'number';

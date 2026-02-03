@@ -472,9 +472,9 @@ BACKUP: {
     },
 
     PROB: { // [핵심 게임 확률 엔진]
-        ODD_EVEN_WIN: 0.45,        // 홀짝 기본 승률 (47%)
-        ODD_EVEN_PAYOUT: 0.85,     // [신규] 홀짝 기본 배당률 (1.85배)
-        ODD_EVEN_FEVER: 0.50,      // 피버타임 시 홀짝 승률 (52%)
+        ODD_EVEN_WIN: 0.45,        // 홀짝 기본 승률 (45%)
+        ODD_EVEN_PAYOUT: 0.90,     // 홀짝 기본 배당률 (사용자 정의)
+        ODD_EVEN_FEVER: 0.50,      // 피버타임 시 홀짝 기본 승률 (50%)
         STOCK_NEW_LISTING: 0.8,    // 매 변동 타임마다 신규 종목이 상장될 확률 (50%)
         STOCK_SPECIAL: 0.5,        // 특정 종목에 특수 이벤트(폭등/폭락)가 발생할 확률 (50%)
         STOCK_UP_CHANCE: 0.45      // 특수 이벤트 발생 시 '상승'일 확률 (45%, 하락이 조금 더 높음)
@@ -3786,13 +3786,15 @@ function _runSector16Logic(data, ctx) {
                 else evenSum += b.amount;
             }
 
-            // 2. 10만P당 1% 페널티 계산 (상대적 승률 조정)
-            var winProb = 0.5; // 기본 50%
-            if (adj.ENABLED) {
+            // 2. 피버타임 및 10만P당 1% 페널티 계산
+            var baseProb = (feverData && feverData.active) ? SYSTEM_CONFIG.PROB.ODD_EVEN_FEVER : SYSTEM_CONFIG.PROB.ODD_EVEN_WIN;
+            var winProb = baseProb; 
+            
+            if (adj && adj.ENABLED) {
                 var penalty = (Math.floor(oddSum / 100000) * 0.01) - 
                               (Math.floor(evenSum / 100000) * 0.01);
-                // 홀 판돈이 많으면 penalty가 양수가 되어 winProb(홀 확률)이 낮아짐
-                winProb = Math.max(0.30, Math.min(0.70, 0.5 - penalty));
+                // 기본 승률(baseProb)에서 페널티를 가감함
+                winProb = Math.max(0.30, Math.min(0.70, baseProb - penalty));
             }
 
             // 3. 보정된 확률에 따라 결과(oe) 먼저 결정
@@ -12052,11 +12054,16 @@ function _showCasinoRoundInfo(replier, user, type, obj, interval, roomName) {
     var title = (type === "ladder" ? "사다리" : "바카라");
     var payoutMsg = (type === "ladder" ? "단일 x1.9 / 조합 x4.0" : "P x2.0 / B x1.95 / T x8.0");
 
+    var minBet = SYSTEM_CONFIG.CASINO.MIN_BET; // 1,000P
+    var maxLimit = (type === "ladder") ? SYSTEM_CONFIG.CASINO.LADDER.LIMIT : SYSTEM_CONFIG.CASINO.BACCARAT.LIMIT;
+
     var body = "실시간으로 집계된 배팅 비율입니다.\n" +
                "🕒 " + remainSec + "초 후 배팅이 마감됩니다.\n\n" +
                "[배팅 리포트]\n" + report + "\n" +
                "🏦 총 배팅액 : " + fp(totalBet) + "P\n" +
                "⚖️ 현재 배당률 : " + payoutMsg + "\n\n" +
+               "최소 배팅금 : " + fp(minBet) + "P\n" +
+               "최대 배팅금 : " + fp(maxLimit) + "P\n\n" +
                "채팅으로 배팅을 입력하세요.";
 
     replier.reply(formatCommand("📈 제 " + obj.round + "회차 " + title + " 현황", user, body, "(↩️ 뒤로 / 🏠 처음으로)"));
@@ -12115,12 +12122,19 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
     }
 
     // 3. 자금 및 한도 검증
-    var maxLimit = (gameType === "ladder") ? 500000 : 1000000;
+    var minLimit = SYSTEM_CONFIG.CASINO.MIN_BET;
+    var maxLimit = (gameType === "ladder") ? SYSTEM_CONFIG.CASINO.LADDER.LIMIT : SYSTEM_CONFIG.CASINO.BACCARAT.LIMIT;
+
     if (user.point < amt) {
         replier.reply(formatError(user, "포인트 부족", "보유 포인트가 부족합니다."));
+        return true;
+    } else if (amt < minLimit) {
+        replier.reply(formatError(user, "배팅 금액 미달", "최소 배팅금은 " + fp(minLimit) + "P입니다."));
+        return true;
     } else if (amt > maxLimit) {
         replier.reply(formatError(user, "한도 초과", (gameType === "ladder" ? "사다리" : "바카라") + "의 최대 한도는 " + fp(maxLimit) + "P입니다."));
-    } else {
+        return true;
+    }
         // 4. 배팅 접수
         var finalPick = pick;
         if (gameType === "baccarat") finalPick = { "플레이어": "P", "뱅커": "B", "타이": "T" }[pick];

@@ -8885,54 +8885,64 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         var roomData = data.rooms[roomName];
         if (!roomData || !roomData.features || !roomData.features.dailyPools) return true;
 
-        // 1. 현재 시간 및 경과 시간 계산
+        // 1. 시간 및 환경 변수 안전 로드
         var now = new Date();
         var startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        var hoursPassed = (now - startOfDay) / 3600000; // 오늘 00시부터 현재까지 흐른 시간
+        var hoursPassed = (now - startOfDay) / 3600000; 
 
-        // 2. 환경 설정 로드 (Sector 1에서 설정한 값 참조)
-        var ecoCfg = SYSTEM_CONFIG.ECO;
-        var baseHourly = ecoCfg.HOURLY_DIVIDEND; // 시간당 10,000P
-        var threshold = ecoCfg.BONUS_THRESHOLD;  // 10지분
-        var bonusRate = ecoCfg.BONUS_RATE;       // 0.1 (10%)
+        // SYSTEM_CONFIG가 정의되지 않았을 경우를 대비한 하드코딩 백업
+        var baseHourly = 10000;
+        var threshold = 10;
+        var bonusRate = 0.1;
+
+        if (typeof SYSTEM_CONFIG !== 'undefined' && SYSTEM_CONFIG.ECO) {
+            baseHourly = SYSTEM_CONFIG.ECO.HOURLY_DIVIDEND || 10000;
+            threshold = SYSTEM_CONFIG.ECO.BONUS_THRESHOLD || 10;
+            bonusRate = SYSTEM_CONFIG.ECO.BONUS_RATE || 0.1;
+        }
+
+        // 2. 내부 전용 숫자 포맷터 (fp 함수가 정의되지 않았을 경우 대비)
+        var formatP = function(val) {
+            if (isNaN(val)) return "0";
+            return String(Math.floor(val)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        };
+
+        // 3. 내부 전용 이름 추출기 (getDisplayName 함수가 정의되지 않았을 경우 대비)
+        var getName = function(u) {
+            if (!u) return "알 수 없음";
+            return u.name || "이름없음";
+        };
 
         var targets = [
-            { name: "광산", key: "mine", icon: "⛏️", pending: Math.floor(pendingMineEarn * rates.MINE) },
-            { name: "낚시터", key: "fish", icon: "🎣", pending: 0 },
-            { name: "카지노", key: "casino", icon: "🎰", pending: 0 },
-            { name: "중앙은행", key: "bank", icon: "🏦", pending: 0 },
-            { name: "백화점", key: "shop", icon: "🏢", pending: 0 },
-            { name: "경마장", key: "race", icon: "🏇", pending: 0 }
+            { name: "광산", icon: "⛏️" }, { name: "낚시터", icon: "🎣" },
+            { name: "카지노", icon: "🎰" }, { name: "중앙은행", icon: "🏦" },
+            { name: "백화점", icon: "🏢" }, { name: "경마장", icon: "🏇" }
         ];
 
-        // 정렬 로직 분리 (안전성)
         targets.sort(function(a, b) { return a.name.localeCompare(b.name); });
 
         var report = [];
         targets.forEach(function(t) {
-
             var owner = util_getMajorityOwner(roomData, t.name);
             var ownerTag = "⚠️ 주인 없음";
             var finalDividend = 0;
 
             if (owner && owner.data) {
-                ownerTag = "👑 " + getDisplayName(owner.data) + " (" + owner.qty + "지분)";
+                var nameTag = getName(owner.data);
+                ownerTag = "👑 " + nameTag + " (" + owner.qty + "지분)";
                 
-                // [보너스 공식]: 10지분 초과 시 1지분당 10%(0.1) 가산 (단리)
+                // 보너스 배율 계산 (10지분 초과 시 10% 가산)
                 var shareMult = owner.qty > threshold ? 1.0 + (owner.qty - threshold) * bonusRate : 1.0;
-                
-                // 최종 배당금 = (시간당 기본금 * 오늘 경과 시간 * 지분 보너스 배율)
                 finalDividend = Math.floor(baseHourly * hoursPassed * shareMult);
                 
-                // [칭호 보너스]: 갓물주 칭호 보유 시 최종액의 10% 추가
                 if (owner.data.title === "갓물주") finalDividend = Math.floor(finalDividend * 1.1);
             }
 
-            report.push(t.icon + " " + t.name + "\n  💰 예상 수령액: " + fp(finalDividend) + "P\n  📊 누적 적립금: " + fp(currentBasis) + "P\n  👤 현재 주주: " + ownerTag);
+            report.push(t.icon + " " + t.name + "\n  💰 현재까지 적립: " + formatP(finalDividend) + "P\n  👤 현재 주주: " + ownerTag);
         });
 
-        var header = "📊 실시간 랜드마크 배당 현황\n━━━━━━━━━━━━━━━\n※ 오늘 누적된 수익을 바탕으로 계산된 예상치입니다.";
-        var footer = "━━━━━━━━━━━━━━━\n✨ 자정(00:00) 정산 순간의 최대주주가 위 금액을 전액 수령합니다.";
+        var header = "📊 실시간 랜드마크 배당 현황\n━━━━━━━━━━━━━━━\n※ 시간당 " + formatP(baseHourly) + "P 확정 수익 모델";
+        var footer = "━━━━━━━━━━━━━━━\n✨ 오늘 총 경과 시간: " + hoursPassed.toFixed(1) + "시간\n💡 자정(00:00) 정산 시점에 자동 지급됩니다.";
 
         replier.reply(formatAdmin("배당 리포트", header + "\n\n" + report.join("\n\n") + "\n" + footer));
         return true;

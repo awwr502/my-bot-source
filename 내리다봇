@@ -11504,10 +11504,17 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         return replier.reply(formatSimple("🌊 무역 결과", v.dest + "에서 소득 없이 귀항했습니다.")); 
     }
 
-    // 3. 지능형 누진세 계산 (순자산 2배 초과 시 15%)
+    // 3. 지능형 누진세 계산 (상수 참조형으로 교정)
+    var tradeCfg = SYSTEM_CONFIG.TRADE;
     var eco = calculateEconomy(data, roomName);
     var myNetWorth = util_calculateNetWorth(user, roomData);
-    var taxRate = (myNetWorth > eco.average * 2) ? 0.15 : 0.10;
+    
+    // 하드코딩 제거: 상수의 BASE_TAX(기본)와 MAX_TAX(최대)를 참조
+    var baseTax = Number(tradeCfg.BASE_TAX || 0.1);
+    var maxTax = Number(tradeCfg.MAX_TAX || 0.1);
+
+    // 자산가 판정 시 MAX_TAX 적용, 일반은 BASE_TAX 적용
+    var taxRate = (myNetWorth > eco.average * 2) ? maxTax : baseTax;
     var taxAmount = Math.floor(totalRevenue * taxRate);
     var netProfit = totalRevenue - taxAmount;
 
@@ -11535,11 +11542,12 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     user.tradeCount++;
     safeSaveData(data);
 
-    var taxTag = (taxRate === 0.15) ? " (자산가 누진 적용)" : "";
+    // 출력 메시지 자동화: taxRate에 따라 (10%), (15%) 등이 가변적으로 표시됨
+    var taxTag = (taxRate > baseTax) ? " (자산가 누진 적용)" : "";
     var report = "📍 도착지: " + v.dest + "\n" +
                  soldLog.join("\n") + "\n━━━━━━━━━━━━━━━\n" +
                  "💰 총 매출: " + fp(totalRevenue) + "P\n" +
-                 "⚖️ 무역세(" + (taxRate*100) + "%): -" + fp(taxAmount) + "P" + taxTag + "\n" +
+                 "⚖️ 무역세(" + (taxRate * 100).toFixed(0) + "%): -" + fp(taxAmount) + "P" + taxTag + "\n" +
                  "💵 최종 수익: +" + fp(netProfit) + "P" + disasterLog + specialtyFound;
 
     replier.reply(formatCommand("🌊 [항해 일지: 무역 보고]", user, report, "누적 무역: " + user.tradeCount + "회 / 잔액: " + fp(user.point) + "P"));

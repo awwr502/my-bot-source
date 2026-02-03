@@ -616,33 +616,22 @@ function util_recalculateDailyPools(data, roomName) {
             var amount = Math.abs(Number(parts[2])); 
             var reason = parts[4]; 
 
-           // 1. 카지노 배당금 집계 (0.15 수수료의 4%)
+            /* =====요청사항 시작===== */
+            // 1. 카지노 배당금 집계 (원금 누적 방식으로 통일)
             if (reason.indexOf("홀짝 적중") !== -1) {
                 var originalBet = amount / 0.85; 
                 var houseCommission = originalBet * 0.15; 
-                roomObj.features.dailyPools.casino += Math.floor(houseCommission * cfg.CASINO);
+                roomObj.features.dailyPools.casino += Math.floor(houseCommission);
             }
             else if (reason.indexOf("홀짝 미적중") !== -1) {
-                roomObj.features.dailyPools.casino += Math.floor(amount * cfg.CASINO);
+                roomObj.features.dailyPools.casino += amount;
             }
-            // 2. 광산 및 가결산 집계
-            else if (reason.indexOf("광산") !== -1) {
-                // '광산' 키워드가 포함된 모든 포인트 변동(구리, 금, 다이아 정산 포함)을 전수 합산
-                var mineVal = amount;
-                
-                // 가결산(00시 정산) 로그의 경우 괄호 안의 실데이터 추출 로직 유지
-                if (reason.indexOf("가결산") !== -1) {
-                    var reg = new RegExp("\\((\\d+)\\)");
-                    var match = reason.match(reg);
-                    if (match) mineVal = Number(match[1]);
-                }
-                roomObj.features.dailyPools.mine += Math.floor(mineVal * cfg.MINE);
-            }
-            else if (reason.indexOf("낚시 보상") !== -1) roomObj.features.dailyPools.fish += Math.floor(amount * cfg.FISH);
-            else if (reason.indexOf("홀짝 미적중") !== -1) roomObj.features.dailyPools.casino += Math.floor(amount * cfg.CASINO);
-            else if (reason.indexOf("이자 지급") !== -1) roomObj.features.dailyPools.bank += Math.floor(amount * cfg.BANK);
-            else if (reason.indexOf("상점 구매") !== -1) roomObj.features.dailyPools.shop += Math.floor(amount * cfg.SHOP);
-            else if (reason.indexOf("경마 배팅") !== -1) roomObj.features.dailyPools.race += Math.floor(amount * cfg.RACING);
+            // 2. 기타 활동 집계 (cfg 참조 제거)
+            else if (reason.indexOf("광산") !== -1) roomObj.features.dailyPools.mine += amount;
+            else if (reason.indexOf("낚시 보상") !== -1) roomObj.features.dailyPools.fish += amount;
+            else if (reason.indexOf("이자 지급") !== -1) roomObj.features.dailyPools.bank += amount;
+            else if (reason.indexOf("상점 구매") !== -1) roomObj.features.dailyPools.shop += amount;
+            else if (reason.indexOf("경마 배팅") !== -1) roomObj.features.dailyPools.race += amount;
         });
         
     } catch (e) {
@@ -7199,12 +7188,6 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
 
         totalEarn = Math.floor(totalEarn);
 
-        // 설명: 설정된 적립 비율(10%)만큼만 배당 주머니에 합산합니다.
-        if (roomData.features.dailyPools) {
-            var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.MINE || 0.01;
-            roomData.features.dailyPools.mine += Math.floor(totalEarn * accumRate);
-        }
-
         var matchingBonus = 0;
         var isStimulusActive = (data.stimulusEndTime && Date.now() < data.stimulusEndTime);
         
@@ -7309,13 +7292,6 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
 
     // 수량 및 누적 매출 정산 로직 최적화
     var qty = (quantity !== undefined && quantity !== null) ? quantity : 1;
-
-    // [v11.0] 백화점 최대주주 배당을 위한 일일 판매액(매출) 누적
-    // 설명: 무료 이용권 사용이 아닌 순수 포인트 결제 시에만 매출액을 배당 주머니에 합산합니다.
-    if (!isUsingTicket && roomData.features.dailyPools) {
-        var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.SHOP || 0.008;
-        roomData.features.dailyPools.shop += Math.floor((Number(finalPrice) || 0) * accumRate);
-    }
 
     // 중앙은행 재원 초기화 (기본 10,000P)
     if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
@@ -11362,13 +11338,6 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
 
                 // [해왕] 칭호 효과: 물고기 판매 보상 20% 증가
                 if (user.title === "해왕") reward = Math.floor(reward * 1.2);
-
-                // [v11.0] 내리다낚시터 최대주주 배당을 위한 일일 판매대금 누적
-                // 설명: 물고기를 팔아 획득한 보상액을 배당 주머니에 합산합니다.
-                if (roomData.features.dailyPools) {
-                    var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.FISH || 0.01;
-                    roomData.features.dailyPools.fish += Math.floor(reward * accumRate);
-                }
 
                 var matchingBonus = 0;
                 var isStimulusActive = (data.stimulusEndTime && Date.now() < data.stimulusEndTime);

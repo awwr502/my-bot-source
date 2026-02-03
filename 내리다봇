@@ -264,6 +264,15 @@ var SYSTEM_CONFIG = {
 
     TRADE: {
         PRICE_CYCLE_MIN: 60,        // 시세 변동 주기 (60분)
+
+        GOODS_COST: {
+            "식료품": 10000,
+            "공업품": 15000,
+            "공예품": 20000,
+            "귀금속": 25000,
+            "보석": 30000
+        },
+
         NATIONS: {
             "브리타니아": { favorite: "", hate: "", specialty: "증기기관부품" },
             "샹그릴라": { favorite: "", hate: "", specialty: "고대찻잎" },
@@ -293,6 +302,20 @@ var SYSTEM_CONFIG = {
         SPECIALTY_CHANCE: 0.15,
         SPECIALTY_PROFIT: 3.0
     },
+
+    /**
+         * [신규] 품목별 차등 수익률 매트릭스
+         * - 선호(pref): 식료품은 높게(1.28), 보석은 낮게(1.19) 설정하여 밸런스 조정
+         * - 일반(norm): 세금 고려 시 약소한 이득 혹은 본전 (1.05)
+         * - 기피(hate): 강력한 손실 부여 (0.8)
+         */
+        PROFIT_RATES: {
+            "식료품": { pref: 1.28, norm: 1.05, hate: 0.8 },
+            "공업품": { pref: 1.24, norm: 1.05, hate: 0.8 },
+            "공예품": { pref: 1.21, norm: 1.05, hate: 0.8 },
+            "귀금속": { pref: 1.20, norm: 1.05, hate: 0.8 },
+            "보석":   { pref: 1.19, norm: 1.05, hate: 0.8 }
+        },
 
     MANIPULATION: {
         DEFAULT_GAMBLE: 65, // 홀짝 적중 보정치
@@ -11475,19 +11498,27 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // 재해 판정 (25% 확률)
     var triggeredDisaster = (Math.random() < 0.25) ? ["STORM", "FIRE", "CORRO", "PIRACY"][Math.floor(Math.random() * 4)] : null; 
 
-   // 1. 일반 화물 정산 (자국 품목 매입 거부 로직 추가)
+   // 1. 일반 화물 정산 (자국 품목 매입 거부 및 물가 연동 비례 수익 로직)
     var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
+    var ecoMult = util_getEcoMultiplier(roomName); // 현재 시장 물가 배율 확보
 
     for (var good in (user.cargo || {})) {
         var count = Number(user.cargo[good]); if (count <= 0) continue;
+        
+        // 최종 구매가 산출 (기본원가 * 경제배율)
+        var finalPurchasePrice = (cfg.GOODS_COST[good] || 10000) * ecoMult;
+        var rateInfo = cfg.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
         var multiplier = 1.0;
 
-        // [A] 자국 생산물 수입 거부 판정
+        // [A] 자국 생산물 수입 거부 및 수익률 판정
         if (good === producedByDest) {
             multiplier = 0;
             disasterLog += "\n🚫 [수입 거부]: 자국 생산물인 '" + good + "'은 매입하지 않습니다.";
         } else {
-            multiplier = (good === nationInfo.favorite) ? 1.5 : (good === nationInfo.hate ? 0.7 : 1.0);
+            // 국가 선호도에 따라 섹터 1의 차등 배율 매핑
+            if (good === nationInfo.favorite) multiplier = rateInfo.pref;
+            else if (good === nationInfo.hate) multiplier = rateInfo.hate;
+            else multiplier = rateInfo.norm;
         }
 
         // 재해 로직 (수량/가치 10% 손실)
@@ -11501,10 +11532,14 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             }
         }
 
-        var earn = Math.floor(cfg.BASE_PRICE * count * multiplier);
+        // 최종 정산액: (물가 반영 구매가 * 품목별 수익 배율) * 수량
+        var earn = Math.floor(finalPurchasePrice * multiplier * count);
         totalRevenue += earn;
+
         if (count > 0 && multiplier > 0) {
-            soldLog.push("• " + good + " x" + count + ": " + fp(earn) + "P " + (multiplier > 1 ? "🔺" : (multiplier < 1 ? "🔹" : "")));
+            // 수익 구간별 아이콘 표시 (1.15 이상: 상승, 0.8 이하: 하락, 나머지: 유지)
+            var sign = (multiplier >= 1.15) ? "🔺" : (multiplier <= 0.8 ? "🔹" : "➖");
+            soldLog.push("• " + good + " x" + count + ": " + fp(earn) + "P " + sign);
         }
         user.cargo[good] = 0;
     }

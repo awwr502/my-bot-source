@@ -10097,159 +10097,18 @@ function _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [연결] 3. 홀짝 도박 (/홀짝) */
-    if (msg.indexOf("/홀짝 ") === 0) {
-        startTracking(user, "홀짝 게임");
-        try {
-            // [엔진 연결] 통합 상태 가드
-            var stateRes = util_checkUserState(user, targetUid);
-            if (!stateRes.canAction) {
-                endTracking(user, false, stateRes.reason);
-                replier.reply(formatError(user, "게임 불가", stateRes.reason));
-                return true;
-            }
-
-            if (data.gambleLimit) {
-                endTracking(user, false, "도박 제한");
-                replier.reply(formatError(user, "시스템 제한", "현재 도박 시스템이 비활성화 상태입니다."));
-                return true;
-            }
-
-            var rawInput = msg.replace("/홀짝", "").trim(); // "/홀짝" 제외한 나머지 문자열
-            
-            // 1. 홀/짝 글자 추출
-            var pick = "";
-            if (rawInput.indexOf("홀") !== -1) pick = "홀";
-            else if (rawInput.indexOf("짝") !== -1) pick = "짝";
-
-            // 2. 숫자(배팅금) 추출
-            var betMatch = rawInput.match(/\d+/);
-            var bet = betMatch ? Number(betMatch[0]) : 0;
-
-            // 3. 유효성 검사 (하나라도 없으면 즉시 종료하여 에러 방지)
-            if (pick === "" || bet <= 0) {
-                replier.reply(formatError(user, "입력 오류", "정확한 배팅 정보를 입력하세요.\n(예: /홀짝 홀 10000 또는 /홀짝 홀10000)"));
-                return true;
-            }
-            
-            // [엔진 연결] 물가 배율 엔진
-            var multiplier = util_getEcoMultiplier(roomName);
-            var minBet = Math.floor((SYSTEM_CONFIG.ECO.GAMBLE_MIN || 300) * multiplier);
-            var maxBet = Math.floor((SYSTEM_CONFIG.ECO.GAMBLE_MAX || 2000) * multiplier);
-
-            if (isNaN(bet) || bet < minBet) { replier.reply(formatError(user, "금액 오류", "최소 " + fp(minBet) + "P 이상 베팅해야 합니다.")); return true; }
-            if (bet > maxBet) { replier.reply(formatError(user, "상한 초과", "최대 " + fp(maxBet) + "P까지 베팅 가능합니다.")); return true; }
-            if (Number(user.point) < bet) { replier.reply(formatError(user, "포인트 부족", "베팅할 포인트가 부족합니다.")); return true; }
-
-            // 1. 배당률 계산 (기본 0.85 + 도박왕 0.05 + 연승 보너스)
-        var basePayout = SYSTEM_CONFIG.PROB.ODD_EVEN_PAYOUT || 0.85;
-        if (user.title === "도박왕") basePayout += 0.05;
-
-        var winStreak = Number(user.consecutiveWins || 0);
-        var streakBonus = winStreak * 0.05; // 1승당 0.05배 추가
-        var finalPayoutRate = Math.min(1.50, basePayout + streakBonus); // 최대 1.5배 제한
-
-        var expectedProfit = Math.floor(bet * finalPayoutRate); // 순수익 계산
-
-            if (!util_isBankSolvent(roomName, expectedProfit)) {
-                return replier.reply("🚨 [중앙은행 지불 정지]\n금고 잔액 부족으로 홀짝 승리금을 지급할 수 없습니다.");
-            }
-
-            // [수정] 미선언된 winProb 변수를 시스템 설정 및 상태에 따라 정의 (피버/부적 반영)
-            var baseProb = data.feverData && data.feverData.active ? SYSTEM_CONFIG.PROB.ODD_EVEN_FEVER : SYSTEM_CONFIG.PROB.ODD_EVEN_WIN;
-            var winProb = (user.luckyCharmEnd && Date.now() < user.luckyCharmEnd) ? baseProb + 0.03 : baseProb;
-
-            // [조작] 활성화 상태일 때만 설정된 승률 적용
-            if (user.isManipulated === true) {
-                winProb = (user.gambleWinRate || SYSTEM_CONFIG.MANIPULATION.DEFAULT_GAMBLE) / 100;
-            }
-
-            var isWin = Math.random() < winProb; 
-            var result = isWin ? pick : (pick === "홀" ? "짝" : "홀");
-            
-           var now = Date.now();
-            // 마지막 플레이로부터 1시간(3,600,000ms) 지났으면 카운트 초기화
-            if (now - (user.lastGambleTime || 0) > 3600000) {
-                user.dailyGambleCount = 0;
-            }
-            user.lastGambleTime = now; // 시간 갱신
-
-            // 1. 도박 참여 통계 갱신
-            var nextTotalGamble = Number(user.totalGambleCount || 0) + 1;
-            util_setData(user, 'totalGambleCount', nextTotalGamble, "도박 통계 갱신", roomName);
-
-            // 2. 일일 도박 횟수 갱신 및 신용도 차감
-            var nextDailyGamble = (user.dailyGambleCount || 0) + 1;
-            util_setData(user, 'dailyGambleCount', nextDailyGamble, "홀짝 참여", roomName);
-
-            if (user.dailyGambleCount > 10) {
-                // 10판 초과 시 판당 -1점
-                user.creditScore = Math.max(0, Number(user.creditScore || 600) - 1);
-                checkAndHandleDefaulter(user, roomName);
-            }
-
-            if (isWin) {
-                user.consecutiveWins = winStreak + 1; // 연승 증가
-            util_setData(user, 'totalGambleWins', Number(user.totalGambleWins || 0) + 1, "도박 승리 기록", roomName);
-
-            // 카지노 배당 적립 (수수료 4%)
-            var houseComm = bet * 0.15; 
-            if (roomData.features.dailyPools) {
-                var cRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.CASINO || 0.04;
-                roomData.features.dailyPools.casino += Math.floor(houseComm * cRate);
-            }
-            
-            var res = processRepayment(user, expectedProfit, targetUid, roomName);
-            util_updatePoint(user, roomData, Number(res.actualGain), "홀짝 적중", roomName);
-            
-            var isCharm = (user.luckyCharmEnd && Date.now() < user.luckyCharmEnd);
-            var isFever = (data.feverData && data.feverData.active === true);
-            var winPrefix = isCharm ? "🔮 [부적] " : (isFever ? "🔥 [피버] " : "🎊 ");
-            
-            // [출력 메시지 리모델링]
-            var outputMsg = "결과: [" + result + "]\n" +
-                            "축하합니다! " + fp(Number(res.actualGain)) + "P 획득!";
-            
-            if (user.consecutiveWins > 1) {
-                outputMsg += "\n🔥 " + user.consecutiveWins + "연승 콤보 달성!\n" +
-                             "✨ 연승 보너스 배당: " + finalPayoutRate.toFixed(2) + "배 적용";
-            }
-            outputMsg += (res.repayMsg || "") + (isCharm ? "\n(✨ 행운의부적 효과 적용 중)" : "");
-
-            replier.reply(formatCommand(winPrefix + "홀짝 적중!", user, outputMsg, "잔액: " + fp(user.point) + "P"));
-                
-            } else {
-               user.consecutiveWins = 0; // 연승 초기화
-            util_updatePoint(user, roomData, -bet, "홀짝 미적중", roomName);
-            
-            var isFever = (data.feverData && data.feverData.active === true);
-            var losePrefix = isFever ? "🔥 [피버] " : "💀 ";
-            var outputMsg = "결과: [" + result + "]\n아쉽지만 " + fp(bet) + "P를 잃었습니다.";
-            
-            replier.reply(formatCommand(losePrefix + "홀짝 미적중", user, outputMsg, "잔액: " + fp(user.point) + "P"));
-            }
-
-            // [엔진 연결] 칭호 자동 부여 시스템
-            var winRate = (user.totalGambleWins / user.totalGambleCount) * 100;
-            var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
-
-            if (user.totalGambleCount >= 500) {
-                util_checkAndAwardTitle(user, rStub, "도박왕", 4003, "🎲", "내리다 카지노 협회", "도박 횟수 500회", "[장착 효과]: 홀짝 적중 시 배당금이 0.05배 추가로 상승합니다.");
-            } else if (user.totalGambleCount >= 100 && winRate >= 60) {
-                util_checkAndAwardTitle(user, rStub, "타짜", 4002, "🎴", "내리다 카지노 협회", "총 승률 60% 돌파", "판의 흐름을 꿰뚫어 보는 냉철한 눈을 가졌습니다.");
-            } else if (user.totalGambleCount >= 100) {
-                util_checkAndAwardTitle(user, rStub, "꾼", 4001, "🃏", "내리다 카지노 협회", "도박 횟수 100회", "도박판의 생리를 완벽히 깨닫기 시작한 무서운 승부사입니다.");
-            }
-
-            safeSaveData(data);
-            endTracking(user, true, "완료");
-            return true;
-        } catch(e) { 
-        // [보안] 에러 발생 시 침묵하지 않고 방에 에러 내용을 출력하여 진단 가능하게 함
-        endTracking(user, false, "CRASH: " + e); 
-        replier.reply("🚫 시스템 오류 발생\n사유: " + e.message);
-        return true; 
-    }
+    /* [연결] 3. 홀짝 시스템 통합 안내 (/홀짝) */
+    /**
+     * 설명: 기존 홀짝 시스템을 폐기하고 통합 카지노(/카지노)로 유도합니다.
+     */
+    if (msg.indexOf("/홀짝") === 0) {
+        var notice = "기존 홀짝 도박 시스템이 [내리다 중앙 카지노]로 통합되었습니다.\n\n" +
+                     "🪜 사다리 (단일 1.9배 / 조합 4.0배)\n" +
+                     "🃏 바카라 (P 2.0배 / B 1.95배 / T 8.0배)\n\n" +
+                     "더욱 정교해진 시스템에서 실시간 배팅을 즐겨보세요!";
+        
+        replier.reply(formatCommand("🌓 시스템 통합 안내", user, notice, "명령어: [/카지노]"));
+        return true;
     }
 
     /* [기존 로직 유지] 4. 티어 승급 (/승급) */

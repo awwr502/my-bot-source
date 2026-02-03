@@ -8141,85 +8141,88 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
     /* [v11.5] 6대 핵심 랜드마크 실시간 배당 현황 조회 (문법 완전 수정본) */
    if (msg === "/배당현황") {
         var roomData = data.rooms[roomName];
-        // 00시에 0으로 리셋되는 dailyPools를 참조하여 정확한 현황 출력
-        var dbPools = roomData.features.dailyPools || { mine: 0, fish: 0, casino: 0, bank: 0, shop: 0, race: 0 };
-        var pools = JSON.parse(JSON.stringify(dbPools));
-        try {
-            var logContent = FileStream.read(JOURNAL_PATH);
-            if (logContent) {
-                var logs = logContent.split("\n");
-                logs.forEach(function(line) {
-                    var p = line.split("|");
-                    if (p.length < 5 || p[1] !== roomName) return;
-                    var amt = Math.abs(Number(p[2]));
-                    var reason = p[4];
-                    if (reason.indexOf("광산") !== -1) pools.mine += Math.floor(amt * rates.MINE);
-                    else if (reason.indexOf("낚시") !== -1) pools.fish += Math.floor(amt * rates.FISH);
-                    else if (reason.indexOf("미적중") !== -1) pools.casino += Math.floor(amt * rates.CASINO);
-                    else if (reason.indexOf("이자") !== -1) pools.bank += Math.floor(amt * rates.BANK);
-                    else if (reason.indexOf("상점") !== -1) pools.shop += Math.floor(amt * rates.SHOP);
-                    else if (reason.indexOf("배팅") !== -1) pools.race += Math.floor(amt * rates.RACING);
-                });
-            }
-        } catch(e) { Log.error("Dividend Scan Error: " + e); }
+        // [교정 1] 중복 합산 방지를 위해 0P부터 새로 집계 (로그 기반 재구성)
+    var pools = { mine: 0, fish: 0, casino: 0, bank: 0, shop: 0, race: 0 };
+    var rates = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES; // rates 변수 선언 (참조 오류 해결)
+    var nowTs = Date.now();
 
-        // 2. [광산 가집계 연동] 현재 종료 안 하고 채굴 중인 유저들의 예상 수익 실시간 합산
-        var pendingMineEarn = 0;
-        var nowTs = Date.now();
-        var pol = util_getActivePolicy(roomData);
-        var mineMult = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
+    try {
+        var logContent = FileStream.read(JOURNAL_PATH);
+        if (logContent) {
+            var logs = logContent.split("\n");
+            logs.forEach(function(line) {
+                var p = line.split("|");
+                // 오늘 발생한 해당 방의 로그만 필터링
+                if (p.length < 5 || p[1] !== roomName) return;
+                
+                var amt = Math.abs(Number(p[2]));
+                var reason = p[4];
+                
+                // 각 카테고리별 활동 적립금 재계산
+                if (reason.indexOf("광산") !== -1) pools.mine += Math.floor(amt * rates.MINE);
+                else if (reason.indexOf("낚시") !== -1) pools.fish += Math.floor(amt * rates.FISH);
+                else if (reason.indexOf("미적중") !== -1) pools.casino += Math.floor(amt * rates.CASINO);
+                else if (reason.indexOf("이자") !== -1) pools.bank += Math.floor(amt * rates.BANK);
+                else if (reason.indexOf("상점") !== -1) pools.shop += Math.floor(amt * rates.SHOP);
+                else if (reason.indexOf("배팅") !== -1) pools.race += Math.floor(amt * rates.RACING);
+            });
+        }
+    } catch(e) { Log.error("Dividend Scan Error: " + e); }
 
-        /* [기대값 엔진] 광물 발견 확률을 포함한 평균 수익 배율 산출 */
-        var mCfg = SYSTEM_CONFIG.ECO.MINE;
-        // 평균적으로 1분당 기본급의 몇 배를 버는지 계산 (확률 * (배율-1))
-        var expectedBonusMult = 1 + 
-            (mCfg.COPPER_PROB * (mCfg.COPPER_MULT - 1)) + 
-            (mCfg.GOLD_PROB * (mCfg.GOLD_MULT - 1)) + 
-            (mCfg.DIA_PROB * (mCfg.DIA_MULT - 1));
+    // 2. [광산 가집계 연동] 현재 채굴 중인 유저의 미정산 수익 실시간 합산
+    var pendingMineEarn = 0;
+    var pol = util_getActivePolicy(roomData);
+    var mineMult = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
+    var mCfg = SYSTEM_CONFIG.ECO.MINE;
 
-        for (var uid in roomData.users) {
-            var u = roomData.users[uid];
-            if (u.mining && u.mining.active === true) {
-                var mDuration = Math.floor((nowTs - u.mining.startTime) / 60000);
-                if (mDuration >= 1) {
-                var baseEarn = mDuration * mCfg.BASE_PER_MIN * mineMult;
-                    pendingMineEarn += Math.floor(baseEarn * expectedBonusMult);
-              }
+    // 광물 기대값 반영 (평균 수익 배율)
+    var expMult = 1 + (mCfg.COPPER_PROB * (mCfg.COPPER_MULT-1)) + (mCfg.GOLD_PROB * (mCfg.GOLD_MULT-1)) + (mCfg.DIA_PROB * (mCfg.DIA_MULT-1));
+
+    for (var uid in roomData.users) {
+        var u = roomData.users[uid];
+        if (u.mining && u.mining.active === true) {
+            var mDur = Math.floor((nowTs - u.mining.startTime) / 60000);
+            if (mDur >= 1) {
+                pendingMineEarn += Math.floor(mDur * mCfg.BASE_PER_MIN * mineMult * expMult);
             }
         }
-        // 미정산 수익의 1%(설정치)를 mine 주머니에 실시간 가산
-        pools.mine += Math.floor(pendingMineEarn * rates.MINE);
+    }
+    pools.mine += Math.floor(pendingMineEarn * rates.MINE);
 
-        // 3. [출력 엔진] targets 배열 정의 및 리포트 조립
-        var targets = [
-            { name: "광산", key: "mine", icon: "⛏️" },
-            { name: "낚시터", key: "fish", icon: "🎣" },
-            { name: "카지노", key: "casino", icon: "🎰" },
-            { name: "중앙은행", key: "bank", icon: "🏦" },
-            { name: "백화점", key: "shop", icon: "🏢" },
-            { name: "경마장", key: "race", icon: "🏇" }
-        ].sort(function(a, b) { return a.name.localeCompare(b.name); });
+    var targets = [
+        { name: "광산", key: "mine", icon: "⛏️" },
+        { name: "낚시터", key: "fish", icon: "🎣" },
+        { name: "카지노", key: "casino", icon: "🎰" },
+        { name: "중앙은행", key: "bank", icon: "🏦" },
+        { name: "백화점", key: "shop", icon: "🏢" },
+        { name: "경마장", key: "race", icon: "🏇" }
+    ].sort(function(a, b) { return a.name.localeCompare(b.name); });
 
-        var report = [];
-        targets.forEach(function(t) {
-            var basis = Number(pools[t.key] || 0); 
-            var landData = data.landmarkMarket[t.name];
-            var curPrice = landData ? Number(landData.price) : 0;
-            
-            // 상수 기반 배당금 계산 (2.5% + 10%)
-            var marketPart = Math.floor(curPrice * SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE);
-            var activityPart = Math.floor(basis * SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO);
-            var totalDividend = marketPart + activityPart;
+    var report = [];
+    targets.forEach(function(t) {
+        var basis = Number(pools[t.key] || 0); 
+        var landData = data.landmarkMarket[t.name];
+        var curPrice = landData ? Number(landData.price) : 0;
+        
+        // 배당금 산출: (시세배당 7.5%) + (활동적립금 10%)
+        var marketPart = Math.floor(curPrice * SYSTEM_CONFIG.ECO.MARKET_DIVIDEND_RATE);
+        var activityPart = Math.floor(basis * SYSTEM_CONFIG.ECO.DIVIDEND_PAYOUT_RATIO);
+        var totalDividend = marketPart + activityPart;
 
-            // 최대주주 탐색
-            var ownerName = "⚠️ 주인 없음";
-            var owner = util_getMajorityOwner(roomData, t.name);
-            if (owner && owner.data) {
-                ownerName = "👑 " + getDisplayName(owner.data) + " (" + owner.qty + "지분)";
-            }
+        var ownerName = "⚠️ 주인 없음";
+        var finalDividend = totalDividend;
+        var owner = util_getMajorityOwner(roomData, t.name);
 
-            report.push(t.icon + " " + t.name + "\n  💰 예상 수령액: " + fp(totalDividend) + "P\n  👤 현재 주주: " + ownerName);
-        });
+        if (owner && owner.data) {
+            ownerName = "👑 " + getDisplayName(owner.data) + " (" + owner.qty + "지분)";
+            // [교정 2] 지분 보너스 배율 적용 (5지분 초과 시 1지분당 +0.2배)
+            var shareMult = owner.qty > 5 ? 1.0 + (owner.qty - 5) * 0.2 : 1.0;
+            finalDividend = Math.floor(totalDividend * shareMult);
+            if (owner.data.title === "갓물주") finalDividend = Math.floor(finalDividend * 1.1);
+        }
+
+        report.push(t.icon + " " + t.name + "\n  💰 예상 수령액: " + fp(finalDividend) + "P\n  👤 현재 주주: " + ownerName);
+    });
         var header = "📊 실시간 랜드마크 배당 현황\n" + 
                      "━━━━━━━━━━━━━━━\n" +
                      "※ 오늘 누적된 수익을 바탕으로 계산된 예상치입니다.";

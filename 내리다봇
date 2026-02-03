@@ -631,8 +631,29 @@ function verifyPointTransaction(user, prePoint, changeAmount, reason, roomName, 
         if (actual !== expected) {
             var errorMsg = "[" + new Date().toLocaleString() + "] [불일치] " + (user.name||"") + ": " + reason + " (예상:" + fp(expected) + "/실제:" + fp(actual) + ")\n";
             FileStream.append(ERROR_LOG_PATH, errorMsg);
-            try { Api.replyRoom("내리다", "⚠️ 포인트 불일치 발생\n" + errorMsg); } catch(e){}
-            user.lastAction = { cmd: reason, status: "FAIL", amount: changeAmount, time: Date.now(), msg: "데이터 불일치" };
+            // [개별 유저 롤백]: 연산 오류 감지 시 해당 유저의 데이터만 안전 지점으로 되돌림
+            var db = getDatabase();
+            var safeUser = null;
+            for (var r in db.rooms) { 
+                if (db.rooms[r].users[user.uid]) { 
+                    safeUser = db.rooms[r].users[user.uid]; 
+                    break; 
+                } 
+            }
+            
+            if (safeUser) {
+                var roomData = db.rooms[roomName || "내리다"];
+                if (roomData) {
+                    // 문제가 된 유저 객체만 백업본으로 통째로 교체 (전체 롤백)
+                    roomData.users[user.uid] = JSON.parse(JSON.stringify(safeUser)); 
+                }
+            }
+            
+            try { 
+                Api.replyRoom(roomName || "내리다", "🛡️ [데이터 무결성 가드] " + (user.name || "유저") + "님의 자산 연산 오류를 감지하여 해당 유저 데이터를 롤백했습니다."); 
+            } catch(e){}
+            
+            user.lastAction = { cmd: reason, status: "FAIL", amount: changeAmount, time: Date.now(), msg: "데이터 불일치 및 롤백" };
         } else {
             if (roomName) {
                 logLock.lock();

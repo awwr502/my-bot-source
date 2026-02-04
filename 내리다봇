@@ -1851,6 +1851,23 @@ function util_getMajorityOwner(roomData, landName) {
     return topOwnerId ? { id: topOwnerId, data: roomData.users[topOwnerId], qty: maxQty } : null;
 }
 
+/**
+ * [신규] 전 구역 특정 건물의 총 지분 합계 계산 (Global)
+ * 설명: 모든 방의 유저 데이터를 뒤져 특정 건물의 발행된 총 지분 수를 합산합니다.
+ */
+function util_getTotalShares(landName, data) {
+    var total = 0;
+    if (!data || !data.rooms) return 0;
+    for (var r in data.rooms) {
+        var room = data.rooms[r];
+        if (!room.users) continue;
+        for (var u in room.users) {
+            total += Number((room.users[u].landHoldings || {})[landName] || 0);
+        }
+    }
+    return total;
+}
+
 //==========섹터8==========
 
 /**
@@ -2792,17 +2809,6 @@ function generateLandmarkList(data, roomName) {
     var keys = Object.keys(data.landmarkMarket || {});
     if (keys.length === 0) return null;
 
-    // [Gemini] 전 구역 특정 건물의 총 지분 합계 계산 함수
-    var getTotalShares = function(landName) {
-        var total = 0;
-        for (var r in data.rooms) {
-            for (var u in data.rooms[r].users) {
-                total += Number((data.rooms[r].users[u].landHoldings || {})[landName] || 0);
-            }
-        }
-        return total;
-    };
-
     // 타입별 우선순위 정의 (낮을수록 상단)
     var getTypePriority = function(name) {
         var fixed = ["광산", "낚시터", "카지노", "중앙은행", "백화점", "경마장"];
@@ -2848,11 +2854,10 @@ function generateLandmarkList(data, roomName) {
         var displayPrice = Number(landmark.price);
         var statusInfo = "";
 
-        if (landmark.type === "normal") {
-            // [랜드마크 전용] 실시간 지분가 계산: 기본가 + (총지분 * (기본가 * 5%))
-            var totalShares = getTotalShares(name);
-            displayPrice = fixCfg.BASE_PRICE + (totalShares * (fixCfg.BASE_PRICE * fixCfg.PER_SHARE_RATE));
-            statusInfo = " (총 " + totalShares + "지분)";
+        // [랜드마크 전용] 전역 유틸리티 함수(util_getTotalShares)를 사용하여 실시간 지분가 계산
+            var totalShares = util_getTotalShares(name, data);
+            displayPrice = fixCfg.BASE_PRICE + (totalShares * (fixCfg.BASE_PRICE * fixCfg.PER_SHARE_RATE));
+            statusInfo = " (총 " + totalShares + "지분)";
         } else {
             // [비즈니스/상가] 기존 주식형 등락 표시 유지
             var diff = displayPrice - Number(landmark.lastPrice);
@@ -10670,6 +10675,8 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
         var keys = Object.keys(holdings);
         var title = "🏘️ " + getDisplayName(user) + "의 소유 부동산";
 
+        var fixCfg = SYSTEM_CONFIG.ECO.LANDMARK.FIXED_POLICY; // 고정가 정책 설정 로드
+
         if (keys.length === 0) {
             replier.reply(formatCommand(title, null, "보유 중인 부동산 지분이 없습니다.", "투자: [/투자 건물명 수량]"));
             return true;
@@ -10686,7 +10693,18 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
 
             var landmark = data.landmarkMarket[lName];
             var isDemolished = !landmark; 
-            var curPrice = isDemolished ? 0 : Math.floor(Number(landmark.price));
+            
+            // [가격 동기화 핵심] 타입에 따른 실시간 시세 계산
+            var curPrice = 0;
+            if (!isDemolished) {
+                if (landmark.type === "normal") {
+                    // 전역 함수를 통해 실시간 발행 지분 총합을 가져와 가격 산출
+                    var totalShares = util_getTotalShares(lName, data);
+                    curPrice = fixCfg.BASE_PRICE + (totalShares * (fixCfg.BASE_PRICE * fixCfg.PER_SHARE_RATE));
+                } else {
+                    curPrice = Math.floor(Number(landmark.price));
+                }
+            }
             var avgPrice = Math.floor(Number(user.landAvg[lName] || 0));
             
             var purchaseVal = Math.floor(avgPrice * count);
@@ -10749,9 +10767,9 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
         var fixCfg = SYSTEM_CONFIG.ECO.LANDMARK.FIXED_POLICY;
 
         if (landmark.type === "normal") {
-            /* [랜드마크 전용] 점진적 가격 상승 매입 공식 적용 */
-            var currentGlobalShares = getTotalShares(sName);
-            var unitIncr = fixCfg.BASE_PRICE * fixCfg.PER_SHARE_RATE; // 지분당 상승액 (10,000P)
+            /* [참조 오류 해결] 전역 함수 util_getTotalShares 호출 */
+            var currentGlobalShares = util_getTotalShares(sName, data);
+            var unitIncr = fixCfg.BASE_PRICE * fixCfg.PER_SHARE_RATE; 
 
             for (var i = 0; i < count; i++) {
                 // 한 지분을 살 때마다 가격이 unitIncr만큼 상승한 값을 누적
@@ -10856,9 +10874,9 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
         var landmark = data.landmarkMarket[sName];
         var sellUnitPrice = 0;
         if (landmark && landmark.type === "normal") {
-            /* [랜드마크 전용] 현재 전 서버 지분가 기준 매각 */
+            /* [랜드마크 전용] 현재 전 서버 지분가 기준 매각 (전역 함수 적용) */
             var fixCfg = SYSTEM_CONFIG.ECO.LANDMARK.FIXED_POLICY;
-            var totalShares = getTotalShares(sName);
+            var totalShares = util_getTotalShares(sName, data);
             sellUnitPrice = fixCfg.BASE_PRICE + (totalShares * (fixCfg.BASE_PRICE * fixCfg.PER_SHARE_RATE));
         } else {
             /* [비즈니스/상가] 현재 시장가 기준 매각 */

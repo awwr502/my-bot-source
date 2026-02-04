@@ -5979,6 +5979,28 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
+        // [수정] 이름 확정 시점에 잔액 확인 및 후불 결제 진행
+        var cost = 0;
+        
+        // 1. 이전 단계(상점)에서 넘겨준 가격이 있으면 그대로 사용
+        if (state.extra && state.extra.price) {
+            cost = state.extra.price;
+        } 
+        // 2. 만약 데이터가 유실됐다면 현재 물가 배율을 적용해 재계산 (기본가 50만P)
+        else {
+            var multiplier = util_getEcoMultiplier(roomName);
+            cost = Math.floor(500000 * multiplier);
+        }
+        
+        if (Number(user.point) < cost) {
+            delete bankProcessState[targetUid];
+            replier.reply(formatError(user, "결제 실패", "변경 비용(" + fp(cost) + "P)이 부족하여 취소되었습니다."));
+            return true;
+        }
+
+        // 여기서 최종 차감
+        util_updatePoint(user, roomData, -cost, "선박 이름 변경 비용", roomName);
+
         user.shipName = msg;
         delete bankProcessState[targetUid];
         replier.reply(formatCommand("🚢 선박 명명식 완료", user, "축하합니다! 새로운 선박의 이름이\n[" + msg + "](으)로 결정되었습니다!", "무역 현황: [/무역]"));
@@ -6066,7 +6088,11 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
                         delete bankProcessState[targetUid];
                         replier.reply(formatError(user, "중복 소유", "이미 보유 중인 아이템입니다."));
                     } else {
-                        if (!isUsingTicket) util_updatePoint(user, roomData, -finalPrice, "상점 구매: " + item.name, roomName);
+                        var isDelayedBilling = (item.effect === "ship_rename");
+
+                        if (!isUsingTicket && !isDelayedBilling) {
+                            util_updatePoint(user, roomData, -finalPrice, "상점 구매: " + item.name, roomName);
+                        }
                         delete bankProcessState[targetUid];
                         if (typeof _handleShopEffect === 'function') _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket, 1);
                     }
@@ -7742,7 +7768,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
 
     // 6. 선박 이름변경권 효과 처리
     if (item.effect === "ship_rename") {
-        bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now() };
+        bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now(), extra: { price: finalPrice } };
         replier.reply(formatCommand("📝 선박 이름 변경", user, "새로운 선박의 이름을 입력해주세요.\n(2~8자, 특수문자 불가)", "취소: [취소]"));
     }
 

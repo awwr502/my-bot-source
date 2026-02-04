@@ -4885,6 +4885,23 @@ if (!data) return;
 var roomData = data.rooms[roomName] || { users: {} };
 data.rooms[roomName] = roomData;
 
+/ [1:1 채팅방 전용] '내리다' 메인 방 데이터 강제 연동 (Ghost Sync)
+// 설명: 허용된 방 목록에 없는 1:1 방일 경우, 무조건 '내리다' 방에서 유저를 찾아 연결합니다.
+if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+    var mainRoomData = data.rooms["내리다"];
+    if (mainRoomData && mainRoomData.users) {
+        for (var mUid in mainRoomData.users) {
+            // 이름이 정확히 일치하는 유저를 메인 방에서 탐색
+            if (mainRoomData.users[mUid].name.trim() === cleanSender.trim()) {
+                // 1:1 방의 변수들이 메인 방의 객체를 가리키도록 참조 변경
+                targetUid = mUid;        // UID를 메인 방의 것으로 교체
+                roomData = mainRoomData; // [핵심] 현재 참조하는 방 데이터를 '내리다'로 변경
+                break;
+            }
+        }
+    }
+}
+
 // 2. [신분 복구] 식별 실패 시 영구 명부(Registry) 대조 (데이터 부활)
 var isIdentityRecovered = false; // 변수 초기화 (에러 방지 핵심)
 
@@ -10021,7 +10038,19 @@ function _handleGameLogic(msg, user, data, replier, roomName, targetUid, sender)
  * 설명: 메뉴 UI에 기부 항목을 추가하고, 상환 시 중앙은행 재고로 환수되도록 연동함.
  */
 function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
+    var targetRoomData = null;
+    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+        var linkedRoom = data.rooms["내리다"];
+        if (linkedRoom) {
+            targetRoomData = linkedRoom;
+        } else {
+            return false; // 메인 방 데이터가 없으면 중단
+        }
+    } else {
+        targetRoomData = data.rooms[roomName];
+    }
+    
+    var roomData = targetRoomData; // 변수명 통일
     if (!roomData || !roomData.features) return false;
 
     // [상태 로컬라이징] 전역 변수 대신 방별 독립 상태 참조
@@ -10030,7 +10059,8 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
 
     /* [기능 1] 은행 시스템 진입 (v5.2 기부 메뉴 추가) */
     if (msg === "/은행") {
-        var cr = getCreditInfo(user.creditScore, roomName); 
+        var crTargetRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+        var cr = getCreditInfo(user.creditScore, crTargetRoom);
         
         menuWaitState[targetUid] = { type: 'bank_menu', time: Date.now() };
 
@@ -10078,12 +10108,14 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
             return true; 
         }
         
-        // 분산 상환 로직 호출 (섹터 13 정의)
-        var res = distributeRepayment(user, amt, roomName);
-        
-        /* [중앙은행 연동] 통합 포인트 함수 사용 */
-        // 유저 포인트 차감과 동시에 차감된 금액(res.actualRepay)이 bankReserve에 자동 입금됨.
-        util_updatePoint(user, roomData, -Number(res.actualRepay), "대출 상환", roomName);
+        // 분산 상환 로직 호출 (섹터 13 정의) - 메인 방 기준으로 신용점수 계산
+        var targetRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+        var res = distributeRepayment(user, amt, targetRoomName);
+        
+        /* [중앙은행 연동] 통합 포인트 함수 사용 */
+        // 유저 포인트 차감과 동시에 차감된 금액(res.actualRepay)이 bankReserve에 자동 입금됨.
+        // 로그 기록 시 1:1 방 이름이 아닌 실제 메인 방 이름으로 기록되게 함
+        util_updatePoint(user, roomData, -Number(res.actualRepay), "대출 상환", targetRoomName);
         
         var remainingDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
         replier.reply(formatCommand("📉 상환 완료", user, fp(res.actualRepay) + "P 상환되었습니다.\n(신용 점수 +" + res.creditGain + ")", "남은 대출: " + fp(remainingDebt) + "P / 잔액: " + fp(user.point) + "P"));
@@ -10103,7 +10135,20 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
  * 수정 사항: 도굴왕 달성 시 특별 축하 멘트 적용 및 유물 도감 UI 최종 최적화
  */
 function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
+    // [1:1 연동 핵심] 데이터 소스 리다이렉트
+    var targetRoomData = null;
+    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+        var linkedRoom = data.rooms["내리다"];
+        if (linkedRoom) {
+            targetRoomData = linkedRoom;
+        } else {
+            return false;
+        }
+    } else {
+        targetRoomData = data.rooms[roomName];
+    }
+    
+    var roomData = targetRoomData; // 변수명 통일
 
     // 1. 방 데이터 및 기능 템플릿 존재 여부 체크 (안전 가드)
     if (!roomData || !roomData.features) return false;
@@ -10174,7 +10219,8 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
 
     /* [기능 3] 내 정보 조회 */
     if (msg === "/내정보") {
-        var cr = getCreditInfo(user.creditScore);
+        var crTargetRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+        var cr = getCreditInfo(user.creditScore, crTargetRoom);
         var authInfo = "🎮 게임 인증: " + (user.gameAuthCount || 0) + "/2 (시즌)";
         
         var bankDebt = (user.loan && user.loan.debt) ? Math.floor(Number(user.loan.debt)) : 0;
@@ -10278,14 +10324,16 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
     /* [기능 4] 신용 등급 및 대출 한도 조회 */
     if (msg === "/신용등급" || msg === "/대출한도") {
         // 1. 섹터 10의 통합 엔진 호출 (이미 승수와 신불자가 계산되어 있음)
-        var limitTable = getCreditLimitTable(roomName);
-        var cr = getCreditInfo(user.creditScore, roomName);
-        
-        // 2. 현재 시장 승수 확인 (메시지 상단 상태 표시용)
-        var dynMult = 1.0;
-        if (typeof util_getDynamicRateMultiplier === 'function') {
-            dynMult = util_getDynamicRateMultiplier(roomName);
-        }
+        // [수정] 강제로 '내리다' 방 기준 계산
+        var targetRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+        var limitTable = getCreditLimitTable(targetRoomName);
+        var cr = getCreditInfo(user.creditScore, targetRoomName);
+        
+        // 2. 현재 시장 승수 확인 (메시지 상단 상태 표시용)
+        var dynMult = 1.0;
+        if (typeof util_getDynamicRateMultiplier === 'function') {
+            dynMult = util_getDynamicRateMultiplier(targetRoomName);
+        }
 
         // 3. 시장 상황 텍스트 판별
         var marketStatus = "🟢 경제 안정";

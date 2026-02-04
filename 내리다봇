@@ -4698,40 +4698,51 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                     }
                 }
 
-                // [Patch 1: 계정 연동] 1:1 채팅방일 경우, 메인방("내리다")의 유저 데이터 강제 로드
+               // 1:1 채팅방일 경우, 시스템이 참조하는 '방 데이터(roomData)' 자체를 메인방으로 바꿔치기합니다.
                 if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-                    var mainRoom = data.rooms["내리다"];
-                    if (mainRoom && mainRoom.users) {
-                        // 메인방 유저 리스트에서 닉네임이 일치하는 유저 탐색
-                        for (var mUid in mainRoom.users) {
-                            if (mainRoom.users[mUid].name === cleanSender) {
-                                user = mainRoom.users[mUid]; // 유저 객체 교체 (메인방 데이터 사용)
-                                targetUid = mUid;            // UID도 메인방 것으로 교체
+                    var mainTargetRoom = "내리다"; // 메인방 이름 (정확해야 함)
+                    var mainRoomData = data.rooms[mainTargetRoom];
+                    
+                    if (mainRoomData && mainRoomData.users) {
+                        // 메인방 유저 리스트에서 내 닉네임과 똑같은 사람 찾기
+                        var foundMainUser = null;
+                        var foundMainUid = null;
+
+                        for (var mUid in mainRoomData.users) {
+                            // 공백 제거 후 비교 (닉네임 실수 보정)
+                            if (mainRoomData.users[mUid].name.trim() === cleanSender.trim()) {
+                                foundMainUser = mainRoomData.users[mUid];
+                                foundMainUid = mUid;
                                 break;
                             }
+                        }
+
+                        // [핵심] 찾았으면 현재 실행 컨텍스트의 데이터를 메인방 것으로 교체
+                        if (foundMainUser) {
+                            user = foundMainUser;        // 유저 객체 교체
+                            targetUid = foundMainUid;    // UID 교체
+                            roomData = mainRoomData;     // [중요] 방 장부 자체를 메인방으로 교체!
+                            
+                            // 봇에게 "지금 다루는 방은 '내리다' 방이다"라고 속임 (단, 답장은 1:1방으로 감)
+                            // (주의: roomName 변수는 답장 경로로 쓰이므로 놔두고, 데이터 참조용 roomData만 바꿈)
                         }
                     }
                 }
 
                 // [Patch 2: 1:1 전용 화이트리스트 가드]
-                // (내정보, 카지노, 은행 및 진행 중인 게임 입력만 허용, 나머지는 무시)
+                // (기존: 내정보, 카지노, 은행) + [추가: 연동진단, 관리자]
                 if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
                     var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/관리자"));
                     
-                    // 현재 카지노나 은행 로직을 진행 중인지 확인 (진행 중이면 입력 허용)
                     var inState = false;
-                    
-                    // 1:1 방의 상태(state) 확인
+                    // roomData가 위에서 메인방으로 교체되었으므로, 메인방의 상태를 체크하게 됨 (정상)
                     if (roomData.features && roomData.features.states) {
                         var rStates = roomData.features.states;
-                        // targetUid는 위에서 메인방 ID로 교체되었을 수 있으므로 해당 ID로 상태 체크
                         if (rStates.menuWait && rStates.menuWait[targetUid]) inState = true;
                         if (rStates.bankProcess && rStates.bankProcess[targetUid]) inState = true;
-                        // 블랙잭 상태는 user 객체(메인방 user) 내부에 저장됨
                         if (user && user.blackjackState) inState = true;
                     }
 
-                    // 허용된 명령어도 아니고, 진행 중인 상태도 아니라면 -> 무응답 차단 (return)
                     if (!isAllowedCmd && !inState) return;
                 }
 

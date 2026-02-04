@@ -11888,45 +11888,56 @@ function _showVoyageStatus(user, replier, data, roomName) {
         var eSnap = v.ecoMultSnapshot || 1.0; 
         var pByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
 
-        // 1. [Snapshot] 저장된 데이터를 그대로 꺼내 정산 공식 대입
-        var cSnap = v.cargoSnapshot || user.cargo || {};
-        for (var g in cSnap) {
-            var qty = Number(cSnap[g]); if (qty <= 0) continue;
-            
-            // 매입가 계산 (평단가 없으면 출항 시점 시세로 보정)
-            var uCost = Number((user.cargoAvg && user.cargoAvg[g]) || (cfg.GOODS_COST[g] * eSnap));
-            tCost += (uCost * qty);
-            
-            // 정산 엔진 판매가 공식 그대로 복제
-            var rInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.25, norm: 1.05, hate: 0.8 };
-            var mult = (g === pByDest) ? 0.5 : (g === nSnap.favorite ? rInfo.pref : (g === nSnap.hate ? rInfo.hate : rInfo.norm));
-            tRev += Math.floor(((cfg.GOODS_COST[g] || 10000) * eSnap) * mult * qty);
-        }
-
-        // 2. 특산품 매출 합산
-        var sSnap = v.specialtySnapshot || user.specialties || {};
-        for (var s in sSnap) {
-            var sQty = Number(sSnap[s]); if (sQty <= 0) continue;
-            var pG = "";
-            for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === s) { pG = TRADE_RELATION[n].produce; break; } }
-            var sMult = (pG === pByDest) ? 0 : (pG === nSnap.favorite ? cfg.SPECIALTY_PROFIT : (pG === nSnap.hate ? 0.5 : 1.0));
-            tRev += Math.floor((cfg.SPECIALTY_COST[pG] || 10000) * sQty * sMult);
-        }
-
-        // 3. [최종 정산액] 정산 엔진과 동일하게 세금 10% 차감 후 수령액 산출
-        var finalReceipt = tRev - Math.floor(tRev * 0.1); 
-        var pureProfit = finalReceipt - tCost; 
-        var roi = tCost > 0 ? ((pureProfit / tCost) * 100).toFixed(1) : "0.0";
-
-        msg = "현재 [" + v.dest + "]로 항해 중\n\n" +
-              "💰 예상 수령액: " + fp(finalReceipt) + "P\n" +
-              "💵 순수익 기대: " + (pureProfit >= 0 ? "+" : "") + fp(pureProfit) + "P\n" +
-              "📈 기대 수익률: " + roi + "%\n\n" +
-              "🕒 남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
+        // 1. 일반 화물 예상 수익 계산 (정산 엔진 로직과 100% 동기화)
+    var cSnap = v.cargoSnapshot || user.cargo || {};
+    for (var g in cSnap) {
+        var qty = Number(cSnap[g]); if (qty <= 0) continue;
+        
+        // 매입 원가 계산 (출항 스냅샷 시점 기준)
+        var uCost = Number((user.cargoAvg && user.cargoAvg[g]) || (cfg.GOODS_COST[g] * eSnap));
+        tCost += (uCost * qty);
+        
+        // 판매 단가 결정 (정산 엔진 Profit_Rates 참조)
+        var rInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.25, norm: 1.05, hate: 0.8 };
+        var multiplier = 1.0;
+        
+        if (g === pByDest) multiplier = 0.5; // 자국 생산물 페널티 (반값)
+        else if (g === nSnap.favorite) multiplier = rInfo.pref;
+        else if (g === nSnap.hate) multiplier = rInfo.hate;
+        else multiplier = rInfo.norm;
+        
+        tRev += Math.floor(((cfg.GOODS_COST[g] || 10000) * eSnap) * multiplier * qty);
     }
-    
-    // 응답 대기가 종료될 것이므로 가이드 문구에서 (뒤로/처음으로)를 제거하여 깔끔하게 출력
-    replier.reply(formatCommand("📦 항해 현황", user, msg, "정산은 도착 후 채팅 입력 시 자동 수행됩니다."));
+
+    // 2. 특산품 예상 수익 계산
+    var sSnap = v.specialtySnapshot || user.specialties || {};
+    for (var s in sSnap) {
+        var sQty = Number(sSnap[s]); if (sQty <= 0) continue;
+        var pG = "";
+        for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === s) { pG = TRADE_RELATION[n].produce; break; } }
+        
+        var sMult = 1.0;
+        if (pG === pByDest) sMult = 0; // 자국 특산품 통관 거부
+        else if (pG === nSnap.favorite) sMult = cfg.SPECIALTY_PROFIT;
+        else if (pG === nSnap.hate) sMult = 0.5;
+        
+        tRev += Math.floor((cfg.SPECIALTY_COST[pG] || 10000) * sQty * sMult);
+    }
+
+    // 3. 최종 세후 수령액 및 순수익 산출 (10% 단일 무역세 적용)
+    var taxAmount = Math.floor(tRev * 0.1);
+    var finalReceipt = tRev - taxAmount; 
+    var pureProfit = finalReceipt - tCost; 
+    var roi = tCost > 0 ? ((pureProfit / tCost) * 100).toFixed(1) : "0.0";
+
+    var displayBody = "현재 [" + v.dest + "]로 항해 중\n\n" +
+                      "💰 예상 수령액: " + fp(finalReceipt) + "P\n" +
+                      "💵 순수익 기대: " + (pureProfit >= 0 ? "+" : "") + fp(pureProfit) + "P\n" +
+                      "📈 기대 수익률: " + roi + "%" +
+                      (v.isSmooth ? "\n\n🌬️ 순풍을 타고 예정보다 빠르게 도착 중!" : "") + "\n\n" +
+                      "🕒 남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
+
+    replier.reply(formatCommand("📦 항해 현황", user, displayBody, "정산은 도착 후 채팅 입력 시 자동 수행됩니다."));
 }
 
 /* [서브] 🛠️ 선박 관리 및 개조 */

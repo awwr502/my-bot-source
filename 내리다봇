@@ -4559,7 +4559,9 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
             var roomName = (realRoom === "베릭방") ? "내리다" : realRoom;
             var cleanSender = sender ? String(sender).trim() : ""; 
 
-            if (ALLOWED_ROOMS.indexOf(realRoom) === -1 || cleanSender === "오픈채팅봇") return;
+            // [수정] 허용된 단체방이 아니더라도, 1:1 채팅방(isGroupChat이 false)이면 통과시킵니다.
+            if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && isGroupChat === true) return;
+            if (cleanSender === "오픈채팅봇") return;
 
             // [Step 2] 순차 처리 엔진 가동
             LogicQueue.execute(new java.lang.Runnable({
@@ -12445,19 +12447,38 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
 /* [메인] 카지노 로직 진입점 */
 function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
-    var mState = roomData.features.states.menuWait;
+    // [핵심] 현재 접속한 방이 단체방인지 확인 (1:1 방에서만 구동되게 제한)
+    // 1:1 방은 보통 방 이름이 발송자 이름과 같거나 특수 구조를 가짐. 
+    // 여기서는 isGroupChat 여부를 알 수 없으므로 ALLOWED_ROOMS로 판단.
+    if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
+        var inviteBody = "중앙 카지노는 VIP 고객님의 보안과\n" +
+                         "쾌적한 환경을 위해 오직 [1:1 대화]를\n" +
+                         "통해서만 입장을 제한하고 있습니다.\n" +
+                         "입장 시 메인방 닉네임과 동일하게\n" +
+                         "맞춰주셔야 하며,\n\n" +
+                         "아래 비밀 통로(링크)를 통해 입장하여\n" +
+                         "/카지노 를 다시 입력해 주십시오.\n\n" +
+                         "🎫 [입장 링크]\n" +
+                         "https://open.kakao.com/me/nerida";
+
+        replier.reply(formatCommand("📨 VIP 전용 안내", user, inviteBody, "봇의 오픈프로필 1:1 채팅방에서 만나요!"));
+        return true;
+    }
+
+    // [중요] 1:1 방에는 판돈 데이터가 없으므로 메인 운영 방("내리다")의 데이터를 강제 참조
+    var MAIN_ZONE = "내리다";
+    var mainRoomData = data.rooms[MAIN_ZONE];
+    var mState = data.rooms[roomName].features.states.menuWait; // 입력 대기 상태는 현재 1:1방 유지
     
-    // 카지노 데이터 초기화 확인
-    if (!roomData.features.casino) {
-        roomData.features.casino = {
+    if (!mainRoomData.features.casino) {
+        mainRoomData.features.casino = {
             ladder: { round: 1, history: [], bets: {} },
             baccarat: { round: 1, history: [], bets: {} }
         };
     }
-    var casino = roomData.features.casino;
+    // 이제 모든 casino 변수는 '내리다' 방의 데이터를 가리킵니다.
+    var casino = mainRoomData.features.casino;
 
-    // 1. 메인 메뉴 호출
     if (msg === "/카지노") {
 
         // [채굴 가드] 광산 이용 중 접근 차단
@@ -12678,6 +12699,9 @@ function _showCasinoHistory(replier, user, type, obj) {
 
 /* [입력 핸들러] 채팅 직접 배팅 처리 엔진 */
 function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
+    var MAIN_ZONE = "내리다"; 
+    var mainRoomData = data.rooms[MAIN_ZONE];
+
     var mState = data.rooms[roomName].features.states.menuWait;
     if (!mState || !mState[targetUid] || !mState[targetUid].type || mState[targetUid].type.indexOf("casino_") === -1) return false;
 
@@ -12704,7 +12728,8 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
 
     // 1. 게임 타입 판별 보정 (Sub 상태 포함 인식)
     var gameType = (state.type.indexOf("ladder") !== -1) ? "ladder" : "baccarat";
-    var casino = data.rooms[roomName].features.casino[gameType];
+    var casino = mainRoomData.features.casino[gameType]; 
+    
     var interval = (gameType === "ladder") ? 2 : 3;
 
     // 2. 배팅 가능 선택지 검증
@@ -12751,7 +12776,7 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
 
     // 6. 포인트 차감 및 통계 기록
     user.skipHealing = true; 
-    util_updatePoint(user, data.rooms[roomName], -amt, "카지노 배팅 참여 (" + pick + ")", roomName);
+    util_updatePoint(user, mainRoomData, -amt, "카지노 배팅 참여 (" + pick + ")", MAIN_ZONE);
     
     user.totalGambleCount = (user.totalGambleCount || 0) + 1;
     user.totalCasinoBet = (user.totalCasinoBet || 0) + amt;

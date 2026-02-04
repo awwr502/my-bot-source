@@ -174,7 +174,6 @@ if (typeof globalData === 'undefined' || globalData === null) {
 var racingData = null;      // 경마 실시간 데이터 참조용
 var lotto = null;           // 로또 실시간 데이터 참조용
 var marketOpenPrice = globalData.marketOpenPrice || 0;    // 랜드마크 시가 참조용
-var feverData = {};         // 피버타임 상태 참조용
 var sprinkleData = {};      // 뿌리기 상태 참조용
 var _msgReceiveTime = 0;    // [신규] 응답속도 측정을 위한 전역 타임스탬프
 
@@ -234,7 +233,6 @@ var ROOM_FEATURE_TEMPLATE = function() {
         stockMarket: {},
         stockTraffic: {},
         marketOpenPrice: 0,
-        feverData: { active: false, endTime: 0, scheduled: [] },
         sprinkleData: { active: false, winners: [], portions: [] },
         lotto: { round: 1, entries: {}, dailyPool: 0, jackpot: 0, lastWinNums: [] },
 
@@ -3893,8 +3891,7 @@ function _runSector16Logic(data, ctx) {
             }
 
             // 우선순위: 1순위 조작확률 / 2순위 피버타임 / 3순위 기본승률
-            var winProb = (rigProb !== null) ? rigProb : 
-                          ((feverData && feverData.active) ? SYSTEM_CONFIG.PROB.ODD_EVEN_FEVER : SYSTEM_CONFIG.PROB.ODD_EVEN_WIN);
+            var winProb = (rigProb !== null) ? rigProb : SYSTEM_CONFIG.PROB.ODD_EVEN_WIN;
             
             // 조작 대상자가 없을 때만 고액 배팅 페널티(10만P당 -1%) 작동
             if (rigProb === null && adj && adj.ENABLED) {
@@ -4037,21 +4034,7 @@ function _runSector16Logic(data, ctx) {
 
     /* [4. 피버타임 및 결투 체크] */
     try {
-        if (!data.feverData) data.feverData = { active: false, endTime: 0, scheduled: [] };
-        var timeKey = (currentHour < 10 ? "0"+currentHour : currentHour) + ":" + (currentMin < 10 ? "0"+currentMin : currentMin);
-        if (data.feverData.scheduled.indexOf(timeKey) !== -1 && !data.feverData.active) {
-            data.feverData.active = true; data.feverData.endTime = nowTs + (5 * 60 * 1000);
-            data.feverData.scheduled.splice(data.feverData.scheduled.indexOf(timeKey), 1);
-            try { Api.replyRoom(ctx.targetRoom, "🔥 홀짝 피버타임 시작\n━━━━━━━━━━━━━━━\n지금부터 5분간 홀짝 승률이 상승합니다!"); } catch(e){}
-            ctx.isUpdated = true;
-        }
-        if (data.feverData.active && data.feverData.endTime > 0 && nowTs > Number(data.feverData.endTime)) {
-            data.feverData.active = false; data.feverData.endTime = 0;
-            try { Api.replyRoom(ctx.targetRoom, "❄️ 홀짝 피버타임 종료\n━━━━━━━━━━━━━━━\n이벤트 시간이 마감되어 승률이 정상화되었습니다."); } catch(e){}
-            ctx.isUpdated = true;
-        }
-
-        for (var dKey in duelData) {
+            for (var dKey in duelData) {
             var d = duelData[dKey];
             if (nowTs > d.expire) {
                 var room = data.rooms[d.room];
@@ -4110,16 +4093,6 @@ function _runSector17Logic(data, ctx) {
         try { 
             Api.replyRoom(ctx.targetRoom, formatAdmin("📉 장 마감 알림", "금일 부동산 시장이 종료되었습니다.\n(일일 시세 데이터가 초기화되었습니다.)")); 
         } catch(e) {}
-
-        // [3] 전역 피버타임 스케줄 생성
-        data.feverData.scheduled = [];
-        while(data.feverData.scheduled.length < 5) {
-            var h = Math.floor(Math.random() * 15) + 9; 
-            var m = Math.floor(Math.random() * 60);
-            var tStr = (h < 10 ? "0"+h : h) + ":" + (m < 10 ? "0"+m : m);
-            if (data.feverData.scheduled.indexOf(tStr) === -1) data.feverData.scheduled.push(tStr);
-        }
-        data.feverData.active = false; 
 
         // [4] 피버타임 요일별 공지
         var dayOfWeek = ctx.now.getDay(); 
@@ -9643,7 +9616,6 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
         bankProcessState = {}; 
         menuWaitState = {};
         miningState = {}; // 광산 활동 초기화
-        feverData = { active: false, endTime: 0, scheduled: [] }; // 피버타임 상태 초기화
 
         // 2. UID 캐시 초기화 (메모리 정리)
         if (typeof uidCache !== 'undefined') {

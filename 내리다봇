@@ -892,17 +892,16 @@ function safeSaveData(data, isForceBackup) {
                 if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
                     var safeU = DB_DATA.rooms[rName].users[uid];
                     
-                    // [근본 해결] 객체 전체 덮어쓰기 금지 -> 의심되는 필드만 부분 복구
-                    // 이를 통해 voyage, cargo, mining 등 활동 데이터는 보존됩니다.
                     var dropAmount = Number(safeU.point || 0) - u.point;
                     var cr = getCreditInfo(u.creditScore || 600);
                     var maxAllowDrop = Math.max(cr.limit * 1.5, Number(safeU.point) * 0.5);
 
+                    // [근본 해결] 객체 전체 덮어쓰기 금지 -> 포인트/은행만 복구하여 진행 상태(voyage) 보존
                     if (dropAmount > maxAllowDrop || isNaN(u.point)) {
-                        u.point = Number(safeU.point); // 포인트만 복구
-                        u.bank = Number(safeU.bank);   // 은행만 복구
+                        u.point = Number(safeU.point); 
+                        u.bank = Number(safeU.bank);   
                         isHealed = true;
-                        healReports.push(u.name + " (자산만 부분 복구: 진행 상태 보존)");
+                        healReports.push(u.name + " (자산 부분 복구: 진행 상태 보존)");
                         continue;
                     }
                 }
@@ -1004,22 +1003,19 @@ function safeSaveData(data, isForceBackup) {
         run: function() {
             lock.lock(); 
             try {
-                // [크래시 방지] JSON 변환 시 Executor 등 자바 객체 자동 제거 (Replacer 적용)
                 var content = JSON.stringify(data, function(key, value) {
                     if (key === "Executor" || key === "SaveExecutor" || (value && typeof value.getClass === 'function')) {
-                        return undefined; // 자바 객체는 저장 대상에서 제외
+                        return undefined;
                     }
                     return value;
                 });
                 
-                // 2. 저장 전 데이터 구조 최종 확인
                 var check = JSON.parse(content);
                 if (!check || !check.rooms) throw new Error("데이터 구조 불완전 (rooms 누락)");
 
                 var targetPath = FILE_PATH;
                 var tempPath = FILE_PATH + ".tmp";
                 
-                // 3. 파일 기록 및 원자적 교체 (Atomic Rename)
                 FileStream.write(tempPath, content);
                 var tempFile = new java.io.File(tempPath);
 
@@ -1028,8 +1024,7 @@ function safeSaveData(data, isForceBackup) {
                     if (orgFile.exists()) orgFile.delete();
                     tempFile.renameTo(orgFile);
 
-                    // [핵심] 물리적 파일 저장이 완전히 성공한 이 시점에서만 면제권을 일괄 회수합니다.
-                    // 파일 쓰기 도중 스케줄러가 개입하여 데이터를 옛날로 돌리는 현상을 원천 봉쇄합니다.
+                    // [핵심] 모든 물리적 파일 저장이 끝난 이 시점에서 면제권을 일괄 회수합니다.
                     for (var r in data.rooms) {
                         if (!data.rooms[r].users) continue;
                         for (var id in data.rooms[r].users) {
@@ -1038,7 +1033,6 @@ function safeSaveData(data, isForceBackup) {
                     }
                 }
 
-                // 4. 물리 백업 처리
                 if (isForceBackup) {
                     var backupPath = BACKUP_DIR + "last_stable_backup.json";
                     FileStream.write(backupPath + ".tmp", content);
@@ -1050,15 +1044,13 @@ function safeSaveData(data, isForceBackup) {
                     }
                 }
                 
-                content = null; // 메모리 해제
+                content = null; 
             } catch (e) {
                 Log.error("Async Save Fail: " + e.message);
-                // [베릭방 전용]: 물리적 저장 실패는 관제센터에만 비명을 지름
                 var saveErr = "🚨 [시스템 비상: 저장 마비]\n━━━━━━━━━━━━━━━\n• 사유: " + e.message + "\n⚠️ 기기 저장소 권한 및 용량을 확인하세요.";
                 try { Api.replyRoom("베릭방", saveErr); } catch (err) {}
             } finally {
                 lock.unlock();
-                // [노트9 최적화] 작업 완료 후 가비지 컬렉션(GC) 유도하여 팅김 방지
                 java.lang.System.gc(); 
             }
         }

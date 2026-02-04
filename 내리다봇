@@ -3830,7 +3830,9 @@ function _runSector16Logic(data, ctx) {
             // 2. 당첨자 정산 (조용히 포인트 지급)
             for (var uid in casino.ladder.bets) {
                 var bet = casino.ladder.bets[uid];
-                var u = mainRoomData.users[uid];
+                var u = null;
+                // 방 이탈 유저를 대비해 전 구역 유저 탐색 (정산 멈춤 방지 핵심)
+                for (var r in data.rooms) { if (data.rooms[r].users[bet.uid || uid]) { u = data.rooms[r].users[bet.uid || uid]; break; } }
                 if (!u) continue;
 
                 var isWin = (bet.pick === oe || bet.pick === result.full);
@@ -12136,7 +12138,7 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
 
     // 3. 자금 및 한도 검증 (상수 참조 교정: CASINO.MIN_BET -> ECO.GAMBLE_MIN)
     var minLimit = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
-    var maxLimit = (gameType === "ladder") ? (SYSTEM_CONFIG.CASINO.LADDER.LIMIT || 500000) : (SYSTEM_CONFIG.CASINO.BACCARAT.LIMIT || 1000000);
+    var maxLimit = SYSTEM_CONFIG.ECO.GAMBLE_MAX;
 
     // 4. 시간 마감 가드 (5초 전 차단)
     var now = new Date();
@@ -12155,7 +12157,13 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
         replier.reply(formatError(user, "배팅 금액 미달", "최소 배팅금은 " + fp(minLimit) + "P입니다."));
         return true;
     } else if (amt > maxLimit) {
-        replier.reply(formatError(user, "한도 초과", (gameType === "ladder" ? "사다리" : "바카라") + "의 최대 한도는 " + fp(maxLimit) + "P입니다."));
+        replier.reply(formatError(user, "한도 초과", (gameType === "ladder" ? "사다리" : "바카라") + "의 최대 한도는 " + fp(maxLimit) + "P입니다.\n(현재 입력: " + fp(amt) + "P)"));
+        return true;
+    }
+
+    // 1인 1회 배팅 제한 가드 (이미 배팅 데이터가 존재하면 차단)
+    if (casino.bets[targetUid]) {
+        replier.reply(formatError(user, "중복 배팅 제한", "이미 이번 회차에 배팅을 완료하셨습니다.\n카지노는 게임 종류별로 회차당 1회만 참여 가능합니다."));
         return true;
     }
 

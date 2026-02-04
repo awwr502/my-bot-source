@@ -886,33 +886,27 @@ function safeSaveData(data, isForceBackup) {
             for (var uid in room.users) {
                 var u = room.users[uid];
 
-                // [최우선 순위] 정상 활동 면제권(skipHealing) 체크
-                // 로직상 포인트 차감/지급이 정상적으로 완료되었다면, 아래의 모든 검역 로직을 생략합니다.
-                if (u.skipHealing === true) {
-                    u.skipHealing = false; // 1회 면제 후 플래그 초기화
-                    continue; // 즉시 다음 유저 검사로 이동 (아래 복구 로직 미실행)
-                }
+                // [교정] 물리적 저장이 완료될 때까지 면제권을 유지 (비동기 롤백 버그 해결)
+                if (u.skipHealing === true) continue; 
 
-                /* [여기서부터는 면제권이 없는 '의심스러운 변동'만 검사합니다] */
-
-                // 1. [점진적 침식 방어] 신용 등급 기반 과다 지출 감지
                 if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
                     var safeU = DB_DATA.rooms[rName].users[uid];
-                    var lastPoint = Number(safeU.point || 0);
-                    var dropAmount = lastPoint - u.point;
+                    
+                    // [근본 해결] 객체 전체 덮어쓰기 금지 -> 의심되는 필드만 부분 복구
+                    // 이를 통해 voyage, cargo, mining 등 활동 데이터는 보존됩니다.
+                    var dropAmount = Number(safeU.point || 0) - u.point;
+                    var cr = getCreditInfo(u.creditScore || 600);
+                    var maxAllowDrop = Math.max(cr.limit * 1.5, Number(safeU.point) * 0.5);
 
-                    if (dropAmount > 0) {
-                        var cr = getCreditInfo(u.creditScore || 600);
-                        var maxAllowDrop = Math.max(cr.limit * 1.5, lastPoint * 0.5);
-
-                        if (dropAmount > maxAllowDrop) {
-                            room.users[uid] = JSON.parse(JSON.stringify(safeU)); 
-                            isHealed = true;
-                            healReports.push(u.name + " (비인가 과다 지출 감지: 전체 롤백)");
-                            continue;
-                        }
+                    if (dropAmount > maxAllowDrop || isNaN(u.point)) {
+                        u.point = Number(safeU.point); // 포인트만 복구
+                        u.bank = Number(safeU.bank);   // 은행만 복구
+                        isHealed = true;
+                        healReports.push(u.name + " (자산만 부분 복구: 진행 상태 보존)");
+                        continue;
                     }
                 }
+            }
                 
                 // 2. 변수 오염(NaN) 체크 및 복구
                 var isPointBroken = isNaN(u.point) || u.point === null || typeof u.point !== 'number';
@@ -1034,12 +1028,14 @@ function safeSaveData(data, isForceBackup) {
                     if (orgFile.exists()) orgFile.delete();
                     tempFile.renameTo(orgFile);
 
-                    /* [v9.0 블랙박스 로테이션] */
-                    // logLock.lock();
-                    // try {
-                       // var jFile = new java.io.File(JOURNAL_PATH);
-                       // if (jFile.exists()) jFile.delete();
-                   // } finally { logLock.unlock(); }
+                    // [핵심] 물리적 파일 저장이 완전히 성공한 이 시점에서만 면제권을 일괄 회수합니다.
+                    // 파일 쓰기 도중 스케줄러가 개입하여 데이터를 옛날로 돌리는 현상을 원천 봉쇄합니다.
+                    for (var r in data.rooms) {
+                        if (!data.rooms[r].users) continue;
+                        for (var id in data.rooms[r].users) {
+                            data.rooms[r].users[id].skipHealing = false;
+                        }
+                    }
                 }
 
                 // 4. 물리 백업 처리
@@ -11853,12 +11849,11 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
         var multiplier = 1.0;
 
-        // [A] 자국 생산물 수입 거부 및 수익률 판정
+        // [A] 자국 생산물 수입 거부 판정 수정 (전량 몰수 -> 반값 매입 보전)
         if (good === producedByDest) {
-            multiplier = 0;
-            disasterLog += "\n🚫 [수입 거부]: 자국 생산물인 '" + good + "'은 매입하지 않습니다.";
+            multiplier = 0.5; // 원가의 절반이라도 건지도록 0.5배 적용
+            disasterLog += "\n🚫 [과잉 공급]: 자국 생산물인 '" + good + "'은 수요가 낮아 반값에 매매되었습니다.";
         } else {
-            // 국가 선호도에 따라 섹터 1의 차등 배율 매핑
             if (good === nationInfo.favorite) multiplier = rateInfo.pref;
             else if (good === nationInfo.hate) multiplier = rateInfo.hate;
             else multiplier = rateInfo.norm;

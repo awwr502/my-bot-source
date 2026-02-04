@@ -81,7 +81,8 @@ var USER_SCHEMA = [
     { key: 'voyage', default: { active: false, dest: "", arrival: 0, items: [] }, type: 'object' }, // 항해 상태
     { key: 'tradeCount', default: 0, type: 'number' },          // 누적 무역 횟수
     { key: 'totalCasinoBet', default: 0, type: 'number' },      // [카지노] 누적 배팅액
-    { key: 'totalCasinoWin', default: 0, type: 'number' }       // [카지노] 누적 당첨액
+    { key: 'totalCasinoWin', default: 0, type: 'number' },      // [카지노] 누적 당첨액
+    { key: 'shipName', default: '', type: 'string' }  // 선박 이름 저장 필드 추가
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -1067,7 +1068,8 @@ var SHOP_ITEMS = [
     { id: 103, name: "공업품 상자", icon: "⚙️", price: 15000, effect: "trade_cargo", value: "공업품", cat: 6 },
     { id: 102, name: "공예품 상자", icon: "🏺", price: 20000, effect: "trade_cargo", value: "공예품", cat: 6 },
     { id: 104, name: "귀금속 상자", icon: "🪙", price: 25000, effect: "trade_cargo", value: "귀금속", cat: 6 },
-    { id: 105, name: "보석 상자", icon: "💎", price: 30000, effect: "trade_cargo", value: "보석", cat: 6 }
+    { id: 105, name: "보석 상자", icon: "💎", price: 30000, effect: "trade_cargo", value: "보석", cat: 6 },
+    { id: 106, name: "선박 이름변경권", icon: "📝", price: 500000, effect: "ship_rename", cat: 6 }
 ];
 
 /* [신규] 랜덤 아이콘 박스 상세 구성 및 확률 설정 */
@@ -5806,14 +5808,32 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
     if (!bankProcessState || !bankProcessState[targetUid]) return false;
 
     var state = bankProcessState[targetUid];
-    var types = ['shop_buy', 'shop_quantity'];
+    var types = ['shop_buy', 'shop_quantity', 'ship_rename_input'];
     if (types.indexOf(state.type) === -1) return false;
 
-    // 1. 공통 가드 (시간 초과 및 취소)
+    // 1. 공통 가드 (시간 초과 및 취소) - 입력 처리보다 먼저 수행하여 "취소" 이름 지정 방지
     if (Date.now() - state.time > 30000 || msg === "취소") {
         delete bankProcessState[targetUid];
-        if (msg === "취소") replier.reply(formatCommand("🚫 업무 취소", user, "업무가 취소되었습니다."));
-        else replier.reply(formatError(user, "입력 시간 초과", "입력 시간이 초과되었습니다."));
+        if (msg === "취소") replier.reply(formatCommand("🚫 업무 취소", user, "선박 명명 절차를 중단했습니다."));
+        else replier.reply(formatError(user, "입력 시간 초과", "시간이 초과되어 명명 절차가 자동 취소되었습니다."));
+        return true;
+    }
+
+    // 2. [신규] 선박 이름 입력 처리부
+    if (state.type === 'ship_rename_input') {
+        if (msg.length < 2 || msg.length > 8) {
+            replier.reply(formatError(user, "이름 길이 오류", "선박 이름은 2~8글자 사이로 입력해주세요."));
+            return true;
+        }
+        if (msg.indexOf("/") !== -1 || msg.indexOf("|") !== -1) {
+            replier.reply(formatError(user, "사용 불가 문자", "이름에 특수문자(/, |)를 포함할 수 없습니다."));
+            return true;
+        }
+
+        user.shipName = msg;
+        delete bankProcessState[targetUid];
+        replier.reply(formatCommand("🚢 선박 명명식 완료", user, "축하합니다! 새로운 선박의 이름이\n[" + msg + "](으)로 결정되었습니다!", "무역 현황: [/무역]"));
+        safeSaveData(data);
         return true;
     }
     if (msg.startsWith("/")) {
@@ -7530,6 +7550,12 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         if (user.warningCount !== undefined) user.warningCount = 0; 
         
         replier.reply(formatCommand("🎫 경고삭제권 사용 완료", user, "경고삭제권 구매 및 사용이 성공적으로 완료되었습니다.\n(평생 1회 사용 기록 완료)", "내 잔액: " + fp(user.point) + "P"));
+    }
+
+    // 6. 선박 이름변경권 효과 처리
+    if (item.effect === "ship_rename") {
+        bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now() };
+        replier.reply(formatCommand("📝 선박 이름 변경", user, "새로운 선박의 이름을 입력해주세요.\n(2~8자, 특수문자 불가)", "취소: [취소]"));
     }
 
     safeSaveData(data);
@@ -11495,11 +11521,11 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
     var menuWaitState = roomData.features.states.menuWait;
     var tradeCfg = SYSTEM_CONFIG.TRADE;
 
-    // 1. [진입점] /무역 명령어 (적재 화물 상세 리스트 출력 기능 추가)
-    if (msg === "/무역") {
-        var ship = tradeCfg.SHIPS[user.shipLevel || 1];
+    // 1. [진입점] /무역 명령어
+    if (msg === "/무역") {
+        var ship = tradeCfg.SHIPS[user.shipLevel || 1];
+        var sNameDisp = user.shipName ? " '" + user.shipName + "'" : ""; // '호' 제거 완료
         var cargoList = [];
-        var currentCargoCount = 0;
 
         // 일반 화물 수집
         for (var key in (user.cargo || {})) {

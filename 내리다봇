@@ -12722,14 +12722,20 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
     
     user.totalGambleCount = (user.totalGambleCount || 0) + 1;
     user.totalCasinoBet = (user.totalCasinoBet || 0) + amt;
-    casino.bets[targetUid] = { pick: finalPick, amount: amt, name: user.name };
+    casinoObj.bets[targetUid] = { pick: finalPick, amount: amt, name: user.name, uid: targetUid };
 
     // 7. 칭호 자동 부여 체크
     var winRate = (user.totalGambleWins / user.totalGambleCount) * 100;
     if (user.totalGambleCount >= 500) {
-        util_checkAndAwardTitle(user, replier, "도박왕", 4003, "🎲", "내리다 카지노 협회", "도박 횟수 500회", "[효과]: 카지노 당첨금 5% 추가 보너스", roomName);
+        util_checkAndAwardTitle(user, replier, "도박왕", 4003, "🎲", "내리다 카지노 협회", 
+            "카지노 통합 500회 참여 달성", 
+            "[장착 효과]: 모든 카지노 게임(사다리, 바카라, 블랙잭 등) 정산 시 배당률 +0.05 추가 적용", 
+            roomName);
     } else if (user.totalGambleCount >= 100 && winRate >= 60) {
-        util_checkAndAwardTitle(user, replier, "타짜", 4002, "🎴", "내리다 카지노 협회", "총 승률 60% 돌파", "냉철한 승부사", roomName);
+        util_checkAndAwardTitle(user, replier, "타짜", 4002, "🎴", "내리다 카지노 협회", 
+            "카지노 통합 승률 60% 돌파", 
+            "판을 읽는 날카로운 눈을 가졌습니다.", 
+            roomName);
     } else if (user.totalGambleCount >= 100) {
         util_checkAndAwardTitle(user, replier, "꾼", 4001, "🃏", "내리다 카지노 협회", "도박 횟수 100회", "카지노의 생리를 깨달은 승부사", roomName);
     }
@@ -12834,7 +12840,7 @@ function _handleBlackjackAction(msg, user, data, replier, roomName, targetUid) {
     return false;
 }
 
-/** [블랙잭 결과 정산] AI 딜러 가동 및 승패 판정 */
+/** [블랙잭 결과 정산] 도박왕 배당(+0.05) 적용 및 통합 메시지 출력 */
 function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
     var roomData = data.rooms[roomName];
     var state = user.blackjackState;
@@ -12843,10 +12849,10 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
     
     delete roomData.features.states.menuWait[targetUid];
 
+    // [카운트 연동] 3종 게임 통합 횟수 증가
     user.totalGambleCount = (user.totalGambleCount || 0) + 1;
 
     if (action === "STAY") {
-        // 딜러 AI: 17점 이상 될 때까지 계속 뽑음
         while (dScore < 17) {
             var c = Math.floor(Math.random() * 13) + 1;
             if (c > 10) c = 10; if (c === 1) c = 11;
@@ -12855,46 +12861,58 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
         }
     }
 
-    // 원리: 카드의 결과와 상관없이 시스템이 45% 확률로 유저의 승리를 강제 확정합니다.
-    var winProb = 45; // 타겟 승률 45%
-    var luckRoll = Math.random() * 100;
-    var isLucky = (luckRoll < winProb);
-
-    // 1. 유저가 버스트(21초과)되지 않았고, 당첨 운(45%)이 따랐을 때
-    if (pScore <= 21 && isLucky) {
-        // 만약 카드가 졌거나 비기는 상황이라면, 딜러를 버스트시켜서 유저 승리로 조작
-        if (dScore <= 21 && dScore >= pScore) {
-            dScore = 22; // 딜러 강제 버스트 유도
-        }
+    // [승률 보정] 45% 확률로 유저 승리 강제 (기존 로직 유지)
+    var winProb = 45; 
+    if (pScore <= 21 && (Math.random() * 100 < winProb)) {
+        if (dScore <= 21 && dScore >= pScore) dScore = 22;
     }
-     // 2. 당첨 운이 없는 구간(55%)에서는 카드의 순수 운에 맡김
-    // (블랙잭 기본 승률이 42~44%이므로 자연스럽게 45% 근사치로 수렴하게 됩니다.)
 
-    var result = ""; var prize = 0; var isWin = false;
-    if (pScore > 21) { result = "버스트(Bust) 패배! 💀"; prize = 0; }
-    else if (dScore > 21) { result = "딜러 버스트! 승리! 🎊"; prize = state.bet * 2; isWin = true; }
-    else if (pScore > dScore) { result = "점수 우위 승리! 🎊"; prize = state.bet * 2; isWin = true; }
-    else if (pScore < dScore) { result = "딜러 점수 우위 패배! 💀"; prize = 0; }
-    else { result = "무승부 (Push) 😐"; prize = state.bet; }
+    // 1. 승패 판정
+    var resultStr = ""; 
+    var resultStatus = "LOSE"; // WIN, LOSE, PUSH
 
+    if (pScore > 21) { resultStr = "버스트(Bust) 패배! 💀"; resultStatus = "LOSE"; }
+    else if (dScore > 21) { resultStr = "딜러 버스트! 승리! 🎊"; resultStatus = "WIN"; }
+    else if (pScore > dScore) { resultStr = "점수 우위 승리! 🎊"; resultStatus = "WIN"; }
+    else if (pScore < dScore) { resultStr = "딜러 점수 우위 패배! 💀"; resultStatus = "LOSE"; }
+    else { resultStr = "무승부 (Push) 😐"; resultStatus = "PUSH"; }
+
+    // 2. 배당률(Multiplier) 산출 및 도박왕 보너스 적용
+    var multiplier = 0;
+    var bonusTag = "";
+
+    if (resultStatus === "WIN") {
+        multiplier = 2.0; // 기본 2배
+        if (user.title === "도박왕") {
+            multiplier += 0.05; // 2.05배 적용
+            bonusTag = " 👑도박왕";
+        }
+        user.totalGambleWins = (user.totalGambleWins || 0) + 1;
+    } else if (resultStatus === "PUSH") {
+        multiplier = 1.0; // 원금 반환
+    }
+
+    var prize = Math.floor(state.bet * multiplier);
     var finalMsg = "🤖 딜러 패: [ " + state.dealerHand.join(", ") + " ] (" + dScore + "점)\n" +
                    "👤 나의 패: [ " + state.playerHand.join(", ") + " ] (" + pScore + "점)\n\n" +
-                   "📢 결과: " + result;
+                   "📢 결과: " + resultStr;
 
+    // 3. 정산 및 결과 저장 (타입 격리 포함)
     if (prize > 0) {
         var res = processRepayment(user, prize, targetUid, roomName);
         util_updatePoint(user, roomData, Number(res.actualGain), "블랙잭 정산 수익", roomName);
-        if (isWin) {
+        finalMsg += (res.repayMsg || "") + bonusTag;
+
+        if (resultStatus === "WIN") {
             var nowStr = new Date().getHours() + ":" + ("0" + new Date().getMinutes()).slice(-2);
             if (!user.dailyBlackjackWins) user.dailyBlackjackWins = [];
             user.dailyBlackjackWins.unshift({ round: "BJ", res: "승리", profit: prize, time: nowStr });
-            user.totalGambleWins = (user.totalGambleWins || 0) + 1;
             user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "승리", profit: prize, isWin: true };
-        } else { // 무승부 처리
+        } else {
             user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "무승부", profit: 0, isWin: false };
         }
-        finalMsg += (res.repayMsg || "");
-    } else { // 패배 처리
+    } else {
+        // 패배 시
         user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "패배", profit: -state.bet, isWin: false };
     }
 

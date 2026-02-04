@@ -4885,38 +4885,35 @@ if (!data) return;
 var roomData = data.rooms[roomName] || { users: {} };
 data.rooms[roomName] = roomData;
 
-/ [1:1 채팅방 전용] '내리다' 메인 방 데이터 강제 연동 (Ghost Sync)
-// 설명: 허용된 방 목록에 없는 1:1 방일 경우, 무조건 '내리다' 방에서 유저를 찾아 연결합니다.
+/* [1:1 채팅방 전용] '내리다' 메인 방 데이터 강제 연동 (Ghost Sync) */
 if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
     var mainRoomData = data.rooms["내리다"];
     if (mainRoomData && mainRoomData.users) {
         for (var mUid in mainRoomData.users) {
-            // 이름이 정확히 일치하는 유저를 메인 방에서 탐색
             if (mainRoomData.users[mUid].name.trim() === cleanSender.trim()) {
-                // 1:1 방의 변수들이 메인 방의 객체를 가리키도록 참조 변경
-                targetUid = mUid;        // UID를 메인 방의 것으로 교체
-                roomData = mainRoomData; // [핵심] 현재 참조하는 방 데이터를 '내리다'로 변경
+                targetUid = mUid;        
+                roomData = mainRoomData; 
                 break;
             }
         }
     }
 }
 
-// 2. [신분 복구] 식별 실패 시 영구 명부(Registry) 대조 (데이터 부활)
-var isIdentityRecovered = false; // 변수 초기화 (에러 방지 핵심)
+// 2. [신분 복구] 식별 실패 시 영구 명부(Registry) 대조
+var isIdentityRecovered = false;
 
 if (!targetUid) {
     var regKey = roomName + "_" + cleanSender;
-    var registry = {};
     try {
         var regFile = new java.io.File(REGISTRY_PATH);
-        if (regFile.exists()) registry = JSON.parse(FileStream.read(REGISTRY_PATH));
-        
-        if (registry[regKey]) {
-            targetUid = registry[regKey]; 
-            globalData.nameToIdCache[cacheKey] = targetUid; 
-            isIdentityRecovered = true; // 복구 성공 플래그 세우기
-            Log.info("[Identity Restore] " + cleanSender + "님 신분 복구 완료.");
+        if (regFile.exists()) {
+            var registry = JSON.parse(FileStream.read(REGISTRY_PATH));
+            if (registry[regKey]) {
+                targetUid = registry[regKey]; 
+                globalData.nameToIdCache[cacheKey] = targetUid; 
+                isIdentityRecovered = true;
+                Log.info("[Identity Restore] " + cleanSender + "님 신분 복구 완료.");
+            }
         }
     } catch(e) { Log.error("Registry Read Error"); }
 }
@@ -4924,27 +4921,23 @@ if (!targetUid) {
 // 3. [신규 생성] 진짜 신규 유저일 경우
 if (!targetUid) {
     targetUid = generateUUID();
-    globalData.nameToIdCache[cacheKey] = targetUid; // 신규 유저도 캐시 등록
+    globalData.nameToIdCache[cacheKey] = targetUid;
     
-    // 명부 자동 등록
     try {
         var regKey = roomName + "_" + cleanSender;
         var regFile = new java.io.File(REGISTRY_PATH);
         var registry = regFile.exists() ? JSON.parse(FileStream.read(REGISTRY_PATH)) : {};
         registry[regKey] = targetUid;
         FileStream.write(REGISTRY_PATH, JSON.stringify(registry));
-        Log.info("[Registry Auto-Sync] " + cleanSender + "님 신규 등록.");
     } catch(e) {}
 }
 
 // [C] UID는 확보되었으나 실제 게임 데이터(Object)가 없는 경우 초기화 실행
 if (!roomData.users[targetUid]) {
-// 1. 기초 유저 객체 생성 및 스키마 적용
     var newUser = { uid: targetUid, name: cleanSender, imageHash: currentImgHash, lastDate: "" };
 
     USER_SCHEMA.forEach(function(item) {
         if (typeof item.default === 'object' && item.default !== null) {
-            // 객체나 배열인 경우 주소값을 복사하지 않고 내용물만 복사하여 새로 만듦
             newUser[item.key] = JSON.parse(JSON.stringify(item.default));
         } else {
             newUser[item.key] = item.default;
@@ -4953,7 +4946,6 @@ if (!roomData.users[targetUid]) {
 
     roomData.users[targetUid] = newUser;
 
-    // 2. 게이트웨이를 통한 공식 보너스 지급 (로그 기록 보장)
     if (typeof util_updatePoint === 'function') {
         util_updatePoint(roomData.users[targetUid], roomData, 100000, "입장 축하 보너스", roomName);
     }
@@ -4963,12 +4955,13 @@ if (!roomData.users[targetUid]) {
     var welcomeTitle = isIdentityRecovered ? "🎊 [" + cleanSender + "]님 신분 복구 완료!" : "🎊 [" + cleanSender + "]님 환영합니다!";
     var welcomeSub = isIdentityRecovered ? "🛡️ 영구 명부에서 과거 고유 코드를 찾아 연결했습니다." : "🎁 입장 축하 보너스: " + fP(100000) + "P 지급!";
     
-    var welcomeMsg = welcomeTitle + "\n━━━━━━━━━━━━━━━\n" +
+    // [문법 안전] 괄호로 감싸고 세미콜론 명시
+    var welcomeMsg = (welcomeTitle + "\n━━━━━━━━━━━━━━━\n" +
                      welcomeSub + "\n" +
                      "🕹️ 미니게임 및 출석체크 기능 제공\n" +
                      "💳 신용 등급: 4등급 (600점) 부여\n\n" + 
-                     "📖 이용 전 반드시 '/도움말'을 확인해주세요!";
-                     
+                     "📖 이용 전 반드시 '/도움말'을 확인해주세요!");
+                      
     replier.reply(welcomeMsg); 
     safeSaveData(data);
 }

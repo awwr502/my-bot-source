@@ -8084,24 +8084,59 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
     }
 
     if (msg === "/연동진단") {
-                var mainData = data.rooms["내리다"] || data.rooms["베릭방"];
-                var status = "";
+        var targetRoom = "내리다"; // 메인 방 이름 (정확해야 함)
+        var mainData = data.rooms[targetRoom];
+        
+        // [수정] sender 대신 user.name 사용 (참조 오류 해결)
+        var myName = user.name.trim(); 
+
+        var report = "🔍 [시스템 데이터 정밀 진단]\n━━━━━━━━━━━━━━━\n";
+
+        // 1. 방 데이터 존재 여부 검사
+        if (!mainData) {
+            report += "❌ [치명적] '" + targetRoom + "' 방 데이터가 없습니다.\n";
+            report += "💡 현재 저장된 방 목록:\n[" + Object.keys(data.rooms).join(", ") + "]";
+        } else {
+            report += "✅ '" + targetRoom + "' 방 데이터가 존재합니다.\n";
+            
+            // 2. 유저 매칭 시도
+            var exactMatch = null;
+            var trimMatch = null;
+            var similarList = [];
+
+            for (var uid in mainData.users) {
+                var uName = mainData.users[uid].name;
                 
-                if (!mainData) {
-                    status = "❌ 실패: 메인방 데이터가 없습니다. (방 이름 확인 필요)";
-                } else {
-                    var found = false;
-                    for (var uid in mainData.users) {
-                        if (mainData.users[uid].name.trim() === sender.trim()) {
-                            found = true;
-                            status = "✅ 성공: 메인방에서 [" + sender + "]님을 찾았습니다.\nUID: " + uid + "\n포인트: " + fp(mainData.users[uid].point);
-                            break;
-                        }
-                    }
-                    if (!found) status = "❌ 실패: 메인방 유저 목록에 [" + sender + "]님이 없습니다.\n(띄어쓰기 포함 정확히 일치해야 합니다)";
+                if (uName === user.name) exactMatch = uid;
+                if (uName.trim() === myName) trimMatch = uid;
+                
+                // 디버깅용: 내 이름이 포함된 유저가 있는지 확인
+                if (uName.indexOf(myName) !== -1 || myName.indexOf(uName) !== -1) {
+                    similarList.push("[" + uName + "]");
                 }
-                replier.reply("🔍 [계정 연동 정밀 진단]\n" + status);
             }
+
+            report += "\n👤 유저 찾기 결과:\n";
+            if (exactMatch) {
+                report += "✅ 완벽 일치 성공! (UID: " + exactMatch + ")\n";
+                report += "💰 보유 포인트: " + fp(mainData.users[exactMatch].point) + "P";
+            } else if (trimMatch) {
+                report += "⚠️ 공백 제거 후 일치 성공 (UID: " + trimMatch + ")\n";
+                report += "👉 원본: [" + mainData.users[trimMatch].name + "] / 나: [" + user.name + "]\n";
+                report += "💡 해결책: 닉네임의 띄어쓰기를 확인하세요.";
+            } else {
+                report += "❌ 일치하는 닉네임 없음.\n";
+                report += "👉 현재 내 닉네임: [" + user.name + "] (길이:" + user.name.length + ")\n";
+                if (similarList.length > 0) {
+                    report += "❓ 혹시 이 닉네임인가요?: " + similarList.join(", ");
+                } else {
+                    report += "💡 메인방에 접속 기록이 아예 없습니다.";
+                }
+            }
+        }
+
+        replier.reply(report);
+    }
 
     if (msg.indexOf("/진단 ") === 0) {
         var tn = msg.substring(4).trim();

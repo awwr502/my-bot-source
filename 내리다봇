@@ -3612,7 +3612,7 @@ function _runSector16Logic(data, ctx) {
 
                 if (reserve < disasterLimit && roomData.lastBankAlert !== "disaster") {
                     roomData.lastBankAlert = "disaster";
-                    var disasterMsg = "🚨 [국가 부도 선포] 🚨\n━━━━━━━━━━━━━━━\n중앙은행의 국고가 바닥났습니다(10% 미만).\n\n🚫 동결: 부동산 매매, 홀짝, 경마 등 모든 투자 활동이 전면 금지됩니다.\n🏥 제한: 출석 및 복지 포인트가 50% 삭감됩니다.\n\n⚠️ 해제 조건: 국고가 기준점의 50%(" + fp(normalLimit) + "P) 이상 충전되어야 합니다.";
+                    var disasterMsg = "🚨 [국가 부도 선포] 🚨\n━━━━━━━━━━━━━━━\n중앙은행의 국고가 바닥났습니다(10% 미만).\n\n🚫 동결: 부동산 매매, 카지노, 경마 등 모든 투자 활동이 전면 금지됩니다.\n🏥 제한: 출석 및 복지 포인트가 50% 삭감됩니다.\n\n⚠️ 해제 조건: 국고가 기준점의 50%(" + fp(normalLimit) + "P) 이상 충전되어야 합니다.";
                     Api.replyRoom(rName, disasterMsg);
                     ctx.isUpdated = true;
                 }
@@ -10931,8 +10931,15 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
 
     // 3. 부동산 지분 매입 (/투자)
     if (msg.indexOf("/투자 ") === 0) {
-        if (util_isBankruptcy(roomName)) {
-            replier.reply(formatError(user, "거래 동결", "국가 부도 상태에서는 신규 부동산 지분 매입이 불가능합니다."));
+        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
+            var bankMsg = "🚨 [국가 부동산 거래 동결]\n" +
+                          "━━━━━━━━━━━━━━━\n" +
+                          "현재 중앙은행의 지불 불능(부도) 상태가 선포되어\n" +
+                          "신규 부동산 매입이 전면 중단되었습니다.\n\n" +
+                          "📍 사유: 국고 재원 고갈\n" +
+                          "📉 조치: 부동산 시장 일시 폐쇄";
+            
+            replier.reply(formatCommand("🏗️ 투자 동결 알림", user, bankMsg, "해제 기준: 국고 50% 복구"));
             return true;
         }
 
@@ -11039,10 +11046,17 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
 
     // 4. 부동산 지분 매각 (/매각)
     if (msg.indexOf("/매각 ") === 0) {
-        if (util_isBankruptcy(roomName)) {
-            replier.reply(formatError(user, "거래 동결", "국가 부도 선포로 인해 부동산 지분의 현금화가 중단되었습니다."));
-            return true;
-        }
+        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
+            var bankMsg = "🚨 [중앙은행 지불 불능 알림]\n" +
+                      "━━━━━━━━━━━━━━━\n" +
+                      "무역선이 항구에 도착했으나, 국가 부도 상태로 인해\n" +
+                      "정산금을 지급할 재원이 부족합니다.\n\n" +
+                      "📦 상태: 화물 보존 및 입항 대기\n" +
+                      "💰 조치: 국고 복구 후 채팅 입력 시 자동 정산";
+        
+        replier.reply(formatCommand("⚓ 입항 대기 (지불 정지)", user, bankMsg, "해제 기준: 국고 50% 복구"));
+        return; 
+    }
 
         var stateRes = util_checkUserState(user, targetUid, roomName);
         if (!stateRes.canAction) {
@@ -12465,6 +12479,19 @@ function _showCasinoHistory(replier, user, type, obj) {
 function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
     var mState = data.rooms[roomName].features.states.menuWait;
     if (!mState || !mState[targetUid] || !mState[targetUid].type || mState[targetUid].type.indexOf("casino_") === -1) return false;
+
+    // [부도 가드] 베팅 로직 진입 전 최우선 검증
+    if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
+        var bankMsg = "🚨 [긴급: 카지노 영업 정지]\n" +
+                      "━━━━━━━━━━━━━━━\n" +
+                      "국가 부도 선포로 인해 카지노 내 모든\n" +
+                      "현금 거래 및 배팅이 전면 동결되었습니다.\n\n" +
+                      "🎭 상태: 임시 휴업 (정부 관할)\n" +
+                      "⚖️ 사유: 경제 회생을 위한 자금 통제";
+        
+        replier.reply(formatCommand("🎰 카지노 폐쇄 알림", user, bankMsg, "정부의 회생 조치를 기다려주세요."));
+        return true; // 로직 종료 및 입력 차단
+    }
 
     var state = mState[targetUid];
     var parts = msg.split(" ");

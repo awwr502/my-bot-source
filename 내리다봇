@@ -11880,47 +11880,47 @@ function _showVoyageStatus(user, replier, data, roomName) {
         var remain = (v.arrival || 0) - Date.now();
         var cfg = SYSTEM_CONFIG.TRADE;
         
-        var estGross = 0;   // 예상 세전 매출
-        var estCost = 0;    // 실제 구매 원가 합계
+        var tRev = 0; // 정산용 세전 총매출
+        var tCost = 0; // 평단가 기반 총매입가
         
-        var mSnap = v.marketSnapshot || {}; // 출항 시 시세 스냅샷
+        var mSnap = v.marketSnapshot || {}; 
         var nSnap = mSnap[v.dest] || { favorite: "", hate: "" };
-        var eSnap = v.ecoMultSnapshot || 1.0; // 출항 시 물가 배율
+        var eSnap = v.ecoMultSnapshot || 1.0; 
         var pByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
 
-        // 1. 스냅샷 기반 화물 매출 및 원가 정산
+        // 1. [Snapshot] 저장된 데이터를 그대로 꺼내 정산 공식 대입
         var cSnap = v.cargoSnapshot || user.cargo || {};
         for (var g in cSnap) {
             var qty = Number(cSnap[g]); if (qty <= 0) continue;
             
-            // 구매 당시 기록된 평단가 참조 (없을 경우 출항 당시 기본가로 보정)
-            var unitC = Number((user.cargoAvg && user.cargoAvg[g]) || (cfg.GOODS_COST[g] * eSnap));
-            estCost += (unitC * qty);
+            // 매입가 계산 (평단가 없으면 출항 시점 시세로 보정)
+            var uCost = Number((user.cargoAvg && user.cargoAvg[g]) || (cfg.GOODS_COST[g] * eSnap));
+            tCost += (uCost * qty);
             
+            // 정산 엔진 판매가 공식 그대로 복제
             var rInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.25, norm: 1.05, hate: 0.8 };
             var mult = (g === pByDest) ? 0.5 : (g === nSnap.favorite ? rInfo.pref : (g === nSnap.hate ? rInfo.hate : rInfo.norm));
-            estGross += Math.floor(((cfg.GOODS_COST[g] || 10000) * eSnap) * mult * qty);
+            tRev += Math.floor(((cfg.GOODS_COST[g] || 10000) * eSnap) * mult * qty);
         }
 
-        // 2. 스냅샷 기반 특산품 매출 합산
+        // 2. 특산품 매출 합산
         var sSnap = v.specialtySnapshot || user.specialties || {};
         for (var s in sSnap) {
             var sQty = Number(sSnap[s]); if (sQty <= 0) continue;
             var pG = "";
             for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === s) { pG = TRADE_RELATION[n].produce; break; } }
             var sMult = (pG === pByDest) ? 0 : (pG === nSnap.favorite ? cfg.SPECIALTY_PROFIT : (pG === nSnap.hate ? 0.5 : 1.0));
-            estGross += Math.floor((cfg.SPECIALTY_COST[pG] || 10000) * sQty * sMult);
+            tRev += Math.floor((cfg.SPECIALTY_COST[pG] || 10000) * sQty * sMult);
         }
 
-        // 3. 정산 엔진과 동일한 최종 수령액 계산 (세전매출 - 세금 10%)
-        var estTax = Math.floor(estGross * 0.1); 
-        var estNet = estGross - estTax; // 이게 정산 시 지갑에 꽂힐 최종 금액
-        var pureP = estNet - estCost; 
-        var roi = estCost > 0 ? ((pureP / estCost) * 100).toFixed(1) : "0.0";
+        // 3. [최종 정산액] 정산 엔진과 동일하게 세금 10% 차감 후 수령액 산출
+        var finalReceipt = tRev - Math.floor(tRev * 0.1); 
+        var pureProfit = finalReceipt - tCost; 
+        var roi = tCost > 0 ? ((pureProfit / tCost) * 100).toFixed(1) : "0.0";
 
         msg = "현재 [" + v.dest + "]로 항해 중\n\n" +
-              "💰 예상 수령액: " + fp(estNet) + "P\n" +
-              "💵 순수익 기대: " + (pureP >= 0 ? "+" : "") + fp(pureP) + "P\n" +
+              "💰 예상 수령액: " + fp(finalReceipt) + "P\n" +
+              "💵 순수익 기대: " + (pureProfit >= 0 ? "+" : "") + fp(pureProfit) + "P\n" +
               "📈 기대 수익률: " + roi + "%\n\n" +
               "🕒 남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
     }

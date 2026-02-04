@@ -4699,43 +4699,56 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 }
 
                // 1:1 채팅방일 경우, 시스템이 참조하는 '방 데이터(roomData)' 자체를 메인방으로 바꿔치기합니다.
+                // 특정 방 이름을 지정하지 않고, DB에 있는 모든 방을 뒤져서 가장 부자인 계정을 찾아냅니다.
                 if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-                    var mainTargetRoom = "내리다"; // 메인방 이름 (정확해야 함)
-                    var mainRoomData = data.rooms[mainTargetRoom];
-                    
-                    if (mainRoomData && mainRoomData.users) {
-                        // 메인방 유저 리스트에서 내 닉네임과 똑같은 사람 찾기
-                        var foundMainUser = null;
-                        var foundMainUid = null;
+                    var bestMatchUser = null;
+                    var bestMatchUid = null;
+                    var bestMatchRoomData = null;
+                    var maxPoints = -1;
 
-                        for (var mUid in mainRoomData.users) {
-                            // 공백 제거 후 비교 (닉네임 실수 보정)
-                            if (mainRoomData.users[mUid].name.trim() === cleanSender.trim()) {
-                                foundMainUser = mainRoomData.users[mUid];
-                                foundMainUid = mUid;
-                                break;
+                    // 1. DB에 존재하는 모든 방을 순회
+                    for (var dbRoomName in data.rooms) {
+                        // 현재 1:1 방(자기 자신)은 제외하고 검색
+                        if (dbRoomName === realRoom) continue;
+
+                        var rData = data.rooms[dbRoomName];
+                        if (!rData || !rData.users) continue;
+
+                        // 2. 해당 방의 유저 목록 스캔
+                        for (var mUid in rData.users) {
+                            var mUser = rData.users[mUid];
+                            
+                            // 이름 일치 확인 (공백 제거 후 비교)
+                            if (mUser.name.trim() === cleanSender.trim()) {
+                                var uPoint = Number(mUser.point || 0);
+                                
+                                // 동명이인(또는 유령계정) 중 포인트가 가장 많은 '진짜'를 선택
+                                if (uPoint > maxPoints) {
+                                    maxPoints = uPoint;
+                                    bestMatchUser = mUser;
+                                    bestMatchUid = mUid;
+                                    bestMatchRoomData = rData;
+                                }
                             }
                         }
+                    }
 
-                        // [핵심] 찾았으면 현재 실행 컨텍스트의 데이터를 메인방 것으로 교체
-                        if (foundMainUser) {
-                            user = foundMainUser;        // 유저 객체 교체
-                            targetUid = foundMainUid;    // UID 교체
-                            roomData = mainRoomData;     // [중요] 방 장부 자체를 메인방으로 교체!
-                            
-                            // 봇에게 "지금 다루는 방은 '내리다' 방이다"라고 속임 (단, 답장은 1:1방으로 감)
-                            // (주의: roomName 변수는 답장 경로로 쓰이므로 놔두고, 데이터 참조용 roomData만 바꿈)
-                        }
+                    // 3. 찾은 '진짜 계정'으로 1:1방 데이터 덮어쓰기
+                    if (bestMatchUser && bestMatchRoomData) {
+                        user = bestMatchUser;           // 유저 객체 교체
+                        targetUid = bestMatchUid;       // UID 교체
+                        roomData = bestMatchRoomData;   // [핵심] 장부를 찾은 방의 장부로 교체
+                        
+                        // 로그: 연결된 방 이름이 무엇인지 확인하고 싶다면 주석 해제
+                        // Log.info("[연동 성공] " + cleanSender + " -> " + bestMatchRoomData.users[bestMatchUid].name);
                     }
                 }
 
-                // [Patch 2: 1:1 전용 화이트리스트 가드]
-                // (기존: 내정보, 카지노, 은행) + [추가: 연동진단, 관리자]
+                // [Patch 2: 1:1 전용 화이트리스트 가드] (기존 유지)
                 if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
                     var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/관리자"));
                     
                     var inState = false;
-                    // roomData가 위에서 메인방으로 교체되었으므로, 메인방의 상태를 체크하게 됨 (정상)
                     if (roomData.features && roomData.features.states) {
                         var rStates = roomData.features.states;
                         if (rStates.menuWait && rStates.menuWait[targetUid]) inState = true;

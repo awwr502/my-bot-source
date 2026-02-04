@@ -11670,18 +11670,22 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             _showTradeMarket(user, replier, roomData, tradeCfg);
             menuWaitState[targetUid] = { type: 'trade_market', time: Date.now(), depth: 2 };
         } else if (choice === "2") {
-            // [예외 처리] 이미 항해 중인 경우 출항지 선택 대신 현황 메시지 출력 (입력대기 없음)
             if (user.voyage && user.voyage.active === true) {
                 _showVoyageStatus(user, replier, data, roomName); 
-                // 유저가 현황판을 보고 '뒤로' 갈 수 있도록 메뉴 상태를 현황(trade_status)으로 전환
-                menuWaitState[targetUid] = { type: 'trade_status', time: Date.now(), depth: 2 };
+                delete menuWaitState[targetUid]; // 항해 중이므로 응답 대기 종료
                 return true;
             }
             _prepareVoyage(user, replier, tradeCfg, roomData);
             menuWaitState[targetUid] = { type: 'trade_depart', time: Date.now(), depth: 2 };
         } else if (choice === "3") {
-            _showVoyageStatus(user, replier, roomName);
-            menuWaitState[targetUid] = { type: 'trade_status', time: Date.now(), depth: 2 };
+            if (user.voyage && user.voyage.active === true) {
+                _showVoyageStatus(user, replier, data, roomName); 
+                delete menuWaitState[targetUid]; // 항해 중이면 정보 보여주고 종료
+            } else {
+                _showVoyageStatus(user, replier, data, roomName); 
+                // 항해 중이 아니면 "선박 없음"을 보여주고 메뉴 대기 상태(trade_main)를 유지하여 다른 번호 입력 가능
+                state.time = Date.now(); 
+            }
         } else if (choice === "4") {
             _manageShip(user, replier, tradeCfg);
             menuWaitState[targetUid] = { type: 'trade_ship', time: Date.now(), depth: 2 };
@@ -11812,7 +11816,7 @@ function _departVoyage(user, data, replier, roomName, dest, cfg) {
 }
 
 /* [서브] 📦 항해 현황판 (예상 수익 분기 추가) */
-function _showVoyageStatus(user, replier, roomName) {
+function _showVoyageStatus(user, replier, data, roomName) {
     var msg = "";
     
     if (!user.voyage || user.voyage.active !== true) {
@@ -11821,61 +11825,53 @@ function _showVoyageStatus(user, replier, roomName) {
         var v = user.voyage;
         var remain = (v.arrival || 0) - Date.now();
         
-        // [신규] 예상 수익 계산 (재해 제외 기본치)
-        var estRev = 0;   // 예상 매출
-        var totalCost = 0; // 투자 원가 (지니세 포함)
+        var estRev = 0;   
+        var totalCost = 0; 
         var cfg = SYSTEM_CONFIG.TRADE;
-        var roomName = "내리다"; 
-        var roomData = globalData.rooms[roomName];
+        
+        // 출발 시점의 스냅샷 데이터 로드
         var market = v.marketSnapshot || {};
         var nationInfo = market[v.dest] || { favorite: "", hate: "" };
+        
+        // [중요] roomName을 인자로 확실히 받아 물가 배율 함수에 전달 (에러 해결 핵심)
+        var eMult = v.ecoMultSnapshot || util_getEcoMultiplier(roomName); 
+        var gini = util_getGiniCorrection(user, roomName);
         var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
 
-        // 1. 일반 화물 예상 수익 계산 (정산 엔진과 100% 동기화)
+        // 1. 일반 화물 수익 계산
         var cargo = v.cargoSnapshot || user.cargo || {};
         for (var good in cargo) {
             var count = Number(cargo[good]); if (count <= 0) continue;
-            
-            // A. 투자 원가 추정 (출발 시점 물가 + 평균 지니세 1.05배 가정)
             var unitCost = Math.floor((cfg.GOODS_COST[good] || 10000) * eMult * 1.05);
             totalCost += (unitCost * count);
-
-            // B. 예상 매출 배율 산출
             var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
-            var multiplier = (good === producedByDest) ? 0.5 : // 자국 생산물 반값
+            var multiplier = (good === producedByDest) ? 0.5 : 
                              (good === nationInfo.favorite) ? rateInfo.pref : 
                              (good === nationInfo.hate) ? rateInfo.hate : rateInfo.norm;
-
             estRev += Math.floor(((cfg.GOODS_COST[good] || 10000) * eMult) * multiplier * count);
         }
 
-        // 2. 특산품 예상 수익 계산 (카테고리별 차등 가격 적용)
+        // 2. 특산품 수익 계산
         var specs = v.specialtySnapshot || user.specialties || {};
         for (var sName in specs) {
             var sCount = Number(specs[sName]); if (sCount <= 0) continue;
-            
-            // 특산품 카테고리 및 기본가 확인
             var parentGood = "";
             var sBasePrice = 10000;
             for (var n in TRADE_RELATION) {
                 if (TRADE_RELATION[n].set === sName) { 
                     parentGood = TRADE_RELATION[n].produce; 
-                    sBasePrice = cfg.SPECIALTY_COST[parentGood] || 10000;
+                    sBasePrice = (cfg.SPECIALTY_COST && cfg.SPECIALTY_COST[parentGood]) ? cfg.SPECIALTY_COST[parentGood] : 10000;
                     break; 
                 }
             }
-
-            var sMult = (parentGood === producedByDest) ? 0 : // 자국 특산품 압수
+            var sMult = (parentGood === producedByDest) ? 0 : 
                          (parentGood === nationInfo.favorite) ? cfg.SPECIALTY_PROFIT : 
                          (parentGood === nationInfo.hate) ? 0.5 : 1.0;
-
             estRev += Math.floor(sBasePrice * sCount * sMult);
         }
 
-        // 3. 최종 세후 수령액 계산 (무역세 10% 고정 차감)
-        var taxRate = 0.1; 
-        var estNetPayout = Math.floor(estRev * (1 - taxRate)); 
-        var pureProfit = estNetPayout - totalCost; // 세후 수익 - 투자 원가
+        var estNetPayout = Math.floor(estRev * 0.9); // 무역세 10%
+        var pureProfit = estNetPayout - totalCost;
 
         msg = "현재 [" + v.dest + "]로 항해 중\n\n" +
               "💰 예상 수령액: " + fp(estNetPayout) + "P\n" +
@@ -11884,7 +11880,8 @@ function _showVoyageStatus(user, replier, roomName) {
               "🕒 남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
     }
     
-    replier.reply(formatCommand("📦 항해 현황", user, msg, "(↩️ 뒤로 / 🏠 처음으로)"));
+    // 응답 대기가 종료될 것이므로 가이드 문구에서 (뒤로/처음으로)를 제거하여 깔끔하게 출력
+    replier.reply(formatCommand("📦 항해 현황", user, msg, "정산은 도착 후 채팅 입력 시 자동 수행됩니다."));
 }
 
 /* [서브] 🛠️ 선박 관리 및 개조 */

@@ -1236,6 +1236,7 @@ var CMD_LIST = {
         { cmd: "/이월금수정", desc: "[금액] 경마 잭팟 금액 강제 조정", func: "_adminEconomyLogic" },
         { cmd: "/재원충전", desc: "[금액] 은행 금고 자본 긴급 수혈", func: "_adminEconomyLogic" },
         { cmd: "/보안점검", desc: "데이터 보호 엔진 자가진단", func: "_adminEconomyLogic" },
+        { cmd: "/국고로그", desc: "중앙은행 재원 변동 내역 실시간 추적", func: "_adminEconomyLogic" },
         { cmd: "/명부확인", desc: "등록된 전체 유저 복구 코드 조회", func: "_adminEconomyLogic" },
         { cmd: "/명부삭제", desc: "[닉네임] 특정 유저 명부 강제 삭제", func: "_adminEconomyLogic" },
         { cmd: "/명부업데이트", desc: "등록된 전체 유저 복구 코드 업데이트", func: "_adminEconomyLogic" },
@@ -8635,6 +8636,52 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
             "현재 방의 가용 재원이 수정되었습니다.\n\n" +
             "💰 설정 금액: " + fp(val) + "P\n" +
             "📢 이제 유저들이 이 금액 내에서 대출 가능합니다."));
+        return true;
+    }
+
+    if (msg === "/국고로그") {
+        try {
+            var logFile = new java.io.File(JOURNAL_PATH);
+            if (!logFile.exists() || logFile.length() === 0) {
+                return replier.reply(formatAdmin("📋 국고 로그", "기록된 국고 변동 내역이 없습니다."));
+            }
+
+            var content = FileStream.read(JOURNAL_PATH);
+            var lines = content.split("\n");
+            var logs = [];
+            
+            // 역순 탐색하여 국고 변동(4번째 열)이 있는 로그만 10건 수집
+            for (var i = lines.length - 1; i >= 0; i--) {
+                var line = lines[i].trim();
+                if (!line) continue;
+                
+                var parts = line.split("|");
+                if (parts.length < 5) continue;
+
+                var brDelta = Number(parts[3]); // 국고 변동액
+                if (brDelta !== 0) {
+                    var sign = brDelta > 0 ? "➕" : "➖";
+                    // 로그 형식: [사유] 유저명 | +50,000P
+                    var uName = "";
+                    // UID로 유저명 역추적
+                    if (data.rooms[roomName] && data.rooms[roomName].users[parts[0]]) {
+                        uName = data.rooms[roomName].users[parts[0]].name;
+                    } else { uName = "알 수 없음"; }
+
+                    logs.push("• [" + parts[4] + "] " + uName + " | " + sign + fp(Math.abs(brDelta)) + "P");
+                }
+                if (logs.length >= 10) break;
+            }
+
+            var roomData = data.rooms[roomName];
+            var resultBody = "🏦 현재 금고 잔액: " + fp(roomData.bankReserve) + "P\n" +
+                             "━━━━━━━━━━━━━━━\n" +
+                             (logs.length > 0 ? logs.join("\n") : "최근 국고 변동 내역이 없습니다.");
+
+            replier.reply(formatAdmin("🏛️ 중앙은행 국고 변동 장부", resultBody));
+        } catch (e) {
+            replier.reply(formatAdmin("🚫 조회 실패", "로그 분석 오류: " + e));
+        }
         return true;
     }
 

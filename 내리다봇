@@ -12009,35 +12009,32 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     // 4. 게이트웨이 정산
     user.skipHealing = true;
-    util_updatePoint(user, roomData, netProfit, "무역 정산 수익", roomName);
-    util_updateReserve(roomData, taxAmount, "무역세 국고 귀속", roomName);
-
-    // [폭풍우]: 정산 후 수리비 지출 (부족 시 은행 대납 로직 통합)
+    // [교정] 수리비를 먼저 산출하여 최종 수익(netProfit) 변수에 반영
+    var repairFee = 0;
     if (triggeredDisaster === "STORM") {
-        var repairFee = Math.floor(netProfit * 0.1 + 10000);
-        var currentPoints = Number(user.point);
+        repairFee = Math.floor(netProfit * 0.1 + 10000);
+        // UI 출력을 위해 netProfit(매출-세금)에서 수리비를 미리 차감
+        netProfit -= repairFee; 
         
+        // 수리비 지출 처리 (지갑 잔액 부족 시 대출 전환 로직 포함)
+        var currentPoints = Number(user.point);
         if (currentPoints < repairFee) {
-            // 자금이 부족한 경우: 잔액 전액 차감 후 부족분 대출 전환
             var loanGap = repairFee - currentPoints;
-            
-            // 1. 보유 포인트 전액 차감 (0원이 됨)
-            util_updatePoint(user, roomData, -currentPoints, "폭풍우 수리비(잔액 전액)", roomName);
-            
-            // 2. 부족분 대출 객체 생성 및 부채 가산
+            if (currentPoints > 0) util_updatePoint(user, roomData, -currentPoints, "폭풍우 수리비(잔액 전액)", roomName);
             if (!user.loan || typeof user.loan !== 'object') user.loan = { debt: 0, items: [] };
             if (!user.loan.items) user.loan.items = [];
-            
             user.loan.debt = Number(user.loan.debt || 0) + loanGap;
             user.loan.items.push(loanGap);
-            
             disasterLog += "\n🌊 [재해: 폭풍우]: 수리비가 부족하여 " + fp(loanGap) + "P가 은행 대출(대납)로 처리되었습니다.";
         } else {
-            // 자금이 충분한 경우: 정상 차감
             util_updatePoint(user, roomData, -repairFee, "선박 수리비 지출", roomName);
             disasterLog += "\n🌊 [재해: 폭풍우]: 선체 파손 수리비로 " + fp(repairFee) + "P가 지출되었습니다.";
         }
     }
+
+    // 최종적으로 계산된 순이익을 한 번에 지급
+    util_updatePoint(user, roomData, (totalRevenue - taxAmount), "무역 정산 수익", roomName);
+    util_updateReserve(roomData, taxAmount, "무역세 국고 귀속", roomName);
 
     // 5. 특산품 발견 (15% 확률)
     var specialtyFound = "";

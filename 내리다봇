@@ -3392,6 +3392,7 @@ function _runEconomicStimulus(data, ctx) {
 
 /* 독립 로직 함수: 사채 및 시스템 관리 + 부동산 스케줄러 통합 엔진 */
 function _runSector16Logic(data, ctx) {
+    if (ALLOWED_ROOMS.indexOf(ctx.targetRoom) === -1) return;
     try { _runEconomicStimulus(data, ctx); } catch(e) {}
     var nowTs = ctx.now.getTime();
     var currentHour = ctx.now.getHours();
@@ -3597,6 +3598,7 @@ function _runSector16Logic(data, ctx) {
     // 설명: 국가 부도, 사채 이자, 강제 추심 등 시스템 안정성을 위한 핵심 로직입니다.
     try {
         for (var rName in data.rooms) {
+            if (ALLOWED_ROOMS.indexOf(rName) === -1) continue;
             var roomData = data.rooms[rName];
             if (!roomData.loanContracts) roomData.loanContracts = {};
 
@@ -4693,6 +4695,43 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                         targetUid = id; // 찾은 유저의 고유 코드(ID)를 즉시 바인딩
                         break;
                     }
+                }
+
+                // [Patch 1: 계정 연동] 1:1 채팅방일 경우, 메인방("내리다")의 유저 데이터 강제 로드
+                if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
+                    var mainRoom = data.rooms["내리다"];
+                    if (mainRoom && mainRoom.users) {
+                        // 메인방 유저 리스트에서 닉네임이 일치하는 유저 탐색
+                        for (var mUid in mainRoom.users) {
+                            if (mainRoom.users[mUid].name === cleanSender) {
+                                user = mainRoom.users[mUid]; // 유저 객체 교체 (메인방 데이터 사용)
+                                targetUid = mUid;            // UID도 메인방 것으로 교체
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // [Patch 2: 1:1 전용 화이트리스트 가드]
+                // (내정보, 카지노, 은행 및 진행 중인 게임 입력만 허용, 나머지는 무시)
+                if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
+                    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행"));
+                    
+                    // 현재 카지노나 은행 로직을 진행 중인지 확인 (진행 중이면 입력 허용)
+                    var inState = false;
+                    
+                    // 1:1 방의 상태(state) 확인
+                    if (roomData.features && roomData.features.states) {
+                        var rStates = roomData.features.states;
+                        // targetUid는 위에서 메인방 ID로 교체되었을 수 있으므로 해당 ID로 상태 체크
+                        if (rStates.menuWait && rStates.menuWait[targetUid]) inState = true;
+                        if (rStates.bankProcess && rStates.bankProcess[targetUid]) inState = true;
+                        // 블랙잭 상태는 user 객체(메인방 user) 내부에 저장됨
+                        if (user && user.blackjackState) inState = true;
+                    }
+
+                    // 허용된 명령어도 아니고, 진행 중인 상태도 아니라면 -> 무응답 차단 (return)
+                    if (!isAllowedCmd && !inState) return;
                 }
 
                 /* [v6.6 딥 헬러] 타입 검증형 자가 치유 엔진 (Deep Healing & Memory Sync) */

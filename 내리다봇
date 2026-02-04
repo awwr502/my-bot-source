@@ -4800,18 +4800,17 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                      * 기능: 항해 시간이 경과한 후 유저가 채팅을 치면 즉시 정산 로직 실행
                      */
                     if (user && user.voyage && user.voyage.active === true) {
-                        if (Date.now() >= (user.voyage.arrival || 0)) {
-                            // 섹터 51의 무역 정산 엔진 호출
-                            if (typeof _processTradeArrival === 'function') {
-                                user.skipHealing = true; // 자산 급증 보호 (딥헬러 예외)
-                                _processTradeArrival(user, data, replier, roomName, targetUid);
-                                safeSaveData(data); // 정산 완료 후 즉시 저장
-                            }
+                    if (Date.now() >= (user.voyage.arrival || 0)) {
+                        if (typeof _processTradeArrival === 'function') {
+                            user.skipHealing = true; // 자산 변동 보호
+                            _processTradeArrival(user, data, replier, roomName, targetUid);
+                            safeSaveData(data, true); // 정산 즉시 물리 저장 강제
                         }
                     }
+                }
 
-                    // 4. [Spam Guard] 도배 방지 로직 (수리 완료 후 안전하게 실행)
-                    var now = Date.now();
+                // 4. [Spam Guard] 도배 방지 로직 (무역 정산 이후에 실행)
+                var now = Date.now();
                     var conf = SYSTEM_CONFIG.SPAM;
                     if (user.timeoutEndTime && now < user.timeoutEndTime) return;
 
@@ -12332,35 +12331,35 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS) {
     var ship = cfg.SHIPS[user.shipLevel || 1];
     var timeMin = Math.floor(60 * ship.speedMult);
     
+    // 1. 순풍 확률 판정 및 도착 시간 계산
     var isSmooth = Math.random() < 0.1;
     if (isSmooth) timeMin = Math.floor(timeMin * 0.8);
     var arrival = Date.now() + (timeMin * 60 * 1000);
     
-    var marketSnapshot = JSON.parse(JSON.stringify(roomData.features.tradeMarket || cfg.NATIONS));
-    var ecoMultSnapshot = util_getEcoMultiplier(roomName);
-
-    /* [수정] 전체 화물이 아닌 유저가 선택한 화물만 스냅샷에 박제 */
-    var cargoSnapshot = JSON.parse(JSON.stringify(selC || {}));
-    var specialtySnapshot = JSON.parse(JSON.stringify(selS || {}));
-
+    // 2. 항해 데이터 패키징 (스냅샷 방식)
     user.voyage = {
         active: true, 
         dest: dest, 
         arrival: arrival, 
         startTime: Date.now(),
-        marketSnapshot: marketSnapshot, 
-        ecoMultSnapshot: ecoMultSnapshot,
-        cargoSnapshot: cargoSnapshot,      // 화물 스냅샷 추가
-        specialtySnapshot: specialtySnapshot, // 특산품 스냅샷 추가
-        isSmooth: isSmooth
+        // 출항 시점의 시세와 내 적재 화물을 그대로 박제하여 변조 방지
+        marketSnapshot: JSON.parse(JSON.stringify(roomData.features.tradeMarket || cfg.NATIONS)), 
+        ecoMultSnapshot: util_getEcoMultiplier(roomName),
+        cargoSnapshot: JSON.parse(JSON.stringify(selC || {})), 
+        specialtySnapshot: JSON.parse(JSON.stringify(selS || {})),
+        isSmooth: isSmooth,
+        /* [핵심] 중복 정산 방지 및 정산 대기 플래그 초기화 */
+        isProcessing: false 
     };
     
-    // [중요] 출항 즉시 물리 파일 저장을 강제하여 봇 재시작 시 증발 방지
-    safeSaveData(data, true);
+    // 3. [중요] 즉시 물리 파일 저장 집행 (자정 리셋 및 봇 재시작 대비)
+    // 비동기 큐가 아닌 2번째 인자 true를 통해 즉시 휴대폰 저장소에 기록합니다.
+    safeSaveData(data, true); 
 
     var msg = "목적지: " + dest + "\n" +
               "소요 시간: 약 " + timeMin + "분\n" +
               "도착 예정: " + new Date(arrival).toLocaleTimeString();
+              
     if (isSmooth) msg += "\n\n🌬️ [순풍] 기분 좋은 바람으로 시간이 20% 단축되었습니다!";
     
     replier.reply(formatCommand("🌊 출항 명령 하달", user, msg, "항해 중 타 활동이 가능합니다."));

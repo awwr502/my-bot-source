@@ -11826,6 +11826,11 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
 
     // [네비게이션] 처음으로 / 뒤로 처리
     if (msg === "처음으로") return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
+    /* [수정] 하역 화물 선택 상태(trade_select_cargo) 처리 분기 추가 */
+    if (state.type === 'trade_select_cargo') {
+        _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg);
+        return true;
+    }
     if (msg === "뒤로") {
         if (state.depth === 1) {
             delete menuWaitState[targetUid];
@@ -11877,8 +11882,19 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatError(user, "목적지 오류", "올바른 번호를 입력하세요."));
             return true;
         }
-        _departVoyage(user, data, replier, roomName, nations[idx], tradeCfg);
-        delete menuWaitState[targetUid];
+        /* [개편] 즉시 출항 대신 '하역 화물 선택' 단계로 진입 */
+        var destName = nations[idx];
+        menuWaitState[targetUid] = { 
+            type: 'trade_select_cargo', 
+            time: Date.now(), 
+            depth: 3, 
+            dest: destName, 
+            selCargo: {}, 
+            selSpec: {} 
+        };
+        
+        // 하역 설정 화면 출력
+        _showTradeCargoSelectUI(user, replier, roomData, tradeCfg, destName, {}, {});
         return true;
     }
     
@@ -11891,6 +11907,108 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
     }
 
     return false;
+}
+
+/**
+ * [신설] 🚢 무역 하역 설정 UI 출력 함수
+ */
+function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS) {
+    var market = roomData.features.tradeMarket || cfg.NATIONS;
+    var nInfo = market[dest];
+    var body = "📍 목적지: [" + dest + "]\n\n[📦 선박 적재 현황]\n";
+    
+    var availableItems = []; 
+    
+    // 1. 선박 내 일반 화물 추출 및 선호도 판별
+    for (var k in (user.cargo || {})) {
+        if (user.cargo[k] > 0) {
+            var status = (k === nInfo.favorite) ? "🔺선호" : (k === nInfo.hate ? "🔹기피" : "➖일반");
+            availableItems.push({ type: 'cargo', name: k, qty: user.cargo[k], status: status });
+        }
+    }
+    // 2. 특산품 추출
+    for (var s in (user.specialties || {})) {
+        if (user.specialties[s] > 0) {
+            availableItems.push({ type: 'spec', name: s, qty: user.specialties[s], status: "➖일반" });
+        }
+    }
+
+    if (availableItems.length === 0) {
+        body += "- 보관 중인 물품 없음 -";
+    } else {
+        availableItems.forEach(function(it, i) {
+            var prefix = it.type === 'spec' ? "⭐" : "";
+            body += (i + 1) + ". " + prefix + it.name + " (" + it.qty + "상자) - " + it.status + "\n";
+        });
+    }
+
+    body += "\n[✅ 현재 판매 대기]\n";
+    var selList = [];
+    for (var c in selC) selList.push("• " + c + " x" + selC[c] + "상자");
+    for (var s in selS) selList.push("• ⭐" + s + " x" + selS[s] + "개");
+    body += (selList.length > 0 ? selList.join("\n") : "- 선택된 화물 없음 -");
+
+    var guide = "💬 [입력 방법]\n• 판매 품목 지정: [번호] [수량]\n• 모든 화물 선택: [전부]\n• 출항 : [출항]";
+    
+    replier.reply(formatCommand("🚢 무역 하역 설정", user, body, guide + "\n━━━━━━━━━━━━━━━\n💡 [가이드]: 판매할 번호와 수량을 입력하세요. [취소] 입력 시 무역이 중단됩니다."));
+}
+
+/**
+ * [신설] 🚢 무역 하역 화물 선택 핸들러
+ */
+function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, cfg) {
+    var roomData = data.rooms[roomName];
+    var state = roomData.features.states.menuWait[targetUid];
+
+    if (msg === "취소") {
+        return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
+    }
+
+    // [전부] 입력 처리: 모든 일반 화물과 특산품을 바구니에 담음
+    if (msg === "전부") {
+        for (var k in (user.cargo || {})) if (user.cargo[k] > 0) state.selCargo[k] = user.cargo[k];
+        for (var s in (user.specialties || {})) if (user.specialties[s] > 0) state.selSpec[s] = user.specialties[s];
+        _showTradeCargoSelectUI(user, replier, roomData, cfg, state.dest, state.selCargo, state.selSpec);
+        return;
+    }
+
+    // [출항] 입력 처리: 최종 확정 후 항해 시작
+    if (msg === "출항") {
+        var hasCargo = Object.keys(state.selCargo).length > 0 || Object.keys(state.selSpec).length > 0;
+        if (!hasCargo) {
+            replier.reply(formatError(user, "출항 불가", "판매할 화물을 최소 1개 이상 선택해야 합니다."));
+            return;
+        }
+        delete roomData.features.states.menuWait[targetUid];
+        _departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec);
+        return;
+    }
+
+    // [번호 수량] 입력 처리
+    var parts = msg.split(" ");
+    var idx = parseInt(parts[0]) - 1;
+    var qty = parts.length > 1 ? parseInt(parts[1].replace(/[^0-9]/g, "")) : 999999;
+
+    var availableItems = [];
+    var market = roomData.features.tradeMarket || cfg.NATIONS;
+    var nInfo = market[state.dest];
+
+    for (var k in (user.cargo || {})) if (user.cargo[k] > 0) availableItems.push({ type: 'cargo', name: k, qty: user.cargo[k] });
+    for (var s in (user.specialties || {})) if (user.specialties[s] > 0) availableItems.push({ type: 'spec', name: s, qty: user.specialties[s] });
+
+    if (isNaN(idx) || idx < 0 || idx >= availableItems.length) {
+        replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 입력하세요."));
+        return;
+    }
+
+    var selected = availableItems[idx];
+    var finalQty = Math.min(qty, selected.qty);
+
+    if (selected.type === 'cargo') state.selCargo[selected.name] = finalQty;
+    else state.selSpec[selected.name] = finalQty;
+
+    state.time = Date.now();
+    _showTradeCargoSelectUI(user, replier, roomData, cfg, state.dest, state.selCargo, state.selSpec);
 }
 
 /* [서브] 🌍 세계 시세 리포트 */
@@ -11948,7 +12066,7 @@ function _prepareVoyage(user, replier, cfg, roomData) {
 }
 
 /* [서브] 🌊 항해 시작 (스냅샷 및 순풍 적용) */
-function _departVoyage(user, data, replier, roomName, dest, cfg) {
+function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS) {
     var roomData = data.rooms[roomName];
     user.skipHealing = true;
     var ship = cfg.SHIPS[user.shipLevel || 1];
@@ -11958,13 +12076,12 @@ function _departVoyage(user, data, replier, roomName, dest, cfg) {
     if (isSmooth) timeMin = Math.floor(timeMin * 0.8);
     var arrival = Date.now() + (timeMin * 60 * 1000);
     
-    // 시세 및 물가 배율 스냅샷
     var marketSnapshot = JSON.parse(JSON.stringify(roomData.features.tradeMarket || cfg.NATIONS));
-    var ecoMultSnapshot = util_getEcoMultiplier(roomName); 
+    var ecoMultSnapshot = util_getEcoMultiplier(roomName);
 
-    // [보안] 현재 적재함의 화물과 특산품 상태를 그대로 복사하여 배에 박제 (롤백/유실 방어)
-    var cargoSnapshot = JSON.parse(JSON.stringify(user.cargo || {}));
-    var specialtySnapshot = JSON.parse(JSON.stringify(user.specialties || {}));
+    /* [수정] 전체 화물이 아닌 유저가 선택한 화물만 스냅샷에 박제 */
+    var cargoSnapshot = JSON.parse(JSON.stringify(selC || {}));
+    var specialtySnapshot = JSON.parse(JSON.stringify(selS || {}));
 
     user.voyage = {
         active: true, 

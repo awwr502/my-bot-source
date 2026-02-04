@@ -11878,58 +11878,49 @@ function _showVoyageStatus(user, replier, data, roomName) {
     } else {
         var v = user.voyage;
         var remain = (v.arrival || 0) - Date.now();
-        
-        var estRev = 0;   
-        var totalCost = 0; 
         var cfg = SYSTEM_CONFIG.TRADE;
         
-       var totalRevenue = 0; 
-        var totalCost = 0;    
+        var estGross = 0;   // 예상 세전 매출
+        var estCost = 0;    // 실제 구매 원가 합계
         
-        var market = v.marketSnapshot || {};
-        var nationInfo = market[v.dest] || { favorite: "", hate: "" };
-        var eMult = v.ecoMultSnapshot || 1.0;
-        var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
+        var mSnap = v.marketSnapshot || {}; // 출항 시 시세 스냅샷
+        var nSnap = mSnap[v.dest] || { favorite: "", hate: "" };
+        var eSnap = v.ecoMultSnapshot || 1.0; // 출항 시 물가 배율
+        var pByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
 
-        // 1. 일반 화물 정산 공식 및 매입가 계산 (0원 방어 로직 추가)
-        var cargo = v.cargoSnapshot || user.cargo || {};
-        for (var good in cargo) {
-            var count = Number(cargo[good]); if (count <= 0) continue;
+        // 1. 스냅샷 기반 화물 매출 및 원가 정산
+        var cSnap = v.cargoSnapshot || user.cargo || {};
+        for (var g in cSnap) {
+            var qty = Number(cSnap[g]); if (qty <= 0) continue;
             
-            // [교정] 매입가 정보가 없으면 기본가로 소급 적용하여 0원 처리 방지
-            var unitCost = Number((user.cargoAvg && user.cargoAvg[good]) || 0);
-            if (unitCost <= 0) unitCost = (cfg.GOODS_COST[good] || 10000) * eMult; 
+            // 구매 당시 기록된 평단가 참조 (없을 경우 출항 당시 기본가로 보정)
+            var unitC = Number((user.cargoAvg && user.cargoAvg[g]) || (cfg.GOODS_COST[g] * eSnap));
+            estCost += (unitC * qty);
             
-            totalCost += (unitCost * count);
-            
-            var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
-            var multiplier = (good === producedByDest) ? 0.5 : 
-                             (good === nationInfo.favorite) ? rateInfo.pref : 
-                             (good === nationInfo.hate) ? rateInfo.hate : rateInfo.norm;
-            
-            totalRevenue += Math.floor(((cfg.GOODS_COST[good] || 10000) * eMult) * multiplier * count);
+            var rInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.25, norm: 1.05, hate: 0.8 };
+            var mult = (g === pByDest) ? 0.5 : (g === nSnap.favorite ? rInfo.pref : (g === nSnap.hate ? rInfo.hate : rInfo.norm));
+            estGross += Math.floor(((cfg.GOODS_COST[g] || 10000) * eSnap) * mult * qty);
         }
 
-        // 2. 특산품 정산 공식 합산 (특산품은 획득가 0원으로 처리)
-        var specs = v.specialtySnapshot || user.specialties || {};
-        for (var sName in specs) {
-            var sCount = Number(specs[sName]); if (sCount <= 0) continue;
-            var parentGood = "";
-            for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === sName) { parentGood = TRADE_RELATION[n].produce; break; } }
-            var sBasePrice = cfg.SPECIALTY_COST[parentGood] || 10000;
-            var sMult = (parentGood === producedByDest) ? 0 : (parentGood === nationInfo.favorite ? cfg.SPECIALTY_PROFIT : (parentGood === nationInfo.hate ? 0.5 : 1.0));
-            totalRevenue += Math.floor(sBasePrice * sCount * sMult);
+        // 2. 스냅샷 기반 특산품 매출 합산
+        var sSnap = v.specialtySnapshot || user.specialties || {};
+        for (var s in sSnap) {
+            var sQty = Number(sSnap[s]); if (sQty <= 0) continue;
+            var pG = "";
+            for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === s) { pG = TRADE_RELATION[n].produce; break; } }
+            var sMult = (pG === pByDest) ? 0 : (pG === nSnap.favorite ? cfg.SPECIALTY_PROFIT : (pG === nSnap.hate ? 0.5 : 1.0));
+            estGross += Math.floor((cfg.SPECIALTY_COST[pG] || 10000) * sQty * sMult);
         }
 
-        // 3. 최종 수령액(세후 10%) 및 순수익 계산
-        var tax = Math.floor(totalRevenue * 0.1); 
-        var finalPayout = totalRevenue - tax; 
-        var pureProfit = finalPayout - totalCost; 
-        var roi = totalCost > 0 ? ((pureProfit / totalCost) * 100).toFixed(1) : "0.0";
+        // 3. 정산 엔진과 동일한 최종 수령액 계산 (세전매출 - 세금 10%)
+        var estTax = Math.floor(estGross * 0.1); 
+        var estNet = estGross - estTax; // 이게 정산 시 지갑에 꽂힐 최종 금액
+        var pureP = estNet - estCost; 
+        var roi = estCost > 0 ? ((pureP / estCost) * 100).toFixed(1) : "0.0";
 
         msg = "현재 [" + v.dest + "]로 항해 중\n\n" +
-              "💰 예상 수령액: " + fp(finalPayout) + "P\n" +
-              "💵 순수익 기대: " + (pureProfit >= 0 ? "+" : "") + fp(pureProfit) + "P\n" +
+              "💰 예상 수령액: " + fp(estNet) + "P\n" +
+              "💵 순수익 기대: " + (pureP >= 0 ? "+" : "") + fp(pureP) + "P\n" +
               "📈 기대 수익률: " + roi + "%\n\n" +
               "🕒 남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
     }

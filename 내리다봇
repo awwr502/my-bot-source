@@ -12859,10 +12859,11 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
     var dScore = _calcBJScore(state.dealerHand);
     
     delete roomData.features.states.menuWait[targetUid];
-
-    // [카운트 연동] 3종 게임 통합 횟수 증가
+    
+    // [카운트 연동]
     user.totalGambleCount = (user.totalGambleCount || 0) + 1;
 
+    // 1. 딜러 카드 드로우 (일단 규칙대로 뽑음)
     if (action === "STAY") {
         while (dScore < 17) {
             var c = Math.floor(Math.random() * 13) + 1;
@@ -12872,15 +12873,32 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
         }
     }
 
-    // [승률 보정] 45% 확률로 유저 승리 강제 (기존 로직 유지)
-    var winProb = 45; 
-    if (pScore <= 21 && (Math.random() * 100 < winProb)) {
-        if (dScore <= 21 && dScore >= pScore) dScore = 22;
+    // 2. [승률 조작] 45% 고정 승률 적용
+    // 유저가 이미 버스트(21초과)라면 조작 없이 패배 확정
+    if (pScore <= 21) {
+        var targetWinRate = 45; // 목표 승률 45%
+        var isUserWin = (Math.random() * 100 < targetWinRate);
+
+        if (isUserWin) {
+            // [승리 시나리오]: 유저가 이겨야 함
+            // 만약 딜러가 이기거나 비기고 있다면 -> 딜러를 강제 버스트(22)시킴
+            if (dScore <= 21 && dScore >= pScore) {
+                dScore = 22; 
+            }
+        } else {
+            // [패배 시나리오]: 유저가 져야 함 (55%)
+            // 만약 딜러가 터졌거나 점수가 낮다면 -> 딜러 점수를 (유저+1)로 조작
+            if (dScore > 21 || dScore < pScore) {
+                dScore = pScore + 1;
+                // 단, 21점을 넘길 순 없으므로 최대 21로 고정 (이 경우 무승부가 됨)
+                if (dScore > 21) dScore = 21;
+            }
+        }
     }
 
-    // 1. 승패 판정
+    // 3. 최종 승패 판정 (조작된 dScore 기준)
     var resultStr = ""; 
-    var resultStatus = "LOSE"; // WIN, LOSE, PUSH
+    var resultStatus = "LOSE"; 
 
     if (pScore > 21) { resultStr = "버스트(Bust) 패배! 💀"; resultStatus = "LOSE"; }
     else if (dScore > 21) { resultStr = "딜러 버스트! 승리! 🎊"; resultStatus = "WIN"; }
@@ -12888,19 +12906,19 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
     else if (pScore < dScore) { resultStr = "딜러 점수 우위 패배! 💀"; resultStatus = "LOSE"; }
     else { resultStr = "무승부 (Push) 😐"; resultStatus = "PUSH"; }
 
-    // 2. 배당률(Multiplier) 산출 및 도박왕 보너스 적용
+    // 4. 배당률 산출 (도박왕 보너스 +0.05)
     var multiplier = 0;
     var bonusTag = "";
 
     if (resultStatus === "WIN") {
-        multiplier = 2.0; // 기본 2배
+        multiplier = 2.0; 
         if (user.title === "도박왕") {
-            multiplier += 0.05; // 2.05배 적용
+            multiplier += 0.05; 
             bonusTag = " 👑도박왕";
         }
         user.totalGambleWins = (user.totalGambleWins || 0) + 1;
     } else if (resultStatus === "PUSH") {
-        multiplier = 1.0; // 원금 반환
+        multiplier = 1.0; 
     }
 
     var prize = Math.floor(state.bet * multiplier);
@@ -12908,7 +12926,6 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
                    "👤 나의 패: [ " + state.playerHand.join(", ") + " ] (" + pScore + "점)\n\n" +
                    "📢 결과: " + resultStr;
 
-    // 3. 정산 및 결과 저장 (타입 격리 포함)
     if (prize > 0) {
         var res = processRepayment(user, prize, targetUid, roomName);
         util_updatePoint(user, roomData, Number(res.actualGain), "블랙잭 정산 수익", roomName);
@@ -12923,16 +12940,12 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
             user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "무승부", profit: 0, isWin: false };
         }
     } else {
-        // 패배 시
         user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "패배", profit: -state.bet, isWin: false };
     }
 
-    // [수정] 결과 메시지에 재도전 버튼 추가 및 대기 상태 갱신
     replier.reply(formatCommand("🏁 블랙잭 결과 Report", user, finalMsg + "\n\n🔁한번더 ❎그만", "내 잔액: " + fp(user.point) + "P"));
     
     user.blackjackState = null;
-    
-    // [신규] 재도전 입력을 받기 위해 30초 대기 상태 진입
     roomData.features.states.menuWait[targetUid] = { type: 'blackjack_retry', time: Date.now() };
     
     safeSaveData(data);
@@ -12952,14 +12965,14 @@ function _handleBlackjackRetry(msg, user, data, replier, roomName, targetUid) {
     }
 
     // 2. 종료 (그만/취소)
-    if (msg === "그만" || msg === "취소") {
+    if (msg === "그만" || msg === "취소" || msg === "❎") {
         delete mState[targetUid];
         replier.reply(formatCommand("🚫 블랙잭 종료", user, "테이블에서 일어났습니다."));
         return true;
     }
 
     // 3. 재도전 (한번더/리트)
-    if (msg === "한번더" || msg === "한번 더" || msg === "리트") {
+    if (msg === "한번더" || msg === "한번 더" || msg === "리트" || msg === "🔁") {
         // [부도 가드] 재확인
         if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
             delete mState[targetUid];
@@ -12970,7 +12983,7 @@ function _handleBlackjackRetry(msg, user, data, replier, roomName, targetUid) {
         // 상태 전환: 메뉴 대기(retry) -> 금액 입력 대기(bet_input)
         delete mState[targetUid];
         
-        // 섹터 22-1 등에서 처리하는 입력 대기 상태로 전환
+        // 섹터 22-1 등에서 처리하는 입력 대기 상태로 전환 (즉시 배팅 가능)
         data.rooms[roomName].features.states.bankProcess[targetUid] = { type: 'blackjack_bet_input', time: Date.now() };
         
         var minB = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;

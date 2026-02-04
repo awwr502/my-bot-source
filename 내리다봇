@@ -869,114 +869,70 @@ function safeSaveData(data, isForceBackup) {
 
         for (var rName in data.rooms) {
             var room = data.rooms[rName];
-            var uKeys = Object.keys(room.users || {});
             
-            // 1. 유저 대량 증발 체크 (핵심 방어)
-            if (globalData.rooms[rName]) {
-                var prevCount = Object.keys(globalData.rooms[rName].users || {}).length;
-                var currentCount = uKeys.length;
-                if (prevCount > 0 && currentCount === 0) {
-                    throw new Error("[" + rName + "] 방의 유저 데이터 전량 누락 감지");
-                }
-                if (prevCount >= 10 && (currentCount / prevCount) < 0.65) {
-                    throw new Error("[" + rName + "] 대량의 유저 데이터 증발 감지 (기존:" + prevCount + "/현재:" + currentCount + ")");
-                }
-            }
-
             for (var uid in room.users) {
                 var u = room.users[uid];
 
-                // [교정] 물리적 저장이 완료될 때까지 면제권을 유지 (비동기 롤백 버그 해결)
+                // [1] 면제권 체크: 저장이 완료될 때까지 보안 엔진의 접근을 차단
                 if (u.skipHealing === true) continue; 
 
+                // [2] 정밀 부분 복구 로직 (Surgical Repair)
                 if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
                     var safeU = DB_DATA.rooms[rName].users[uid];
-                    
-                    var dropAmount = Number(safeU.point || 0) - u.point;
-                    var cr = getCreditInfo(u.creditScore || 600);
-                    var maxAllowDrop = Math.max(cr.limit * 1.5, Number(safeU.point) * 0.5);
+                    var isFieldHealed = false;
 
-                    // [근본 해결] 객체 전체 덮어쓰기 금지 -> 포인트/은행만 복구하여 진행 상태(voyage) 보존
-                    if (dropAmount > maxAllowDrop || isNaN(u.point)) {
-                        u.point = Number(safeU.point); 
-                        u.bank = Number(safeU.bank);   
-                        isHealed = true;
-                        healReports.push(u.name + " (자산 부분 복구: 진행 상태 보존)");
-                        continue;
-                    }
-                }
-            }
-         }
-                
-                // 2. 변수 오염(NaN) 체크 및 복구
-                var isPointBroken = isNaN(u.point) || u.point === null || typeof u.point !== 'number';
-                var isBankBroken = isNaN(u.bank) || u.bank === null || typeof u.bank !== 'number';
-
-                if (isPointBroken || isBankBroken) {
-                    if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
-                        var safeU = DB_DATA.rooms[rName].users[uid];
-                        room.users[uid] = JSON.parse(JSON.stringify(safeU));
-                        isHealed = true;
-                        healReports.push(u.name + " (자산 데이터 오염 수리: 전체 롤백)");
-                    }
-                    continue;
-                }
-                
-                // 4. 자산 80% 급감 방어 로직 (기존 로직 보존)
-                if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
-                    var safeU = DB_DATA.rooms[rName].users[uid];
-                    
-                    // A. 포인트 급감 체크
+                    // A. 포인트 정밀 체크 (NaN 또는 80%↑ 급감 시 해당 필드만 복구)
                     var lastPoint = Number(safeU.point || 0);
-                    if (lastPoint > 10000 && (lastPoint - u.point) / lastPoint >= 0.8) {
-                        room.users[uid] = JSON.parse(JSON.stringify(safeU));
-                        isHealed = true;
-                        healReports.push(u.name + " (포인트 80%↑ 급감 감지: 전체 롤백)");
-                        continue;
+                    var cr = getCreditInfo(u.creditScore || 600);
+                    var maxAllowDrop = Math.max(cr.limit * 1.5, lastPoint * 0.5);
+
+                    if (isNaN(u.point) || (lastPoint > 10000 && (lastPoint - u.point) > maxAllowDrop)) {
+                        u.point = lastPoint; 
+                        isFieldHealed = true;
                     }
-                    // B. 은행 잔고 급감 체크
+
+                    // B. 은행 잔고 정밀 체크
                     var lastBank = Number(safeU.bank || 0);
-                    if (lastBank > 10000 && (lastBank - u.bank) / lastBank >= 0.8) {
-                        room.users[uid] = JSON.parse(JSON.stringify(safeU));
-                        isHealed = true;
-                        healReports.push(u.name + " (은행잔고 80%↑ 급감 감지: 전체 롤백)");
-                        continue;
+                    if (isNaN(u.bank) || (lastBank > 10000 && (lastBank - u.bank) / lastBank >= 0.8)) {
+                        u.bank = lastBank;
+                        isFieldHealed = true;
                     }
-                    // C. 랜드마크(부동산) 보유량 증발 체크
-                    if (safeU.landHoldings) {
+
+                    // C. 부동산 지분 정밀 체크
+                    if (safeU.landHoldings && u.landHoldings) {
                         for (var lName in safeU.landHoldings) {
-                            if (!data.landmarkMarket || !data.landmarkMarket[lName]) continue; // 철거(상폐) 제외
                             var lastQty = Number(safeU.landHoldings[lName] || 0);
-                            var curQty = Number((u.landHoldings || {})[lName] || 0);
+                            var curQty = Number(u.landHoldings[lName] || 0);
                             if (lastQty >= 10 && (lastQty - curQty) / lastQty >= 0.8) {
-                                room.users[uid] = JSON.parse(JSON.stringify(safeU));
-                                isHealed = true;
-                                healReports.push(u.name + " (" + lName + " 지분 증발 감지: 전체 롤백)");
-                                break;
+                                u.landHoldings[lName] = lastQty; // 해당 건물 지분만 복구
+                                isFieldHealed = true;
                             }
                         }
-                        if (isHealed) continue;
                     }
-                    // D. 인벤토리 증발 체크
+
+                    // D. 인벤토리 정밀 체크
                     var lastInvCount = Array.isArray(safeU.inventory) ? safeU.inventory.length : 0;
                     var curInvCount = Array.isArray(u.inventory) ? u.inventory.length : 0;
                     if (lastInvCount >= 5 && (curInvCount / lastInvCount) <= 0.2) {
-                        room.users[uid] = JSON.parse(JSON.stringify(safeU));
+                        u.inventory = JSON.parse(JSON.stringify(safeU.inventory)); // 가방만 복구
+                        isFieldHealed = true;
+                    }
+
+                    // 수리 발생 시 리포트 추가
+                    if (isFieldHealed) {
                         isHealed = true;
-                        healReports.push(u.name + " (가방 아이템 유실 감지: 전체 롤백)");
-                        continue;
+                        healReports.push(u.name + " (자산/항목 정밀 수리: 무역 상태 보존)");
                     }
                 }
-            }
-        }
+            } // 유저 루프 종료 (3번째 중괄호)
+        } // 방 루프 종료 (4번째 중괄호)
 
+        // 모든 방의 검사가 끝난 시점에 한 번만 치유 보고서 발송
         if (isHealed && healReports.length > 0) {
             try {
-                var reportMsg = "🚨 [데이터 자가 치유 작동]\n" +
-                                "손상 의심 데이터를 제외하고 정상 저장되었습니다.\n\n" +
+                var reportMsg = "🚨 [데이터 자가 치유 작동]\n손상 의심 데이터를 제외하고 정상 저장되었습니다.\n\n" +
                                 "[치유 내역]\n• " + healReports.join("\n• ") + "\n\n" +
                                 "⚠️ 관리자는 해당 유저의 활동을 점검하십시오.";
-                // [이중 알림]: 유저(내리다)에게는 상황 안내를, 관리자(베릭방)에게는 정밀 감사 로그를 전송
                 Api.replyRoom("내리다", reportMsg);
                 Api.replyRoom("베릭방", "🩹 [Healer Audit]\n━━━━━━━━━━━━━━━\n" + healReports.join("\n") + "\n━━━━━━━━━━━━━━━");
             } catch(e) {}

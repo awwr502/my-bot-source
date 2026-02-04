@@ -11832,39 +11832,51 @@ function _showVoyageStatus(user, replier) {
         var nationInfo = market[v.dest] || { favorite: "", hate: "" };
         var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
 
-        // 출항 당시 물가 참조 (기존 항해자는 현재 물가 참조)
-        var eMult = v.ecoMultSnapshot || util_getEcoMultiplier(roomName); 
-        var gini = util_getGiniCorrection(user, roomName);
-
-        // 1. 일반 화물 순수익 시뮬레이션
-        for (var good in (user.cargo || {})) {
-            var count = Number(user.cargo[good]); if (count <= 0) continue;
+        // 1. 일반 화물 예상 수익 계산 (정산 엔진과 100% 동기화)
+        var cargo = v.cargoSnapshot || user.cargo || {};
+        for (var good in cargo) {
+            var count = Number(cargo[good]); if (count <= 0) continue;
             
-            // 실제 유저가 구매 시 지불했을 예상 비용 (원가)
-            var unitCost = Math.floor((cfg.GOODS_COST[good] || 10000) * eMult * gini.tax);
-            var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
-            
-            var mult = (good === producedByDest) ? 0 : 
-                       (good === nationInfo.favorite) ? rateInfo.pref : 
-                       (good === nationInfo.hate) ? rateInfo.hate : rateInfo.norm;
-
+            // A. 투자 원가 추정 (출발 시점 물가 + 평균 지니세 1.05배 가정)
+            var unitCost = Math.floor((cfg.GOODS_COST[good] || 10000) * eMult * 1.05);
             totalCost += (unitCost * count);
-            estRev += Math.floor(((cfg.GOODS_COST[good] || 10000) * eMult) * mult * count);
+
+            // B. 예상 매출 배율 산출
+            var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
+            var multiplier = (good === producedByDest) ? 0.5 : // 자국 생산물 반값
+                             (good === nationInfo.favorite) ? rateInfo.pref : 
+                             (good === nationInfo.hate) ? rateInfo.hate : rateInfo.norm;
+
+            estRev += Math.floor(((cfg.GOODS_COST[good] || 10000) * eMult) * multiplier * count);
         }
 
-        // 2. 특산품 가치 합산 (발견 확률 제외, 현재 보유분 기준)
-        for (var sName in (user.specialties || {})) {
-            var sCount = Number(user.specialties[sName]); if (sCount <= 0) continue;
-            var sMult = (v.dest === sName) ? cfg.SPECIALTY_PROFIT : 1.0; // 목적지 특산품이면 3배
-            estRev += Math.floor(cfg.BASE_PRICE * sCount * sMult);
+        // 2. 특산품 예상 수익 계산 (카테고리별 차등 가격 적용)
+        var specs = v.specialtySnapshot || user.specialties || {};
+        for (var sName in specs) {
+            var sCount = Number(specs[sName]); if (sCount <= 0) continue;
+            
+            // 특산품 카테고리 및 기본가 확인
+            var parentGood = "";
+            var sBasePrice = 10000;
+            for (var n in TRADE_RELATION) {
+                if (TRADE_RELATION[n].set === sName) { 
+                    parentGood = TRADE_RELATION[n].produce; 
+                    sBasePrice = cfg.SPECIALTY_COST[parentGood] || 10000;
+                    break; 
+                }
+            }
+
+            var sMult = (parentGood === producedByDest) ? 0 : // 자국 특산품 압수
+                         (parentGood === nationInfo.favorite) ? cfg.SPECIALTY_PROFIT : 
+                         (parentGood === nationInfo.hate) ? 0.5 : 1.0;
+
+            estRev += Math.floor(sBasePrice * sCount * sMult);
         }
 
-        // 3. 지능형 세율 적용 및 최종 순수익 산출
-        var tradeCfg = SYSTEM_CONFIG.TRADE;
-        var taxRate = Number(tradeCfg.BASE_TAX || 0.1); // 상수의 고정 10% 무역세 적용
-        
-        var estNetPayout = Math.floor(estRev * (1 - taxRate)); // 세후 수령액
-        var pureProfit = estNetPayout - totalCost; // 수령액 - 구매비용
+        // 3. 최종 세후 수령액 계산 (무역세 10% 고정 차감)
+        var taxRate = 0.1; 
+        var estNetPayout = Math.floor(estRev * (1 - taxRate)); 
+        var pureProfit = estNetPayout - totalCost; // 세후 수익 - 투자 원가
 
         msg = "현재 [" + v.dest + "]로 항해 중\n\n" +
               "💰 예상 수령액: " + fp(estNetPayout) + "P\n" +

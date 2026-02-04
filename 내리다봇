@@ -11711,27 +11711,25 @@ function _departVoyage(user, data, replier, roomName, dest, cfg) {
     var ship = cfg.SHIPS[user.shipLevel || 1];
     var timeMin = Math.floor(60 * ship.speedMult);
     
-    // 순풍 판정 (10% 확률)
     var isSmooth = Math.random() < 0.1;
     if (isSmooth) timeMin = Math.floor(timeMin * 0.8);
-
     var arrival = Date.now() + (timeMin * 60 * 1000);
     
-    // 시세 및 출항 당시 물가 배율 스냅샷 생성 (수익률 박제)
     var marketSnapshot = JSON.parse(JSON.stringify(roomData.features.tradeMarket || cfg.NATIONS));
     var ecoMultSnapshot = util_getEcoMultiplier(roomName); 
+    // 현재 적재된 화물 상태를 그대로 박제 (롤백 방어)
+    var cargoSnapshot = JSON.parse(JSON.stringify(user.cargo || {}));
 
     user.voyage = {
         active: true, dest: dest, arrival: arrival, startTime: Date.now(),
         marketSnapshot: marketSnapshot, 
-        ecoMultSnapshot: ecoMultSnapshot, // 추가됨
+        ecoMultSnapshot: ecoMultSnapshot,
+        cargoSnapshot: cargoSnapshot, // 스냅샷 저장
         isSmooth: isSmooth
     };
     
-    safeSaveData(data);
-    var msg = "목적지: " + dest + "\n" +
-              "소요 시간: 약 " + timeMin + "분\n" +
-              "도착 예정: " + new Date(arrival).toLocaleTimeString();
+    safeSaveData(data, true); // 출항 즉시 물리 저장 강제
+    var msg = "목적지: " + dest + "\n소요 시간: 약 " + timeMin + "분\n도착 예정: " + new Date(arrival).toLocaleTimeString();
     if (isSmooth) msg += "\n\n🌬️ [순풍] 기분 좋은 바람으로 시간이 20% 단축되었습니다!";
     
     replier.reply(formatCommand("🌊 출항 명령 하달", user, msg, "항해 중 타 활동이 가능합니다."));
@@ -11815,13 +11813,16 @@ function _manageShip(user, replier, cfg) {
 function _processShipUpgrade(user, data, replier, roomName, cfg) {
     var next = cfg.SHIPS[(user.shipLevel || 1) + 1];
     if (!next || user.point < next.upgradeCost) return replier.reply(formatError(user, "개조 불가", "비용 부족 또는 최고 등급입니다."));
+    
     user.skipHealing = true;
     util_updatePoint(user, data.rooms[roomName], -next.upgradeCost, "선박 개조 비용", roomName);
-    user.shipLevel = (user.shipLevel || 1) + 1;
-    safeSaveData(data);
+    
+    // 원자적 데이터 게이트웨이 사용 및 물리 저장 강제(true)
+    util_setData(user, 'shipLevel', (user.shipLevel || 1) + 1, "선박 등급 업그레이드", roomName);
+    safeSaveData(data, true); 
+    
     replier.reply(formatCommand("🎊 선박 개조 완료", user, "축하합니다! 선박이 [" + next.name + "]으로 강화되었습니다."));
 }
-
 /**
  * [핵심 엔진] 무역 정산 및 재해 엔진 v1.5
  */

@@ -12643,127 +12643,136 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 //==========섹터52==========
 
 /**
- * [핵심 모듈] 통합 카지노 엔진 (사다리 & 바카라)
- * 기능: 메뉴 출력, 배팅 검증, 최근 결과 조회
- */
+ * [핵심 모듈] 통합 카지노 엔진 (사다리 & 바카라)
+ * 기능: 메뉴 출력, 배팅 검증, 최근 결과 조회
+ */
 
 /* [메인] 카지노 로직 진입점 */
 function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
-    // [핵심] 현재 접속한 방이 단체방인지 확인 (1:1 방에서만 구동되게 제한)
-    // 1:1 방은 보통 방 이름이 발송자 이름과 같거나 특수 구조를 가짐. 
-    // 여기서는 isGroupChat 여부를 알 수 없으므로 ALLOWED_ROOMS로 판단.
-    if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
-        var inviteBody = "중앙 카지노는 VIP 고객님의 보안과\n" +
+    // 1. 공백 제거 (숫자 인식률 향상)
+    var cleanMsg = msg.trim();
+
+    // [핵심] 현재 접속한 방이 단체방인지 확인 (1:1 방에서만 구동되게 제한)
+    if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
+        var inviteBody = "중앙 카지노는 VIP 고객님의 보안과\n" +
                          "쾌적한 환경을 위해 오직 [1:1 대화]를\n" +
                          "통해서만 게임을 제한하고 있습니다.\n" +
-                         "입장 시 메인방 닉네임과 동일하게\n" +
-                         "맞춰주셔야 메인방 정보랑 연동가능하며\n" +
-                         "동일한 정보로 이용가능합니다.\n\n" +
-                         "아래 비밀 통로(링크)를 통해 입장하여\n" +
-                         "/카지노 를 다시 입력해 주십시오.\n\n" +
-                         "🎫 [입장 링크]\n" +
                          "https://open.kakao.com/me/nerida";
 
-        replier.reply(formatCommand("📨 VIP 전용 안내", user, inviteBody, "봇의 오픈프로필 1:1 채팅방에서 만나요!"));
-        return true;
-    }
+        replier.reply(formatCommand("📨 VIP 전용 안내", user, inviteBody, "봇의 오픈프로필 1:1 채팅방에서 만나요!"));
+        return true;
+    }
 
-    // [1:1 방 안전 초기화] 현재 방(1:1)에 features가 없으면 생성하여 오류 방지
+    /* [1:1 방 안전 초기화 및 상태 연결] */
     if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
     if (!data.rooms[roomName].features) {
         if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
             data.rooms[roomName].features = ROOM_FEATURE_TEMPLATE();
+        } else {
+            // 템플릿 함수가 없을 경우 수동 생성 (비상용)
+            data.rooms[roomName].features = { states: { menuWait: {} }, racing: {}, lotto: {} };
         }
     }
     
-    // 입력 대기 상태(mState)는 현재 접속한 1:1 방에 저장해야 함
-    var mState = data.rooms[roomName].features.states.menuWait;
+    // 입력 대기 상태(mState)는 현재 접속한 1:1 방에 저장
+    var rFeatures = data.rooms[roomName].features;
+    if (!rFeatures.states) rFeatures.states = { menuWait: {} };
+    var mState = rFeatures.states.menuWait; 
 
-    // [중요] 1:1 방에는 판돈 데이터가 없으므로 메인 운영 방("내리다")의 데이터를 강제 참조
-    var MAIN_ZONE = "내리다";
-    var mainRoomData = data.rooms[MAIN_ZONE];
-    var mState = data.rooms[roomName].features.states.menuWait; // 입력 대기 상태는 현재 1:1방 유지
-    
-    if (!mainRoomData.features.casino) {
-        mainRoomData.features.casino = {
-            ladder: { round: 1, history: [], bets: {} },
-            baccarat: { round: 1, history: [], bets: {} }
-        };
-    }
-    // 이제 모든 casino 변수는 '내리다' 방의 데이터를 가리킵니다.
-    var casino = mainRoomData.features.casino;
+    // [중요] 게임 판돈/기록 데이터는 메인 운영 방("내리다")의 데이터를 강제 참조
+    var MAIN_ZONE = "내리다";
+    var mainRoomData = data.rooms[MAIN_ZONE];
+    
+    if (!mainRoomData.features.casino) {
+        mainRoomData.features.casino = {
+            ladder: { round: 1, history: [], bets: {} },
+            baccarat: { round: 1, history: [], bets: {} }
+        };
+    }
+    var casino = mainRoomData.features.casino;
 
-    if (msg === "/카지노") {
+    /* 명령어 처리: /카지노 */
+    if (cleanMsg === "/카지노") {
+        if (user.mining && user.mining.active === true) {
+            replier.reply(formatError(user, "배팅 불가", "현재 광산에서 채굴 작업 중입니다."));
+            return true;
+        }
 
-        // [채굴 가드] 광산 이용 중 접근 차단
-        if (user.mining && user.mining.active === true) {
-            replier.reply(formatError(user, "배팅 불가", "현재 광산에서 채굴 작업 중입니다."));
-            return true;
-        }
+        mState[targetUid] = { type: 'casino_main', time: Date.now() };
+        var body = "현재 입장 가능한 게임룸입니다.\n\n" +
+                   "1. 🌓 사다리 (2분 주기 / 1.90~4.0배)\n" +
+                   "2. 🃏 바카라 (3분 주기 / 2.0~8.0배)\n" +
+                   "3. 🕴️ 블랙잭 (개인전 / 딜러 대결)\n";
+        
+        replier.reply(formatCommand("🎰 내리다 중앙 카지노", user, body, "이동하실 게임 번호를 입력하세요."));
+        safeSaveData(data); // 상태 저장 필수
+        return true;
+    }
 
-        mState[targetUid] = { type: 'casino_main', time: Date.now() };
-        var body = "현재 입장 가능한 게임룸입니다.\n\n" +
-                   "1. 🌓 사다리 (2분 주기 / 1.90~4.0배)\n" +
-                   "2. 🃏 바카라 (3분 주기 / 2.0~8.0배)\n" +
-                   "3. 🕴️ 블랙잭 (개인전 / 딜러 대결)\n";
+    /* 숫자 입력 처리 */
+    var state = mState[targetUid];
+    if (!state) return false; // 대기 상태가 없으면 종료
+
+    // 2. 사다리 메뉴
+    if (state.type === 'casino_main' && cleanMsg === "1") {
+        mState[targetUid] = { type: 'casino_ladder', time: Date.now() };
+        _showCasinoSubMenu(replier, user, "사다리", casino.ladder, 2);
+        safeSaveData(data);
+        return true;
+    }
+
+    // 3. 바카라 메뉴
+    if (state.type === 'casino_main' && cleanMsg === "2") {
+        mState[targetUid] = { type: 'casino_baccarat', time: Date.now() };
+        _showCasinoSubMenu(replier, user, "바카라", casino.baccarat, 3);
+        safeSaveData(data);
+        return true;
+    }
+
+    // 3-1. 블랙잭 메뉴
+    if (state.type === 'casino_main' && cleanMsg === "3") {
+        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
+            replier.reply(formatError(user, "블랙잭 폐쇄", "국가 부도 선포로 인해 딜러들이 모두 휴가 중입니다."));
+            return true;
+        }
         
-        replier.reply(formatCommand("🎰 내리다 중앙 카지노", user, body, "이동하실 게임 번호를 입력하세요."));
-        return true;
-    }
-
-    var state = mState[targetUid];
-    if (!state) return false;
-
-    // 2. 사다리 메뉴 (casino_main에서 1번 선택 시)
-    if (state.type === 'casino_main' && msg === "1") {
-        mState[targetUid] = { type: 'casino_ladder', time: Date.now() };
-        _showCasinoSubMenu(replier, user, "사다리", casino.ladder, 2);
-        return true;
-    }
-
-    // 3. 바카라 메뉴 (casino_main에서 2번 선택 시)
-    if (state.type === 'casino_main' && msg === "2") {
-        mState[targetUid] = { type: 'casino_baccarat', time: Date.now() };
-        _showCasinoSubMenu(replier, user, "바카라", casino.baccarat, 3);
-        return true;
-    }
-
-    // 3-1. 블랙잭 메뉴 (casino_main에서 3번 선택 시)
-    if (state.type === 'casino_main' && msg === "3") {
-        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
-            replier.reply(formatError(user, "블랙잭 폐쇄", "국가 부도 선포로 인해 딜러들이 모두 휴가 중입니다."));
-            return true;
+        // 뱅크 프로세스 상태 초기화 확인
+        if (!data.rooms[roomName].features.states.bankProcess) {
+            data.rooms[roomName].features.states.bankProcess = {};
         }
-        // 배팅 금액 입력 상태로 전환
-        data.rooms[roomName].features.states.bankProcess[targetUid] = { type: 'blackjack_bet_input', time: Date.now() };
-        delete mState[targetUid];
-        
-        var minB = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
-        var maxB = SYSTEM_CONFIG.ECO.GAMBLE_MAX || 50000;
-        replier.reply(formatCommand("🕴️ 블랙잭 테이블 입장", user, "딜러가 카드를 섞고 있습니다.\n배팅하실 금액을 입력해주세요.\n\n• 최소: " + fp(minB) + "P\n• 최대: " + fp(maxB) + "P", "취소: [취소]"));
-        return true;
-    }
 
-    // 4. 게임별 세부 기능 선택 (회차정보 / 결과조회 / 당첨기록)
-    if (state.type === 'casino_ladder' || state.type === 'casino_baccarat') {
-        var gameType = (state.type.indexOf('ladder') !== -1) ? "ladder" : "baccarat"; 
-        var gameObj = casino[gameType];
-        var interval = (gameType === "ladder") ? 2 : 3;
+        // 배팅 금액 입력 상태로 전환
+        data.rooms[roomName].features.states.bankProcess[targetUid] = { type: 'blackjack_bet_input', time: Date.now() };
+        delete mState[targetUid];
+        
+        var minB = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
+        var maxB = SYSTEM_CONFIG.ECO.GAMBLE_MAX || 50000;
+        replier.reply(formatCommand("🕴️ 블랙잭 테이블 입장", user, "딜러가 카드를 섞고 있습니다.\n배팅하실 금액을 입력해주세요.\n\n• 최소: " + fp(minB) + "P\n• 최대: " + fp(maxB) + "P", "취소: [취소]"));
+        safeSaveData(data);
+        return true;
+    }
 
-        if (msg === "1") { // 진행 중인 회차 상세
-            mState[targetUid].type = state.type + "_sub"; 
-            _showCasinoRoundInfo(replier, user, gameType, gameObj, interval, roomName);
-        } else if (msg === "2") { // 최근 10경기 결과
-            mState[targetUid].type = state.type + "_sub"; 
-            _showCasinoHistory(replier, user, gameType, gameObj);
-        } else if (msg === "3") { // [신규] 금일 당첨 기록 확인
-            mState[targetUid].type = state.type + "_sub";
-            _showCasinoDailyHistory(replier, user, gameType);
-        }
-        return true;
-    }
+    // 4. 게임별 세부 기능
+    if (state.type === 'casino_ladder' || state.type === 'casino_baccarat') {
+        var gameType = (state.type.indexOf('ladder') !== -1) ? "ladder" : "baccarat"; 
+        var gameObj = casino[gameType];
+        var interval = (gameType === "ladder") ? 2 : 3;
 
-    return false;
+        if (cleanMsg === "1") {
+            mState[targetUid].type = state.type + "_sub"; 
+            _showCasinoRoundInfo(replier, user, gameType, gameObj, interval, roomName);
+        } else if (cleanMsg === "2") {
+            mState[targetUid].type = state.type + "_sub"; 
+            _showCasinoHistory(replier, user, gameType, gameObj);
+        } else if (cleanMsg === "3") {
+            mState[targetUid].type = state.type + "_sub";
+            _showCasinoDailyHistory(replier, user, gameType);
+        }
+        safeSaveData(data);
+        return true;
+    }
+
+    return false;
 }
 
 /* [서브] 카지노 게임별 2단계 메뉴 출력 */

@@ -77,6 +77,7 @@ var USER_SCHEMA = [
     { key: 'spittoWinRate', default: 0, type: 'number' },       // 스피또 보정치
     { key: 'shipLevel', default: 1, type: 'number' },           // 선박 등급 (1:카라벨, 2:프리깃, 3:갤리온)
     { key: 'cargo', default: {}, type: 'object' },              // 현재 적재 화물 { type: count }
+    { key: 'cargoAvg', default: {}, type: 'object' },           // 화물별 평균 매입가 { type: price }
     { key: 'specialties', default: {}, type: 'object' },        // 보유 특산품 { name: count }
     { key: 'voyage', default: { active: false, dest: "", arrival: 0, items: [] }, type: 'object' }, // 항해 상태
     { key: 'tradeCount', default: 0, type: 'number' },          // 누적 무역 횟수
@@ -7464,7 +7465,17 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         // 적재함 업데이트
         if (!user.cargo) user.cargo = {};
         var goodsType = item.value; // "식료품", "보석" 등
-        user.cargo[goodsType] = (user.cargo[goodsType] || 0) + qty;
+        if (!user.cargoAvg) user.cargoAvg = {}; // 평단가 객체 초기화
+
+        var oldQty = Number(user.cargo[goodsType] || 0);
+        var oldAvg = Number(user.cargoAvg[goodsType] || 0);
+        var currentUnitPrice = Math.floor(finalPrice / qty); // 이번 구매 개당 단가
+
+        // 새로운 가중 평균 매입가 계산 및 수량 합산
+        var newAvg = Math.floor(((oldAvg * oldQty) + (currentUnitPrice * qty)) / (oldQty + qty));
+        
+        user.cargoAvg[goodsType] = newAvg; // 새 평단가 기록
+        user.cargo[goodsType] = oldQty + qty; // 수량 업데이트 (기존 한 줄 코드의 역할 수행)
 
         replier.reply(formatCommand("🚢 화물 적재 완료", user, 
             "[" + goodsType + " 상자] " + qty + "개를 배에 실었습니다.\n" +
@@ -11885,8 +11896,8 @@ function _showVoyageStatus(user, replier, data, roomName) {
         var cargo = v.cargoSnapshot || user.cargo || {};
         for (var good in cargo) {
             var count = Number(cargo[good]); if (count <= 0) continue;
-            var unitCost = Math.floor((cfg.GOODS_COST[good] || 10000) * eMult * 1.05);
-            totalCost += (unitCost * count);
+            var unitCost = Number(user.cargoAvg[good] || (cfg.GOODS_COST[good] * eMult));
+            totalCost += (unitCost * count);
             var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
             var multiplier = (good === producedByDest) ? 0.5 : 
                              (good === nationInfo.favorite) ? rateInfo.pref : 
@@ -12019,6 +12030,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         
         // [중요] 실제 유저의 실시간 가방 데이터 비우기 (동기화)
         if (user.cargo) user.cargo[good] = 0;
+        if (user.cargoAvg) user.cargoAvg[good] = 0; // 정산 완료 후 평단가 초기화
     }
 
     // 3. 특산품 정산 (specialtyToSell 스냅샷 기반 루프)

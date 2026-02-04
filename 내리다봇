@@ -11883,23 +11883,25 @@ function _showVoyageStatus(user, replier, data, roomName) {
         var totalCost = 0; 
         var cfg = SYSTEM_CONFIG.TRADE;
         
-       var totalRevenue = 0; // 정산 시 '💰 총 매출'에 해당하는 변수
-        var totalCost = 0;    // 실제 구매 시 지불한 '💰 매입가' 총액
+       var totalRevenue = 0; 
+        var totalCost = 0;    
         
         var market = v.marketSnapshot || {};
         var nationInfo = market[v.dest] || { favorite: "", hate: "" };
         var eMult = v.ecoMultSnapshot || 1.0;
         var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
 
-        // 1. 일반 화물 정산 공식 (정산 엔진 _processTradeArrival과 100% 동일화)
+        // 1. 일반 화물 정산 공식 및 매입가 계산 (0원 방어 로직 추가)
         var cargo = v.cargoSnapshot || user.cargo || {};
         for (var good in cargo) {
             var count = Number(cargo[good]); if (count <= 0) continue;
             
-            // 매입가 합산: 가방에 기록된 평단가 직접 사용
-            totalCost += (Number(user.cargoAvg[good] || 0) * count);
+            // [교정] 매입가 정보가 없으면 기본가로 소급 적용하여 0원 처리 방지
+            var unitCost = Number((user.cargoAvg && user.cargoAvg[good]) || 0);
+            if (unitCost <= 0) unitCost = (cfg.GOODS_COST[good] || 10000) * eMult; 
             
-            // 매출액 계산: 정산 엔진의 Math.floor 방식 적용
+            totalCost += (unitCost * count);
+            
             var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
             var multiplier = (good === producedByDest) ? 0.5 : 
                              (good === nationInfo.favorite) ? rateInfo.pref : 
@@ -11908,7 +11910,7 @@ function _showVoyageStatus(user, replier, data, roomName) {
             totalRevenue += Math.floor(((cfg.GOODS_COST[good] || 10000) * eMult) * multiplier * count);
         }
 
-        // 2. 특산품 정산 공식 합산
+        // 2. 특산품 정산 공식 합산 (특산품은 획득가 0원으로 처리)
         var specs = v.specialtySnapshot || user.specialties || {};
         for (var sName in specs) {
             var sCount = Number(specs[sName]); if (sCount <= 0) continue;
@@ -11919,10 +11921,10 @@ function _showVoyageStatus(user, replier, data, roomName) {
             totalRevenue += Math.floor(sBasePrice * sCount * sMult);
         }
 
-        // 3. 최종 수령액(세후) 및 순수익 도출
+        // 3. 최종 수령액(세후 10%) 및 순수익 계산
         var tax = Math.floor(totalRevenue * 0.1); 
-        var finalPayout = totalRevenue - tax; // [정산액 - 세금 = 실제 지갑에 꽂히는 돈]
-        var pureProfit = finalPayout - totalCost; // [실제 수령액 - 매입원가 = 순수익]
+        var finalPayout = totalRevenue - tax; 
+        var pureProfit = finalPayout - totalCost; 
         var roi = totalCost > 0 ? ((pureProfit / totalCost) * 100).toFixed(1) : "0.0";
 
         msg = "현재 [" + v.dest + "]로 항해 중\n\n" +

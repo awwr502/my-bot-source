@@ -1277,6 +1277,43 @@ function util_getActivePolicy(roomData) {
 }
 
 /**
+ * [신설] 입력 대기열 자동 만료 엔진 (Auto-Timeout Guard)
+ * 기능: 30초간 응답 없는 유저를 탐지하여 즉시 알림을 발송하고 대기 상태를 해제합니다.
+ * (이 함수는 섹터 16-1의 스케줄러 루프에서 호출됩니다.)
+ */
+function util_autoClearTimeouts(data) {
+    var now = Date.now();
+    for (var rName in data.rooms) {
+        var roomObj = data.rooms[rName];
+        if (!roomObj || !roomObj.features || !roomObj.features.states) continue;
+        
+        var states = roomObj.features.states;
+        var queues = ["menuWait", "bankProcess", "lottoPurchase", "selectWait"];
+
+        queues.forEach(function(qKey) {
+            var q = states[qKey];
+            if (!q) return;
+            for (var uid in q) {
+                var entry = q[uid];
+                // 각 대기열별 시간 필드값 참조 (time 또는 timestamp)
+                var startTime = entry.time || entry.timestamp || 0;
+                
+                if (startTime > 0 && (now - startTime > 30000)) {
+                    var u = roomObj.users[uid];
+                    if (u) {
+                        try {
+                            Api.replyRoom(rName, formatError(u, "입력 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
+                        } catch(e) {}
+                    }
+                    delete q[uid]; // 대기 상태 즉시 파기
+                    safeSaveData(data); // 상태 변경 실시간 저장
+                }
+            }
+        });
+    }
+}
+
+/**
  * [원자적 개편: 범용 데이터 게이트웨이] v2.0
  * 검증: 타입 일치 및 유효 숫자 여부를 선행 검사하고 정상 변경 승인 플래그 부여
  */
@@ -3071,6 +3108,12 @@ function runScheduler() {
             }
 
             util_stamp("mainLoop"); // 로직 시작 시점에 도장을 찍어 무한 경고를 방지합니다.
+
+            // 0. 입력 대기열 자동 만료 감시 엔진 가동 (1초 주기)
+            // 섹터 7에서 정의한 함수를 호출하여 30초 초과 시 자동 메시지를 발송합니다.
+            if (typeof util_autoClearTimeouts === 'function') {
+                util_autoClearTimeouts(data);
+            }
 
             // 모든 섹터가 공유할 상태 객체 (Context)
             var ctx = {

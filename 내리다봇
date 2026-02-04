@@ -12008,55 +12008,58 @@ function _showVoyageStatus(user, replier, data, roomName) {
         var eSnap = v.ecoMultSnapshot || 1.0; 
         var pByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
 
-        // 1. 일반 화물 예상 수익 계산 (정산 엔진 로직과 100% 동기화)
-    var cSnap = v.cargoSnapshot || user.cargo || {};
-    for (var g in cSnap) {
-        var qty = Number(cSnap[g]); if (qty <= 0) continue;
-        
-        // 매입 원가 계산 (출항 스냅샷 시점 기준)
-        var uCost = Number((user.cargoAvg && user.cargoAvg[g]) || (cfg.GOODS_COST[g] * eSnap));
-        tCost += (uCost * qty);
-        
-        // 판매 단가 결정 (정산 엔진 Profit_Rates 참조)
-        var rInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.25, norm: 1.05, hate: 0.8 };
-        var multiplier = 1.0;
-        
-        if (g === pByDest) multiplier = 0.5; // 자국 생산물 페널티 (반값)
-        else if (g === nSnap.favorite) multiplier = rInfo.pref;
-        else if (g === nSnap.hate) multiplier = rInfo.hate;
-        else multiplier = rInfo.norm;
-        
-        tRev += Math.floor(((cfg.GOODS_COST[g] || 10000) * eSnap) * multiplier * qty);
-    }
+        // 1. 일반 화물 예상 수익 계산 (매입가 보존 로직)
+        var cSnap = v.cargoSnapshot || user.cargo || {};
+        for (var g in cSnap) {
+            var qty = Number(cSnap[g]); if (qty <= 0) continue;
+            
+            // [핵심]: 시장가가 아닌 유저가 구매한 '평단가'를 원가로 고정 호출
+            var uCost = Number((user.cargoAvg && user.cargoAvg[g]) || cfg.GOODS_COST[g]);
+            tCost += (uCost * qty);
+            
+            // 수익률(Multiplier) 결정
+            var rInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.25, norm: 1.05, hate: 0.8 };
+            var multiplier = 1.0;
+            
+            if (g === pByDest) multiplier = 0.5; // 자국 생산물 페널티
+            else if (g === nSnap.favorite) multiplier = rInfo.pref;
+            else if (g === nSnap.hate) multiplier = rInfo.hate;
+            else multiplier = rInfo.norm;
+            
+            // 예상 매출 = 내 매입가 * 수익률%
+            tRev += Math.floor(uCost * multiplier * qty);
+        }
 
-    // 2. 특산품 예상 수익 계산
-    var sSnap = v.specialtySnapshot || user.specialties || {};
-    for (var s in sSnap) {
-        var sQty = Number(sSnap[s]); if (sQty <= 0) continue;
-        var pG = "";
-        for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === s) { pG = TRADE_RELATION[n].produce; break; } }
-        
-        var sMult = 1.0;
-        if (pG === pByDest) sMult = 0; // 자국 특산품 통관 거부
-        else if (pG === nSnap.favorite) sMult = cfg.SPECIALTY_PROFIT;
-        else if (pG === nSnap.hate) sMult = 0.5;
-        
-        tRev += Math.floor((cfg.SPECIALTY_COST[pG] || 10000) * sQty * sMult);
-    }
+        // 2. 특산품 예상 수익 계산 (특산품은 획득 시 비용이 0이므로 표준 원가 기준 계산)
+        var sSnap = v.specialtySnapshot || user.specialties || {};
+        for (var s in sSnap) {
+            var sQty = Number(sSnap[s]); if (sQty <= 0) continue;
+            var pG = "";
+            for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === s) { pG = TRADE_RELATION[n].produce; break; } }
+            
+            var sMult = 1.0;
+            if (pG === pByDest) sMult = 0;
+            else if (pG === nSnap.favorite) sMult = cfg.SPECIALTY_PROFIT;
+            else if (pG === nSnap.hate) sMult = 0.5;
+            
+            var sVal = (cfg.SPECIALTY_COST[pG] || 10000);
+            tCost += (sVal * sQty); // 특산품 가치도 원가에 포함 (수익률 계산용)
+            tRev += Math.floor(sVal * sQty * sMult);
+        }
 
-    // 3. 최종 세후 수령액 및 순수익 산출 (실제 정산 엔진과 100% 동기화)
-    var taxAmount = Math.floor(tRev * 0.1); // 무역세 10%
-    var finalReceipt = tRev - taxAmount;    // 💰 예상 수령액 (세후)
-    var pureProfit = finalReceipt - tCost;  // 💵 순수익 (세후 수령액 - 총 매입가)
-    var roi = tCost > 0 ? ((pureProfit / tCost) * 100).toFixed(1) : "0.0";
+        // 3. 최종 세후 수령액 계산 (정산 엔진과 동일하게 10% 적용)
+        var taxAmount = Math.floor(tRev * 0.1); 
+        var finalReceipt = tRev - taxAmount;
+        var pureProfit = finalReceipt - tCost;
+        var roi = tCost > 0 ? ((pureProfit / tCost) * 100).toFixed(1) : "0.0";
 
-    var displayBody = "현재 [" + v.dest + "]로 항해 중\n\n" +
-                      "💰 예상 수령액: " + fp(finalReceipt) + "P\n" +
-                      "💵 순수익 기대: " + (pureProfit >= 0 ? "+" : "") + fp(pureProfit) + "P\n" +
-                      "📈 기대 수익률: " + roi + "%\n\n" +
-                      "🕒 남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
+        var displayBody = "현재 [" + v.dest + "]로 항해 중\n\n" +
+                          "💰 예상 수령액: " + fp(finalReceipt) + "P\n" +
+                          "💵 순수익 기대: " + (pureProfit >= 0 ? "+" : "") + fp(pureProfit) + "P\n" +
+                          "📈 기대 수익률: " + roi + "%\n\n" +
+                          "🕒 남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
 
-    replier.reply(formatCommand("📦 항해 현황", user, displayBody, "정산은 도착 후 채팅 입력 시 자동 수행됩니다."));
+        replier.reply(formatCommand("📦 항해 현황", user, displayBody, "정산은 도착 후 채팅 입력 시 자동 수행됩니다."));
 }
 }
 
@@ -12112,47 +12115,45 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     
     var triggeredDisaster = (Math.random() < 0.25) ? ["STORM", "FIRE", "CORRO", "PIRACY"][Math.floor(Math.random() * 4)] : null; 
 
-    // 2. 일반 화물 정산 (중복 루프를 제거하고 cargoToSell 하나만 사용)
+    // 2. 일반 화물 실정산 (매입가 그대로 적용 로직)
     for (var good in cargoToSell) {
         var count = Number(cargoToSell[good]); if (count <= 0) continue;
-        cargoSummary.push(good + " x" + count);
         
-        var finalPurchasePrice = (cfg.GOODS_COST[good] || 10000) * ecoMult;
+        // [중요]: 유저가 실제 구매했던 가격(cargoAvg)을 가져옴
+        var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good]);
         var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
         var multiplier = 1.0;
 
-        // [A] 자국 생산물 수입 보전 (반값 매입)
         if (good === producedByDest) {
             multiplier = 0.5;
-            disasterLog += "\n🚫 [과잉 공급]: 자국 생산물인 '" + good + "'은 반입이 제한되어 반값에 거래되었습니다.";
+            disasterLog += "\n🚫 [과잉 공급]: 자국 생산물 '" + good + "'은 반입 제한(반값)";
         } else {
             if (good === nationInfo.favorite) multiplier = rateInfo.pref;
             else if (good === nationInfo.hate) multiplier = rateInfo.hate;
             else multiplier = rateInfo.norm;
         }
 
-        // 재해 로직 적용 (수량/가치 10% 손실)
-        if (multiplier > 0) {
-            if (triggeredDisaster === "FIRE" && (good === "식료품" || good === "공예품")) {
-                var lost = Math.ceil(count * 0.1); count -= lost;
-                disasterLog += "\n🔥 [재해: 화재]: " + good + " " + lost + "상자가 소실되었습니다.";
-            } else if (triggeredDisaster === "CORRO" && (good === "공업품" || good === "귀금속")) {
-                multiplier *= 0.9;
-                disasterLog += "\n🧪 [재해: 부식]: 화물의 가치가 10% 하락했습니다.";
-            }
+        // 재해 처리 (수량/가치 차감)
+        if (triggeredDisaster === "FIRE" && (good === "식료품" || good === "공예품")) {
+            var lost = Math.ceil(count * 0.1); count -= lost;
+            disasterLog += "\n🔥 [재해: 화재]: " + good + " " + lost + "상자 소실";
+        } else if (triggeredDisaster === "CORRO" && (good === "공업품" || good === "귀금속")) {
+            multiplier *= 0.9;
+            disasterLog += "\n🧪 [재해: 부식]: 화물 가치 10% 하락";
         }
 
-        var earn = Math.floor(finalPurchasePrice * multiplier * count);
+        // 최종 개별 매출 = 내 매입가 * 수익률% * 남은 수량
+        var earn = Math.floor(myPurchasePrice * multiplier * count);
         totalRevenue += earn;
 
         if (count > 0 && multiplier > 0) {
-            var sign = (multiplier >= 1.15) ? "🔺" : (multiplier <= 0.8 ? "🔹" : "➖");
+            var sign = (multiplier >= 1.1) ? "🔺" : (multiplier <= 0.9 ? "🔹" : "➖");
             soldLog.push("• " + good + " x" + count + ": " + fp(earn) + "P " + sign);
         }
         
-        // [중요] 실제 유저의 실시간 가방 데이터 비우기 (동기화)
+        // 가방 비우기
         if (user.cargo) user.cargo[good] = 0;
-        if (user.cargoAvg) user.cargoAvg[good] = 0; // 정산 완료 후 평단가 초기화
+        if (user.cargoAvg) user.cargoAvg[good] = 0;
     }
 
     // 3. 특산품 정산 (specialtyToSell 스냅샷 기반 루프)

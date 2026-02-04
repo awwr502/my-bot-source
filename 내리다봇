@@ -6814,6 +6814,12 @@ if (msg === "/가이드") {
             // 0-1. 조작 메뉴 및 수치 입력 처리
             if (typeof _handleAdminManiStep === 'function' && _handleAdminManiStep(msg, user, data, replier, roomName, targetUid)) return;
 
+            // [추가] 블랙잭 재도전(한번더/그만) 입력 처리
+            var bjWait = data.rooms[roomName].features.states.menuWait;
+            if (bjWait && bjWait[targetUid] && bjWait[targetUid].type === 'blackjack_retry') {
+                if (_handleBlackjackRetry(msg, user, data, replier, roomName, targetUid)) return;
+            }
+
             // 0. 중복 유저 선택
             if (typeof _handleSelectionLogic === 'function' && _handleSelectionLogic(msg, user, data, replier, roomName, targetUid)) return;
 
@@ -12921,9 +12927,60 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
         user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "패배", profit: -state.bet, isWin: false };
     }
 
-    replier.reply(formatCommand("🏁 블랙잭 결과 Report", user, finalMsg, "내 잔액: " + fp(user.point) + "P"));
+    // [수정] 결과 메시지에 재도전 버튼 추가 및 대기 상태 갱신
+    replier.reply(formatCommand("🏁 블랙잭 결과 Report", user, finalMsg + "\n\n🔁한번더 ❎그만", "내 잔액: " + fp(user.point) + "P"));
+    
     user.blackjackState = null;
+    
+    // [신규] 재도전 입력을 받기 위해 30초 대기 상태 진입
+    roomData.features.states.menuWait[targetUid] = { type: 'blackjack_retry', time: Date.now() };
+    
     safeSaveData(data);
+}
+
+/** [신규] 블랙잭 재도전(한번더/그만) 처리 핸들러 */
+function _handleBlackjackRetry(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    var mState = roomData.features.states.menuWait;
+    var state = mState[targetUid];
+
+    // 1. 시간 초과 체크 (30초)
+    if (Date.now() - state.time > 30000) {
+        delete mState[targetUid];
+        replier.reply(formatError(user, "선택 시간 초과", "30초 이내에 선택하지 않아 블랙잭이 종료되었습니다."));
+        return true;
+    }
+
+    // 2. 종료 (그만/취소)
+    if (msg === "그만" || msg === "취소") {
+        delete mState[targetUid];
+        replier.reply(formatCommand("🚫 블랙잭 종료", user, "테이블에서 일어났습니다."));
+        return true;
+    }
+
+    // 3. 재도전 (한번더/리트)
+    if (msg === "한번더" || msg === "한번 더" || msg === "리트") {
+        // [부도 가드] 재확인
+        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
+            delete mState[targetUid];
+            replier.reply(formatError(user, "블랙잭 폐쇄", "국가 부도 선포로 인해 딜러들이 휴업 중입니다."));
+            return true;
+        }
+
+        // 상태 전환: 메뉴 대기(retry) -> 금액 입력 대기(bet_input)
+        delete mState[targetUid];
+        
+        // 섹터 22-1 등에서 처리하는 입력 대기 상태로 전환
+        data.rooms[roomName].features.states.bankProcess[targetUid] = { type: 'blackjack_bet_input', time: Date.now() };
+        
+        var minB = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
+        var maxB = SYSTEM_CONFIG.ECO.GAMBLE_MAX || 50000;
+        
+        replier.reply(formatCommand("🕴️ 블랙잭 재도전", user, "배팅하실 금액을 입력해주세요.\n\n• 최소: " + fp(minB) + "P\n• 최대: " + fp(maxB) + "P", "취소: [취소]"));
+        return true;
+    }
+
+    return false;
 }
 
 /** 점수 계산기 (A처리 포함) */

@@ -87,7 +87,9 @@ var USER_SCHEMA = [
     { key: 'lastCasinoResult', default: null, type: 'object' }, // { type: "ladder", round: 0, res: "", profit: 0, isWin: true }
     { key: 'dailyLadderWins', default: [], type: 'array' },    // 사다리 당첨 히스토리
     { key: 'dailyBaccaratWins', default: [], type: 'array' },  // 바카라 당첨 히스토리
-    { key: 'shipName', default: '', type: 'string' }
+    { key: 'shipName', default: '', type: 'string' },
+    { key: 'blackjackState', default: null, type: 'object' }, // { status, playerHand, dealerHand, bet }
+    { key: 'dailyBlackjackWins', default: [], type: 'array' } // 금일 당첨 기록용
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -5460,7 +5462,7 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
     if (!bankProcessState || !bankProcessState[targetUid]) return false;
 
     var state = bankProcessState[targetUid];
-    var types = ['transfer', 'deposit', 'donate'];
+    var types = ['transfer', 'deposit', 'donate', 'blackjack_bet_input'];
     if (types.indexOf(state.type) === -1) return false; // 내 담당 업무가 아니면 패스
 
     // 1. 공통 가드 (시간 초과 및 취소)
@@ -5486,6 +5488,26 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
 
     var roomData = data.rooms[roomName];
     if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
+
+    if (state.type === 'blackjack_bet_input') {
+        var amt = parseInt(msg.replace(/,/g, ""));
+        var minB = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
+        var maxB = SYSTEM_CONFIG.ECO.GAMBLE_MAX || 50000;
+
+        if (isNaN(amt) || amt < minB || amt > maxB) {
+            replier.reply(formatError(user, "배팅 금액 오류", fp(minB) + "P ~ " + fp(maxB) + "P 사이를 입력하세요."));
+            return true;
+        }
+        if (Number(user.point) < amt) {
+            replier.reply(formatError(user, "잔액 부족", "보유 포인트가 부족합니다."));
+            return true;
+        }
+
+        delete bankProcessState[targetUid]; // 입력 세션 종료
+        // 섹터 52에 정의된 블랙잭 시작 함수 호출
+        _startBlackjackGame(user, data, replier, roomName, targetUid, amt);
+        return true;
+    }
 
     /* [기능 1] 송금 처리 */
     if (state.type === 'transfer') {
@@ -6826,6 +6848,9 @@ if (msg === "/가이드") {
             
             // B. 메뉴 대기
             if (typeof _handleMenuStep1 === 'function' && _handleMenuStep1(msg, user, data, replier, roomName, targetUid)) return;
+            if (menuWaitState[targetUid] && menuWaitState[targetUid].type === 'blackjack_action') {
+                if (_handleBlackjackAction(msg, user, data, replier, roomName, targetUid)) return;
+            }
             if (typeof _handleMenuStep2 === 'function' && _handleMenuStep2(msg, user, data, replier, roomName, targetUid)) return;
             if (typeof _handleMenuStep3 === 'function' && _handleMenuStep3(msg, user, data, replier, roomName, targetUid)) return;
             if (typeof _handleMenuStep4 === 'function' && _handleMenuStep4(msg, user, data, replier, roomName, targetUid)) return;
@@ -12287,7 +12312,8 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
         mState[targetUid] = { type: 'casino_main', time: Date.now() };
         var body = "현재 입장 가능한 게임룸입니다.\n\n" +
                    "1. 🌓 사다리 (2분 주기 / 1.90~4.0배)\n" +
-                   "2. 🃏 바카라 (3분 주기 / 2.0~8.0배)";
+                   "2. 🃏 바카라 (3분 주기 / 2.0~8.0배)\n" +
+                   "3. 🕴️ 블랙잭 (개인전 / 딜러 대결)\n";
         
         replier.reply(formatCommand("🎰 내리다 중앙 카지노", user, body, "이동하실 게임 번호를 입력하세요."));
         return true;
@@ -12307,6 +12333,22 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
     if (state.type === 'casino_main' && msg === "2") {
         mState[targetUid] = { type: 'casino_baccarat', time: Date.now() };
         _showCasinoSubMenu(replier, user, "바카라", casino.baccarat, 3);
+        return true;
+    }
+
+    // 3-1. 블랙잭 메뉴 (casino_main에서 3번 선택 시)
+    if (state.type === 'casino_main' && msg === "3") {
+        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
+            replier.reply(formatError(user, "블랙잭 폐쇄", "국가 부도 선포로 인해 딜러들이 모두 휴가 중입니다."));
+            return true;
+        }
+        // 배팅 금액 입력 상태로 전환
+        data.rooms[roomName].features.states.bankProcess[targetUid] = { type: 'blackjack_bet_input', time: Date.now() };
+        delete mState[targetUid];
+        
+        var minB = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
+        var maxB = SYSTEM_CONFIG.ECO.GAMBLE_MAX || 50000;
+        replier.reply(formatCommand("🕴️ 블랙잭 테이블 입장", user, "딜러가 카드를 섞고 있습니다.\n배팅하실 금액을 입력해주세요.\n\n• 최소: " + fp(minB) + "P\n• 최대: " + fp(maxB) + "P", "취소: [취소]"));
         return true;
     }
 
@@ -12582,4 +12624,140 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
     }
     safeSaveData(data);
     return true;
+}
+
+/** [블랙잭 시작] 최초 카드 분배 및 스테이징 적용 */
+function _startBlackjackGame(user, data, replier, roomName, targetUid, betAmt) {
+    var roomData = data.rooms[roomName];
+    user.skipHealing = true;
+    
+    // 포인트 선차감 (게이트웨이 준수)
+    util_updatePoint(user, roomData, -betAmt, "블랙잭 배팅 참여", roomName);
+
+    // 카드 생성 (1~10, JQK=10, A=11)
+    var getCard = function() {
+        var num = Math.floor(Math.random() * 13) + 1;
+        if (num > 10) return 10; // J, Q, K
+        if (num === 1) return 11; // A (기본 11)
+        return num;
+    };
+
+    var pHand = [getCard(), getCard()];
+    var dHand = [getCard(), getCard()];
+
+    user.blackjackState = {
+        bet: betAmt,
+        playerHand: pHand,
+        dealerHand: dHand,
+        status: 'playing'
+    };
+
+    // 메뉴 선택 상태로 전환
+    roomData.features.states.menuWait[targetUid] = { type: 'blackjack_action', time: Date.now() };
+
+    var body = "🕴️ 딜러가 카드를 돌렸습니다.\n\n" +
+               "🤖 딜러: [ ? ], [ " + dHand[1] + " ]\n" +
+               "👤 나: [ " + pHand.join(", ") + " ]\n" +
+               "💰 합계: " + _calcBJScore(pHand) + "점\n\n" +
+               "1. 힛(Hit) - 카드 한 장 더\n" +
+               "2. 스테이(Stay) - 멈추고 비교";
+
+    replier.reply(formatCommand("🃏 블랙잭: 1:1 대결", user, body, "번호를 선택하세요."));
+    safeSaveData(data);
+}
+
+/** [블랙잭 액션 핸들러] 힛/스테이 처리 */
+function _handleBlackjackAction(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    var state = user.blackjackState;
+    if (!state) return false;
+
+    if (msg === "1") { // HIT
+        var newCard = Math.floor(Math.random() * 13) + 1;
+        if (newCard > 10) newCard = 10;
+        if (newCard === 1) newCard = 11;
+        
+        state.playerHand.push(newCard);
+        var score = _calcBJScore(state.playerHand);
+
+        if (score > 21) {
+            _finishBlackjack(user, data, replier, roomName, targetUid, "BUST");
+        } else {
+            // 딜러의 블러핑 멘트 생성
+            var bluffs = [
+                "오호.. 점수가 꽤 높은데요? 욕심내다간 터질지도 모릅니다.",
+                "제 바닥패가 그림(10)일 확률이 아주 높은데.. 괜찮으시겠습니까?",
+                "지금 멈추면 비길 수도 있을 것 같군요.",
+                "카드를 더 받으시다니, 대담하시네요."
+            ];
+            var bluffMsg = "\n\n💬 딜러: \"" + bluffs[Math.floor(Math.random() * bluffs.length)] + "\"";
+            
+            var body = "🤖 딜러: [ ? ], [ " + state.dealerHand[1] + " ]\n" +
+                       "👤 나: [ " + state.playerHand.join(", ") + " ]\n" +
+                       "💰 합계: " + score + "점" + bluffMsg + "\n\n" +
+                       "1. 힛(Hit) / 2. 스테이(Stay)";
+            replier.reply(formatCommand("🃏 블랙잭 진행 중", user, body));
+            roomData.features.states.menuWait[targetUid].time = Date.now(); // 시간 연장
+        }
+        return true;
+    } 
+    else if (msg === "2") { // STAY
+        _finishBlackjack(user, data, replier, roomName, targetUid, "STAY");
+        return true;
+    }
+    return false;
+}
+
+/** [블랙잭 결과 정산] AI 딜러 가동 및 승패 판정 */
+function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
+    var roomData = data.rooms[roomName];
+    var state = user.blackjackState;
+    var pScore = _calcBJScore(state.playerHand);
+    var dScore = _calcBJScore(state.dealerHand);
+    
+    delete roomData.features.states.menuWait[targetUid];
+
+    if (action === "STAY") {
+        // 딜러 AI: 17점 이상 될 때까지 계속 뽑음
+        while (dScore < 17) {
+            var c = Math.floor(Math.random() * 13) + 1;
+            if (c > 10) c = 10; if (c === 1) c = 11;
+            state.dealerHand.push(c);
+            dScore = _calcBJScore(state.dealerHand);
+        }
+    }
+
+    var result = ""; var prize = 0; var isWin = false;
+    if (pScore > 21) { result = "버스트(Bust) 패배! 💀"; prize = 0; }
+    else if (dScore > 21) { result = "딜러 버스트! 승리! 🎊"; prize = state.bet * 2; isWin = true; }
+    else if (pScore > dScore) { result = "점수 우위 승리! 🎊"; prize = state.bet * 2; isWin = true; }
+    else if (pScore < dScore) { result = "딜러 점수 우위 패배! 💀"; prize = 0; }
+    else { result = "무승부 (Push) 😐"; prize = state.bet; }
+
+    var finalMsg = "🤖 딜러 패: [ " + state.dealerHand.join(", ") + " ] (" + dScore + "점)\n" +
+                   "👤 나의 패: [ " + state.playerHand.join(", ") + " ] (" + pScore + "점)\n\n" +
+                   "📢 결과: " + result;
+
+    if (prize > 0) {
+        var res = processRepayment(user, prize, targetUid, roomName);
+        util_updatePoint(user, roomData, Number(res.actualGain), "블랙잭 정산 수익", roomName);
+        if (isWin) {
+            var nowStr = new Date().getHours() + ":" + ("0" + new Date().getMinutes()).slice(-2);
+            user.dailyBlackjackWins.unshift({ round: "B", res: "BJ승리", profit: prize, time: nowStr });
+            user.lastCasinoResult = { type: "baccarat", round: "BJ", res: "승리", profit: prize, isWin: true };
+        }
+        finalMsg += (res.repayMsg || "");
+    }
+
+    replier.reply(formatCommand("🏁 블랙잭 결과 Report", user, finalMsg, "내 잔액: " + fp(user.point) + "P"));
+    user.blackjackState = null;
+    safeSaveData(data);
+}
+
+/** 점수 계산기 (A처리 포함) */
+function _calcBJScore(hand) {
+    var score = 0; var aces = 0;
+    hand.forEach(function(c) { if (c === 11) aces++; score += c; });
+    while (score > 21 && aces > 0) { score -= 10; aces--; } // A를 11에서 1로 변환
+    return score;
 }

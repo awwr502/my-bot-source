@@ -8641,46 +8641,59 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
 
     if (msg === "/국고로그") {
         try {
-            var logFile = new java.io.File(JOURNAL_PATH);
-            if (!logFile.exists() || logFile.length() === 0) {
-                return replier.reply(formatAdmin("📋 국고 로그", "기록된 국고 변동 내역이 없습니다."));
+            var logs = [];
+            var filesToRead = [JOURNAL_PATH, BASE_DIR + "total_history.log"];
+
+            filesToRead.forEach(function(path) {
+                var file = new java.io.File(path);
+                if (file.exists() && file.length() > 0) {
+                    var content = FileStream.read(path).split("\n");
+                    logs = logs.concat(content);
+                }
+            });
+
+            if (logs.length === 0) {
+                return replier.reply(formatAdmin("📋 국고 로그", "기록된 국고 변동 내역이 전혀 없습니다."));
             }
 
-            var content = FileStream.read(JOURNAL_PATH);
-            var lines = content.split("\n");
-            var logs = [];
-            
-            // 역순 탐색하여 국고 변동(4번째 열)이 있는 로그만 10건 수집
-            for (var i = lines.length - 1; i >= 0; i--) {
-                var line = lines[i].trim();
+            var filteredLogs = [];
+            // 최신순으로 확인하기 위해 배열을 뒤에서부터 탐색
+            for (var i = logs.length - 1; i >= 0; i--) {
+                var line = logs[i].trim();
                 if (!line) continue;
                 
                 var parts = line.split("|");
                 if (parts.length < 5) continue;
 
                 var brDelta = Number(parts[3]); // 국고 변동액
-                if (brDelta !== 0) {
+                if (!isNaN(brDelta) && brDelta !== 0) {
                     var sign = brDelta > 0 ? "➕" : "➖";
-                    // 로그 형식: [사유] 유저명 | +50,000P
-                    var uName = "";
-                    // UID로 유저명 역추적
-                    if (data.rooms[roomName] && data.rooms[roomName].users[parts[0]]) {
-                        uName = data.rooms[roomName].users[parts[0]].name;
-                    } else { uName = "알 수 없음"; }
+                    var uName = "알 수 없음";
+                    
+                    // UID로 유저명 역추적 (전 구역 검색)
+                    var foundName = null;
+                    for (var r in data.rooms) {
+                        if (data.rooms[r].users[parts[0]]) {
+                            foundName = data.rooms[r].users[parts[0]].name;
+                            break;
+                        }
+                    }
+                    uName = foundName || "퇴거유저(" + parts[0].slice(0,4) + ")";
 
-                    logs.push("• [" + parts[4] + "] " + uName + " | " + sign + fp(Math.abs(brDelta)) + "P");
+                    filteredLogs.push("• [" + parts[4] + "] " + uName + " | " + sign + fp(Math.abs(brDelta)) + "P");
                 }
-                if (logs.length >= 10) break;
+                // 너무 많으면 과부하가 걸리므로 최신 15건만 추출
+                if (filteredLogs.length >= 15) break;
             }
 
             var roomData = data.rooms[roomName];
             var resultBody = "🏦 현재 금고 잔액: " + fp(roomData.bankReserve) + "P\n" +
                              "━━━━━━━━━━━━━━━\n" +
-                             (logs.length > 0 ? logs.join("\n") : "최근 국고 변동 내역이 없습니다.");
+                             (filteredLogs.length > 0 ? filteredLogs.join("\n") : "국고 변동 기록을 찾을 수 없습니다.");
 
-            replier.reply(formatAdmin("🏛️ 중앙은행 국고 변동 장부", resultBody));
+            replier.reply(formatAdmin("🏛️ 중앙은행 통합 국고 장부", resultBody));
         } catch (e) {
-            replier.reply(formatAdmin("🚫 조회 실패", "로그 분석 오류: " + e));
+            replier.reply(formatAdmin("🚫 조회 실패", "로그 통합 분석 중 오류: " + e));
         }
         return true;
     }

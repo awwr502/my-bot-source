@@ -12248,18 +12248,21 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 4. 게임별 세부 기능 선택 (회차정보 / 결과조회)
+    // 4. 게임별 세부 기능 선택 (회차정보 / 결과조회 / 당첨기록)
     if (state.type === 'casino_ladder' || state.type === 'casino_baccarat') {
-        var gameType = (state.type.indexOf('ladder') !== -1) ? "ladder" : "baccarat"; // 비교 연산자 개선
+        var gameType = (state.type.indexOf('ladder') !== -1) ? "ladder" : "baccarat"; 
         var gameObj = casino[gameType];
         var interval = (gameType === "ladder") ? 2 : 3;
 
         if (msg === "1") { // 진행 중인 회차 상세
-            mState[targetUid].type = state.type + "_sub"; // 상세 상태(sub)로 변경
+            mState[targetUid].type = state.type + "_sub"; 
             _showCasinoRoundInfo(replier, user, gameType, gameObj, interval, roomName);
         } else if (msg === "2") { // 최근 10경기 결과
-            mState[targetUid].type = state.type + "_sub"; // 상세 상태(sub)로 변경
+            mState[targetUid].type = state.type + "_sub"; 
             _showCasinoHistory(replier, user, gameType, gameObj);
+        } else if (msg === "3") { // [신규] 금일 당첨 기록 확인
+            mState[targetUid].type = state.type + "_sub";
+            _showCasinoDailyHistory(replier, user, gameType);
         }
         return true;
     }
@@ -12277,15 +12280,59 @@ function _showCasinoSubMenu(replier, user, title, obj, interval) {
     var totalBet = 0;
     for (var uid in obj.bets) { totalBet += Number(obj.bets[uid].amount); }
 
+    var lastResLine = "";
+    var gKey = (title === "사다리") ? "ladder" : "baccarat";
+    // 유저의 lastCasinoResult가 현재 보고 있는 게임 타입과 일치할 때만 한 줄 표시
+    if (user.lastCasinoResult && user.lastCasinoResult.type === gKey) {
+        var lr = user.lastCasinoResult;
+        var icon = lr.isWin ? "🎊" : "💀";
+        var sign = lr.isWin ? "+" : "";
+        lastResLine = "• 직전(" + lr.round + "회): " + lr.res + " [" + sign + fp(lr.profit) + "P] " + icon + "\n";
+    }
+
     var body = "진행 중인 회차 및 메뉴를 선택하세요.\n\n" +
                "[현재 회차 정보]\n" +
                "• 회차: 제 " + (obj.round || 1) + "회차\n" +
+               lastResLine + // 요약 라인 삽입
                "• 남은 시간: " + (min > 0 ? min + "분 " : "") + sec + "초\n" +
                "• 총 판돈: " + fp(totalBet) + "P\n\n" +
                "1. 📈 진행 중인 회차 정보 (배팅 현황)\n" +
-               "2. 📋 최근 10경기 결과";
+               "2. 📋 최근 10경기 결과\n" +
+               "3. 🏆 금일 당첨 기록 확인";
 
     replier.reply(formatCommand((title === "사다리" ? "🪜 " : "🃏 ") + title + " 게임실", user, body, "원하시는 번호를 입력하세요."));
+}
+
+/**
+ * @param {String} type - "ladder" 또는 "baccarat"
+ */
+function _showCasinoDailyHistory(replier, user, type) {
+    var wins = (type === "ladder") ? (user.dailyLadderWins || []) : (user.dailyBaccaratWins || []);
+    var titleStr = (type === "ladder") ? "🪜 사다리" : "🃏 바카라";
+    
+    var list = [];
+    var totalProfit = 0;
+    
+    if (wins.length === 0) {
+        list.push("(금일 당첨 기록이 없습니다)");
+    } else {
+        // 최대 15건까지만 출력 (말풍선 길이 제한 대비)
+        var displayCount = Math.min(wins.length, 15);
+        for (var i = 0; i < displayCount; i++) {
+            var w = wins[i];
+            var pickName = (type === "ladder") ? w.pick : w.res;
+            list.push("• [" + w.round + "회] " + pickName + " : +" + fp(w.profit) + "P (" + w.time + ")");
+            totalProfit += Number(w.profit);
+        }
+        if (wins.length > 15) list.push("...외 " + (wins.length - 15) + "건 더 있음");
+    }
+
+    var body = "[오늘의 승전보]\n" + list.join("\n") + "\n\n" +
+               "📊 당일 누적 합계\n" +
+               "• 당첨 횟수: " + wins.length + "회\n" +
+               "• 누적 수익: +" + fp(totalProfit) + "P";
+
+    replier.reply(formatCommand(titleStr + " 금일 당첨 리포트", user, body, "(↩️ 뒤로 / 🏠 처음으로)"));
 }
 
 /* [서브] 실시간 배팅 현황판 및 배팅 가이드 */

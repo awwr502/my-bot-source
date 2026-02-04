@@ -83,7 +83,11 @@ var USER_SCHEMA = [
     { key: 'tradeCount', default: 0, type: 'number' },          // 누적 무역 횟수
     { key: 'totalCasinoBet', default: 0, type: 'number' },      // [카지노] 누적 배팅액
     { key: 'totalCasinoWin', default: 0, type: 'number' },      // [카지노] 누적 당첨액
-    { key: 'shipName', default: '', type: 'string' }  // 선박 이름 저장 필드 추가
+    { key: 'shipName', default: '', type: 'string' },           // 선박 이름 저장 필드 추가
+    { key: 'lastCasinoResult', default: null, type: 'object' }, // { type: "ladder", round: 0, res: "", profit: 0, isWin: true }
+    { key: 'dailyLadderWins', default: [], type: 'array' },    // 사다리 당첨 히스토리
+    { key: 'dailyBaccaratWins', default: [], type: 'array' },  // 바카라 당첨 히스토리
+    { key: 'shipName', default: '', type: 'string' }
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -3917,12 +3921,18 @@ function _runSector16Logic(data, ctx) {
                 if (!u) continue;
 
                 var isWin = (bet.pick === oe || bet.pick === result.full);
+                var nowStr = new Date().getHours() + ":" + ("0" + new Date().getMinutes()).slice(-2);
+
                 if (isWin) {
                     var mult = (bet.pick.length > 1) ? 4.0 : 1.9;
                     if (u.title === "도박왕") mult += 0.05; // 칭호 효과 연동
-                    
                     var winAmt = Math.floor(bet.amount * mult);
                     
+                    // 당일 리포트 및 직전 결과 기록
+                    if (!u.dailyLadderWins) u.dailyLadderWins = [];
+                    u.dailyLadderWins.unshift({ round: casino.ladder.round, pick: bet.pick, profit: winAmt, time: nowStr });
+                    u.lastCasinoResult = { type: "ladder", round: casino.ladder.round, res: bet.pick, profit: winAmt, isWin: true };
+
                     // 중앙은행 지불 능력 체크 (부도 방지)
                     if (util_isBankSolvent(ctx.targetRoom, winAmt)) {
                         u.skipHealing = true; // 고액 당첨 시 롤백 방지
@@ -3930,6 +3940,9 @@ function _runSector16Logic(data, ctx) {
                         util_updatePoint(u, mainRoomData, Number(res.actualGain), "사다리 적중 (" + result.full + ")", ctx.targetRoom);
                         u.totalGambleWins = (u.totalGambleWins || 0) + 1;
                     }
+                } else {
+                    // 미적중 시 직전 결과만 업데이트 (손실액 기록)
+                    u.lastCasinoResult = { type: "ladder", round: casino.ladder.round, res: "미적중", profit: -bet.amount, isWin: false };
                 }
             }
 

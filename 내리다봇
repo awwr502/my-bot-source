@@ -1195,6 +1195,7 @@ var CMD_LIST = {
         { cmd: "/공지", desc: "[내용] 내리다 방에 공지 전송", func: "_adminSystemLogic" },
         { cmd: "/봇구동", desc: "[온|오프] 시스템 제어", func: "_adminSystemLogic" },
         { cmd: "/진단", desc: "[닉네임] 유저 상태 정밀 분석", func: "_adminUserManageLogic" },
+        { cmd: "/무역복구", desc: "[닉네임] 정산 꼬임 강제 해제 및 재시작", func: "_adminUserManageLogic" },
         { cmd: "/블랙박스", desc: "[닉네임] 최근 거래 내역 역추적", func: "_adminUserManageLogic" },
         { cmd: "/부동산자산복구", desc: "유저 평단가 기반 시세 긴급 복구", func: "_adminEconomyLogic" },
         { cmd: "/매물추가", desc: "[이름] [가격] 신규 상장", func: "_adminEconomyLogic" },
@@ -8677,6 +8678,39 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         else report += "데이터상 정상입니다. 특정 유저만 안 된다면 식별 캐시를 확인하세요.";
 
         replier.reply(report);
+        return true;
+    }
+
+    if (msg.indexOf("/무역복구 ") === 0) {
+        var tn = msg.substring(6).trim();
+        var found = findUserGlobal(tn); // 전 구역에서 유저 탐색
+
+        if (found.length === 0) {
+            replier.reply(formatAdmin("🚫 대상 없음", "[" + tn + "] 유저를 찾을 수 없습니다."));
+            return true;
+        }
+        if (found.length > 1) {
+            handleUserSelection(replier, targetUid, found, "admin_trade_repair", null, user, roomName);
+            return true;
+        }
+
+        var tUser = found[0].data;
+        if (!tUser.voyage || tUser.voyage.active !== true) {
+            replier.reply(formatAdmin("❌ 복구 불가", "[" + tUser.name + "]님은 현재 항해 중이 아닙니다."));
+            return true;
+        }
+
+        // 핵심 복구 로직: 잠금 해제 및 시간 재설정
+        tUser.voyage.isProcessing = false; // 잠금 강제 해제
+        tUser.voyage.isAlerted = false;    // 부도 알림 기록 초기화
+        tUser.voyage.arrival = Date.now() - 1000; // 도착 시간을 과거로 돌려 즉시 정산 대상자로 만듦
+        tUser.skipHealing = true; // 보안 엔진 예외 허용
+
+        safeSaveData(data, true); // 즉시 저장
+        replier.reply(formatAdmin("⚓ 무역 정산 락 해제 완료", 
+            "대상: " + tUser.name + "\n" +
+            "조치: 정산 잠금 장치 강제 해제 및 도착 시간 동기화 완료\n\n" +
+            "💡 이제 해당 유저가 채팅을 한 번 치면 즉시 정산이 시작됩니다."));
         return true;
     }
 

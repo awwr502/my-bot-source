@@ -5294,7 +5294,49 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1 && !roomData.users[targetUid]) {
     safeSaveData(data);
 }
 
+/* [구조 혁신] 여기서 복잡한 쓰레드/락 박스를 모두 닫고, 핵심 로직 함수를 호출합니다. */
+/* 이제 섹터 20-2부터는 괄호 개수 걱정 없이 독립된 함수로 작동합니다. */
+
+        // 1. 핵심 로직 함수 호출 (에러 핸들링 포함)
+        try {
+            _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom);
+        } catch (e) {
+            // [Rollback] 에러 발생 시 데이터 복구 및 보고 (섹터 26에서 이사옴)
+            if (typeof util_stagingRollback === 'function') util_stagingRollback(user, roomName);
+            if (typeof util_reportError === 'function') util_reportError(e, roomName, cleanSender, msg);
+            try {
+                if (typeof replier !== 'undefined' && typeof formatError === 'function') {
+                    replier.reply(formatError(user, "시스템 보호 작동", "로직 처리 중 오류가 발생하여 복구되었습니다."));
+                }
+            } catch (err) { Log.error("🚨 [Critical Error in Catch: " + err); }
+        } finally {
+            // [Lock Release] 락 해제 (섹터 26에서 이사옴)
+            try {
+                if (typeof _perfStartTime !== 'undefined') {
+                    var _pDur = java.lang.System.currentTimeMillis() - _perfStartTime;
+                    if (typeof PERF_METRICS !== 'undefined') {
+                        PERF_METRICS.avgLag = Math.floor((PERF_METRICS.avgLag * 9 + _pDur) / 10);
+                        if (_pDur > PERF_METRICS.peakLag) PERF_METRICS.peakLag = _pDur;
+                        PERF_METRICS.msgPerMin++;
+                    }
+                }
+                if (typeof lock !== 'undefined' && lock !== null && lock.isHeldByCurrentThread()) {
+                    lock.unlock(); 
+                }
+            } catch (err) { Log.error("Lock Release Fail: " + err); }
+        }
+
+    // [계층 역순 종료] 모든 박스를 여기서 닫습니다.
+    } // LogicQueue.run 종료
+    })); // LogicQueue.execute 종료
+    } // ParallelPool.run 종료
+    })); // ParallelPool.execute 종료
+}; // action 함수 완전 종료
+
 //==========섹터20-2==========
+
+/* [신규 독립 함수 시작] 이제부터는 이 함수 내부입니다. */
+function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom) {
 
 /* [데이터 & 가드 통합 엔진] 1:1방 동기화 및 숫자 핸들러 프리패스 */
 if (ALLOWED_ROOMS.indexOf(realRoom) === -1 || realRoom === "베릭방") {
@@ -7548,55 +7590,11 @@ if (typeof _runChatBonusLogic === 'function') {
 
     // 1. [Atomic Commit] 모든 로직 정상 종료 시 트랜잭션 확정
     if (typeof util_stagingCommit === 'function') {
-        util_stagingCommit(user, roomData);
+        // [수정] 함수 종료 직전, 데이터 객체를 안전하게 직접 참조하여 커밋
+        util_stagingCommit(user, data.rooms[roomName]);
     }
 
-    } catch (e) {
-        // 2. [Rollback] 에러 발생 시 데이터 복구 및 보고
-        if (typeof util_stagingRollback === 'function') util_stagingRollback(user, roomName);
-        if (typeof util_reportError === 'function') util_reportError(e, roomName, cleanSender, msg);
-        try {
-            if (typeof replier !== 'undefined' && typeof formatError === 'function') {
-                replier.reply(formatError(user, "시스템 보호 작동", "로직 처리 중 오류가 발생하여 복구되었습니다."));
-            }
-        } catch (err) { 
-            Log.error("🚨 [Critical Error in Catch]: " + err); 
-        }
-    } finally {
-        // 3. [안전 장치] 성능 기록 로직 별도 분리
-        try {
-            if (typeof _perfStartTime !== 'undefined') {
-                var _pDur = java.lang.System.currentTimeMillis() - _perfStartTime;
-                if (typeof PERF_METRICS !== 'undefined') {
-                    PERF_METRICS.avgLag = Math.floor((PERF_METRICS.avgLag * 9 + _pDur) / 10);
-                    if (_pDur > PERF_METRICS.peakLag) PERF_METRICS.peakLag = _pDur;
-                    PERF_METRICS.msgPerMin++;
-                }
-            }
-        } catch (e) { 
-            Log.error("Perf Metrics Error: " + e); 
-        }
-        
-        // 4. [교정] 현재 스레드 소유권 확인 후 안전한 락 해제
-        if (typeof lock !== 'undefined' && lock !== null) {
-            try {
-                if (lock.isHeldByCurrentThread()) {
-                    lock.unlock(); 
-                }
-            } catch (err) {
-                Log.error("Critical Lock Release Fail: " + err);
-            }
-        }
-    } 
-
-    // [계층 역순 종료] 
-    } // LogicQueue.run 종료
-    })); // LogicQueue.execute 종료
-
-    } // ParallelPool.run 종료
-    })); // ParallelPool.execute 종료
-
-}; // action 리스너 함수 전체 종료
+} // _processMainLogic 함수 종료 (단 하나의 중괄호만 있으면 됩니다)
 
 //==========섹터27==========
 

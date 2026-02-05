@@ -6238,24 +6238,31 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 3. 선박 이름 최종 확정 (결제 및 반영)
+    // 3. 선박 이름 최종 확정 (로직 종료 지점)
     if (state.type === 'ship_rename_confirm') {
         if (msg === "1" || msg === "예") {
             var finalName = state.extra.newName;
-            var cost = state.extra.price;
+            var cost = state.extra.price || 0;
+            
+            // [종료 처리] 대기 상태를 먼저 삭제하여 응답 대기를 끝냅니다.
+            delete bankProcessState[targetUid]; 
+
             if (Number(user.point) < cost) {
-                delete bankProcessState[targetUid];
                 replier.reply(formatError(user, "결제 실패", "잔액이 부족하여 취소되었습니다."));
                 return true;
             }
+            
             util_updatePoint(user, data.rooms[roomName], -cost, "선박 이름 변경권 사용", roomName);
             user.shipName = finalName;
-            delete bankProcessState[targetUid];
-            replier.reply(formatCommand("🚢 선박 명명식 완료", user, "성공적으로 [" + finalName + "](으)로 변경되었습니다!", "무역 현황: [/무역]"));
+            
+            // [완료 메시지] 끝나는 지점이므로 SHOP_NAV 없이 일반 메시지로 출력
+            replier.reply(formatCommand("🚢 선박 명명식 완료", user, "성공적으로 [" + finalName + "](으)로 변경되었습니다!", "무역 정보: [/무역]"));
             safeSaveData(data);
         } else if (msg === "2" || msg === "아니오") {
-            bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now(), extra: state.extra };
-            replier.reply(formatCommand("📝 선박 이름 입력", user, "변경하실 이름을 다시 입력해주세요." + SHOP_NAV));
+            // 다시 입력받는 단계는 대기 유지 및 내비게이션 포함
+            state.type = 'ship_rename_input';
+            state.time = Date.now();
+            replier.reply(formatCommand("📝 선박 이름 재입력", user, "변경하실 이름을 다시 입력해주세요." + SHOP_NAV));
         }
         return true;
     }
@@ -6358,13 +6365,14 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
         } // closes if (state.type === 'shop_buy')
     }
 
-    /* [기능 2] 수량 입력 처리 */
+    /* [기능 2] 수량 입력 처리 (로직 종료 지점) */
     else if (state.type === 'shop_quantity') {
         var item = (state.extra && state.extra.item) ? state.extra.item : null;
         if (!item) { delete bankProcessState[targetUid]; return true; }
 
         var qty = parseInt(msg.replace(/[^0-9]/g, ""));
         if (isNaN(qty) || qty <= 0) {
+            // 다시 입력을 기다리는 구간은 내비게이션 바 포함
             replier.reply(formatError(user, "입력 오류", "숫자로 수량을 입력해주세요." + SHOP_NAV));
         } else {
             var multiplier = util_getEcoMultiplier(roomName);
@@ -6386,23 +6394,23 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             }
 
             if (Number(user.point) < totalPrice) {
-                replier.reply(formatError(user, "포인트 부족", "총 " + fp(totalPrice) + "P가 필요합니다."));
+                replier.reply(formatError(user, "포인트 부족", "총 " + fp(totalPrice) + "P가 필요합니다." + SHOP_NAV));
             } else {
-                // 결제 및 효과 적용 로직으로 진행
+                // [종료 처리] 결제 진입 전 대기 상태를 삭제합니다.
+                delete bankProcessState[targetUid]; 
+                
                 if (item.effect !== "trade_cargo") {
-                    util_updatePoint(user, roomData, -totalPrice, "상점 구매: " + item.name + " x" + qty, roomName);
+                    util_updatePoint(user, data.rooms[roomName], -totalPrice, "상점 구매: " + item.name + " x" + qty, roomName);
                 }
-                delete bankProcessState[targetUid];
+                
+                // _handleShopEffect(섹터 30) 내부에서 최종 완료 메시지를 띄웁니다.
                 if (typeof _handleShopEffect === 'function') {
                     _handleShopEffect(item, user, roomName, replier, data, targetUid, totalPrice, false, qty);
                 }
-                return true; 
             } 
         } 
         return true; 
-    } 
-    return false;
-}
+    }
 
 //==========섹터23-1==========
 

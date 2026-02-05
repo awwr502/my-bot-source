@@ -7899,11 +7899,14 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
+        // [수정]: 포인트 복사 방지 및 락 해제를 위한 상태 선점형 종료 로직 적용
+        user.mining.active = false; // 1. 진입 즉시 비활성화하여 중복 호출 차단
+        user.skipHealing = true;    // 보안 엔진 일시 허용
+
         // [v5.9] 통합 상태 가드: 징역형 선고 시 즉시 퇴거 처리
         var stateRes = util_checkUserState(user, targetUid);
         if (!stateRes.canAction && stateRes.reason.indexOf("징역") !== -1) {
-            user.mining.active = false; 
-            safeSaveData(data);
+            safeSaveData(data, true); // 상태 변화 즉시 강제 저장
             return replier.reply(formatError(user, "검거 확인", "징역형 선고로 인해 광산에서 강제 퇴거되었습니다."));
         }
 
@@ -7911,8 +7914,7 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         var durationMin = Math.floor((now - user.mining.startTime) / 60000); 
 
         if (durationMin < 1) {
-            user.mining.active = false; 
-            safeSaveData(data);
+            safeSaveData(data, true); // 짧은 시간 작업 시에도 상태 동기화
             replier.reply(formatCommand("⛏️ 광산 퇴거", user, "채굴 시간이 너무 짧아 수익이 발생하지 않았습니다.\n(최소 1분 이상 유지 필요)", "다시 시작: [/광산시작]"));
             return true;
         }
@@ -8066,9 +8068,11 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
                            "현재 보유 " + pieces + " / " + targetGoal + " 개";
         }
 
+        // [수정]: 정산 완료 후 물리적 강제 저장을 수행하여 데이터 무결성 및 기능 락 해제 보장
         finalOutput += "\n━━━━━━━━━━━━━━━\n💡 [가이드]: 내 잔액: " + fP(user.point) + "P";
                                           
         replier.reply(finalOutput);
+        safeSaveData(data, true); // 2. 물리적 즉시 저장 실행 (복사 및 기능 차단 해결 핵심)
         return true;
     }
 }

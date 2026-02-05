@@ -13341,58 +13341,41 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
     // 1. 공백 제거 (숫자 인식률 향상)
     var cleanMsg = msg.trim();
 
-    // [핵심] 현재 접속한 방이 단체방인지 확인 (1:1 방에서만 구동되게 제한)
-    if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
-        var inviteBody = "중앙 카지노는 VIP 고객님의 보안과\n" +
+    // 수정: 모든 실행 경로에서 참조할 수 있도록 핵심 변수 선언부를 함수 최상단으로 이동 (참조 오류 해결)
+    var MAIN_ZONE = "내리다";
+    var mainRoomData = data.rooms[MAIN_ZONE];
+    var nowTs = Date.now(); // 현재 시간 변수를 최상단에 선언하여 모든 조건문에서 공유
+
+    // 카지노 데이터 구조 안전성 확보
+    if (mainRoomData && !mainRoomData.features.casino) {
+        mainRoomData.features.casino = {
+            ladder: { round: 1, history: [], bets: {} },
+            baccarat: { round: 1, history: [], bets: {} }
+        };
+    }
+    var casino = mainRoomData.features.casino;
+
+    // 현재 방의 메뉴 상태 저장소 참조
+    if (!data.rooms[roomName].features.states) data.rooms[roomName].features.states = { menuWait: {} };
+    var mState = data.rooms[roomName].features.states.menuWait;
+
+    // [핵심 가드] 단체방 입장 제한
+    if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
+        var inviteBody = "중앙 카지노는 VIP 고객님의 보안과\n" +
                          "쾌적한 환경을 위해 오직 [1:1 대화]를\n" +
                          "통해서만 게임을 제한하고 있습니다.\n" +
                          "https://open.kakao.com/me/nerida";
-
-        replier.reply(formatCommand("📨 VIP 전용 안내", user, inviteBody, "봇의 오픈프로필 1:1 채팅방에서 만나요!"));
-        return true;
-    }
-
-    /* [1:1 방 안전 초기화 및 상태 연결] */
-    if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
-    if (!data.rooms[roomName].features) {
-        if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
-            data.rooms[roomName].features = ROOM_FEATURE_TEMPLATE();
-        } else {
-            // 템플릿 함수가 없을 경우 수동 생성 (비상용)
-            data.rooms[roomName].features = { states: { menuWait: {} }, racing: {}, lotto: {} };
-        }
+        replier.reply(formatCommand("📨 VIP 전용 안내", user, inviteBody, "봇의 오픈프로필 1:1 채팅방에서 만나요!"));
+        return true;
     }
-    
-    // 입력 대기 상태(mState)는 현재 접속한 1:1 방에 저장
-    var rFeatures = data.rooms[roomName].features;
-    if (!rFeatures.states) rFeatures.states = { menuWait: {} };
-    var mState = rFeatures.states.menuWait; 
 
-    // [중요] 게임 판돈/기록 데이터는 메인 운영 방("내리다")의 데이터를 강제 참조
-    var MAIN_ZONE = "내리다";
-    var mainRoomData = data.rooms[MAIN_ZONE];
-    
-    if (!mainRoomData.features.casino) {
-        mainRoomData.features.casino = {
-            ladder: { round: 1, history: [], bets: {} },
-            baccarat: { round: 1, history: [], bets: {} }
-        };
-    }
-    var casino = mainRoomData.features.casino;
-
-    /* 명령어 처리: /카지노 */
-    if (cleanMsg === "/카지노") {
-        // [핵심] 현재 방이 단체방이 아니면 "내리다" 방의 상태를 체크함
-        var economyRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-
-        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(economyRoom)) {
+    // 1. 명령어 처리: /카지노
+    if (cleanMsg === "/카지노") {
+        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
             var bankMsg = "🚨 [긴급: 카지노 임시 휴업]\n" +
                           "━━━━━━━━━━━━━━━\n" +
-                          "현재 메인 구역(" + economyRoom + ")의 국가 부도 선포로 인해\n" +
-                          "모든 게임과 배팅이 전면 중단되었습니다.\n\n" +
-                          "📍 사유: 국고 재원 고갈 및 자금 통제\n" +
-                          "📉 조치: 카지노 전면 폐쇄 (1:1 이용 불가)";
-            
+                          "현재 메인 구역의 국가 부도 선포로 인해\n" +
+                          "모든 게임과 배팅이 전면 중단되었습니다.";
             replier.reply(formatCommand("🎰 카지노 영업 정지", user, bankMsg, "해제 기준: 국고 50% 복구"));
             return true; 
         }
@@ -13402,28 +13385,27 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        var nowTs = Date.now();
-        // 1) 마지막 활동 후 3분이 지났거나, 감시 시작 기록이 없는 경우 새 세션으로 시작
+        // 1) 세션 갱신 및 입장 알림 (3분 미사용 시 또는 최초 입장 시 1회 발송)
         if (nowTs - (user.lastBotUseTime || 0) > 180000 || !user.casinoAuditStartTime) {
-            user.casinoAuditStartTime = nowTs; // 시작 시간 기록
-            user.casinoAuditStartAssets = Number(user.point || 0) + Number(user.bank || 0); // 현재 총 자산 기록
-            user.casinoAuditAlertHistory = []; // 알림 이력 초기화
-           if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+            user.casinoAuditStartTime = nowTs;
+            user.casinoAuditStartAssets = Number(user.point || 0) + Number(user.bank || 0);
+            user.casinoAuditAlertHistory = [];
+            
+            // 베릭방 입장 알림 발송 (3분에 1번)
             var entryLog = "🔔 [카지노 입장 알림]\n" +
                            "━━━━━━━━━━━━━━━\n" +
                            "👤 유저: " + user.name + "\n" +
                            "🆔 ID: " + targetUid + "\n" +
                            "📍 장소: 1:1 대화방 (" + roomName + ")\n" +
-                           "💰 현재자산: " + fp(Number(user.point) + Number(user.bank || 0)) + " P\n" +
+                           "💰 현재자산: " + fp(user.casinoAuditStartAssets) + " P\n" +
                            "━━━━━━━━━━━━━━━\n" +
                            "⚠️ 실시간 모니터링 중";
-            
             try { Api.replyRoom("베릭방", entryLog); } catch(e) { Log.error("Entry Alert Fail: " + e); }
         }
-      }
 
+        // 마지막 활동 시간 갱신 및 메뉴 상태 설정
         user.lastBotUseTime = nowTs; 
-        mState[targetUid] = { type: 'casino_main', time: Date.now() };
+        mState[targetUid] = { type: 'casino_main', time: nowTs };
 
         var body = "현재 입장 가능한 게임룸입니다.\n\n" +
                    "1. 🌓 사다리 (2분 주기 / 1.90~4.0배)\n" +

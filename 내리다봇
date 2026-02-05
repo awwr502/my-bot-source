@@ -4208,6 +4208,35 @@ function _runSector16Logic(data, ctx) {
         }
     } catch (e) { Log.error("Casino Background Engine Error: " + e); }
 
+    // 추가: 카지노 1분 미사용 시 자동 퇴장 알림 엔진 (스케줄러 루프 내 위치)
+    try {
+        var nowTs = Date.now();
+        for (var r in data.rooms) {
+            var roomUsers = data.rooms[r].users;
+            for (var uid in roomUsers) {
+                var u = roomUsers[uid];
+                // 1:1 대화방 유저이면서, 카지노 감시가 활성화된 상태이고, 마지막 활동 후 1분(60,000ms)이 경과한 경우
+                if (u.casinoAuditStartTime > 0 && (nowTs - (u.lastBotUseTime || 0) > 60000)) {
+                    var exitLog = "🚪 [카지노 퇴장 알림]\n" +
+                                  "━━━━━━━━━━━━━━━\n" +
+                                  "👤 유저: " + u.name + "\n" +
+                                  "🆔 ID: " + uid + "\n" +
+                                  "💰 최종자산: " + fp(Number(u.point) + Number(u.bank || 0)) + " P\n" +
+                                  "━━━━━━━━━━━━━━━\n" +
+                                  "✅ 1분 미활동으로 모니터링을 종료합니다.";
+                    
+                    try { Api.replyRoom("베릭방", exitLog); } catch(e) {}
+                    
+                    // 감시 데이터 초기화 (퇴장 처리)
+                    u.casinoAuditStartTime = 0;
+                    u.casinoAuditStartAssets = 0;
+                    u.casinoAuditAlertHistory = [];
+                    ctx.isUpdated = true; // 변경 사항 저장 플래그
+                }
+            }
+        }
+    } catch (e) { Log.error("Casino Exit Monitor Error: " + e); }
+
     /* [4. 피버타임 및 결투 체크] */
     try {
             for (var dKey in duelData) {
@@ -13378,7 +13407,6 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
             user.casinoAuditStartTime = nowTs; // 시작 시간 기록
             user.casinoAuditStartAssets = Number(user.point || 0) + Number(user.bank || 0); // 현재 총 자산 기록
             user.casinoAuditAlertHistory = []; // 알림 이력 초기화
-           }
            if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
             var entryLog = "🔔 [카지노 입장 알림]\n" +
                            "━━━━━━━━━━━━━━━\n" +
@@ -13391,6 +13419,7 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
             
             try { Api.replyRoom("베릭방", entryLog); } catch(e) { Log.error("Entry Alert Fail: " + e); }
         }
+      }
 
         user.lastBotUseTime = nowTs; 
         mState[targetUid] = { type: 'casino_main', time: Date.now() };

@@ -2723,6 +2723,46 @@ function util_getTradeCreditMult(grade) {
     return mapping[grade] || 0.60;
 }
 
+/**
+ * [추가] 총독 자격 검증 엔진
+ * 기능: 특정 유저가 해당 항구의 총독인지 여부를 확인합니다.
+ * @param {String} targetUid - 유저 UID
+ * @param {String} portName - 항구 이름
+ * @param {Object} roomData - 해당 방의 데이터 객체
+ */
+function util_isUserGovernor(targetUid, portName, roomData) {
+    if (!roomData || !roomData.portData || !roomData.portData[portName]) return false;
+    return roomData.portData[portName].governorUid === targetUid;
+}
+
+/**
+ * [추가] 유저 보유 총독 권한 목록 추출
+ * 기능: 유저가 총독으로 임명된 모든 항구의 이름을 배열로 반환합니다.
+ */
+function util_getUserGovernorPorts(targetUid, roomData) {
+    var myPorts = [];
+    if (!roomData || !roomData.portData) return myPorts;
+    
+    for (var pName in roomData.portData) {
+        if (roomData.portData[pName].governorUid === targetUid) {
+            myPorts.push(pName);
+        }
+    }
+    return myPorts;
+}
+
+/**
+ * [추가] 항구 발전 보너스 계산기
+ * 기능: 항구 레벨에 따른 수익 가산 배율을 계산하여 반환합니다.
+ */
+function util_getPortLevelBonus(portName, roomData) {
+    if (!roomData || !roomData.portData || !roomData.portData[portName]) return 0;
+    var level = roomData.portData[portName].level || 1;
+    var cfg = SYSTEM_CONFIG.TRADE.INVEST;
+    // (레벨 - 1) * 1% 보너스 적용
+    return (level - 1) * (cfg.BONUS_PER_LEVEL || 0.01);
+}
+
 //==========섹터12==========
 
 /* 경찰 출동 결과 처리 함수 (중앙은행 연동 및 방별 격리 보정) */
@@ -6510,7 +6550,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
     if (!bankProcessState || !bankProcessState[targetUid]) return false;
 
     var state = bankProcessState[targetUid];
-    var types = ['shop_buy', 'shop_quantity', 'ship_rename_input', 'ship_rename_confirm'];
+    var types = ['shop_buy', 'shop_quantity', 'ship_rename_input', 'ship_rename_confirm', 'trade_invest_amount'];
     if (types.indexOf(state.type) === -1) return false;
 
     // [1:1 전용 가드] 상점 및 선박 관리 기능은 1:1방에서 차단 (요청 사항 반영)
@@ -6626,6 +6666,87 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
     }
 
     var roomData = data.rooms[roomName];
+
+    /**
+     * [추가] 항구 투자 금액 처리 및 총독 판정 로직
+     * 기능: 입력된 금액만큼 투자를 집행하고 발전도와 총독 권한을 갱신함
+     */
+    if (state.type === 'trade_invest_amount') {
+        var amt = parseInt(msg.replace(/,/g, ""));
+        var dest = state.extra.dest;
+        var cfg = SYSTEM_CONFIG.TRADE.INVEST;
+
+        if (isNaN(amt) || amt <= 0) {
+            replier.reply(formatError(user, "금액 오류", "투자할 금액을 숫자로 정확히 입력하세요."));
+            return true;
+        }
+
+        // 1. 투자 가능 시간 검증 (07:00 ~ 23:59)
+        var h = new Date().getHours();
+        if (h < cfg.OPEN_HOUR) {
+            delete bankProcessState[targetUid];
+            replier.reply(formatError(user, "투자 불가 시간", "현재 항만이 폐쇄되었습니다. 오전 07시 이후에 다시 시도하세요."));
+            return true;
+        }
+
+        if (Number(user.point) < amt) {
+            replier.reply(formatError(user, "잔액 부족", "보유 포인트가 부족합니다."));
+            return true;
+        }
+
+        // 정산 시작 - 세션 파기
+        delete bankProcessState[targetUid];
+
+        var pData = roomData.portData[dest];
+        var oldGovUid = pData.governorUid;
+        var oldLevel = pData.level;
+
+        // 2. 포인트 차감 및 국고 귀속 (게이트웨이 준수)
+        util_updatePoint(user, roomData, -amt, "항구 투자: " + dest, roomName);
+
+        // 3. 투자 데이터 업데이트
+        if (!pData.userInvests) pData.userInvests = {};
+        pData.userInvests[targetUid] = (pData.userInvests[targetUid] || 0) + amt;
+        pData.totalInvest += amt;
+
+        // 4. 발전 레벨 계산 (100만P당 1레벨 상승, 최대 10레벨)
+        var nextLevel = Math.min(cfg.MAX_LEVEL, Math.floor(pData.totalInvest / cfg.LEVEL_UP_STEP) + 1);
+        pData.level = nextLevel;
+
+        // 5. 총독(Governor) 판정: 해당 항구의 최고 투자자 추적
+        var isGovChanged = false;
+        var currentMaxInvest = 0;
+        var topUid = pData.governorUid;
+
+        // 기존 총독의 투자금 확인
+        if (topUid && pData.userInvests[topUid]) {
+            currentMaxInvest = pData.userInvests[topUid];
+        }
+
+        // 현재 유저가 기록을 갱신했는지 확인
+        if (pData.userInvests[targetUid] > currentMaxInvest) {
+            pData.governorUid = targetUid;
+            if (oldGovUid !== targetUid) isGovChanged = true;
+        }
+
+        // 6. 결과 메시지 구성
+        var resMsg = dest + " 항구에 " + fp(amt) + "P를 투자했습니다!\n\n" +
+                     "📊 " + dest + " 발전도: Lv." + oldLevel + " ➔ Lv." + nextLevel + "\n" +
+                     "✨ 선호품 매입 보너스: +" + (nextLevel - 1) + "% 상승!";
+
+        if (isGovChanged) {
+            var oldGovName = (oldGovUid && roomData.users[oldGovUid]) ? "'" + roomData.users[oldGovUid].name + "'님" : "공석";
+            resMsg += "\n\n🎊 [작위 변동]\n" + user.name + "님이 " + oldGovName + "을 밀어내고\n" +
+                      dest + "의 새로운 [총독]으로 임명되었습니다!\n\n" +
+                      "🎁 총독 특권:\n해당 국가 무역 시 특산품 발견량 증가!\n(기존 1개 ➔ 2~3개 획득)";
+        }
+
+        replier.reply(formatCommand("🏗️ 항구 투자 완료", user, resMsg, "내 잔액: " + fp(user.point) + "P"));
+        
+        user.skipHealing = true;
+        safeSaveData(data, true);
+        return true;
+    }
 
     /* [기능 1] 상점 아이템 번호 선택 처리 */
     if (state.type === 'shop_buy') {

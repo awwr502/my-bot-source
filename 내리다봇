@@ -6163,18 +6163,21 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
     var types = ['shop_buy', 'shop_quantity', 'ship_rename_input', 'ship_rename_confirm'];
     if (types.indexOf(state.type) === -1) return false;
 
-    // 공통 네비게이션 바 정의
+    // [1:1 전용 가드] 상점 및 선박 관리 기능은 1:1방에서 차단 (요청 사항 반영)
+    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+        delete bankProcessState[targetUid];
+        replier.reply("🚫 [기능 제한]\n상점 및 선박 이름 변경은 단체방('내리다')에서만 가능합니다.\n\n✅ 1:1 가능: 카지노, 은행, 내정보");
+        return true;
+    }
+
+    // 공통 네비게이션 바 정의 (중간 단계 안내용)
     var SHOP_NAV = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
-    // 1. 공통 가드 (시간 초과 및 취소)
+    // 1. 공통 가드 및 취소 로직
     if (Date.now() - state.time > 30000 || msg === "취소" || msg === "❎취소") {
         delete bankProcessState[targetUid];
-        if (msg === "취소" || msg === "❎취소") {
-            var cancelMsg = state.type.indexOf('ship_') !== -1 ? "선박 명명 절차를 중단했습니다." : "상점 이용을 종료합니다.";
-            replier.reply(formatCommand("🚫 작업 취소", user, cancelMsg));
-        } else {
-            replier.reply(formatError(user, "입력 시간 초과", "시간이 초과되어 작업이 자동 취소되었습니다."));
-        }
+        var cancelMsg = state.type.indexOf('ship_') !== -1 ? "선박 명명 절차를 중단했습니다." : "상점 이용을 종료합니다.";
+        replier.reply(formatCommand("🚫 작업 취소", user, cancelMsg));
         return true;
     }
 
@@ -6203,12 +6206,11 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
 
     // 2. 선박 이름 입력 처리 (띄어쓰기 수용 및 확인 단계로 이동)
     if (state.type === 'ship_rename_input') {
-        var inputName = msg.trim(); // 앞뒤 공백 제거 후 중간 띄어쓰기 유지
+        var inputName = msg.trim(); // 앞뒤 공백만 제거하여 중간 띄어쓰기 보존
         if (inputName.length < 2 || inputName.length > 8) {
             replier.reply(formatError(user, "이름 길이 오류", "2~8글자 사이로 입력해주세요." + SHOP_NAV));
             return true;
         }
-        // 한글, 영문, 숫자, 공백(\s) 허용
         if (!/^[a-zA-Z0-9가-힣\s]+$/.test(inputName)) {
             replier.reply(formatError(user, "사용 불가 문자", "특수문자는 사용할 수 없습니다." + SHOP_NAV));
             return true;
@@ -6221,31 +6223,28 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             } 
             if (isDup) break; 
         }
-        if (isDup) { 
-            replier.reply(formatError(user, "이름 중복", "이미 사용 중인 이름입니다." + SHOP_NAV)); 
-            return true; 
-        }
+        if (isDup) { replier.reply(formatError(user, "이름 중복", "이미 사용 중인 이름입니다." + SHOP_NAV)); return true; }
 
-        // 바로 적용하지 않고 '확인' 상태로 전환
+        // 확인 단계(Confirm) 상태로 전이
         bankProcessState[targetUid] = { 
             type: 'ship_rename_confirm', 
             time: Date.now(), 
             extra: { newName: inputName, price: state.extra.price } 
         };
         
-        var confirmMsg = "설정하신 이름: [" + inputName + "]\n\n정말로 이 이름으로 결정하시겠습니까?\n결정 시 변경권이 사용됩니다.\n\n1. 예 (변경 승인)\n2. 아니오 (재입력)" + SHOP_NAV;
+        var confirmMsg = "새로운 선박 이름: [" + inputName + "]\n\n이 이름으로 최종 결정하시겠습니까?\n결정 시 이름변경권이 즉시 사용됩니다.\n\n1. 예 (변경 승인)\n2. 아니오 (재입력)" + SHOP_NAV;
         replier.reply(formatCommand("⚓ 선박 명명 확인", user, confirmMsg, "번호를 선택하세요."));
         return true;
     }
 
-    // 3. [신규] 선박 이름 최종 확정 (종료 지점 - 대기 삭제 및 네비게이션 제거)
+    // 3. 선박 이름 최종 확정 (로직 종료 지점 - 대기 삭제 및 네비게이션 제거)
     if (state.type === 'ship_rename_confirm') {
         if (msg === "1" || msg === "예") {
             var finalName = state.extra.newName;
             var cost = state.extra.price || 0;
             
-            // [종료 지점] 대기 상태를 먼저 삭제하여 응답 대기를 끝냅니다.
-            delete bankProcessState[targetUid]; 
+            // [종료 처리] 결제 직전 대기열을 먼저 삭제하여 중복 입력을 차단합니다.
+            delete bankProcessState[targetUid];
 
             if (Number(user.point) < cost) {
                 replier.reply(formatError(user, "결제 실패", "잔액이 부족하여 취소되었습니다."));
@@ -6255,11 +6254,10 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             util_updatePoint(user, data.rooms[roomName], -cost, "선박 이름 변경권 사용", roomName);
             user.shipName = finalName;
             
-            // 완료 메시지에서는 SHOP_NAV를 붙이지 않습니다.
+            // [완료 메시지] 끝나는 지점이므로 SHOP_NAV 없이 깔끔하게 출력
             replier.reply(formatCommand("🚢 선박 명명식 완료", user, "성공적으로 [" + finalName + "](으)로 변경되었습니다!", "무역 현황: [/무역]"));
             safeSaveData(data);
         } else if (msg === "2" || msg === "아니오") {
-            // 재입력 시에는 대기를 유지하고 내비게이션 바를 포함합니다.
             bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now(), extra: state.extra };
             replier.reply(formatCommand("📝 선박 이름 입력", user, "변경하실 이름을 다시 입력해주세요." + SHOP_NAV));
         }
@@ -6396,15 +6394,15 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
 
                 replier.reply(formatError(user, "포인트 부족", "총 " + fp(totalPrice) + "P가 필요합니다." + SHOP_NAV));
             } else {
-                // [종료 지점] 결제 완료 시 대기 상태를 삭제합니다.
+                // [종료 처리] 결제가 성공했으므로 대기 상태를 삭제합니다.
                 delete bankProcessState[targetUid]; 
 
                 if (item.effect !== "trade_cargo") {
                     util_updatePoint(user, roomData, -totalPrice, "상점 구매: " + item.name + " x" + qty, roomName);
                 }
                 
+                // 최종 효과 발동 (메시지는 섹터 30에서 네비게이션 없이 출력됨)
                 if (typeof _handleShopEffect === 'function') {
-                    // 최종 결과 메시지 출력 (섹터 30으로 이동)
                     _handleShopEffect(item, user, roomName, replier, data, targetUid, totalPrice, false, qty);
                 }
                 return true; 

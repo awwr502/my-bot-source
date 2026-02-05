@@ -5766,10 +5766,16 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
 
                 if (!rawBackupUser) throw new Error("백업본에 해당 데이터(ID:" + sourceCode + ")가 없습니다.");
 
-                // 수정: 수동 필터링 방식 제거 -> 백업 유저 객체 전체를 깊은 복사로 이식
+                // 수정: 백업 데이터 전체 복제 (Deep Clone)
                 var backupUser = JSON.parse(JSON.stringify(rawBackupUser));
                 
-                // USER_SCHEMA를 기반으로 누락된 필드만 기본값 채우기 (데이터 보존 우선)
+                // 데이터 검증용 실시간 스냅샷 (채팅창 출력용)
+                var tInf = backupUser.tradeCount || 0;
+                var sInf = backupUser.shipLevel || 1;
+                var iInf = (backupUser.collectedIcons && backupUser.collectedIcons.length) || 0;
+                var aInf = backupUser.artifactPieces || 0;
+
+                // 스키마에 정의된 모든 필드를 순회하며 누락된 정보 보정
                 USER_SCHEMA.forEach(function(item) {
                     if (backupUser[item.key] === undefined) {
                         backupUser[item.key] = (typeof item.default === 'object' && item.default !== null) 
@@ -5781,18 +5787,24 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
                 backupUser.uid = targetId;
                 backupUser.skipHealing = true; // 복구 직후 보안 엔진 간섭 방지
 
-                // 현재 운영 중인 메모리에 백업본 통째로 주입
+                // 현재 운영 중인 메모리에 백업본 통째로 주입 (다른 유저 영향 없음)
                 targetRoomData.users[targetId] = backupUser;
 
                 safeSaveData(data, false);
                 if (typeof globalData !== 'undefined') globalData = data;
 
-                replier.reply(formatAdmin("✅ 데이터 정밀 이관 완료",
-                    "📍 소속: " + targetRoom + "\n" +
-                    "현재 대상: " + fullNick + "\n" +
-                    "━━━━━━━━━━━━━━━\n" +
-                    "💰 최종 복구 잔액: " + fp(backupUser.point) + "P\n\n" +
-                    "💡 원격지 방으로의 데이터 동기화가 완료되었습니다."));
+                // [검증 리포트 구성]
+                var debugBody = "👤 대상: " + fullNick + "\n" +
+                                 "━━━━━━━━━━━━━━━\n" +
+                                 "💰 복구 잔액: " + fp(backupUser.point) + "P\n" +
+                                 "🚢 무역 횟수: " + tInf + "회\n" +
+                                 "🏗️ 선박 등급: " + sInf + "단계\n" +
+                                 "🎒 수집 아이콘: " + iInf + "종\n" +
+                                 "🧩 유물 조각: " + aInf + "개\n" +
+                                 "━━━━━━━━━━━━━━━\n" +
+                                 "💡 만약 위 수치들이 0이라면, 사용하신 백업 파일 자체가 이미 초기화된 이후의 파일입니다. 더 이전 시간대의 백업본을 사용하세요.";
+
+                replier.reply(formatAdmin("✅ 특정 유저 정밀 복원 완료", debugBody));
 
             } catch (e) {
                 replier.reply(formatAdmin("🚫 복구 중단", "복구 처리 중 오류가 발생했습니다.\n사유: " + e.message));

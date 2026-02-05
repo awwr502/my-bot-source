@@ -6186,63 +6186,55 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 2. [신규] 선박 이름 입력 처리부
-    if (state.type === 'ship_rename_input') {
-        if (msg.length < 2 || msg.length > 8) {
-            replier.reply(formatError(user, "이름 길이 오류", "선박 이름은 2~8글자 사이로 입력해주세요."));
-            return true;
-        }
-        if (msg.indexOf("/") !== -1 || msg.indexOf("|") !== -1) {
-            replier.reply(formatError(user, "사용 불가 문자", "이름에 특수문자(/, |)를 포함할 수 없습니다."));
-            return true;
-        }
+    // 2. [개선] 선박 이름 입력 처리부 (띄어쓰기 허용 및 정규식 정밀화)
+    if (state.type === 'ship_rename_input') {
+        var newName = msg.trim(); // 양 끝 공백 제거 및 띄어쓰기 유지
+        
+        if (newName.length < 2 || newName.length > 8) {
+            replier.reply(formatError(user, "이름 길이 오류", "선박 이름은 2~8글자 사이로 입력해주세요."));
+            return true;
+        }
 
-        // [중복 검사] 전 구역 유저들의 선박 이름을 스캔
-        var isDuplicate = false;
-        for (var r in data.rooms) {
-            var rUsers = data.rooms[r].users;
-            for (var uId in rUsers) {
-                if (rUsers[uId].shipName === msg) {
-                    isDuplicate = true;
-                    break;
-                }
-            }
-            if (isDuplicate) break;
-        }
+        // 한글, 영문, 숫자, 공백만 허용 (특수문자 및 기호 완전 차단)
+        var nameReg = /^[a-zA-Z0-9가-힣\s]+$/;
+        if (!nameReg.test(newName)) {
+            replier.reply(formatError(user, "사용 불가 문자", "이름에 특수문자를 포함할 수 없습니다.\n(한글, 영문, 숫자, 공백만 가능)"));
+            return true;
+        }
 
-        if (isDuplicate) {
-            replier.reply(formatError(user, "이름 중복", "이미 다른 선주가 사용 중인 이름입니다.\n고유한 이름을 입력해주세요."));
-            return true;
-        }
+        // [중복 검사] 전 서버 선박 이름 스캔
+        var isDuplicate = false;
+        for (var r in data.rooms) {
+            var rUsers = data.rooms[r].users;
+            for (var uId in rUsers) {
+                if (rUsers[uId].shipName === newName) { isDuplicate = true; break; }
+            }
+            if (isDuplicate) break;
+        }
 
-        // [수정] 이름 확정 시점에 잔액 확인 및 후불 결제 진행
-        var cost = 0;
-        
-        // 1. 이전 단계(상점)에서 넘겨준 가격이 있으면 그대로 사용
-        if (state.extra && state.extra.price) {
-            cost = state.extra.price;
-        } 
-        // 2. 만약 데이터가 유실됐다면 현재 물가 배율을 적용해 재계산 (기본가 50만P)
-        else {
-            var multiplier = util_getEcoMultiplier(roomName);
-            cost = Math.floor(500000 * multiplier);
-        }
-        
-        if (Number(user.point) < cost) {
-            delete bankProcessState[targetUid];
-            replier.reply(formatError(user, "결제 실패", "변경 비용(" + fp(cost) + "P)이 부족하여 취소되었습니다."));
-            return true;
-        }
+        if (isDuplicate) {
+            replier.reply(formatError(user, "이름 중복", "이미 사용 중인 선박 이름입니다."));
+            return true;
+        }
 
-        // 여기서 최종 차감
-        util_updatePoint(user, roomData, -cost, "선박 이름 변경 비용", roomName);
+        // 결제 금액 산출
+        var cost = (state.extra && state.extra.price) ? state.extra.price : Math.floor(500000 * util_getEcoMultiplier(roomName));
+        
+        if (Number(user.point) < cost) {
+            delete bankProcessState[targetUid];
+            replier.reply(formatError(user, "결제 실패", "비용(" + fp(cost) + "P)이 부족하여 취소되었습니다."));
+            return true;
+        }
 
-        user.shipName = msg;
-        delete bankProcessState[targetUid];
-        replier.reply(formatCommand("🚢 선박 명명식 완료", user, "축하합니다! 새로운 선박의 이름이\n[" + msg + "](으)로 결정되었습니다!", "무역 현황: [/무역]"));
-        safeSaveData(data);
-        return true;
-    }
+        // 데이터 업데이트 및 결제
+        util_updatePoint(user, data.rooms[roomName], -cost, "선박 이름 변경", roomName);
+        user.shipName = newName;
+        delete bankProcessState[targetUid];
+        
+        replier.reply(formatCommand("🚢 선박 명명식 완료", user, "새로운 이름: [" + newName + "]\n성공적으로 등록되었습니다!", "무역 현황: [/무역]"));
+        safeSaveData(data);
+        return true;
+    }
     if (msg.startsWith("/")) {
         delete bankProcessState[targetUid];
         return false;

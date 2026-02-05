@@ -4966,12 +4966,22 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                      * 기능: 항해 시간이 경과한 후 유저가 채팅을 치면 즉시 정산 로직 실행
                      */
                     if (user && user.voyage && user.voyage.active === true) {
-                    if (Date.now() >= (user.voyage.arrival || 0)) {
-                        if (typeof _processTradeArrival === 'function') {
-                            user.skipHealing = true; // 자산 변동 보호
-                            _processTradeArrival(user, data, replier, roomName, targetUid);
-                            safeSaveData(data, true); // 정산 즉시 물리 저장 강제
-                        }
+    var v = user.voyage;
+    if (Date.now() >= (v.arrival || 0)) {
+        /* =====요청사항 시작===== */
+        // [추가] 정산 잠금(isProcessing) 자가 치유: 5분 이상 정산이 안 끝났다면 잠금 강제 해제
+        if (v.isProcessing === true && (Date.now() - (v.lastAttemptTime || 0) > 300000)) {
+            v.isProcessing = false;
+        }
+
+        if (v.isProcessing !== true) {
+            v.lastAttemptTime = Date.now(); // 시도 시간 기록
+            if (typeof _processTradeArrival === 'function') {
+                user.skipHealing = true;
+                _processTradeArrival(user, data, replier, roomName, targetUid);
+                safeSaveData(data, true);
+            }
+        }
                     }
                 }
 
@@ -13031,27 +13041,31 @@ function _processShipUpgrade(user, data, replier, roomName, cfg) {
  * [핵심 엔진] 무역 정산 및 재해 엔진 v1.5
  */
 function _processTradeArrival(user, data, replier, roomName, targetUid) {
-    if (user.voyage.isProcessing === true) return; // 중복 정산 방지 가드
-    var v = user.voyage;
-
-   // [수정] 1:1방 정산 시 메인방의 장부("내리다")를 정확히 참조하도록 경로 강제 고정
+    // [수정] 1:1방 정산 시 메인방의 장부("내리다")를 정확히 참조하도록 경로 강제 고정
     var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var economyRoomData = data.rooms[economyRoomName];
 
-    // 1. 정산 시 부도 가드 (메인 구역 기준으로 잔액 체크)
+    // 1. [핵심] 정산 시 부도 가드 (메인 구역 기준으로 잔액 체크)
     if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(economyRoomName)) {
-        if (v.isAlerted === true) return; 
+        // 부도 상태일 때는 정산 잠금을 해제하여 부도 해제 시 다음 채팅에서 자동 정산되게 함
+        v.isProcessing = false; 
+
+        if (v.isAlerted === true) return; // 알림은 한 번만 출력
         v.isAlerted = true; 
+        
         var bankMsg = "무역선이 항구에 도착했으나, [" + economyRoomName + "] 구역의 부도 상태로 인해\n" +
                       "정산금을 지급할 재원이 부족합니다.\n\n" +
                       "📦 상태: 화물 보존 및 입항 대기\n" +
                       "💰 조치: 국고 복구 후 채팅 입력 시 자동 정산";
+        
         replier.reply(formatCommand("⚓ 입항 대기 (지불 정지)", user, bankMsg, "해제 기준: 국고 50% 복구"));
         safeSaveData(data, false);
         return; 
     }
 
-    user.voyage.isProcessing = true;
+    // 부도가 아닐 경우 정산 시작
+    v.isProcessing = true; 
+    v.isAlerted = false; // 부도가 풀렸으므로 알림 상태 초기화
     var roomData = data.rooms[roomName];
     var cfg = SYSTEM_CONFIG.TRADE;
     var v = user.voyage;

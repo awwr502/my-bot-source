@@ -9550,7 +9550,12 @@ if (msg === "/전체채굴복구") {
 
         var displayNick = backupUser.name || targetNick;
 
-        // USER_SCHEMA 전체 순회하며 모든 필드 강제 이식 (무역, 수집, 칭호 진행도 포함)
+        // [핵심 교정] 복구 대상 방을 무조건 "내리다"로 강제 고정
+        var MAIN_ZONE = "내리다";
+        if (!data.rooms[MAIN_ZONE]) data.rooms[MAIN_ZONE] = { users: {} };
+        var mainTargetRoom = data.rooms[MAIN_ZONE];
+
+        // USER_SCHEMA 전수 복제 (누락 필드 보정)
         USER_SCHEMA.forEach(function(item) {
             if (backupUser[item.key] === undefined) {
                 backupUser[item.key] = (typeof item.default === 'object' && item.default !== null) 
@@ -9558,7 +9563,7 @@ if (msg === "/전체채굴복구") {
             }
         });
 
-        // [검증 데이터 추출] 수집품 및 진행도 수치 확보
+        // 리포트용 수치 미리 추출
         var tCount = backupUser.tradeCount || 0;
         var hParts = (backupUser.horseParts && backupUser.horseParts.length) || 0;
         var lDeeds = backupUser.landDeedCount || 0;
@@ -9569,13 +9574,20 @@ if (msg === "/전체채굴복구") {
         backupUser.uid = finalUid;
         backupUser.skipHealing = true; 
 
-        // 운영 DB에 전수 주입
-        roomData.users[finalUid] = backupUser;
+        // [정밀 주입] 현재 방이 어디든 상관없이 "내리다" 방 유저 데이터에 덮어쓰기
+        mainTargetRoom.users[finalUid] = backupUser;
 
-        safeSaveData(data, false);
-        if (typeof globalData !== 'undefined') globalData = data; 
+        // 명부 및 캐시 동기화 (역시 "내리다" 기준으로 기록)
+        var regFile = new java.io.File(REGISTRY_PATH);
+        var regData = regFile.exists() ? JSON.parse(FileStream.read(REGISTRY_PATH)) : {};
+        regData[MAIN_ZONE + "_" + displayNick] = finalUid;
+        FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
+        
+        if (globalData.nameToIdCache) globalData.nameToIdCache["GLOBAL_" + displayNick] = finalUid;
 
-        // [최종 UI] 모든 수집 진행도를 리포트에 표시
+        safeSaveData(data, true); // 즉시 물리 저장 강제
+        globalData = data; // 메모리 즉시 동기화
+
         var debugBody = "👤 대상: " + displayNick + "\n" +
                          "━━━━━━━━━━━━━━━\n" +
                          "💰 복구 잔액: " + fp(backupUser.point) + "P\n" +
@@ -9585,7 +9597,7 @@ if (msg === "/전체채굴복구") {
                          "📩 위로의 편지: " + lFails + " / 15 개\n" +
                          "🧩 유물 조각: " + aPieces + "개\n" +
                          "━━━━━━━━━━━━━━━\n" +
-                         "💡 리포트의 수치가 0이라면 백업 시점을 더 과거로 당겨야 합니다.";
+                         "✅ 메인 서버('내리다') 데이터로 복구 완료되었습니다.";
 
         replier.reply(formatAdmin("✅ 유저 전수 데이터 복원 완료", debugBody));
     } catch (e) {

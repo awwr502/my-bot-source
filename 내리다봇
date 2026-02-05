@@ -13130,11 +13130,14 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var specialtyToSell = v.specialtySnapshot || user.specialties || {};
     var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
     
-    var totalRevenue = 0;   // 세전 총 매출
-    var totalCost = 0;      // 총 매입 원가
-    var soldLog = [];       // 판매 내역 로그
-    var disasterLog = "";   // 재해 발생 로그
-    var cargoSummary = [];  // 요약 정보
+    var totalRevenue = 0; 
+    var totalCost = 0; 
+    var soldLog = []; 
+    var disasterLog = ""; 
+    var cargoSummary = []; 
+    var piracyLog = ""; // <--- 누락 지뢰 1: 해적 로그 변수 선언
+    var taxAmount = 0;  // <--- 누락 지뢰 2: 세금 변수 선언
+    var taxTag = "";    // <--- 누락 지뢰 3: 세금 태그 변수 선언
     
     var triggeredDisaster = (Math.random() < 0.25) ? ["STORM", "FIRE", "CORRO", "PIRACY"][Math.floor(Math.random() * 4)] : null; 
 
@@ -13265,23 +13268,29 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         user.specialties[newItem] = (user.specialties[newItem] || 0) + 1;
         specialtyFound = "\n\n✨ [" + v.dest + "]의 특산품 '" + newItem + "'을 발견했습니다!";
     }
-
-    user.voyage.active = false; // 상태 해제를 먼저 수행하여 무한 루프 방지
-    user.tradeCount++;
     
-    var baseTax = cfg.BASE_TAX || 0.1; // 누락된 baseTax 변수 정의
+    // [수정] 중복 선언 및 로직 제거, 정산 플래그 해제 통합
+    user.voyage.active = false; 
+    user.voyage.isProcessing = false; 
+    user.tradeCount = (user.tradeCount || 0) + 1;
+
+    // 리포트용 변수 매핑 및 태그 생성
+    var grossRevenue = totalRevenue; 
+    var netProfit = finalNetProfit; 
+    var cargoDisplay = (cargoSummary && cargoSummary.length > 0) ? cargoSummary.join(", ") : v.dest + " 수출품";
+    var baseTax = cfg.BASE_TAX || 0.1;
     var taxTag = (taxRate > baseTax) ? " (자산가 누진 적용)" : "";
-    
-    var report = "📍 도착지: " + v.dest + " (" + cargoSummary.join(", ") + ")\n\n" +
-                 "💰 총 매출: " + fp(grossRevenue) + "P" + 
-                 piracyLog + 
-                 disasterLog + "\n" +
-                 "⚖️ 무역세(" + (taxRate * 100).toFixed(0) + "%): -" + fp(taxAmount) + "P" + taxTag + "\n\n" +
-                 "💵 최종 수익: +" + fp(netProfit) + "P" + 
-                 specialtyFound;
 
-    // replier 대신 Api.replyRoom을 사용하여 안정성 확보
-    var resultMsg = formatCommand("🌊 [항해 일지: 무역 보고]", user, report, "누적 무역: " + (user.tradeCount || 0) + "회 / 잔액: " + fp(user.point) + "P");
+    var report = "📍 도착지: " + v.dest + " (" + cargoDisplay + ")\n\n" +
+                 "💰 총 매출: " + fp(grossRevenue) + "P" + 
+                 (piracyLog || "") + 
+                 (disasterLog || "") + "\n" +
+                 "⚖️ 무역세(" + (Number(taxRate || 0.1) * 100).toFixed(0) + "%): -" + fp(taxAmount) + "P" + taxTag + "\n\n" +
+                 "💵 최종 수익: +" + fp(netProfit) + "P" + 
+                 (specialtyFound || "");
+
+    // 결과 메시지 생성 및 전송
+    var resultMsg = formatCommand("🌊 [항해 일지: 무역 보고]", user, report, "누적 무역: " + user.tradeCount + "회 / 잔액: " + fp(user.point) + "P");
     Api.replyRoom(roomName, resultMsg);
     
     safeSaveData(data, true);

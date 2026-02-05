@@ -12259,6 +12259,7 @@ function _gameLotteryLogic(msg, user, data, replier, roomName, targetUid) {
  */
 function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
+    if (!roomData) return false;
     if (msg === "/낚시") {
         var stateRes = util_checkUserState(user, targetUid);
         if (!stateRes.canAction && stateRes.reason.indexOf("채굴") === -1) {
@@ -12295,10 +12296,9 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
                 if (luckFactor >= 0.9) fishRand = Math.max(fishRand, 0.985);
             }
 
-            // [A] 유물 조각 판정 (0.5% 확률) - 변수명을 fishRand로 통일하여 에러 해결
             if (fishRand < conf.ARTIFACT_CHANCE) {
-                var nextArtifacts = Number(user.artifactPieces || 0) + 1;
-                util_setData(user, 'artifactPieces', nextArtifacts, "낚시 중 유물 발견", roomName);
+                user.artifactPieces = Number(user.artifactPieces || 0) + 1;
+                util_setData(user, 'artifactPieces', user.artifactPieces, "낚시 중 유물 발견", roomName);
                 
                 var artifactBody = "낚싯줄에 엄청난 무게감이 느껴집니다!\n\n" +
                                    "✨ [심해의 보물] ✨\n" +
@@ -12307,7 +12307,8 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
                                    "(현재 보유: " + user.artifactPieces + " 개)";
                 
                 replier.reply(formatCommand("🎊 [내리다 고고학 연구소: 유물 발견]", user, artifactBody, "유물 도감: [/유물도감]"));
-            } 
+                return true;
+            }
             // [B] 물가 등급 판정 (유물 실패 시 실행)
             else {
                 var fishPool = [
@@ -13045,10 +13046,18 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // 0. [에러 방지] 변수 선언 및 데이터 존재 여부 최우선 검증
     if (!user || !user.voyage) return; // 항해 중이 아니면 즉시 종료
     var v = user.voyage; 
+    var cfg = SYSTEM_CONFIG.TRADE;
     
-    // 1:1방 정산 시 메인방의 장부("내리다")를 정확히 참조하도록 경로 강제 고정
+    // 1. 현재 방 데이터 복구 (하단 로직용)
+    var roomData = data.rooms[roomName]; 
+    
+    // 2. 실제 자산이 연동될 경제 구역 설정 (1:1방 연동용)
     var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var economyRoomData = data.rooms[economyRoomName];
+
+    // [중요] 기존 하단 코드들과의 호환성을 위해 변수를 다시 매핑함
+    // 이 줄이 있어야 하단에서 roomData.bankReserve 등을 찾을 때 에러가 안 납니다.
+    if (!roomData) roomData = economyRoomData;
 
     // [중복 방지] 이미 정산 로직이 도는 중이라면 통과
     if (v.isProcessing === true) return;

@@ -9164,50 +9164,58 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         var targetId = null;
         var targetData = null;
 
-        // [수정]: 1순위 - 입력값이 UID(Key)인지 즉시 확인
-        if (roomData.users[input]) {
-            targetId = input;
-            targetData = roomData.users[input];
-        } else {
-            // 2순위 - 닉네임 검색 (findUserByName은 모든 일치 항목을 배열로 반환)
+        // [수정]: 1순위 - 전 구역(Global)을 뒤져서 입력값이 유효한 UID(Key)인지 확인
+        for (var rName in data.rooms) {
+            if (data.rooms[rName].users && data.rooms[rName].users[input]) {
+                targetId = input;
+                targetData = data.rooms[rName].users[input];
+                targetRoomName = rName; // 데이터가 있는 실제 방을 바인딩
+                break;
+            }
+        }
+
+        // 2순위 - UID가 발견되지 않았다면 현재 방에서 닉네임 검색 수행
+        if (!targetId) {
+            var roomData = data.rooms[roomName];
             var found = findUserByName(roomData, input);
             
             if (found.length === 0) {
-                replier.reply(formatAdmin("🚫 대상 없음", "[" + input + "] 유저를 찾을 수 없습니다."));
+                replier.reply(formatAdmin("🚫 대상 없음", "[" + input + "] 유저를 찾을 수 없습니다.\n(UID가 정확한지 확인하세요)"));
                 return true;
             }
             
-            // [해결]: 중복 닉네임 발견 시 즉시 삭제를 중단하고 선택 창 호출
+            // 중복 닉네임 발견 시 선택 창 호출
             if (found.length > 1) {
                 handleUserSelection(replier, targetUid, found, "admin_delete", null, user, roomName);
                 return true;
             }
             
-            // 단일 유저 발견 시
             targetId = found[0].id;
             targetData = found[0].data;
+            targetRoomName = roomName;
         }
 
-        // 삭제 프로세스 시작 (targetId, targetData 확정 상태)
+        // 실제 데이터가 위치한 방의 객체 참조
+        var actualRoomData = data.rooms[targetRoomName];
         var tName = targetData.name;
         var refundLog = "";
         var refundCount = 0;
         var totalRefunded = 0;
 
-        // 1. 사채 계약 정산 및 보전
-        if (roomData.loanContracts) {
-            for (var cid in roomData.loanContracts) {
-                var c = roomData.loanContracts[cid];
+        // 1. 사채 계약 정산 및 보전 (실제 데이터가 있는 방 기준)
+        if (actualRoomData.loanContracts) {
+            for (var cid in actualRoomData.loanContracts) {
+                var c = actualRoomData.loanContracts[cid];
                 if (c.borrowerUid === targetId) {
-                    var lender = roomData.users[c.lenderUid];
+                    var lender = actualRoomData.users[c.lenderUid];
                     if (lender) {
                         var debtAmt = Number(c.currentDebt);
-                        util_updatePoint(lender, roomData, debtAmt, "사채 강제 정산", roomName);
+                        util_updatePoint(lender, actualRoomData, debtAmt, "사채 강제 정산", targetRoomName);
                         totalRefunded += debtAmt;
                         refundCount++;
-                        try { Api.replyRoom(roomName, "🚬 [사채 강제 정산]\n" + tName + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); } catch(e){}
+                        try { Api.replyRoom(targetRoomName, "🚬 [사채 강제 정산]\n" + tName + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); } catch(e){}
                     }
-                    delete roomData.loanContracts[cid];
+                    delete actualRoomData.loanContracts[cid];
                 }
             }
         }
@@ -9215,13 +9223,13 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         // 2. 은행 대출금 국고 회수
         if (targetData.loan && Number(targetData.loan.debt) > 0) {
             var bankDebt = Number(targetData.loan.debt);
-            util_updateReserve(roomData, bankDebt, "대출금 국고 회수", roomName);
+            util_updateReserve(actualRoomData, bankDebt, "대출금 국고 회수", targetRoomName);
             refundLog += "\n🏦 은행 대출금 " + fp(bankDebt) + "P가 국고로 자동 회수되었습니다.";
         }
 
         if (refundCount > 0) refundLog += "\n⚠️ 사채 보전 완료: " + refundCount + "건 (" + fp(totalRefunded) + "P)";
 
-        // 3. 시스템 캐시 및 메모리 데이터 파기
+        // 3. 캐시 및 메모리 파기
         if (typeof uidCache !== 'undefined') {
             for (var key in uidCache) { if (uidCache[key] === targetId) delete uidCache[key]; }
         }
@@ -9230,19 +9238,19 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         }
 
         // 4. 데이터베이스 및 영구 명부 삭제
-        delete roomData.users[targetId];
+        delete actualRoomData.users[targetId];
         try {
             var regFile = new java.io.File(REGISTRY_PATH);
             if (regFile.exists()) {
                 var regData = JSON.parse(FileStream.read(REGISTRY_PATH));
-                // 명부 키 형식(roomName_userName) 삭제
-                delete regData[roomName + "_" + tName];
+                // 명부에서 [방이름_유저이름] 조합 키를 찾아 삭제
+                delete regData[targetRoomName + "_" + tName];
                 FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
             }
         } catch (e) { Log.error("Registry Delete Error: " + e); }
 
         safeSaveData(data);
-        replier.reply(formatAdmin("유저 삭제 완료", "[" + tName + "]님의 데이터를 영구 삭제하고 명부에서 파기했습니다." + refundLog));
+        replier.reply(formatAdmin("유저 삭제 완료", "📍 소속: [" + targetRoomName + "]\n[" + tName + "]님의 데이터를 영구 삭제하고 명부에서 파기했습니다." + refundLog));
         return true;
         }
 

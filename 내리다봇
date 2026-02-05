@@ -2619,15 +2619,37 @@ function util_applyIncomeTax(user, income, roomName) {
         rate = 0.05; // 상위 30% (중산층)
     }
 
+    // [추가] 기부왕 칭호 효과: 모든 세금 50% 감면 혜택 적용
+    if (user.title === "기부왕") {
+        rate = rate * 0.5;
+    }
+
     var taxAmount = Math.floor(income * rate);
     var netIncome = income - taxAmount;
 
     return {
-        ratePct: Math.round(rate * 100),    // UI 표시용 세율 (3, 5, 7)
+        ratePct: (rate * 100).toFixed(1),
         taxAmount: taxAmount,              // 차감될 세금 액수
         rankPct: Math.floor(percentile),   // UI 표시용 내 순위 %
         netIncome: netIncome               // 세금 떼고 남은 실제 수익
     };
+}
+
+/**
+ * [신규 추가] 신용 등급별 무역 수익 배율 반환 엔진
+ * 기능: 등급(1~6)에 따라 순수익의 90%~60% 차등 지급 배율을 결정합니다.
+ */
+function util_getTradeCreditMult(grade) {
+    var mapping = { 
+        1: 0.90, // 1등급: 90% 수령
+        2: 0.85, // 2등급: 85% 수령
+        3: 0.80, // 3등급: 80% 수령
+        4: 0.75, // 4등급: 75% 수령
+        5: 0.70, // 5등급: 70% 수령
+        6: 0.60  // 신용불량자: 60% 수령
+    };
+    // 등급 정보가 없으면 최하 등급(60%) 배율을 기본값으로 반환합니다.
+    return mapping[grade] || 0.60;
 }
 
 //==========섹터12==========
@@ -2806,7 +2828,7 @@ function distributeRepayment(user, amount, roomName) {
     // [보정]: getCreditInfo 호출 시 roomName을 전달하여 현재 방의 경제 지표에 맞는 신용 가점을 계산합니다.
     var crInfo = getCreditInfo(user.creditScore || 600, roomName);
     var restoreThreshold = Math.floor(crInfo.limit * 0.8);
-    var appliedGain = (actualRepayed >= restoreThreshold) ? (clearedCount * 15) : 0;
+    var appliedGain = (actualRepayed >= restoreThreshold) ? (clearedCount * 80) : 0;
 
     var nextScore = Math.min(1000, Number(user.creditScore || 600) + appliedGain);
     util_setData(user, 'creditScore', nextScore, "대출 상환 가점", roomName);
@@ -3782,10 +3804,10 @@ function _runSector16Logic(data, ctx) {
                         borrower.loan.debt = Number(borrower.loan.debt) + amountToPay;
                         borrower.loan.items.push(amountToPay);
                         borrower.isTransferred = true; 
-                        borrower.creditScore = Math.max(0, (borrower.creditScore || 600) - 50);
+                        borrower.creditScore = Math.max(0, (borrower.creditScore || 600) - 120);
                         checkAndHandleDefaulter(borrower, rName);
                         
-                        var takeoverMsg = "🏛️ [중앙은행 대환 집행]\n━━━━━━━━━━━━━━━\n👤 대상: " + c.borrowerName + "님\n내용: 사채 연체 36시간 경과로 은행이 대납 처리하였습니다.\n\n⚠️ [페널티]: 신용점수 -50점 강등\n⚠️ 해당 채무는 [은행 대환 대출]로 전환되었으며, 모든 수익의 70%가 강제 상환됩니다.\n━━━━━━━━━━━━━━━";
+                        var takeoverMsg = "🏛️ [중앙은행 대환 집행]\n━━━━━━━━━━━━━━━\n👤 대상: " + c.borrowerName + "님\n내용: 사채 연체 36시간 경과로 은행이 대납 처리하였습니다.\n\n⚠️ [페널티]: 신용점수 -120점 강등\n⚠️ 해당 채무는 [은행 대환 대출]로 전환되었으며, 모든 수익의 70%가 강제 상환됩니다.\n━━━━━━━━━━━━━━━";
                         Api.replyRoom(rName, takeoverMsg);
                         delete roomData.loanContracts[cid];
                         ctx.isUpdated = true;
@@ -4391,7 +4413,6 @@ function _runSector17Logic(data, ctx) {
 
                     // [기부왕] 채무 이자 감면 로직
                     var dailyRate = (cr.rate - 1) * dynMult;
-                    if (u.title === "기부왕") dailyRate *= 0.7; // 30% 감면
 
                     var dailyInterest = Math.floor(Number(u.loan.debt) * dailyRate);
                     
@@ -4408,43 +4429,35 @@ function _runSector17Logic(data, ctx) {
                 }
             }
 
-            /* [v11.9.28] 6대 랜드마크 24시간 확정 배당 정산 엔진 (Hourly Fixed Model) */
-            // 설명: 매일 자정, 각 랜드마크 주인에게 24시간치(240,000P) 배당을 일괄 지급합니다.
-            var ecoCfg = SYSTEM_CONFIG.ECO;
-            var divReport = [];
-
+            // [수정] 6대 랜드마크 24시간 확정 배당 정산 및 기부왕 세금 감면 보고 로직
             if (ecoCfg && ecoCfg.HOURLY_DIVIDEND) {
                 var targetNames = ["광산", "낚시터", "카지노", "중앙은행", "백화점", "경마장"];
-                var baseDailyPayout = ecoCfg.HOURLY_DIVIDEND * 24; // 하루치 기본금 (240,000P)
+                var baseDailyPayout = ecoCfg.HOURLY_DIVIDEND * 24; 
 
                 targetNames.forEach(function(landName) {
                     var owner = util_getMajorityOwner(roomObj, landName);
                     
                     if (owner && owner.data) {
-                        // [지분 보너스]: 10지분 초과 시 1지분당 10%(0.1) 가산
                         var threshold = ecoCfg.BONUS_THRESHOLD || 10;
                         var bonusRate = ecoCfg.BONUS_RATE || 0.1;
                         var shareMult = owner.qty > threshold ? 1.0 + (owner.qty - threshold) * bonusRate : 1.0;
                         
-                        // 최종 지급액 계산
                         var finalDividend = Math.floor(baseDailyPayout * shareMult);
                         
-                        // 갓물주 칭호 보너스 (10% 추가)
                         if (owner.data.title === "갓물주") finalDividend = Math.floor(finalDividend * 1.1);
 
                         if (finalDividend > 0) {
-                            // [지능형 차등 세금 계산]
+                            // [지능형 차등 세금 계산] 섹터 11 엔진 호출 (기부왕 50% 감면 자동 포함)
                             var taxInfo = util_applyIncomeTax(owner.data, finalDividend, rName);
 
-                            // 세금 제외 실수령액 지급
                             util_updatePoint(owner.data, roomObj, taxInfo.netIncome, "랜드마크 일일 확정 배당: " + landName, rName);
-                            
-                            // 징수된 세금 국고 환수
                             util_updateReserve(roomObj, taxInfo.taxAmount, "랜드마크 배당 소득세 징수", rName);
 
-                            // 보고서 UI 구성 (원금, 세금, 실수령액 표시)
+                            // [UI 개선] 기부왕 칭호 보유 시 감면 안내 문구 추가
+                            var taxBenefitTag = (owner.data.title === "기부왕") ? " [기부왕 혜택 적용]" : "";
+
                             divReport.push("• " + landName + ": " + owner.data.name + " (+" + fp(finalDividend) + "P)\n" +
-                                           "└ ⚖️ 세금(" + taxInfo.ratePct + "%): -" + fp(taxInfo.taxAmount) + "P (상위 " + taxInfo.rankPct + "%)\n" +
+                                           "└ ⚖️ 세금(" + taxInfo.ratePct + "%): -" + fp(taxInfo.taxAmount) + "P" + taxBenefitTag + "\n" +
                                            "└ 💰 최종 지급: +" + fp(taxInfo.netIncome) + "P");
                         }
                     }
@@ -5854,26 +5867,33 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
             var nextDonation = (user.totalDonation || 0) + amt;
             util_setData(user, 'totalDonation', nextDonation, "기부금 누적", roomName);
             
-            // 기부 칭호 체크
-            var donation = user.totalDonation;
-            
-          if (donation >= 2000000) {
-                util_checkAndAwardTitle(user, replierStub, "기부왕", 5004, "👑", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(2000000) + "P", "[장착 효과]: 은행 대출 이용 시 매일 발생하는 채무 이자가 30% 감면됩니다.", roomName);
-            } else if (donation >= 1000000) {
-                util_checkAndAwardTitle(user, replierStub, "자선가", 5003, "✨", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(1000000) + "P", "사회 전반에 걸쳐 선한 영향력을 널리 퍼뜨리고 있습니다.", roomName);
-            } else if (donation >= 700000) {
-                util_checkAndAwardTitle(user, replierStub, "기부천사", 5002, "👼", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(700000) + "P", "어려운 이들에게 희망의 빛을 선사했습니다.", roomName);
-            } else if (donation >= 300000) {
-                util_checkAndAwardTitle(user, replierStub, "선한손길", 5001, "🌱", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(300000) + "P", "당신의 따뜻한 마음이 사회의 소중한 밀알이 됩니다.", roomName);
+            // 1. [신규] 기부 금액에 따른 신용도 회복 로직 (10,000P당 10점)
+            var creditGain = Math.floor(amt / 10000) * 10;
+            if (creditGain > 0) {
+                var nextScore = Math.min(1000, Number(user.creditScore || 600) + creditGain);
+                util_setData(user, 'creditScore', nextScore, "기부 보상 신용 회복", roomName);
+                if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(user, roomName);
             }
 
-                var thanksMsg = "중앙은행에 " + fp(amt) + "P를 기부하셨습니다.\n" +
-                                "보내주신 소중한 자산은 국가 경제 위기 극복과 \n" +
-                                "전체 유저 복지 향상을 위해 귀하게 사용됩니다.\n" +
-                                "따뜻한 마음에 진심으로 감사드립니다!\n\n" +
-                                "🏦 [국고 입고]: 기부금이 중앙은행 재원으로 귀속됨\n" +
-                                "📊 누적 기부액: " + fp(donation) + "P";
+            // 2. [수정] 기부 칭호 조건 및 기부왕 혜택 변경
+            var donation = user.totalDonation;
+            
+            if (donation >= 5000000) {
+                util_checkAndAwardTitle(user, replierStub, "기부왕", 5004, "👑", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(5000000) + "P", "[장착 효과]: 모든 종류의 세금(소득세, 무역세, 카지노세)이 50% 상시 감면됩니다.", roomName);
+            } else if (donation >= 3000000) {
+                util_checkAndAwardTitle(user, replierStub, "자선가", 5003, "✨", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(3000000) + "P", "사회 전반에 걸쳐 선한 영향력을 널리 퍼뜨리고 있습니다.", roomName);
+            } else if (donation >= 1000000) {
+                util_checkAndAwardTitle(user, replierStub, "기부천사", 5002, "👼", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(1000000) + "P", "어려운 이들에게 희망의 빛을 선사했습니다.", roomName);
+            } else if (donation >= 500000) {
+                util_checkAndAwardTitle(user, replierStub, "선한손길", 5001, "🌱", "내리다 사회복지 협의회", "누적 기부 금액 " + fp(500000) + "P", "당신의 따뜻한 마음이 사회의 소중한 밀알이 됩니다.", roomName);
+            }
 
+            var thanksMsg = "중앙은행에 " + fp(amt) + "P를 기부하셨습니다.\n" +
+                            "보내주신 소중한 자산은 국가 경제 위기 극복과 \n" +
+                            "전체 유저 복지 향상을 위해 귀하게 사용됩니다.\n\n" +
+                            "📈 [신용 회복]: +" + creditGain + "점 상승\n" +
+                            "🏦 [국고 입고]: 기부금이 중앙은행 재원으로 귀속됨\n" +
+                            "📊 누적 기부액: " + fp(donation) + "P";
                 replier.reply(formatCommand("🎁 기부 완료", user, thanksMsg, "(현재 잔액: " + fp(user.point) + "P)"));
                 delete bankProcessState[targetUid];
                 safeSaveData(data)
@@ -5962,14 +5982,13 @@ function _handleBankStep2(msg, user, data, replier, roomName, targetUid) {
             user.dailyLoanCount = (user.dailyLoanCount || 0) + 1;
             
             // [수정] 대출 실행 시 횟수와 상관없이 즉시 신용점수 -20점 하락 페널티 적용
-            user.creditScore = Math.max(0, Number(user.creditScore || 600) - 20);
+            user.creditScore = Math.max(0, Number(user.creditScore || 600) - 100);
             checkAndHandleDefaulter(user, roomName);
 
             var dynMult = (typeof util_getDynamicRateMultiplier === 'function') ? util_getDynamicRateMultiplier(roomName) : 1.0;
 
             // [기부왕] 실행 시 선이자 30% 감면
             var rateGap = (cr.rate - 1) * dynMult;
-            if (user.title === "기부왕") rateGap *= 0.7;
             var finalRate = 1 + rateGap;
 
             var total = Math.floor(amt * finalRate);
@@ -5986,7 +6005,7 @@ function _handleBankStep2(msg, user, data, replier, roomName, targetUid) {
                                  "📢 [자동 상환 안내]\n" +
                                  "향후 발생하는 모든 수익의 " + autoRepayRate + "가\n" +
                                  "대출금으로 자동 상환됩니다.\n\n" +
-                                 "📉 [신용 하락]: 대출 실행으로 점수가 -20점 하락했습니다.";
+                                 "📉 [신용 하락]: 대출 실행으로 점수가 -100점 하락했습니다.";
 
             replier.reply(formatCommand("🏦 대출 승인", user, successContent, "보유 포인트: " + fp(user.point) + "P"));
             delete bankProcessState[targetUid];
@@ -8197,10 +8216,12 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         user.tierGuard = (user.tierGuard || 0) + qty;
         replier.reply(formatCommand("🛒 구매 완료", user, item.name + " x" + qty + " 구매 성공!", "보유 방어권: " + user.tierGuard + "개"));
     } else if (item.effect === "credit") {
-        var totalRestore = (item.value || 50);
+        var totalRestore = 20; 
         user.creditScore = Math.min(1000, (user.creditScore || 600) + totalRestore);
         user.dailyCreditRestoreCount = (user.dailyCreditRestoreCount || 0) + 1;
+        
         if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(user, roomName);
+        
         replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 사용 성공! (신용 +" + totalRestore + ")", "현재 점수: " + user.creditScore + "점"));
     }
 

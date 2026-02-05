@@ -722,19 +722,22 @@ function util_restoreDailyPoolsFromHistory(data, roomName) {
 function getDatabase() {
 
     // [개선] 메모리 상주 여부와 관계없이 리로드 시 무역 고착 유저를 즉시 치료
-    if (globalData && globalData.rooms) {
-        (function util_forceRepair(data) {
-            for (var r in data.rooms) {
-                var users = data.rooms[r].users;
-                for (var id in users) {
-                    var u = users[id];
-                    if (u.voyage && u.voyage.active === true && u.voyage.isProcessing === true) {
-                        u.voyage.isProcessing = false; // 강제 잠금 해제
-                        u.voyage.isAlerted = false;    // 알림 리셋
+   if (globalData && globalData.rooms) {
+        try {
+            for (var r in globalData.rooms) {
+                var roomObj = globalData.rooms[r];
+                if (roomObj && roomObj.users) {
+                    for (var id in roomObj.users) {
+                        var u = roomObj.users[id];
+                        // 무역 정산 중 멈춘 유저 강제 해제
+                        if (u.voyage && u.voyage.active === true && u.voyage.isProcessing === true) {
+                            u.voyage.isProcessing = false;
+                            u.voyage.isAlerted = false;
+                        }
                     }
                 }
             }
-        })(globalData);
+        } catch(e) { Log.error("Healer Error: " + e); }
     }
 
     // 1. RAM 상주 데이터 우선 반환 (물리적 파일 읽기 생략으로 응답 속도 극대화)
@@ -13117,9 +13120,6 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         return; 
     }
 
-    // 추가: 부도가 해제된 상태라면 알림 플래그를 초기화하여 다음 채팅 시 정산 프로세스 강제 진입 보장
-    v.isAlerted = false;
-
     // 2. 부도가 아닐 경우 정산 시작 (잠금 처리)
     v.isProcessing = true; 
     v.isAlerted = false; // 부도가 풀렸으므로 알림 상태 초기화
@@ -13128,14 +13128,13 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // 1. [Snapshot] 출항 시점의 고정 데이터들을 정산 대상으로 설정 (휘발성/롤백 방지)
     var cargoToSell = v.cargoSnapshot || user.cargo || {};
     var specialtyToSell = v.specialtySnapshot || user.specialties || {};
-    var ecoMult = v.ecoMultSnapshot || util_getEcoMultiplier(roomName); 
     var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
-
-    var totalRevenue = 0; 
-    var totalCost = 0; // <--- 핵심 해결: 매입가 합산을 위한 변수 선언 추가
-    var soldLog = []; 
-    var disasterLog = "";
-    var cargoSummary = [];
+    
+    var totalRevenue = 0;   // 세전 총 매출
+    var totalCost = 0;      // 총 매입 원가
+    var soldLog = [];       // 판매 내역 로그
+    var disasterLog = "";   // 재해 발생 로그
+    var cargoSummary = [];  // 요약 정보
     
     var triggeredDisaster = (Math.random() < 0.25) ? ["STORM", "FIRE", "CORRO", "PIRACY"][Math.floor(Math.random() * 4)] : null; 
 

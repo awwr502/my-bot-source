@@ -7782,7 +7782,14 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
 
         var borrowerUid = targetUid || user.uid; 
         var totalWithBonus = totalEarn + matchingBonus;
-        var res = processRepayment(user, totalWithBonus, borrowerUid, roomName); 
+        // 1. [차등 세금 계산] 섹터 11의 엔진 호출
+        var taxInfo = util_applyIncomeTax(user, totalWithBonus, roomName);
+        
+        // 2. 세금 국고 환수 집행
+        util_updateReserve(roomData, taxInfo.taxAmount, "광산 채굴 소득세 징수", roomName);
+
+        // 3. [상환 처리] 세금을 뺀 나머지 금액(taxInfo.netIncome)으로 빚 상환 진행
+        var res = processRepayment(user, taxInfo.netIncome, borrowerUid, roomName); 
         
         var actualTotal = Number(res.actualGain);
         var bonusPart = (matchingBonus > 0) ? Math.floor(actualTotal / 2) : 0;
@@ -7790,6 +7797,12 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
 
         util_updatePoint(user, roomData, basePart, "광산 채굴 정산", roomName);
         if (bonusPart > 0) util_updatePoint(user, roomData, bonusPart, "정부 근로 장려금(광산)", roomName);
+
+        // [UI 구성] 세금 및 정산 내역 텍스트 조립
+        var taxLog = "\n⚖️ 세금(" + taxInfo.ratePct + "%): -" + fp(taxInfo.taxAmount) + "P (상위 " + taxInfo.rankPct + "%)";
+        var stimulusLog = (matchingBonus > 0) ? "\n🏦 [이벤트]: 1:1 매칭 장려금 +" + fp(matchingBonus) + "P" : "";
+        var repayInfo = res.repayMsg ? "\n" + res.repayMsg : "";
+        var finalGainLog = "\n💰 최종 수익: +" + fp(actualTotal) + "P";
 
         var nextMiningTime = Number(user.totalMiningTime || 0) + durationMin;
         util_setData(user, 'totalMiningTime', nextMiningTime, "광산 채굴 시간 합산", roomName);
@@ -7829,12 +7842,15 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         user.mining.active = false;
         // [통합 메시지 조립 시작]
         var repayInfo = res.repayMsg ? "\n\n" + res.repayMsg : "";
-        var finalOutput = "⛏️ 채굴 결과\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n\n";
-        
-        finalOutput += "⛏️ 채굴 시간: " + durationMin + "분\n" +
-                       "🟫 구리 " + copperCount + "회 🗂️ 황금 " + goldCount + "회\n" +
-                       "💎 다이아 " + diaCount + "회\n\n" +
-                       "💰 채굴 수익: " + fp(totalEarn) + "P" + repayInfo;
+        var finalOutput = "⛏️ 채굴 결과\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n\n" +
+                          "⛏️ 채굴 시간: " + durationMin + "분\n" +
+                          "🟫 구리 " + copperCount + "회 🗂️ 황금 " + goldCount + "회\n" +
+                          "💎 다이아 " + diaCount + "회\n" +
+                          "💰 채굴 수익: +" + fp(totalEarn) + "P\n" +
+                          taxLog + 
+                          stimulusLog + 
+                          repayInfo + 
+                          finalGainLog;
 
         if (artifactFound > 0) {
             // 다음 칭호 목표치 계산 로직
@@ -8026,7 +8042,16 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
             }
         }
 
-        var res = processRepayment(user, totalPrize, targetUid, roomName);
+        // 1. [차등 세금 계산] 섹터 11의 지능형 엔진 호출
+        var taxInfo = { taxAmount: 0, ratePct: 0, rankPct: 0, netIncome: totalPrize };
+        if (totalPrize > 0) {
+            taxInfo = util_applyIncomeTax(user, totalPrize, roomName);
+            // 세금 국고 환수 집행
+            util_updateReserve(roomData, taxInfo.taxAmount, "스피또 당첨 소득세 징수", roomName);
+        }
+
+        // 2. 세후 금액으로 빚 상환 및 최종 지급 진행
+        var res = processRepayment(user, taxInfo.netIncome, targetUid, roomName);
         util_updatePoint(user, roomData, Number(res.actualGain), "스피또 당첨금", roomName);
 
         var body = "🧧 스피또 " + qty + "매 개봉 결과\n\n";
@@ -8035,6 +8060,10 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
             if (results.rank1 > 0) body += "⭐ 1등: " + fp(conf.PRIZES.RANK1) + "회\n";
             if (results.rank2 > 0) body += "🥈 2등: " + fp(conf.PRIZES.RANK2) + "회\n";
             body += "🥉 기타 등수: " + (results.rank3 + results.rank4) + "회 당첨";
+            // 3. UI 보완: 세금, 상환 내역, 최종 수익 정보 조립
+            body += "\n\n⚖️ 세금(" + taxInfo.ratePct + "%): -" + fp(taxInfo.taxAmount) + "P (상위 " + taxInfo.rankPct + "%)";
+            if (res.repayMsg) body += res.repayMsg; // 상환 메시지 삽입
+            body += "\n💰 최종 수익: +" + fp(res.actualGain) + "P";
         } else {
             body += "💀 아쉽게도 모두 꽝입니다...";
         }
@@ -8044,7 +8073,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
             body += "\n\n" + letterMsg;
         }
         
-        replier.reply(formatCommand("🎰 스피또 결과", user, body + (res.repayMsg || ""), "내 잔액: " + fp(user.point) + "P"));
+        replier.reply(formatCommand("🎰 스피또 결과", user, body, "내 잔액: " + fp(user.point) + "P"));
     }
 
     // 1. 랜덤 아이콘 박스 처리 (메시지 테이블 및 중복 조각 지급 포함)

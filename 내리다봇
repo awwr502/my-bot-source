@@ -11736,17 +11736,40 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
         
-        // [확정]: 이제 Local States에 저장되어 번호 입력(1~6)이 정상 작동합니다.
+        // 1. 상점 메인 메뉴 UI: 사용자 요청에 따라 "❎취소"만 표시
         menuWaitState[targetUid] = { type: 'shop_category', time: Date.now() };
         var categoryList = [];
         for (var id in SHOP_CATEGORIES) {
             categoryList.push(id + ". " + SHOP_CATEGORIES[id]);
         }
-        // 1. 상점 메인 메뉴 UI: "❎취소"만 표시
         var shopMenu = "원하시는 카테고리 번호를 입력하세요.\n\n" + categoryList.join("\n") + "\n\n❎취소";
         
         replier.reply(formatCommand("🛒 내리다봇 통합 상점", user, shopMenu, "번호를 입력하세요."));
         return true;
+    }
+
+    /* [추가] 상점 물품 목록 출력 (응답 대기 구간 - 내비게이션 포함) */
+    // 이 로직은 상점 카테고리를 선택했을 때 호출되어 물품 목록을 보여줍니다.
+    function _showShopItemList(catId, user, roomName, replier, bankProcessState, targetUid) {
+        var filteredItems = SHOP_ITEMS.filter(function(it) { return it.cat === parseInt(catId); });
+        
+        if (filteredItems.length === 0) {
+            replier.reply(formatSimple("🛒 상점 알림", "해당 카테고리에 물품이 없습니다.", "다른 번호를 선택하세요."));
+            return;
+        }
+
+        var list = filteredItems.map(function(item, j) {
+            return (j + 1) + ". " + item.icon + " " + item.name + " : " + fp(getItemPrice(item, user, roomName)) + "P";
+        });
+
+        // 상태 전환 및 아이템 데이터 캐싱
+        bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: filteredItems } };
+        
+        // [응답 대기 지점] 하단에 전체 내비게이션 바 포함
+        var SHOP_NAV = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+        var shopContent = list.join("\n") + "\n\n💰 보유 포인트: " + fp(user.point) + "P" + SHOP_NAV;
+        
+        replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[catId], user, shopContent, "구매할 물품의 번호를 입력하세요."));
     }
 
     /* [기능 2] 출석 체크 (중앙은행 연동) */

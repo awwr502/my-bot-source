@@ -2572,6 +2572,64 @@ function util_checkAndAwardTitle(user, replier, titleName, titleId, icon, commit
     return true;
 }
 
+/**
+ * [신설] 순자산 백분위 계산 엔진
+ * 기능: 해당 방 유저들의 자산을 전수 조사하여 나의 상대적 위치(상위 %)를 반환합니다.
+ */
+function util_getNetWorthPercentile(user, roomName) {
+    try {
+        var data = getDatabase();
+        var roomObj = data.rooms[roomName || "내리다"];
+        if (!roomObj || !roomObj.users) return 100;
+
+        var netWorths = [];
+        for (var uid in roomObj.users) {
+            // 모든 유저의 실질 순자산(현금+예금+부동산-빚) 리스트 생성
+            var nw = util_calculateNetWorth(roomObj.users[uid], roomObj);
+            netWorths.push(nw);
+        }
+        
+        // 내림차순 정렬 (자산 1등이 0번 인덱스)
+        netWorths.sort(function(a, b) { return b - a; });
+
+        var myNetWorth = util_calculateNetWorth(user, roomObj);
+        var myRank = netWorths.indexOf(myNetWorth) + 1; // 내 등수
+        var totalUsers = netWorths.length;
+
+        // 백분율 계산 (상위 0% ~ 100%)
+        return totalUsers > 0 ? (myRank / totalUsers) * 100 : 100;
+    } catch (e) {
+        Log.error("Percentile Calc Error: " + e);
+        return 50; // 에러 시 평균치 반환
+    }
+}
+
+/**
+ * [신설] 지능형 차등 소득세 및 UI 데이터 생성기
+ * 기준: 상위 10% 이내(7%), 30% 이내(5%), 그 외(3%)
+ * 반환: { 세율%, 차감액, 내순위%, 세후수익 }
+ */
+function util_applyIncomeTax(user, income, roomName) {
+    var percentile = util_getNetWorthPercentile(user, roomName);
+    var rate = 0.03; // 기본 3% (서민층)
+
+    if (percentile <= 10) {
+        rate = 0.07; // 상위 10% (최상위층)
+    } else if (percentile <= 30) {
+        rate = 0.05; // 상위 30% (중산층)
+    }
+
+    var taxAmount = Math.floor(income * rate);
+    var netIncome = income - taxAmount;
+
+    return {
+        ratePct: Math.round(rate * 100),    // UI 표시용 세율 (3, 5, 7)
+        taxAmount: taxAmount,              // 차감될 세금 액수
+        rankPct: Math.floor(percentile),   // UI 표시용 내 순위 %
+        netIncome: netIncome               // 세금 떼고 남은 실제 수익
+    };
+}
+
 //==========섹터12==========
 
 /* 경찰 출동 결과 처리 함수 (중앙은행 연동 및 방별 격리 보정) */
@@ -4375,8 +4433,19 @@ function _runSector17Logic(data, ctx) {
                         if (owner.data.title === "갓물주") finalDividend = Math.floor(finalDividend * 1.1);
 
                         if (finalDividend > 0) {
-                            util_updatePoint(owner.data, roomObj, finalDividend, "랜드마크 일일 확정 배당: " + landName, rName);
-                            divReport.push("• " + landName + ": " + owner.data.name + " (+" + fp(finalDividend) + "P)");
+                            // [지능형 차등 세금 계산]
+                            var taxInfo = util_applyIncomeTax(owner.data, finalDividend, rName);
+
+                            // 세금 제외 실수령액 지급
+                            util_updatePoint(owner.data, roomObj, taxInfo.netIncome, "랜드마크 일일 확정 배당: " + landName, rName);
+                            
+                            // 징수된 세금 국고 환수
+                            util_updateReserve(roomObj, taxInfo.taxAmount, "랜드마크 배당 소득세 징수", rName);
+
+                            // 보고서 UI 구성 (원금, 세금, 실수령액 표시)
+                            divReport.push("• " + landName + ": " + owner.data.name + " (+" + fp(finalDividend) + "P)\n" +
+                                           "└ ⚖️ 세금(" + taxInfo.ratePct + "%): -" + fp(taxInfo.taxAmount) + "P (상위 " + taxInfo.rankPct + "%)\n" +
+                                           "└ 💰 최종 지급: +" + fp(taxInfo.netIncome) + "P");
                         }
                     }
                 });

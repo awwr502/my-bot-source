@@ -5253,36 +5253,13 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1 && !roomData.users[targetUid]) {
 
 /* [데이터 & 가드 통합 엔진] 1:1방 동기화 및 숫자 핸들러 프리패스 */
 if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-    // 1. 데이터 본체 연결: 1:1방은 무조건 '내리다' 방의 지갑을 사용
+    // 수정: 중복 가드 로직을 모두 제거하고 '지갑 연결'만 수행 (가드는 섹터 24에서 일괄 처리)
     var mainRoomData = data.rooms["내리다"];
     if (mainRoomData && mainRoomData.users[targetUid]) {
-        user = mainRoomData.users[targetUid]; 
-    } else {
-        user = roomData.users[targetUid];
+        user = mainRoomData.users[targetUid]; // 1:1방 유저를 메인방 지갑으로 교환
     }
-
-    // 2. 화이트리스트 및 상태 가드: 1:1방 전용 로직 차단 해제
-    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
-    
-    var inState = false;
-    // 현재 1:1 방(local)과 메인 방(main)의 모든 대기 상태를 이중 검사
-    var localSt = roomData.features ? roomData.features.states : null;
-    var mainSt = (mainRoomData && mainRoomData.features) ? mainRoomData.features.states : null;
-
-    var checkWait = function(st) {
-        if (!st) return false;
-        return (st.menuWait[targetUid] || st.bankProcess[targetUid] || st.selectWait[targetUid]);
-    };
-
-    if (checkWait(localSt) || checkWait(mainSt) || (user && user.blackjackState) || (user && user.voyage && user.voyage.active === true)) {
-        inState = true;
-    }
-
-    // 허용된 명령어도 아니고 대기 상태도 아니라면 로직 종료 (일반 채팅 무시)
-    if (!isAllowedCmd && !inState) return;
-
 } else {
-    // 단체방일 경우: 자기 방 데이터를 본체로 사용
+    // 단체방일 경우: 현재 방의 유저 데이터를 그대로 사용
     user = roomData.users[targetUid];
 }
 
@@ -7305,14 +7282,12 @@ if (msg === "/가이드") {
 
 //==========섹터24==========
 
-/* [통합 가드] 1:1방 세션 감지 및 하드코딩 의존성 제거 */
-if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-    if (!user) return;
-    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
+// 수정: 여기서 모든 차단 및 가드 로직을 일괄 처리 (섹터 20-2의 기능을 이관받음)
+    if (!user) return; 
 
+    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
     var inState = false;
     var MAIN_NAME = "내리다"; 
-
 
     var localSt = (data.rooms[roomName] && data.rooms[roomName].features) ? data.rooms[roomName].features.states : null;
     var mainSt = (data.rooms[MAIN_NAME] && data.rooms[MAIN_NAME].features) ? data.rooms[MAIN_NAME].features.states : null;
@@ -7322,15 +7297,15 @@ if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
         return (st.menuWait[targetUid] || st.bankProcess[targetUid] || st.selectWait[targetUid]);
     };
 
-    // [수정] 항해 상태인 유저도 가드를 통과하도록 허용
+    // 현재 게임 중이거나 메뉴가 열려있는지 확인
     if (checkSession(localSt) || checkSession(mainSt) || (user && user.blackjackState) || (user && user.voyage && user.voyage.active === true)) {
         inState = true;
     }
 
-    // 명령어도 아니고 특정 상태도 아니면 여기서 차단(Return)
+    // 허용된 명령어도 아니고 세션 중도 아니라면 여기서 리턴(차단)
     if (!isAllowedCmd && !inState) return;
 
-    // [추가] 가드를 통과한 유저가 무역 도착 상태라면 즉시 정산 실행
+    // 무역 도착 정산 처리 (가드를 통과한 유저만 대상)
     if (user && user.voyage && user.voyage.active === true) {
         var v = user.voyage;
         if (Date.now() >= (v.arrival || 0) && v.isProcessing !== true) {

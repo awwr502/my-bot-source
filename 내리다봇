@@ -5439,6 +5439,41 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
         
         delete selectWaitState[targetUid]; // 선택 완료 시 세션 삭제
 
+        // 추가: /조작 명령어 중복 유저 선택 시 처리 로직 (수정/추가)
+        if (type === "admin_mani_select") {
+            var mode = extra.mode;
+            if (mode === "ON") {
+                targetUser.isManipulated = true;
+                targetUser.gambleWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_GAMBLE;
+                targetUser.fishLuck = SYSTEM_CONFIG.MANIPULATION.DEFAULT_FISH;
+                targetUser.horseWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_RACING;
+                targetUser.spittoWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_SPITTO;
+                targetUser.skipHealing = true;
+                replier.reply(formatAdmin("🎯 조작 가동", "[" + targetRoom + "] " + targetUser.name + "님의 조작을 [기본값]으로 활성화했습니다."));
+            } else if (mode === "OFF") {
+                targetUser.isManipulated = false;
+                targetUser.skipHealing = true;
+                replier.reply(formatAdmin("🎯 조작 해제", "[" + targetRoom + "] " + targetUser.name + "님의 모든 조작을 종료했습니다."));
+            } else {
+                var status = "👤 대상: [" + targetRoom + "] " + targetUser.name + "\n" +
+                             "✨ 상태: " + (targetUser.isManipulated ? "🟢 가동 중" : "⚪ 미가동") + "\n\n" +
+                             "1. 🎲 홀짝 승률: " + (targetUser.gambleWinRate || 0) + "%\n" +
+                             "2. 🎣 낚시 보정: " + (targetUser.fishLuck || 0) + "%\n" +
+                             "3. 🏇 경마 보정: " + (targetUser.horseWinRate || 0) + "%\n" +
+                             "4. 🧧 스피또 보정: " + (targetUser.spittoWinRate || 0) + "%\n" +
+                             "5. ❌ 조작 전체 해제\n\n" +
+                             "💡 수정할 번호를 입력하거나 [취소] 하세요.";
+                
+                var currentMenuWait = data.rooms[roomName].features.states.menuWait;
+                currentMenuWait[targetUid] = { 
+                    type: 'admin_mani_menu', 
+                    time: Date.now(), 
+                    extra: { targetId: selected.id, targetRoom: targetRoom } 
+                };
+                replier.reply(formatAdmin("🎯 조작 설정 센터", status));
+            }
+        }
+
         // [추가] 조작 설정/해제 중복 유저 선택 시 실제 데이터 반영부
            if (type === "admin_manipulate_on") {
             targetUser.isManipulated = true;
@@ -7293,14 +7328,17 @@ if (msg === "/가이드") {
     var is1to1 = (ALLOWED_ROOMS.indexOf(realRoom) === -1);
     var logicRoom = is1to1 ? MAIN_NAME : roomName; 
 
-    // 1:1방 유저라면 세션(menuWait) 정보를 메인방으로 강제 복사하여 핸들러가 인식하게 함
+    // 수정: 1:1 대화방 세션을 메인 방으로 강제 복사하여 모든 숫자 핸들러가 인식하도록 동기화 (수정)
     if (is1to1) {
         var pRoom = data.rooms[roomName];
         var mRoom = data.rooms[MAIN_NAME];
         if (pRoom && pRoom.features && mRoom && mRoom.features) {
-            if (pRoom.features.states.menuWait[targetUid]) {
-                mRoom.features.states.menuWait[targetUid] = pRoom.features.states.menuWait[targetUid];
-            }
+            var sKeys = ["menuWait", "selectWait", "bankProcess", "lottoPurchase"];
+            sKeys.forEach(function(key) {
+                if (pRoom.features.states[key] && pRoom.features.states[key][targetUid]) {
+                    mRoom.features.states[key][targetUid] = pRoom.features.states[key][targetUid];
+                }
+            });
         }
     }
     var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);

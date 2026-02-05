@@ -4884,35 +4884,29 @@ if (!data) return;
 var roomData = data.rooms[roomName] || { users: {} };
 data.rooms[roomName] = roomData;
 
-/* [Fix] 1:1 방 기능 데이터 강제 심층 초기화 (Ghost Sync 전 필수 수행) */
-// 설명: 입력 핸들러(Sector 24)가 1:1 방의 대기 상태(menuWait)를 읽을 수 있도록 구조를 완성합니다.
+// [1] 1:1 방의 특징(Features) 및 상태(States) 구조를 최우선으로 초기화
 if (!roomData.features) {
-    if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
-        roomData.features = ROOM_FEATURE_TEMPLATE();
-    } else {
-        roomData.features = {}; // 비상용 빈 객체
-    }
+    roomData.features = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
 }
-// 하위 구조(states)가 없을 경우 보강 (이 부분이 누락되어 먹통 발생)
 if (!roomData.features.states) {
     roomData.features.states = { 
         menuWait: {}, bankProcess: {}, selectWait: {}, lottoPurchase: {},
         activeThefts: {}, duelData: {}, mining: {}, loanRegister: {}, loanContractWait: {} 
     };
-} else {
-    // states는 있지만 menuWait가 없는 경우 방지
-    if (!roomData.features.states.menuWait) roomData.features.states.menuWait = {};
-    if (!roomData.features.states.bankProcess) roomData.features.states.bankProcess = {};
 }
 
-/* [1:1 채팅방 전용] '내리다' 메인 방 데이터 강제 연동 (Ghost Sync) */
+// [2] 1:1 채팅방일 경우 '내리다' 메인 방 데이터와 UID 강제 연동 (Ghost Sync)
 if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
     var mainRoomData = data.rooms["내리다"];
     if (mainRoomData && mainRoomData.users) {
         for (var mUid in mainRoomData.users) {
             if (mainRoomData.users[mUid].name.trim() === cleanSender.trim()) {
                 targetUid = mUid;
-                roomData = mainRoomData; // 여기서 데이터가 교체되더라도 위에서 features는 이미 생성됨
+                // [핵심] 1:1방 유저 목록에 메인 UID를 강제로 심어 식별 무결성 확보
+                if (!roomData.users[targetUid]) {
+                    roomData.users[targetUid] = mainRoomData.users[targetUid];
+                }
+                roomData = mainRoomData; // 이후 로직의 데이터 저장소는 메인방으로 리다이렉트
                 break;
             }
         }
@@ -6943,48 +6937,57 @@ if (msg === "/가이드") {
 var actualRoomData = data.rooms[roomName];
 var actualFeatures = actualRoomData ? actualRoomData.features : null;
 
+// [1:1 방 무결성 가드] actualFeatures가 없거나 states가 누락된 경우를 대비해 실시간 복구
+if (!actualFeatures) {
+    if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
+        actualRoomData.features = ROOM_FEATURE_TEMPLATE();
+        actualFeatures = actualRoomData.features;
+    }
+}
+
 if (actualFeatures && actualFeatures.states) { 
 
-    // [신규] 관리자 명령어 핸들러 연결
-    if (typeof _handleAdminMain === 'function' && _handleAdminMain(msg, user, data, replier, roomName, targetUid)) return;
+    // [최우선 순위] 카지노 및 메뉴 대기 상태 추출
+    var mWait = actualFeatures.states.menuWait || {};
+    var bProcess = actualFeatures.states.bankProcess || {};
 
-    // 0-1. 조작 메뉴 및 수치 입력 처리
+    // 0-1. 관리자 및 조작 설정 핸들러 연결
+    if (typeof _handleAdminMain === 'function' && _handleAdminMain(msg, user, data, replier, roomName, targetUid)) return;
     if (typeof _handleAdminManiStep === 'function' && _handleAdminManiStep(msg, user, data, replier, roomName, targetUid)) return;
 
-    // [추가] 블랙잭 재도전(한번더/그만) 입력 처리
-    var bjWait = actualFeatures.states.menuWait;
-    if (bjWait && bjWait[targetUid] && bjWait[targetUid].type === 'blackjack_retry') {
-        if (_handleBlackjackRetry(msg, user, data, replier, roomName, targetUid)) return;
+    // 0-2. 블랙잭 재도전 및 액션 처리 (1:1 방 전용)
+    if (mWait[targetUid]) {
+        var stateType = mWait[targetUid].type;
+        if (stateType === 'blackjack_retry' && typeof _handleBlackjackRetry === 'function') {
+            if (_handleBlackjackRetry(msg, user, data, replier, roomName, targetUid)) return;
+        }
+        if (stateType === 'blackjack_action' && typeof _handleBlackjackAction === 'function') {
+            if (_handleBlackjackAction(msg, user, data, replier, roomName, targetUid)) return;
+        }
     }
 
-    // 0. 중복 유저 선택
-    if (typeof _handleSelectionLogic === 'function' && _handleSelectionLogic(msg, user, data, replier, roomName, targetUid)) return;
+    // 0-3. 통합 카지노 배팅 처리 (홀 5000 등 실시간 채팅 배팅)
+    if (typeof _handleCasinoBet === 'function' && _handleCasinoBet(msg, user, data, replier, roomName, targetUid)) return;
 
-    // 1. 로또 번호 입력
-    if (typeof _handleLottoInput === 'function' && _handleLottoInput(msg, user, data, replier, roomName, targetUid)) return;
+    // 1. 공용 메뉴 단계별 핸들러 (Step 4가 카지노 메인을 담당하므로 순서대로 호출)
+    if (typeof _handleMenuStep1 === 'function' && _handleMenuStep1(msg, user, data, replier, roomName, targetUid)) return;
+    if (typeof _handleMenuStep2 === 'function' && _handleMenuStep2(msg, user, data, replier, roomName, targetUid)) return;
+    if (typeof _handleMenuStep3 === 'function' && _handleMenuStep3(msg, user, data, replier, roomName, targetUid)) return;
     
-    // A. 은행 업무
+    // [핵심] /카지노 이후 숫자 입력은 여기서 처리됩니다.
+    if (typeof _handleMenuStep4 === 'function' && _handleMenuStep4(msg, user, data, replier, roomName, targetUid)) return;
+
+    // 2. 은행 및 기타 업무 핸들러
     if (typeof _handleBankStep1 === 'function' && _handleBankStep1(msg, user, data, replier, roomName, targetUid)) return;
     if (typeof _handleBankStep2 === 'function' && _handleBankStep2(msg, user, data, replier, roomName, targetUid)) return;
     if (typeof _handleBankStep3 === 'function' && _handleBankStep3(msg, user, data, replier, roomName, targetUid)) return;
     if (typeof _handleBankStep4 === 'function' && _handleBankStep4(msg, user, data, replier, roomName, targetUid)) return;
     if (typeof _handleBankStep5 === 'function' && _handleBankStep5(msg, user, data, replier, roomName, targetUid)) return;
 
-    // C. 통합 카지노 채팅 배팅 처리
-    if (typeof _handleCasinoBet === 'function' && _handleCasinoBet(msg, user, data, replier, roomName, targetUid)) return;
-    
-    // B. 메뉴 대기
-    if (typeof _handleMenuStep1 === 'function' && _handleMenuStep1(msg, user, data, replier, roomName, targetUid)) return;
-    
-    var mwState = actualFeatures.states.menuWait;
-    if (mwState && mwState[targetUid] && mwState[targetUid].type === 'blackjack_action') {
-        if (_handleBlackjackAction(msg, user, data, replier, roomName, targetUid)) return;
-    }
-    if (typeof _handleMenuStep2 === 'function' && _handleMenuStep2(msg, user, data, replier, roomName, targetUid)) return;
-    if (typeof _handleMenuStep3 === 'function' && _handleMenuStep3(msg, user, data, replier, roomName, targetUid)) return;
-    if (typeof _handleMenuStep4 === 'function' && _handleMenuStep4(msg, user, data, replier, roomName, targetUid)) return;
-    
-} 
+    // 3. 시스템 공통 핸들러 (중복선택, 로또 등)
+    if (typeof _handleSelectionLogic === 'function' && _handleSelectionLogic(msg, user, data, replier, roomName, targetUid)) return;
+    if (typeof _handleLottoInput === 'function' && _handleLottoInput(msg, user, data, replier, roomName, targetUid)) return;
+}
 
 // 2. 일반 게임 명령어 처리
 if (typeof _handleGameLogic === 'function') {

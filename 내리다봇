@@ -11770,6 +11770,12 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
         var pol = util_getActivePolicy(roomData);
         var baseTaxRate = pol.stockTax || 0.05;
         var appliedTaxRate = baseTaxRate;
+
+        var taxBenefitMsg = "";
+        if (user.title === "기부왕") {
+            appliedTaxRate = baseTaxRate * 0.5;
+            taxBenefitMsg = "\n✨ [기부왕 특별 예우] 양도세 50% 감면 적용";
+        }
         
         var fee = Math.floor(totalSell * appliedTaxRate);
         var finalPrice = totalSell - fee;
@@ -11808,12 +11814,14 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
 
         var taxText = (user.title === "갓물주") ? "🏢 [갓물주] 세금 50% 감면 혜택 적용!" : "부동산 양도세 차감";
         
+        // [수정] 매각 결과 리포트에 세금 감면 안내 통합
         var sellResult = "📉 부동산 지분 매각 완료\n" +
                          "━━━━━━━━━━━━━━━\n" +
                          getDisplayName(user) + "님\n" +
                          "건물: " + sName + " " + count + "지분\n" +
                          "수익 : " + fp(Math.abs(profit)) + "P (" + signIcon + Math.abs(profitRate).toFixed(1) + "%)\n" +
-                         "실현손익 : " + fp(finalPrice) + "P (세금 -" + (appliedTaxRate * 100).toFixed(1) + "% 적용)" + (res.repayMsg || "") + "\n" +
+                         "실현손익 : " + fp(finalPrice) + "P (세율 " + (appliedTaxRate * 100).toFixed(1) + "% 적용)" + 
+                         taxBenefitMsg + (res.repayMsg || "") + "\n" +
                          "━━━━━━━━━━━━━━━\n" +
                          "💡 [가이드]: 내 잔액: " + fp(user.point) + "P";
 
@@ -12922,20 +12930,29 @@ function _showVoyageStatus(user, replier, data, roomName) {
         tRev += Math.floor(sVal * sQty * sMult);
     }
 
-    // 적재함 현황 문자열 조립
-    var cargoDisplay = "📦 적재함: " + totalCargoInShip + " / " + shipCapacity + " 칸\n" + currentCargoLines.join("\n") + "\n\n";
+    // 3. [수정] 신용도 및 기부왕 혜택이 적용된 실질 예상 수익 산출
+    var margin = tRev - tCost; // 순수 마진(이익금)
+    
+    // 기부왕 무역세 50% 감면 (10% -> 5%)
+    var taxRate = (user.title === "기부왕") ? 0.05 : 0.10;
+    var taxAmount = Math.max(0, Math.floor(margin * taxRate));
+    
+    // 신용 등급별 수익 배율 적용 (90% ~ 60%)
+    var crInfo = getCreditInfo(user.creditScore, roomName);
+    var creditMult = util_getTradeCreditMult(crInfo.grade);
+    
+    // 최종 예상 이익 = (마진 - 세금) * 신용배율
+    var estimatedNetProfit = Math.floor((margin - taxAmount) * creditMult);
+    var finalReceipt = tCost + estimatedNetProfit; // 최종 수령액 = 원금 + 조정된 이익
+    /* =====요청사항 끝===== */
 
-    // 3. 최종 세후 수령액 및 수익률 산출 (세율 10%)
-    var taxAmount = Math.floor(tRev * 0.1); 
-    var finalReceipt = tRev - taxAmount;
-    var pureProfit = finalReceipt - tCost;
-    var roi = tCost > 0 ? ((pureProfit / tCost) * 100).toFixed(1) : "0.0";
+    var cargoDisplay = "📦 적재함: " + totalCargoInShip + " / " + shipCapacity + " 칸\n" + currentCargoLines.join("\n") + "\n\n";
 
     var displayBody = "현재 [" + v.dest + "]로 항해 중\n\n" +
                       cargoDisplay +
-                      "💰 예상 수령액: " + fp(finalReceipt) + "P\n" +
-                      "💵 순수익 기대: " + (pureProfit >= 0 ? "+" : "") + fp(pureProfit) + "P\n" +
-                      "📈 기대 수익률: " + roi + "%\n\n" +
+                      "💰 총 예상 수령액: " + fp(finalReceipt) + "P\n" +
+                      "💵 순수익(마진): " + (estimatedNetProfit >= 0 ? "+" : "") + fp(estimatedNetProfit) + "P\n" +
+                      "📉 신용 적용: " + (creditMult * 100).toFixed(0) + "% (" + crInfo.label + ")\n\n" +
                       "🕒 남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
 
     replier.reply(formatCommand("📦 항해 현황", user, displayBody, "정산은 도착 후 채팅 입력 시 자동 수행됩니다."));
@@ -13091,63 +13108,44 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         if (user.specialties) user.specialties[sName] = 0;
     }
 
-    // 4. [정산 후처리] 사용된 스냅샷 파기 및 메모리 정리
-    delete v.cargoSnapshot;
-    delete v.specialtySnapshot;
-    delete v.marketSnapshot;
-    delete v.ecoMultSnapshot;
+    // 5. [핵심] 순수익(마진) 기반 차등 정산 로직
+    var margin = totalRevenue - totalCost; // 순수 마진 산출
+    var piracyLoot = 0;
 
-    var grossRevenue = totalRevenue; // 해적 약탈 전 총 매출 보존
-    var piracyLog = "";
-
-    // [해적 습격]: 최종 매출 10% 약탈
-    if (triggeredDisaster === "PIRACY") {
-        var loot = Math.floor(totalRevenue * 0.1);
-        totalRevenue -= loot;
-        piracyLog = "\n🏴‍☠️ [인재: 해적]: 습격을 받아 대금의 10%(-" + fp(loot) + "P)를 약탈당했습니다.";
+    // 해적 약탈 (마진에서 10% 차감)
+    if (triggeredDisaster === "PIRACY" && margin > 0) {
+        piracyLoot = Math.floor(margin * 0.1);
+        margin -= piracyLoot;
+        disasterLog += "\n🏴‍☠️ [해적]: 마진의 10%(-" + fp(piracyLoot) + "P)를 약탈당했습니다.";
     }
 
-    if (totalRevenue <= 0 && !disasterLog) { 
-        user.voyage.active = false; 
-        return replier.reply(formatSimple("🌊 무역 결과", v.dest + "에서 소득 없이 귀항했습니다.")); 
-    }
+    // 세금 계산 (기부왕 5%, 일반 10%)
+    var taxRate = (user.title === "기부왕") ? 0.05 : 0.10;
+    var taxAmount = margin > 0 ? Math.floor(margin * taxRate) : 0;
+    var afterTaxMargin = margin - taxAmount;
 
-    // 3. 무역세 계산 (누진세 폐지 및 단일 세율 적용)
-    var tradeCfg = SYSTEM_CONFIG.TRADE;
-    
-    // 순자산 비교 로직을 삭제하고 무조건 기본 세율(기본 10%)을 적용합니다.
-    var taxRate = Number(tradeCfg.BASE_TAX || 0.1); 
-    var taxAmount = Math.floor(totalRevenue * taxRate);
-    var netProfit = totalRevenue - taxAmount;
+    // 신용 등급 수익 배율 적용
+    var crInfo = getCreditInfo(user.creditScore, roomName);
+    var creditMult = util_getTradeCreditMult(crInfo.grade);
+    var finalNetProfit = Math.floor(afterTaxMargin * creditMult); // 최종 조정된 순이익
+    var creditLoss = Math.max(0, afterTaxMargin - finalNetProfit); // 신용 등급으로 인해 국고로 환수되는 금액
 
-    // 4. 게이트웨이 정산
-    user.skipHealing = true;
-    // [교정] 수리비를 먼저 산출하여 최종 수익(netProfit) 변수에 반영
+    // 폭풍우 수리비 (최종 수익에서 차감)
     var repairFee = 0;
     if (triggeredDisaster === "STORM") {
-        repairFee = Math.floor(netProfit * 0.1 + 10000);
-        // UI 출력을 위해 netProfit(매출-세금)에서 수리비를 미리 차감
-        netProfit -= repairFee; 
-        
-        // 수리비 지출 처리 (지갑 잔액 부족 시 대출 전환 로직 포함)
-        var currentPoints = Number(user.point);
-        if (currentPoints < repairFee) {
-            var loanGap = repairFee - currentPoints;
-            if (currentPoints > 0) util_updatePoint(user, roomData, -currentPoints, "폭풍우 수리비(잔액 전액)", roomName);
-            if (!user.loan || typeof user.loan !== 'object') user.loan = { debt: 0, items: [] };
-            if (!user.loan.items) user.loan.items = [];
-            user.loan.debt = Number(user.loan.debt || 0) + loanGap;
-            user.loan.items.push(loanGap);
-            disasterLog += "\n🌊 [재해: 폭풍우]: 수리비가 부족하여 " + fp(loanGap) + "P가 은행 대출(대납)로 처리되었습니다.";
-        } else {
-            util_updatePoint(user, roomData, -repairFee, "선박 수리비 지출", roomName);
-            disasterLog += "\n🌊 [재해: 폭풍우]: 선체 파손 수리비로 " + fp(repairFee) + "P가 지출되었습니다.";
-        }
+        repairFee = Math.floor(Math.abs(finalNetProfit) * 0.1 + 10000);
+        finalNetProfit -= repairFee;
+        disasterLog += "\n🌊 [폭풍우]: 선체 파손 수리비 " + fp(repairFee) + "P 지출";
     }
 
-    // 최종적으로 계산된 순이익을 한 번에 지급
-    util_updatePoint(user, roomData, (totalRevenue - taxAmount), "무역 정산 수익", roomName);
-    util_updateReserve(roomData, taxAmount, "무역세 국고 귀속", roomName);
+    // 6. 최종 지급액 확정 = 원금(보존) + 조정된 순이익
+    var totalPayout = totalCost + finalNetProfit;
+
+    util_updatePoint(user, roomData, totalPayout, "무역 정산 완료 (원금+수익)", roomName);
+    
+    // 국고 귀속 (세금 + 신용 삭감액)
+    if (taxAmount > 0) util_updateReserve(roomData, taxAmount, "무역세 징수", roomName);
+    if (creditLoss > 0) util_updateReserve(roomData, creditLoss, "신용 등급 차등 수익 환수", roomName);
 
     // 5. 특산품 발견 (15% 확률)
     var specialtyFound = "";

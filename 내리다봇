@@ -9543,31 +9543,47 @@ if (msg === "/전체채굴복구") {
 
         if (!backupUser) throw new Error("백업본에서도 [" + targetNick + "] 유저를 찾을 수 없습니다.");
 
-        // 데이터 이식: 현재 방의 유저 목록에 강제 삽입
-        var fullNick = backupUser.name;
-        roomData.users[finalUid] = backupUser;
-        roomData.users[finalUid].skipHealing = true;
+        // [수정] USER_SCHEMA 전체를 순회하여 백업본의 모든 정보를 현재 계정에 강제 주입
+        USER_SCHEMA.forEach(function(item) {
+            if (backupUser[item.key] === undefined) {
+                backupUser[item.key] = (typeof item.default === 'object' && item.default !== null) 
+                                       ? JSON.parse(JSON.stringify(item.default)) : item.default;
+            }
+        });
 
-        // 명부(Registry) 복구: 1:1방 연동을 위해 필수
+        // 데이터 검증용 변수 추출
+        var tCount = backupUser.tradeCount || 0;
+        var sLevel = backupUser.shipLevel || 1;
+        var iCount = (backupUser.collectedIcons && backupUser.collectedIcons.length) || 0;
+
+        backupUser.name = fullNick;
+        backupUser.uid = finalUid;
+        backupUser.skipHealing = true; // 보안 엔진 일시 유예
+
+        // 실시간 메모리 데이터베이스에 강제 덮어쓰기 (무역/수집정보 포함)
+        roomData.users[finalUid] = backupUser;
+
+        // 명부 및 캐시 동기화
         var regFile = new java.io.File(REGISTRY_PATH);
         var regData = regFile.exists() ? JSON.parse(FileStream.read(REGISTRY_PATH)) : {};
         regData[roomName + "_" + fullNick] = finalUid;
         FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
-
-        // 식별 캐시 복구
-        if (globalData.nameToIdCache) {
-            globalData.nameToIdCache["GLOBAL_" + fullNick] = finalUid;
-        }
+        if (globalData.nameToIdCache) globalData.nameToIdCache["GLOBAL_" + fullNick] = finalUid;
 
         safeSaveData(data, false);
         if (typeof globalData !== 'undefined') globalData = data; 
 
-        replier.reply(formatAdmin("✅ 데이터 복원 성공", 
-            "현재 대상: " + fullNick + "\n" +
-            "ID: " + finalUid + "\n" +
-            "━━━━━━━━━━━━━━━\n" +
-            "💰 최종 복구 잔액: " + fp(backupUser.point) + "P\n\n" +
-            "💡 삭제 전 마지막 백업 시점의 데이터로 복원 및 명부 재연결이 완료되었습니다."));
+        // [UI 변경 확인] 이 메시지가 떠야 정상적으로 패치된 것입니다.
+        var debugBody = "👤 대상: " + fullNick + "\n" +
+                         "━━━━━━━━━━━━━━━\n" +
+                         "💰 복구 잔액: " + fp(backupUser.point) + "P\n" +
+                         "🚢 무역 횟수: " + tCount + "회\n" +
+                         "🏗️ 선박 등급: " + sLevel + "단계\n" +
+                         "🎒 수집 아이콘: " + iCount + "종\n" +
+                         "━━━━━━━━━━━━━━━\n" +
+                         "💡 무역/수집 정보를 포함한 전체 데이터가 복원되었습니다.";
+
+        replier.reply(formatAdmin("✅ 유저 전수 데이터 복원 완료", debugBody));
     } catch (e) {
         replier.reply(formatAdmin("🚫 복구 중단", "사유: " + e.message));
         Log.error("Restore Error: " + e);

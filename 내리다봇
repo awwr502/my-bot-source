@@ -4783,21 +4783,6 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                     }
                 }
 
-                // [Patch 2: 1:1 전용 화이트리스트 가드] (기존 유지)
-                if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-                    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") ||msg.startsWith("/관리자"));
-                    
-                    var inState = false;
-                    if (roomData.features && roomData.features.states) {
-                        var rStates = roomData.features.states;
-                        if (rStates.menuWait && rStates.menuWait[targetUid]) inState = true;
-                        if (rStates.bankProcess && rStates.bankProcess[targetUid]) inState = true;
-                        if (user && user.blackjackState) inState = true;
-                    }
-
-                    if (!isAllowedCmd && !inState) return;
-                }
-
                 /* [v6.6 딥 헬러] 타입 검증형 자가 치유 엔진 (Deep Healing & Memory Sync) */
                 if (user && targetUid) {
                     var isDeepHealed = false;
@@ -5034,6 +5019,28 @@ if (!roomData.users[targetUid]) {
 //==========섹터20-2==========
 
 user = roomData.users[targetUid];
+
+/* [최종 해결] 1:1 채팅방 숫자 핸들러 통과를 위한 위치 교정 가드 */
+if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
+    // 1. 허용된 명령어인지 확인
+    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
+    
+    // 2. 현재 유저가 어떠한 입력 대기 상태인지 정밀 확인
+    var inState = false;
+    if (roomData.features && roomData.features.states) {
+        var st = roomData.features.states;
+        // menuWait, bankProcess, selectWait 중 하나라도 내 UID가 있으면 숫자 입력 허용
+        if ((st.menuWait && st.menuWait[targetUid]) || 
+            (st.bankProcess && st.bankProcess[targetUid]) || 
+            (st.selectWait && st.selectWait[targetUid]) || 
+            (user && user.blackjackState)) {
+            inState = true;
+        }
+    }
+
+    // [핵심] 식별(targetUid 확정)이 끝난 이 시점에서만 로직을 차단할지 결정함
+    if (!isAllowedCmd && !inState) return;
+}
 
 /* [v11.0] 주식 -> 랜드마크 데이터 자동 마이그레이션 */
 if (user.landHoldings === undefined) {
@@ -6983,23 +6990,27 @@ if (msg === "/가이드") {
 
 //==========섹터24==========
 
-// [수정] 1:1방 숫자 핸들러 프리패스 가드
+/* [통합 가드] 1:1방 세션 감지 및 하드코딩 의존성 제거 */
                 if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
                     var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
                     
                     var inState = false;
-                    // 현재 1:1방의 상태 주머니를 확인
-                    var currentStates = roomData.features ? roomData.features.states : null;
-                    if (currentStates) {
-                        if (currentStates.menuWait[targetUid] || currentStates.bankProcess[targetUid] || currentStates.selectWait[targetUid]) {
-                            inState = true;
-                        }
-                    }
+                    var MAIN_NAME = "내리다"; // 메인 방 기준점
                     
-                    // 블랙잭 진행 중인지 확인
-                    if (user && user.blackjackState) inState = true;
+                    // 1) 현재 방(1:1)의 상태 확인
+                    var localSt = (data.rooms[roomName] && data.rooms[roomName].features) ? data.rooms[roomName].features.states : null;
+                    // 2) 메인 방의 상태 확인 (은행 등이 여기에 저장할 경우 대비)
+                    var mainSt = (data.rooms[MAIN_NAME] && data.rooms[MAIN_NAME].features) ? data.rooms[MAIN_NAME].features.states : null;
+                    
+                    var checkSession = function(st) {
+                        if (!st) return false;
+                        return (st.menuWait[targetUid] || st.bankProcess[targetUid] || st.selectWait[targetUid]);
+                    };
 
-                    // 명령어도 아니고 대기 상태도 아니라면 무시 (일반 대화)
+                    if (checkSession(localSt) || checkSession(mainSt) || (user && user.blackjackState)) {
+                        inState = true;
+                    }
+
                     if (!isAllowedCmd && !inState) return;
                 }
 
@@ -10142,9 +10153,12 @@ function _gameBankLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = targetRoomData; // 변수명 통일
     if (!roomData || !roomData.features) return false;
 
-    /* [교정] 데이터는 '내리다'에서 참조하되, 입력 대기 세션은 '현재 방'에 저장 */
-    var menuWaitState = data.rooms[roomName].features.states.menuWait;
-    var bankProcessState = data.rooms[roomName].features.states.bankProcess;
+    /* [핵심 교정] 세션 저장소(States)는 무조건 '현재 채팅 중인 1:1 방'으로 강제 지정 */
+    var currentRoom = data.rooms[roomName];
+    if (!currentRoom.features) currentRoom.features = ROOM_FEATURE_TEMPLATE();
+    
+    var menuWaitState = currentRoom.features.states.menuWait;
+    var bankProcessState = currentRoom.features.states.bankProcess;
 
     /* [기능 1] 은행 시스템 진입 (v5.2 기부 메뉴 추가) */
     if (msg === "/은행") {

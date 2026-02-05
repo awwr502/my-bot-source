@@ -9548,10 +9548,9 @@ if (msg === "/전체채굴복구") {
 
         if (!backupUser) throw new Error("백업본에서도 [" + targetNick + "] 유저를 찾을 수 없습니다.");
 
-        // [수정] 오류 해결: 표시용 이름을 변수로 확정
         var displayNick = backupUser.name || targetNick;
 
-        // USER_SCHEMA 전체를 순회하여 백업본의 모든 정보를 현재 계정에 강제 주입
+        // USER_SCHEMA 전체 순회하며 모든 필드 강제 이식 (무역, 수집, 칭호 진행도 포함)
         USER_SCHEMA.forEach(function(item) {
             if (backupUser[item.key] === undefined) {
                 backupUser[item.key] = (typeof item.default === 'object' && item.default !== null) 
@@ -9559,37 +9558,34 @@ if (msg === "/전체채굴복구") {
             }
         });
 
-        // 데이터 검증용 수치 추출 (출력용)
+        // [검증 데이터 추출] 수집품 및 진행도 수치 확보
         var tCount = backupUser.tradeCount || 0;
-        var sLevel = backupUser.shipLevel || 1;
-        var iCount = (backupUser.collectedIcons && backupUser.collectedIcons.length) || 0;
+        var hParts = (backupUser.horseParts && backupUser.horseParts.length) || 0;
+        var lDeeds = backupUser.landDeedCount || 0;
+        var lFails = backupUser.lottoFailCount || 0;
+        var aPieces = backupUser.artifactPieces || 0;
 
         backupUser.name = displayNick;
         backupUser.uid = finalUid;
-        backupUser.skipHealing = true; // 보안 엔진 일시 유예
+        backupUser.skipHealing = true; 
 
-        // 실제 운영 DB에 데이터 주입
+        // 운영 DB에 전수 주입
         roomData.users[finalUid] = backupUser;
-
-        // 명부 및 식별 캐시 재매핑
-        var regFile = new java.io.File(REGISTRY_PATH);
-        var regData = regFile.exists() ? JSON.parse(FileStream.read(REGISTRY_PATH)) : {};
-        regData[roomName + "_" + displayNick] = finalUid;
-        FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
-        if (globalData.nameToIdCache) globalData.nameToIdCache["GLOBAL_" + displayNick] = finalUid;
 
         safeSaveData(data, false);
         if (typeof globalData !== 'undefined') globalData = data; 
 
-        // 개편된 상세 리포트 UI 출력
+        // [최종 UI] 모든 수집 진행도를 리포트에 표시
         var debugBody = "👤 대상: " + displayNick + "\n" +
                          "━━━━━━━━━━━━━━━\n" +
                          "💰 복구 잔액: " + fp(backupUser.point) + "P\n" +
                          "🚢 무역 횟수: " + tCount + "회\n" +
-                         "🏗️ 선박 등급: " + sLevel + "단계\n" +
-                         "🎒 수집 아이콘: " + iCount + "종\n" +
+                         "🐎 경마 장비: " + hParts + " / 4 개\n" +
+                         "🏙️ 부동산 등기부: " + lDeeds + " / 10 개\n" +
+                         "📩 위로의 편지: " + lFails + " / 15 개\n" +
+                         "🧩 유물 조각: " + aPieces + "개\n" +
                          "━━━━━━━━━━━━━━━\n" +
-                         "💡 무역/수집 정보를 포함한 전체 데이터가 복원되었습니다.";
+                         "💡 리포트의 수치가 0이라면 백업 시점을 더 과거로 당겨야 합니다.";
 
         replier.reply(formatAdmin("✅ 유저 전수 데이터 복원 완료", debugBody));
     } catch (e) {

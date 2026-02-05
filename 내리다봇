@@ -5166,40 +5166,39 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1 && roomName !== "베릭방") {
     data.rooms[roomName] = roomData;
 }
 
-// [수정] 1:1 채팅방 전용 데이터 브릿지 및 연동 안내 메시지 추가
 if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
-    var foundMaster = false;
-    var cleanTarget = cleanSender.replace(/\s/g, "");
-    for (var r in data.rooms) {
-        for (var mUid in data.rooms[r].users) {
-            if (data.rooms[r].users[mUid].name.replace(/\s/g, "") === cleanTarget) {
-                targetUid = mUid;
-                user = data.rooms[r].users[mUid];
-                foundMaster = true;
-                break;
-            }
+    var mainUsers = (data.rooms["내리다"] && data.rooms["내리다"].users) ? data.rooms["내리다"].users : {};
+    var cleanTarget = cleanSender.replace(/\s/g, ""); // 공백 제거 닉네임
+    var foundMainUser = false;
+
+    // 1. '내리다' 방에서 내 닉네임과 일치하는 유저 탐색
+    for (var mUid in mainUsers) {
+        var dbName = mainUsers[mUid].name.replace(/\s/g, "");
+        if (dbName === cleanTarget) {
+            targetUid = mUid; // 메인 방의 UID를 가져옴 (핵심)
+            user = mainUsers[mUid]; // 유저 객체도 메인 방 것으로 연결
+            foundMainUser = true;
+            break; 
         }
-        if (foundMaster) break;
     }
 
-    // [신규] 1:1 방 입장 유저 대상 닉네임 연동 필수 안내
+    // 2. 연동 실패 시 (메인 방에 데이터가 없음)
+    if (!foundMainUser) {
+        var failMsg = "🚫 [연동 실패: 미가입]\n" +
+                      "━━━━━━━━━━━━━━━\n" +
+                      "메인 서버('내리다' 단체방)에서 고객님의 정보를 찾을 수 없습니다.\n\n" +
+                      "💡 해결 방법:\n" +
+                      "1. 단체방에 입장하여 채팅을 한 번 입력하세요.\n" +
+                      "2. 단체방 닉네임과 현재 닉네임이 정확히 일치하는지 확인하세요.\n" +
+                      "   (띄어쓰기 무관, 특수문자 포함 일치 필요)";
+        replier.reply(failMsg);
+        return; // 로직 강제 종료 (신규 생성 차단)
+    }
+
+    // 3. 연동 성공 안내 (최초 1회)
     if (user && !user.hasSeenSyncNotice) {
-        var syncNotice = "🔔 [정보 연동 안내]\n" +
-                         "━━━━━━━━━━━━━━━\n" +
-                         "1:1 대화방의 모든 정보는 메인방('내리다')의\n" +
-                         "데이터와 실시간으로 연동됩니다.\n\n" +
-                         "⚠️ 주의사항:\n" +
-                         "반드시 메인방과 [닉네임]이 동일해야 하며,\n" +
-                         "닉네임 변경 시 연동이 끊길 수 있습니다.\n" +
-                         "━━━━━━━━━━━━━━━\n" +
-                         "💡 동일한 닉네임 사용 시 모든 자산이 공유됩니다.";
-        replier.reply(syncNotice);
-        user.hasSeenSyncNotice = true; // 안내 1회 제한
-    }
-
-    if (!user) {
-        replier.reply("🚫 [미가입 사용자]\n단체방('내리다')에 먼저 접속하여 계정을 생성해야 1:1 기능을 이용할 수 있습니다.\n\n⚠️ 안내: 메인방과 닉네임이 일치해야 정보가 연동됩니다.");
-        return; 
+        replier.reply("🔗 [시스템] 메인 서버 계정(" + user.name + ")과 성공적으로 연동되었습니다.");
+        user.hasSeenSyncNotice = true;
     }
 }
 
@@ -5335,7 +5334,7 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1 && !roomData.users[targetUid]) {
 
 //==========섹터20-2==========
 
-/* [신규 독립 함수 시작] 이제부터는 이 함수 내부입니다. */
+/* [수정] 인자 리스트에 imageDB, sender를 추가하여 내부 로직 오류를 해결합니다. */
 function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender) {
 
 /* [데이터 & 가드 통합 엔진] 1:1방 동기화 및 숫자 핸들러 프리패스 */

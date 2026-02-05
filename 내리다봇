@@ -6160,81 +6160,97 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
     if (!bankProcessState || !bankProcessState[targetUid]) return false;
 
     var state = bankProcessState[targetUid];
-    var types = ['shop_buy', 'shop_quantity', 'ship_rename_input'];
+    var types = ['shop_buy', 'shop_quantity', 'ship_rename_input', 'ship_rename_confirm'];
     if (types.indexOf(state.type) === -1) return false;
 
+    // 공통 네비게이션 바 정의
+    var SHOP_NAV = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+
     // 1. 공통 가드 (시간 초과 및 취소)
-    if (Date.now() - state.time > 30000 || msg === "취소") {
+    if (Date.now() - state.time > 30000 || msg === "취소" || msg === "❎취소") {
         delete bankProcessState[targetUid];
-        
-        if (msg === "취소") {
-            var cancelMsg = "업무가 취소되었습니다."; // 기본 메시지
-            
-            // 현재 진행 중이던 업무(type)에 따라 메시지 분기
-            if (state.type === 'ship_rename_input') {
-                cancelMsg = "선박 명명 절차를 중단했습니다.";
-            } else if (state.type === 'shop_buy') {
-                cancelMsg = "아이템 구매를 취소했습니다.";
-            } else if (state.type === 'shop_quantity') {
-                cancelMsg = "수량 입력을 중단했습니다.";
-            }
-            
-            replier.reply(formatCommand("🚫 업무 취소", user, cancelMsg));
+        if (msg === "취소" || msg === "❎취소") {
+            var cancelMsg = state.type.indexOf('ship_') !== -1 ? "선박 명명 절차를 중단했습니다." : "상점 이용을 종료합니다.";
+            replier.reply(formatCommand("🚫 작업 취소", user, cancelMsg));
         } else {
             replier.reply(formatError(user, "입력 시간 초과", "시간이 초과되어 작업이 자동 취소되었습니다."));
         }
         return true;
     }
 
-    // 2. [개선] 선박 이름 입력 처리부 (띄어쓰기 허용 및 정규식 정밀화)
-    if (state.type === 'ship_rename_input') {
-        var newName = msg.trim(); // 양 끝 공백 제거 및 띄어쓰기 유지
-        
-        if (newName.length < 2 || newName.length > 8) {
-            replier.reply(formatError(user, "이름 길이 오류", "선박 이름은 2~8글자 사이로 입력해주세요."));
-            return true;
-        }
+    if (msg === "처음으로" || msg === "🏠 처음으로") {
+        delete bankProcessState[targetUid];
+        return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
+    }
 
-        // 한글, 영문, 숫자, 공백만 허용 (특수문자 및 기호 완전 차단)
-        var nameReg = /^[a-zA-Z0-9가-힣\s]+$/;
-        if (!nameReg.test(newName)) {
-            replier.reply(formatError(user, "사용 불가 문자", "이름에 특수문자를 포함할 수 없습니다.\n(한글, 영문, 숫자, 공백만 가능)"));
-            return true;
-        }
+    if (msg === "뒤로" || msg === "↩️ 뒤로") {
+        if (state.type === 'shop_quantity') {
+            // 수량 입력 -> 물품 목록으로 이동 (이전 목록 데이터 복구)
+            var prevItems = state.extra.prevItems || [];
+            bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: prevItems } };
+            var list = prevItems.map(function(it, i) { return (i + 1) + ". " + it.icon + " " + it.name + " : " + fp(getItemPrice(it, user, roomName)) + "P"; });
+            replier.reply(formatCommand("🛒 상점 물품 목록", user, list.join("\n") + SHOP_NAV, "구매할 번호를 입력하세요."));
+        } else if (state.type === 'shop_buy') {
+            // 물품 목록 -> 상점 메인 카테고리로 이동
+            delete bankProcessState[targetUid];
+            return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
+        } else if (state.type === 'ship_rename_input') {
+            // 이름 입력 -> 물품 목록으로 이동
+            delete bankProcessState[targetUid];
+            return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
+        } else if (state.type === 'ship_rename_confirm') {
+            // 확인창 -> 이름 입력창으로 이동
+            bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now(), extra: state.extra };
+            replier.reply(formatCommand("📝 선박 이름 입력", user, "새로운 선박의 이름을 다시 입력해주세요.\n(2~8자, 공백 포함 가능)" + SHOP_NAV, "취소: [취소]"));
+        }
+        return true;
+    }
 
-        // [중복 검사] 전 서버 선박 이름 스캔
-        var isDuplicate = false;
-        for (var r in data.rooms) {
-            var rUsers = data.rooms[r].users;
-            for (var uId in rUsers) {
-                if (rUsers[uId].shipName === newName) { isDuplicate = true; break; }
-            }
-            if (isDuplicate) break;
-        }
+    // 2. [개선] 선박 이름 입력 처리 (확인 단계로 이동)
+    if (state.type === 'ship_rename_input') {
+        var inputName = msg.trim(); // 띄어쓰기 허용 유지
+        if (inputName.length < 2 || inputName.length > 8) {
+            replier.reply(formatError(user, "이름 길이 오류", "2~8글자 사이로 입력해주세요."));
+            return true;
+        }
+        // 한글, 영문, 숫자, 공백만 허용
+        if (!/^[a-zA-Z0-9가-힣\s]+$/.test(inputName)) {
+            replier.reply(formatError(user, "사용 불가 문자", "특수문자는 사용할 수 없습니다."));
+            return true;
+        }
+        // 중복 검사 (기존 로직 유지)
+        var isDup = false;
+        for (var r in data.rooms) { for (var uId in data.rooms[r].users) { if (data.rooms[r].users[uId].shipName === inputName) { isDup = true; break; } } if (isDup) break; }
+        if (isDup) { replier.reply(formatError(user, "이름 중복", "이미 사용 중인 이름입니다.")); return true; }
 
-        if (isDuplicate) {
-            replier.reply(formatError(user, "이름 중복", "이미 사용 중인 선박 이름입니다."));
-            return true;
-        }
+        // 확인 단계로 상태 전환
+        bankProcessState[targetUid] = { type: 'ship_rename_confirm', time: Date.now(), extra: { newName: inputName, price: state.extra.price } };
+        var confirmMsg = "새로운 선박 이름: [" + inputName + "]\n\n이 이름으로 최종 선택하시겠습니까?\n\n1. 예 (변경 승인)\n2. 아니오 (재입력)" + SHOP_NAV;
+        replier.reply(formatCommand("⚓ 선박 명명 확인", user, confirmMsg, "번호를 선택하세요."));
+        return true;
+    }
 
-        // 결제 금액 산출
-        var cost = (state.extra && state.extra.price) ? state.extra.price : Math.floor(500000 * util_getEcoMultiplier(roomName));
-        
-        if (Number(user.point) < cost) {
-            delete bankProcessState[targetUid];
-            replier.reply(formatError(user, "결제 실패", "비용(" + fp(cost) + "P)이 부족하여 취소되었습니다."));
-            return true;
-        }
-
-        // 데이터 업데이트 및 결제
-        util_updatePoint(user, data.rooms[roomName], -cost, "선박 이름 변경", roomName);
-        user.shipName = newName;
-        delete bankProcessState[targetUid];
-        
-        replier.reply(formatCommand("🚢 선박 명명식 완료", user, "새로운 이름: [" + newName + "]\n성공적으로 등록되었습니다!", "무역 현황: [/무역]"));
-        safeSaveData(data);
-        return true;
-    }
+    // 3. [신규] 선박 이름 최종 확정
+    if (state.type === 'ship_rename_confirm') {
+        if (msg === "1" || msg === "예") {
+            var finalName = state.extra.newName;
+            var cost = state.extra.price;
+            if (Number(user.point) < cost) {
+                delete bankProcessState[targetUid];
+                replier.reply(formatError(user, "결제 실패", "비용이 부족하여 취소되었습니다."));
+                return true;
+            }
+            util_updatePoint(user, data.rooms[roomName], -cost, "선박 이름 변경", roomName);
+            user.shipName = finalName;
+            delete bankProcessState[targetUid];
+            replier.reply(formatCommand("🚢 선박 명명식 완료", user, "성공적으로 [" + finalName + "](으)로 변경되었습니다!", "무역 현황: [/무역]"));
+            safeSaveData(data);
+        } else if (msg === "2" || msg === "아니오") {
+            bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now(), extra: state.extra };
+            replier.reply(formatCommand("📝 선박 이름 입력", user, "변경하실 이름을 다시 입력해주세요." + SHOP_NAV));
+        }
+        return true;
+    }
     if (msg.startsWith("/")) {
         delete bankProcessState[targetUid];
         return false;
@@ -6248,7 +6264,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
         var filteredItems = (state.extra && state.extra.items) ? state.extra.items : [];
 
         if (isNaN(idx) || idx < 0 || idx >= filteredItems.length) {
-            replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 입력해주세요."));
+            replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 입력해주세요." + SHOP_NAV));
         } else {
             var item = filteredItems[idx];
 
@@ -6286,15 +6302,18 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
                 return true;
             }
 
-            // 수량 입력이 필요한 아이템인지 확인 (중복 구매 가능 여부)
-            var stackableEffects = ["promotion", "tierGuard", "randomBox", "spitto", "trade_cargo"];
-            if (stackableEffects.indexOf(item.effect) !== -1) {
+            // 수량 입력 단계로 전환 시 현재 아이템 목록을 저장(뒤로가기용)
+            if (["promotion", "tierGuard", "randomBox", "spitto", "trade_cargo"].indexOf(item.effect) !== -1) {
                 var itemPrice = getItemPrice(item, user, roomName); 
-                bankProcessState[targetUid] = { type: 'shop_quantity', time: Date.now(), extra: { item: item } };
+                bankProcessState[targetUid] = { 
+                    type: 'shop_quantity', 
+                    time: Date.now(), 
+                    extra: { item: item, prevItems: filteredItems } // prevItems 추가
+                };
                 
                 var quantityInfo = "구매하실 [" + item.name + "]의 수량을 입력해주세요.\n\n" +
                                    "💵 개당 가격: " + fp(itemPrice) + "P\n" +
-                                   "💰 보유 포인트: " + fp(user.point) + "P";
+                                   "💰 보유 포인트: " + fp(user.point) + "P" + SHOP_NAV;
                                    
                 replier.reply(formatCommand("🔢 수량 입력", user, quantityInfo, "취소: [취소]"));
             } else {
@@ -6324,8 +6343,6 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
                         delete bankProcessState[targetUid];
                         if (typeof _handleShopEffect === 'function') _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPrice, isUsingTicket, 1);
                     }
-                }
-            }
         }
         return true;
     }
@@ -6337,7 +6354,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
 
         var qty = parseInt(msg.replace(/[^0-9]/g, ""));
         if (isNaN(qty) || qty <= 0) {
-            replier.reply(formatError(user, "입력 오류", "숫자로 수량을 입력해주세요."));
+            replier.reply(formatError(user, "입력 오류", "숫자로 수량을 입력해주세요." + SHOP_NAV));
         } else {
             var multiplier = util_getEcoMultiplier(roomName);
             var basePrice = Math.floor(Number(item.price) * multiplier);
@@ -6368,9 +6385,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
                 delete bankProcessState[targetUid];
                 if (typeof _handleShopEffect === 'function') {
                     _handleShopEffect(item, user, roomName, replier, data, targetUid, totalPrice, false, qty);
-                }
-            }
-        }
+               }
         return true;
     }
     return false;

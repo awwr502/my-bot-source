@@ -13709,7 +13709,7 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
     var bonusTag = "";
 
     if (resultStatus === "WIN") {
-        multiplier = 2.0; 
+        multiplier = 1.90;
         if (user.title === "도박왕") {
             multiplier += 0.05; 
             bonusTag = " 👑도박왕";
@@ -13724,20 +13724,38 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
                    "👤 나의 패: [ " + state.playerHand.join(", ") + " ] (" + pScore + "점)\n\n" +
                    "📢 결과: " + resultStr;
 
-    if (prize > 0) {
-        var res = processRepayment(user, prize, targetUid, roomName);
-        util_updatePoint(user, roomData, Number(res.actualGain), "블랙잭 정산 수익", roomName);
-        finalMsg += (res.repayMsg || "") + bonusTag;
+    if (prize > 0 && resultStatus === "WIN") {
+        // 1. [고정 세금 계산] 배팅금의 0.1배(10%)를 세금으로 책정
+        var taxAmount = Math.floor(state.bet * 0.1);
+        var netIncome = prize; // prize는 이미 1.90배가 적용된 금액
 
-        if (resultStatus === "WIN") {
-            var nowStr = new Date().getHours() + ":" + ("0" + new Date().getMinutes()).slice(-2);
-            if (!user.dailyBlackjackWins) user.dailyBlackjackWins = [];
-            user.dailyBlackjackWins.unshift({ round: "BJ", res: "승리", profit: prize, time: nowStr });
-            user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "승리", profit: prize, isWin: true };
-        } else {
-            user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "무승부", profit: 0, isWin: false };
-        }
-    } else {
+        // 2. 세금 국고 환수 집행
+        util_updateReserve(roomData, taxAmount, "블랙잭 이용세 징수", roomName);
+
+        // 3. [상환 처리] 세후 금액으로 빚 상환 진행
+        var res = processRepayment(user, netIncome, targetUid, roomName);
+
+        // 4. 최종 실수령액 지급
+        util_updatePoint(user, roomData, Number(res.actualGain), "블랙잭 정산 수익", roomName);
+
+        // 5. UI 메시지 조립 (카지노 이용세 고정 수치 표시)
+        finalMsg += "\n💰 획득: +" + fp(prize) + "P (1.90배 적용)";
+        finalMsg += "\n\n⚖️ 세금(10%): -" + fp(taxAmount) + "P (카지노 이용세)";
+        if (res.repayMsg) finalMsg += res.repayMsg;
+        finalMsg += "\n💰 최종 수익: +" + fp(res.actualGain) + "P" + bonusTag;
+
+        var nowStr = new Date().getHours() + ":" + ("0" + new Date().getMinutes()).slice(-2);
+        if (!user.dailyBlackjackWins) user.dailyBlackjackWins = [];
+        user.dailyBlackjackWins.unshift({ round: "BJ", res: "승리", profit: prize, time: nowStr });
+        user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "승리", profit: prize, isWin: true };
+    } 
+    else if (prize > 0 && resultStatus === "PUSH") {
+        // 무승부 시에는 세금 없이 원금만 반환
+        util_updatePoint(user, roomData, prize, "블랙잭 무승부 환급", roomName);
+        finalMsg += "\n💰 환급: +" + fp(prize) + "P (배팅금 반환)";
+        user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "무승부", profit: 0, isWin: false };
+    }
+    else {
         user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "패배", profit: -state.bet, isWin: false };
     }
 

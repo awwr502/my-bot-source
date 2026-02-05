@@ -2489,7 +2489,9 @@ function handleUserSelection(replier, targetUid, found, type, extra, user, roomN
     for(var i=0; i<found.length; i++) {
         var f = found[i];
         // [방 이름 표시] 관리자가 어느 방 유저를 건드리는지 명확히 표시
-        list.push((i + 1) + ". [" + f.roomName + "] " + f.data.name);
+        var uPoints = f.data.point !== undefined ? fp(f.data.point) : "0";
+        var shortId = f.id ? f.id.substring(0, 8) : "Unknown";
+        list.push((i + 1) + ". [" + f.roomName + "] " + f.data.name + " (" + uPoints + "P) [" + shortId + "]");
     }
 
     replier.reply(formatCommand("🔍 전역 중복 유저 선택", user, "관리하실 대상을 선택해주세요.\n\n" + list.join("\n") + "\n\n(취소: [취소])", "입력 대기: 30초"));
@@ -8679,6 +8681,49 @@ function _adminLogLogic(msg, user, data, replier) {
  * 수정 사항: [Gemini 요청 사항] 오류 지급 칭호 박탈을 위한 /칭호회수 명령어 추가
  */
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
+
+   /* [신규] 데이터 전수조사 (명부 무시하고 DB 전체에서 닉네임 검색) */
+    if (msg.indexOf("/데이터전수조사 ") === 0) {
+        var targetNick = msg.substring(9).trim();
+        var report = ["📂 [" + targetNick + "] 전수 조사 결과"];
+        var foundCount = 0;
+
+        for (var r in data.rooms) {
+            var users = data.rooms[r].users;
+            for (var uid in users) {
+                if (users[uid].name.indexOf(targetNick) !== -1) {
+                    var u = users[uid];
+                    report.push("📍 방: " + r + "\n💰 자산: " + fp(u.point) + "P / " + fp(u.bank) + "P\n🔑 UID: " + uid);
+                    foundCount++;
+                }
+            }
+        }
+        if (foundCount === 0) return replier.reply(formatAdmin("조회 결과", "DB 내에 해당 닉네임과 일치하는 데이터가 전무합니다."));
+        replier.reply(formatAdmin("시스템 전수 스캔", report.join("\n\n")));
+        return true;
+    }
+
+    /* [신규] 명부 강제 등록 (특정 닉네임을 특정 UID로 강제 바인딩) */
+    if (msg.indexOf("/명부강제등록 ") === 0) {
+        var ps = msg.split(" ");
+        if (ps.length < 3) return replier.reply(formatAdmin("오류", "사용법: /명부강제등록 [닉네임] [UID]"));
+        var inputId = ps.pop().trim();
+        var inputNick = ps.slice(1).join(" ").trim();
+
+        var regKey = "내리다_" + inputNick;
+        var regFile = new java.io.File(REGISTRY_PATH);
+        var regData = regFile.exists() ? JSON.parse(FileStream.read(REGISTRY_PATH)) : {};
+        
+        regData[regKey] = inputId;
+        FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
+        
+        // 캐시도 즉시 갱신
+        if (!globalData.nameToIdCache) globalData.nameToIdCache = {};
+        globalData.nameToIdCache["GLOBAL_" + inputNick] = inputId;
+
+        replier.reply(formatAdmin("✅ 명부 강제 교정 완료", "[" + inputNick + "]님을\nID: [" + inputId + "]로 강제 연결했습니다.\n\n이제 해당 계정으로 연동됩니다."));
+        return true;
+    }
 
 
    if (msg.indexOf("/조작 ") === 0) {

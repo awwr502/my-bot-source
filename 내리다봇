@@ -12458,31 +12458,39 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
         return;
     }
 
-    /* [번호 수량] 파싱 로직 강화 */
+   // [Bug Fix]: UI에 표시된 '잔여량이 있는 목록'과 로직상의 인덱스를 완벽히 일치시킴
     var parts = input.split(/\s+/);
     var idx = parseInt(parts[0]) - 1;
     
     var availableItems = [];
-    var market = roomData.features.tradeMarket || cfg.NATIONS;
-    var nInfo = market[state.dest];
-    for (var k in (user.cargo || {})) if (user.cargo[k] > 0) availableItems.push({ type: 'cargo', name: k, qty: user.cargo[k] });
-    for (var s in (user.specialties || {})) if (user.specialties[s] > 0) availableItems.push({ type: 'spec', name: s, qty: user.specialties[s] });
+    // 1. 일반 화물 중 잔여량이 있는 것만 순서대로 추출
+    for (var k in (user.cargo || {})) {
+        var rem = Number(user.cargo[k] || 0) - Number(state.selCargo[k] || 0);
+        if (rem > 0) availableItems.push({ type: 'cargo', name: k, qty: rem });
+    }
+    // 2. 특산품 중 잔여량이 있는 것만 이어서 추출
+    for (var s in (user.specialties || {})) {
+        var remS = Number(user.specialties[s] || 0) - Number(state.selSpec[s] || 0);
+        if (remS > 0) availableItems.push({ type: 'spec', name: s, qty: remS });
+    }
 
     if (isNaN(idx) || idx < 0 || idx >= availableItems.length) {
-        /* 숫자가 아닌 일반 채팅은 무시하거나 에러 출력 */
         if (!isNaN(parseInt(parts[0]))) {
-            replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 입력하세요."));
+            replier.reply(formatError(user, "번호 오류", "현재 화면에 표시된 번호를 입력하세요."));
         }
         return;
     }
 
     var selected = availableItems[idx];
-    // 수량 미입력 시 전부 선택(999999), 입력 시 해당 수량 적용
+    // 수량 파싱: 미입력 시 '전부'로 간주
     var inputQty = parts.length > 1 ? parseInt(parts[1].replace(/[^0-9]/g, "")) : 999999;
     var finalQty = Math.min(inputQty, selected.qty);
 
-    if (selected.type === 'cargo') state.selCargo[selected.name] = finalQty;
-    else state.selSpec[selected.name] = finalQty;
+    if (selected.type === 'cargo') {
+        state.selCargo[selected.name] = (state.selCargo[selected.name] || 0) + finalQty;
+    } else {
+        state.selSpec[selected.name] = (state.selSpec[selected.name] || 0) + finalQty;
+    }
 
     state.time = Date.now();
     _showTradeCargoSelectUI(user, replier, roomData, cfg, state.dest, state.selCargo, state.selSpec);

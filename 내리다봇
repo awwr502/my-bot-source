@@ -89,7 +89,11 @@ var USER_SCHEMA = [
     { key: 'dailyBaccaratWins', default: [], type: 'array' },  // 바카라 당첨 히스토리
     { key: 'shipName', default: '', type: 'string' },
     { key: 'blackjackState', default: null, type: 'object' }, // { status, playerHand, dealerHand, bet }
-    { key: 'dailyBlackjackWins', default: [], type: 'array' } // 금일 당첨 기록용
+    { key: 'dailyBlackjackWins', default: [], type: 'array' }, // 금일 당첨 기록용
+    { key: 'casinoAuditStartTime', default: 0, type: 'number' },   // [감시] 카지노 최초 진입 시각 (2분 체크용)
+    { key: 'casinoAuditStartAssets', default: 0, type: 'number' }, // [감시] 카지노 시작 시점 총 자산 (포인트+은행)
+    { key: 'casinoAuditAlertHistory', default: [], type: 'array' },// [감시] 2배 초과 알림 발생 시점들의 자산 기록 배열
+    { key: 'lastBotUseTime', default: 0, type: 'number' }          // [감시] 3분 미사용 리셋 판단용 마지막 활동 시간
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -12873,6 +12877,15 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatError(user, "배팅 불가", "현재 광산에서 채굴 작업 중입니다."));
             return true;
         }
+
+        var nowTs = Date.now();
+        // 1) 마지막 활동 후 3분이 지났거나, 감시 시작 기록이 없는 경우 새 세션으로 시작
+        if (nowTs - (user.lastBotUseTime || 0) > 180000 || !user.casinoAuditStartTime) {
+            user.casinoAuditStartTime = nowTs; // 시작 시간 기록
+            user.casinoAuditStartAssets = Number(user.point || 0) + Number(user.bank || 0); // 현재 총 자산 기록
+            user.casinoAuditAlertHistory = []; // 알림 이력 초기화
+        }
+        user.lastBotUseTime = nowTs; // 봇 사용 시간 최신화 (리셋 방지용)
 
         mState[targetUid] = { type: 'casino_main', time: Date.now() };
         var body = "현재 입장 가능한 게임룸입니다.\n\n" +

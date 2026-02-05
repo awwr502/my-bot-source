@@ -12132,24 +12132,22 @@ function _gameLotteryLogic(msg, user, data, replier, roomName, targetUid) {
             return true; 
         }
 
-        // 상점 아이템 리스트에서 스피또 객체를 추출하여 물가/지니계수/할인이 반영된 가격 산출
+        // 상점 아이템 리스트에서 스피또 객체를 추출하여 가격 산출
         var spittoItem = null;
         for (var i = 0; i < SHOP_ITEMS.length; i++) {
             if (SHOP_ITEMS[i].effect === "spitto") { spittoItem = SHOP_ITEMS[i]; break; }
         }
         
-        // 하드코딩된 { price: 2000 } 대신 상수를 참조하도록 수정
         var price = getItemPrice(spittoItem || { price: SYSTEM_CONFIG.ECO.SPITTO.PRICE }, user, roomName);
         if (Number(user.point) < price) {
             replier.reply(formatError(user, "잔액 부족", fp(price) + "P가 필요합니다."));
-            return true; // 명시적으로 true를 반환하여 섹터 25의 중복 실행을 차단
+            return true; 
         }
 
         // 1. 포인트 게이트웨이 호출 (구매 대금 차감 및 국고 입고)
         util_updatePoint(user, roomData, -price, "스피또 구매", roomName);
         
-        // 2. 섹터 30의 효과 처리 엔진 호출 (여기서 복권 개봉 및 당첨금 상환 로직이 실행됨)
-        // 인자 설명: (아이템객체, 유저, 방이름, 리플라이어, 데이터, UID, 가격, 이용권여부, 수량)
+        // 2. 섹터 30의 효과 처리 엔진 호출 (여기서 복권 개봉 및 당첨금/세금 정산이 실행됨)
         _handleShopEffect({ effect: "spitto" }, user, roomName, replier, data, targetUid, price, false, 1);
 
         return true;
@@ -12268,15 +12266,29 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
                     matchingBonus = reward; 
                 }
 
-                var res = processRepayment(user, reward + matchingBonus, targetUid, roomName);
+                // 1. [차등 세금 계산] 섹터 11 엔진 호출 (원금 + 보너스 합산 기준)
+                var totalGains = reward + matchingBonus;
+                var taxInfo = util_applyIncomeTax(user, totalGains, roomName);
+
+                // 2. 세금 국고 환수 집행
+                util_updateReserve(roomData, taxInfo.taxAmount, "낚시 보상 소득세 징수", roomName);
+
+                // 3. [상환 처리] 세후 금액(taxInfo.netIncome)으로 빚 상환 진행
+                var res = processRepayment(user, taxInfo.netIncome, targetUid, roomName);
+                
                 var actualTotal = Number(res.actualGain);
                 var bonusPart = (matchingBonus > 0) ? Math.floor(actualTotal / 2) : 0;
                 var basePart = actualTotal - bonusPart;
 
+                // 4. 게이트웨이 최종 지급 (사유 분리 기록 - 이제 국고에서 차감됨)
                 util_updatePoint(user, roomData, basePart, "낚시 보상: " + selectedFish.name, roomName);
                 if (bonusPart > 0) util_updatePoint(user, roomData, bonusPart, "정부 근로 장려금(낚시)", roomName);
 
-                var bonusMsg = (matchingBonus > 0) ? "\n🏦 [이벤트]: 1:1 매칭 장려금 +" + fp(matchingBonus) + "P!" : "";
+                // [UI 구성] 세금, 이벤트, 상환 내역 조립
+                var taxLog = "\n\n⚖️ 세금(" + taxInfo.ratePct + "%): -" + fp(taxInfo.taxAmount) + "P (상위 " + taxInfo.rankPct + "%)";
+                var bonusMsg = (matchingBonus > 0) ? "\n🏦 [이벤트]: 1:1 매칭 장려금 +" + fp(matchingBonus) + "P" : "";
+                var repayLog = res.repayMsg ? res.repayMsg : ""; // 상환 메시지
+                var finalGainLog = "\n💰 최종 수익: +" + fp(actualTotal) + "P";
 
                 // [신설] 낚시 성공 카운트 증가 및 칭호 체크
                 user.totalFishingSuccess = (user.totalFishingSuccess || 0) + 1;
@@ -12294,7 +12306,11 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
 
                 var content = "찌가 깊숙이 가라앉습니다! 영차!\n\n" +
                               "🐟 [" + selectedFish.desc + " " + selectedFish.name + "]를 낚았습니다!\n" +
-                              "💰 판매 보상: +" + fp(reward) + "P" + (res.repayMsg || "");
+                              "💰 판매 보상: +" + fp(reward) + "P" +
+                              taxLog +
+                              bonusMsg +
+                              repayLog +
+                              finalGainLog;
 
                 replier.reply(formatCommand("🎣 낚시 성공!", user, content, "내 잔액: " + fp(user.point) + "P"));
             }

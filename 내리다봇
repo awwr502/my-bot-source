@@ -4884,8 +4884,8 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                             }
                         }
 
-                        // 추가: 카지노 실시간 중계 시스템 (유저 입력 중계부)
-                        // 유저가 카지노 이용 중(감시 가동)일 때만 중계방으로 입력 내용을 쏩니다.
+                        // [중계 시스템] 유저 입력 실시간 탈취
+                        // 유저가 카지노 감시 모드일 때, 해당 유저가 치는 모든 채팅을 중계방에 전송
                         if (user && user.casinoAuditStartTime > 0 && roomName !== CASINO_RELAY_ROOM) {
                             try {
                                 var relayInput = "👤 [중계-입력] " + user.name + " (" + roomName + ")\n" + "💬 " + msg;
@@ -13688,13 +13688,15 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
  */
 
 /**
- * [신규] 카지노 실시간 중계 전용 출력 헬퍼
- * 기능: 유저에게 답장함과 동시에 지정된 중계방에도 내용을 복제 전송합니다.
- * 정밀 패치 적용을 위해 섹터 52 내 모든 replier.reply를 이 함수로 대체 사용합니다.
+ * [신규] 카지노 실시간 중계 전용 출력 엔진 (v2.0 Full-Relay)
+ * 기능: 유저에게 답장함과 동시에 지정된 중계방에도 내용을 토씨 하나 안 틀리고 복제 전송합니다.
+ * 섹터 52의 모든 replier.reply는 이제 이 함수를 거칩니다.
  */
 function util_casinoRelayReply(replier, user, content, roomName) {
     if (!content) return;
+    // 1. 실제 유저에게 전송
     replier.reply(content);
+    // 2. 중계방으로 실시간 복제
     try {
         var relayMsg = "🤖 [중계-응답] To. " + user.name + " (" + roomName + ")\n" + "━━━━━━━━━━━━━━━\n" + content;
         Api.replyRoom(CASINO_RELAY_ROOM, relayMsg);
@@ -13821,7 +13823,7 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
         
         var minB = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
         var maxB = SYSTEM_CONFIG.ECO.GAMBLE_MAX || 50000;
-        replier.reply(formatCommand("🕴️ 블랙잭 테이블 입장", user, "딜러가 카드를 섞고 있습니다.\n배팅하실 금액을 입력해주세요.\n\n• 최소: " + fp(minB) + "P\n• 최대: " + fp(maxB) + "P", "취소: [취소]"));
+        util_casinoRelayReply(replier, user, formatCommand("🕴️ 블랙잭 테이블 입장", user, "딜러가 카드를 섞고 있습니다.\n배팅하실 금액을 입력해주세요.\n\n• 최소: " + fp(minB) + "P\n• 최대: " + fp(maxB) + "P", "취소: [취소]"), roomName);
         safeSaveData(data);
         return true;
     }
@@ -13881,7 +13883,7 @@ function _showCasinoSubMenu(replier, user, title, obj, interval) {
                "2. 📋 최근 10경기 결과\n" +
                "3. 🏆 금일 당첨 기록 확인";
 
-    replier.reply(formatCommand((title === "사다리" ? "🪜 " : "🃏 ") + title + " 게임실", user, body, "원하시는 번호를 입력하세요."));
+    util_casinoRelayReply(replier, user, formatCommand((title === "사다리" ? "🪜 " : "🃏 ") + title + " 게임실", user, body, "원하시는 번호를 입력하세요."), roomName);
 }
 
 /**
@@ -13913,7 +13915,7 @@ function _showCasinoDailyHistory(replier, user, type) {
                "• 당첨 횟수: " + wins.length + "회\n" +
                "• 누적 수익: +" + fp(totalProfit) + "P";
 
-    replier.reply(formatCommand(titleStr + " 금일 당첨 리포트", user, body, "(↩️ 뒤로 / 🏠 처음으로)"));
+    util_casinoRelayReply(replier, user, formatCommand(titleStr + " 금일 당첨 리포트", user, body, "(↩️ 뒤로 / 🏠 처음으로)"), roomName);
 }
 
 /* [서브] 실시간 배팅 현황판 및 배팅 가이드 */
@@ -13969,7 +13971,7 @@ function _showCasinoRoundInfo(replier, user, type, obj, interval, roomName) {
                "👉 " + subExample + "\n\n" +
                "마감 5초전에는 배팅이 차단됩니다.";
 
-    replier.reply(formatCommand("📈 제 " + (obj.round || 1) + "회차 " + title + " 현황", user, body, "(↩️ 뒤로 / 🏠 처음으로)"));
+    util_casinoRelayReply(replier, user, formatCommand("📈 제 " + (obj.round || 1) + "회차 " + title + " 현황", user, body, "(↩️ 뒤로 / 🏠 처음으로)"), roomName);
 }
 
 /* [서브] 최근 10경기 결과 내역 */
@@ -13991,7 +13993,7 @@ function _showCasinoHistory(replier, user, type, obj) {
     var range = history.length > 0 ? " [" + history[history.length-1].round + " ~ " + history[0].round + "회차]" : "";
     var body = "[최근 경기 결과]" + range + "\n\n" + list.join("\n");
     
-    replier.reply(formatCommand("📋 최근 10경기 결과 내역", user, body, "결과는 실시간 갱신됩니다."));
+    util_casinoRelayReply(replier, user, formatCommand("📋 최근 10경기 결과 내역", user, body, "결과는 실시간 갱신됩니다."), roomName);
 }
 
 /* [입력 핸들러] 채팅 직접 배팅 처리 엔진 */
@@ -14048,13 +14050,19 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
     }
 
     if (Number(user.point) < amt) {
-        replier.reply(formatError(user, "포인트 부족", "보유 포인트가 부족합니다."));
+        util_casinoRelayReply(replier, user, formatError(user, "포인트 부족", "보유 포인트가 부족합니다."), roomName);
         return true;
     } else if (amt < minLimit) {
-        replier.reply(formatError(user, "배팅 금액 미달", "최소 배팅금은 " + fp(minLimit) + "P입니다."));
+        util_casinoRelayReply(replier, user, formatError(user, "배팅 금액 미달", "최소 배팅금은 " + fp(minLimit) + "P입니다."), roomName);
         return true;
     } else if (amt > maxLimit) {
-        replier.reply(formatError(user, "한도 초과", (gameType === "ladder" ? "사다리" : "바카라") + "의 최대 한도는 " + fp(maxLimit) + "P입니다.\n(현재 입력: " + fp(amt) + "P)"));
+        util_casinoRelayReply(replier, user, formatError(user, "한도 초과", (gameType === "ladder" ? "사다리" : "바카라") + "의 최대 한도는 " + fp(maxLimit) + "P입니다.\n(현재 입력: " + fp(amt) + "P)"), roomName);
+        return true;
+    }
+
+    // 1인 1회 배팅 제한 가드 (이미 배팅 데이터가 존재하면 차단)
+    if (casino.bets[targetUid]) {
+        util_casinoRelayReply(replier, user, formatError(user, "중복 배팅 제한", "이미 이번 회차에 배팅을 완료하셨습니다.\n카지노는 게임 종류별로 회차당 1회만 참여 가능합니다."), roomName);
         return true;
     }
 
@@ -14187,7 +14195,7 @@ function _handleBlackjackAction(msg, user, data, replier, roomName, targetUid) {
                        "👤 나: [ " + state.playerHand.join(", ") + " ]\n" +
                        "💰 합계: " + score + "점" + bluffMsg + "\n\n" +
                        "1. 힛(Hit) / 2. 스테이(Stay)";
-            replier.reply(formatCommand("🃏 블랙잭 진행 중", user, body));
+            util_casinoRelayReply(replier, user, formatCommand("🃏 블랙잭 진행 중", user, body), roomName);
             roomData.features.states.menuWait[targetUid].time = Date.now(); // 시간 연장
         }
         return true;
@@ -14322,7 +14330,7 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
         user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "패배", profit: -state.bet, isWin: false };
     }
 
-    replier.reply(formatCommand("🏁 블랙잭 결과 Report", user, finalMsg + "\n\n🔁한번더 ❎그만", "내 잔액: " + fp(user.point) + "P"));
+    util_casinoRelayReply(replier, user, formatCommand("🏁 블랙잭 결과 Report", user, finalMsg + "\n\n🔁한번더 ❎그만", "내 잔액: " + fp(user.point) + "P"), roomName);
     
     user.blackjackState = null;
     roomData.features.states.menuWait[targetUid] = { type: 'blackjack_retry', time: Date.now() };
@@ -14339,14 +14347,14 @@ function _handleBlackjackRetry(msg, user, data, replier, roomName, targetUid) {
     // 1. 시간 초과 체크 (30초)
     if (Date.now() - state.time > 30000) {
         delete mState[targetUid];
-        replier.reply(formatError(user, "선택 시간 초과", "30초 이내에 선택하지 않아 블랙잭이 종료되었습니다."));
+        util_casinoRelayReply(replier, user, formatError(user, "선택 시간 초과", "30초 이내에 선택하지 않아 블랙잭이 종료되었습니다."), roomName);
         return true;
     }
 
     // 2. 종료 (그만/취소)
     if (msg === "그만" || msg === "취소" || msg === "❎") {
         delete mState[targetUid];
-        replier.reply(formatCommand("🚫 블랙잭 종료", user, "테이블에서 일어났습니다."));
+        util_casinoRelayReply(replier, user, formatCommand("🚫 블랙잭 종료", user, "테이블에서 일어났습니다."), roomName);
         return true;
     }
 
@@ -14355,7 +14363,7 @@ function _handleBlackjackRetry(msg, user, data, replier, roomName, targetUid) {
         // [부도 가드] 재확인
         if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
             delete mState[targetUid];
-            replier.reply(formatError(user, "블랙잭 폐쇄", "국가 부도 선포로 인해 딜러들이 휴업 중입니다."));
+            util_casinoRelayReply(replier, user, formatError(user, "블랙잭 폐쇄", "국가 부도 선포로 인해 딜러들이 휴업 중입니다."), roomName);
             return true;
         }
 
@@ -14368,7 +14376,7 @@ function _handleBlackjackRetry(msg, user, data, replier, roomName, targetUid) {
         var minB = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
         var maxB = SYSTEM_CONFIG.ECO.GAMBLE_MAX || 50000;
         
-        replier.reply(formatCommand("🕴️ 블랙잭 재도전", user, "배팅하실 금액을 입력해주세요.\n\n• 최소: " + fp(minB) + "P\n• 최대: " + fp(maxB) + "P", "취소: [취소]"));
+        util_casinoRelayReply(replier, user, formatCommand("🕴️ 블랙잭 재도전", user, "배팅하실 금액을 입력해주세요.\n\n• 최소: " + fp(minB) + "P\n• 최대: " + fp(maxB) + "P", "취소: [취소]"), roomName);
         return true;
     }
 

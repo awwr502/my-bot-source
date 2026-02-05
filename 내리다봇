@@ -5152,38 +5152,34 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
 //==========섹터20-1==========
 
 if (!data) return;
-// [수정: 핵심] '베릭방'이거나 1:1방이면 무조건 메인 서버('내리다')의 장부를 불러옴
-// 이렇게 하면 모든 명령어(경제, 경마, 도박 등)가 자동으로 본섭 데이터를 보여주고 수정하게 됨.
+// [수정] 참조 오류 방지를 위한 변수 선언 및 단체방 유저 할당 로직 추가
+var currentImgHash = (function(){ try { return imageDB ? imageDB.getProfileHash() : null; } catch(e){ return null; } })();
+var isIdentityRecovered = false;
+var cacheKey = "GLOBAL_" + cleanSender;
+
 var roomData = (roomName === "베릭방" || ALLOWED_ROOMS.indexOf(roomName) === -1) 
                ? data.rooms["내리다"] 
                : (data.rooms[roomName] || { users: {} });
 
-// 안전장치: 메인 장부가 없으면(최초 실행 등) 빈 객체 생성
 if (!roomData) roomData = { users: {} };
-
-// (기존 코드 유지: data.rooms[roomName] 할당은 덮어씌워지지 않게 주의)
 if (ALLOWED_ROOMS.indexOf(roomName) !== -1 && roomName !== "베릭방") {
     data.rooms[roomName] = roomData;
 }
 
-// [수정] 1:1 채팅방(개인톡) 접속 시 메인 서버('내리다') 데이터 연동 로직
 if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
     var mainUsers = (data.rooms["내리다"] && data.rooms["내리다"].users) ? data.rooms["내리다"].users : {};
-    var cleanTarget = cleanSender.replace(/\s/g, ""); // 공백 제거 닉네임
+    var cleanTarget = cleanSender.replace(/\s/g, "");
     var foundMainUser = false;
 
-    // 1. '내리다' 방에서 내 닉네임과 일치하는 유저 탐색
     for (var mUid in mainUsers) {
-        var dbName = mainUsers[mUid].name.replace(/\s/g, "");
-        if (dbName === cleanTarget) {
-            targetUid = mUid; // 메인 방의 UID를 가져옴 (핵심)
-            user = mainUsers[mUid]; // 유저 객체도 메인 방 것으로 연결
+        if (mainUsers[mUid].name.replace(/\s/g, "") === cleanTarget) {
+            targetUid = mUid;
+            user = mainUsers[mUid];
             foundMainUser = true;
             break; 
         }
     }
 
-    // 2. 연동 실패 시 (메인 방에 데이터가 없음)
     if (!foundMainUser) {
         var failMsg = "🚫 [연동 실패: 미가입]\n" +
                       "━━━━━━━━━━━━━━━\n" +
@@ -5193,14 +5189,16 @@ if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
                       "2. 단체방 닉네임과 현재 닉네임이 정확히 일치하는지 확인하세요.\n" +
                       "   (띄어쓰기 무관, 특수문자 포함 일치 필요)";
         replier.reply(failMsg);
-        return; // 로직 강제 종료 (신규 생성 차단)
+        return; 
     }
 
-    // 3. 연동 성공 안내 (최초 1회)
     if (user && !user.hasSeenSyncNotice) {
         replier.reply("🔗 [시스템] 메인 서버 계정(" + user.name + ")과 성공적으로 연동되었습니다.");
         user.hasSeenSyncNotice = true;
     }
+} else {
+    // [추가] 단체방 접속 시 기존 유저 객체를 'user' 변수에 할당 (참조 오류 해결 핵심)
+    if (targetUid && roomData.users[targetUid]) user = roomData.users[targetUid];
 }
 
 // [2] 현재 접속한 방(1:1방 포함)의 기능 객체가 없으면 즉시 생성

@@ -12236,45 +12236,35 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         var shipName = (user.shipName !== undefined) ? user.shipName : "";
         var shipLabel = (shipName && shipName.length > 0) ? "'" + shipName + "'" : ship.name;
         
-        var cargoList = [];
-        var currentCargoCount = 0;
+        // [Gemini] 일반 교역품(수량) 및 특산품(종류) 분리 계산 로직
+        var currentGeneralCount = 0;
+        var currentSpecTypeCount = 0;
 
-        // 일반 화물 수집
-        for (var key in (user.cargo || {})) {
-            var qty = Number(user.cargo[key]);
-            if (qty > 0) {
-                cargoList.push(key + " " + qty + "상자");
-                currentCargoCount += qty;
+        // 1. 일반 교역품 잔여량 계산 (항해 중인 스냅샷 제외)
+        for (var k in (user.cargo || {})) {
+            var q = Number(user.cargo[k] || 0);
+            if (user.voyage && user.voyage.active === true) {
+                q -= Number((user.voyage.cargoSnapshot || {})[k] || 0);
             }
+            if (q > 0) currentGeneralCount += q;
         }
-        // 특산품 수집
-        for (var spec in (user.specialties || {})) {
-            var sQty = Number(user.specialties[spec]);
-            if (sQty > 0) {
 
-         cargoList.push("⭐" + spec + " " + sQty + "상자");
-                currentCargoCount += sQty; // 적재량 합산 로직 유지
+        // 2. 특산품 잔여 종류 계산 (항해 중인 종류 제외)
+        for (var s in (user.specialties || {})) {
+            var sq = Number(user.specialties[s] || 0);
+            if (user.voyage && user.voyage.active === true) {
+                sq -= Number((user.voyage.specialtySnapshot || {})[s] || 0);
             }
-        } // <--- [수정]: 유저님 코드에서 빠져있던 반복문 종료 중괄호를 추가했습니다.
-
-        // [Gemini] 항해 중 화물 제외 로직: 현재 선박에 실려 있는 물량(Snapshot)을 전체 적재량에서 차감하여 표시
-        if (user.voyage && user.voyage.active === true) {
-            // 일반 화물 스냅샷 차감
-            var cSnap = user.voyage.cargoSnapshot || {};
-            for (var ck in cSnap) currentCargoCount -= Number(cSnap[ck] || 0);
-            
-            // 특산품 스냅샷 차감
-            var sSnap = user.voyage.specialtySnapshot || {};
-            for (var sk in sSnap) currentCargoCount -= Number(sSnap[sk] || 0);
+            if (sq > 0) currentSpecTypeCount++;
         }
-        
-        // 연산 오류로 인한 음수 출력 방지 보정
-        if (currentCargoCount < 0) currentCargoCount = 0;
 
-        // [UI 최적화]: 항해 물량을 제외한 지부 내 순수 적재함 현황 출력
+        // 음수 보정
+        if (currentGeneralCount < 0) currentGeneralCount = 0;
+
         var menu = "📍 현재 위치: 무역 지부\n" +
-                   "🚢 보유 선박: " + shipLabel + " (Lv." + (user.shipLevel || 1) + ")\n" +
-                   "📦 보관함: " + currentCargoCount + " / " + ship.capacity + " 칸\n\n" +
+                   "🚢 보유 선박: " + shipLabel + " (Lv." + shipLevel + ")\n" +
+                   "📦 일반 교역품: " + currentGeneralCount + " / " + ship.capacity + " 칸\n" +
+                   "📦 특산품: " + currentSpecTypeCount + " / 5 종류\n\n" +
                    "1. 🌍 세계 시세 확인\n" +
                    "2. 🚢 출항 준비 (목적지)\n" +
                    "3. 📦 항해 현황 (도착)\n" +

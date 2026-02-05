@@ -7289,6 +7289,8 @@ if (msg === "/가이드") {
     if (!user) return; 
 
     var MAIN_NAME = "내리다"; 
+    var is1to1 = (ALLOWED_ROOMS.indexOf(realRoom) === -1);
+    var logicRoom = is1to1 ? MAIN_NAME : roomName;
     var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
 
     var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
@@ -7340,6 +7342,14 @@ if (actualFeatures && actualFeatures.states) {
     if (!currentStates.bankProcess) currentStates.bankProcess = {};
     if (!currentStates.selectWait) currentStates.selectWait = {};
 
+    // [핵심 패치] 1:1방의 게임 세션을 메인방 데이터와 동기화하여 '스테이' 시 크래시 방지
+        if (is1to1 && currentStates.menuWait[targetUid]) {
+            var sessionData = currentStates.menuWait[targetUid];
+            if (data.rooms[MAIN_NAME] && data.rooms[MAIN_NAME].features) {
+                data.rooms[MAIN_NAME].features.states.menuWait[targetUid] = sessionData;
+            }
+        }
+
     // 1. 관리자 및 조작 핸들러
     if (typeof _handleAdminMain === 'function' && _handleAdminMain(msg, user, data, replier, roomName, targetUid)) return;
     if (typeof _handleAdminManiStep === 'function' && _handleAdminManiStep(msg, user, data, replier, roomName, targetUid)) return;
@@ -7347,13 +7357,19 @@ if (actualFeatures && actualFeatures.states) {
     // 2. 블랙잭 재도전/액션 (1:1방 세션 우선)
     if (currentStates.menuWait[targetUid]) {
         var mType = currentStates.menuWait[targetUid].type;
-        if (mType === 'blackjack_retry' && typeof _handleBlackjackRetry === 'function') {
-            if (_handleBlackjackRetry(msg, user, data, replier, roomName, targetUid)) return;
+       if (mType === 'blackjack_retry' && typeof _handleBlackjackRetry === 'function') {
+                if (_handleBlackjackRetry(msg, user, data, replier, logicRoom, targetUid)) {
+                    if (is1to1) delete currentStates.menuWait[targetUid];
+                    return;
+                }
+            }
+            if (mType === 'blackjack_action' && typeof _handleBlackjackAction === 'function') {
+                if (_handleBlackjackAction(msg, user, data, replier, logicRoom, targetUid)) {
+                    if (is1to1) delete currentStates.menuWait[targetUid];
+                    return;
+                }
+            }
         }
-        if (mType === 'blackjack_action' && typeof _handleBlackjackAction === 'function') {
-            if (_handleBlackjackAction(msg, user, data, replier, roomName, targetUid)) return;
-        }
-    }
 
     // 3. 통합 카지노 배팅 (채팅으로 '홀 5000' 등 입력 시)
     if (typeof _handleCasinoBet === 'function' && _handleCasinoBet(msg, user, data, replier, roomName, targetUid)) return;

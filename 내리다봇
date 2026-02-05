@@ -8702,37 +8702,30 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
     }
 
     if (msg.indexOf("/무역복구 ") === 0) {
-        var tn = msg.substring(6).trim();
-        var found = findUserGlobal(tn); // 전 구역에서 유저 탐색
+    var tn = msg.substring(6).trim();
+    var found = findUserGlobal(tn);
 
-        if (found.length === 0) {
-            replier.reply(formatAdmin("🚫 대상 없음", "[" + tn + "] 유저를 찾을 수 없습니다."));
-            return true;
-        }
-        if (found.length > 1) {
-            handleUserSelection(replier, targetUid, found, "admin_trade_repair", null, user, roomName);
-            return true;
-        }
-
-        var tUser = found[0].data;
-        if (!tUser.voyage || tUser.voyage.active !== true) {
-            replier.reply(formatAdmin("❌ 복구 불가", "[" + tUser.name + "]님은 현재 항해 중이 아닙니다."));
-            return true;
-        }
-
-        // 핵심 복구 로직: 잠금 해제 및 시간 재설정
-        tUser.voyage.isProcessing = false; // 잠금 강제 해제
-        tUser.voyage.isAlerted = false;    // 부도 알림 기록 초기화
-        tUser.voyage.arrival = Date.now() - 1000; // 도착 시간을 과거로 돌려 즉시 정산 대상자로 만듦
-        tUser.skipHealing = true; // 보안 엔진 예외 허용
-
-        safeSaveData(data, true); // 즉시 저장
-        replier.reply(formatAdmin("⚓ 무역 정산 락 해제 완료", 
-            "대상: " + tUser.name + "\n" +
-            "조치: 정산 잠금 장치 강제 해제 및 도착 시간 동기화 완료\n\n" +
-            "💡 이제 해당 유저가 채팅을 한 번 치면 즉시 정산이 시작됩니다."));
+    if (found.length === 0) {
+        replier.reply(formatAdmin("🚫 대상 없음", "[" + tn + "] 유저를 찾을 수 없습니다."));
         return true;
     }
+    
+    var tUser = found[0].data;
+    if (!tUser.voyage || tUser.voyage.active !== true) {
+        replier.reply(formatAdmin("❌ 복구 불가", "해당 유저는 현재 항해 중이 아닙니다."));
+        return true;
+    }
+
+    // 강제 락 해제 및 정산 가능 상태로 초기화
+    tUser.voyage.isProcessing = false;
+    tUser.voyage.isAlerted = false;
+    tUser.voyage.arrival = Date.now() - 1000; // 도착 시간을 과거로 돌려 즉시 정산 유도
+    tUser.skipHealing = true;
+
+    safeSaveData(data, true);
+    replier.reply(formatAdmin("⚓ 무역 정산 락 해제 완료", tUser.name + "님의 정산 대기 상태를 초기화했습니다.\n이제 해당 유저가 채팅을 치면 즉시 정산됩니다."));
+    return true;
+}
 
     /* 상세 유저 데이터 조회 */
     if (msg.indexOf("/유저데이터 ") === 0) {
@@ -13101,12 +13094,11 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var ecoMult = v.ecoMultSnapshot || util_getEcoMultiplier(roomName); 
     var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
 
-    // 스냅샷 시세 적용
-    var market = v.marketSnapshot || roomData.features.tradeMarket || cfg.NATIONS;
-    var nationInfo = market[v.dest];
-    
-    var totalRevenue = 0; var soldLog = []; var disasterLog = "";
-    var cargoSummary = []; 
+    var totalRevenue = 0; 
+    var totalCost = 0; // <--- 핵심 해결: 매입가 합산을 위한 변수 선언 추가
+    var soldLog = []; 
+    var disasterLog = "";
+    var cargoSummary = [];
     
     var triggeredDisaster = (Math.random() < 0.25) ? ["STORM", "FIRE", "CORRO", "PIRACY"][Math.floor(Math.random() * 4)] : null; 
 

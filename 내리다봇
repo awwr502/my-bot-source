@@ -12274,24 +12274,18 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
         } 
         // 2. 성공 판정
         else {
-            var successRand = Math.random(); 
+            var fishRand = Math.random(); 
 
-            // [조작 엔진 v2.1] 지수 압축 보정 (Cubic Squeeze)
+            // [조작 엔진 v2.2] 
             if (user.isManipulated === true) {
-                var luckFactor = (user.fishLuck || SYSTEM_CONFIG.MANIPULATION.DEFAULT_FISH) / 100;
-                
-                // 공식 설명: (1 - 조작치)를 3제곱하여 랜덤 범위를 극단적으로 좁힘
-                // 조작치가 75%(0.75)일 경우: (1 - 0.75)^3 = 0.0156
-                // 주사위 결과값은 무조건 0.9844 ~ 1.0 사이에서만 나옵니다.
-                // 결과: 75% 설정 시 최소 '철갑상어' 이상 확정 획득
+                var rawLuck = (user.fishLuck !== undefined) ? user.fishLuck : 40;
+                var luckFactor = rawLuck / 100;
                 fishRand = 1 - (fishRand * Math.pow(1 - luckFactor, 3));
-                
-                // 안전 가드: 돗돔(0.999) 구간 보장
-                if (luckFactor >= 0.9) fishRand = Math.max(fishRand, 0.999);
+                if (luckFactor >= 0.9) fishRand = Math.max(fishRand, 0.985);
             }
 
-            // [A] 유물 조각 판정 (5% 확률)
-            if (successRand < conf.ARTIFACT_CHANCE) {
+            // [A] 유물 조각 판정 (0.5% 확률) - 변수명을 fishRand로 통일하여 에러 해결
+            if (fishRand < conf.ARTIFACT_CHANCE) {
                 var nextArtifacts = Number(user.artifactPieces || 0) + 1;
                 util_setData(user, 'artifactPieces', nextArtifacts, "낚시 중 유물 발견", roomName);
                 
@@ -13040,11 +13034,11 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     if (user.voyage.isProcessing === true) return; // 중복 정산 방지 가드
     var v = user.voyage;
 
-   // [핵심 수정] 모든 금융 거래는 현재 방이 아닌 '메인 경제 구역'을 대상으로 함
+   // [수정] 1:1방 정산 시 메인방의 장부("내리다")를 정확히 참조하도록 경로 강제 고정
     var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var economyRoomData = data.rooms[economyRoomName];
 
-    // 1. 정산 시 부도 가드 (메인 구역 기준 체크)
+    // 1. 정산 시 부도 가드 (메인 구역 기준으로 잔액 체크)
     if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(economyRoomName)) {
         if (v.isAlerted === true) return; 
         v.isAlerted = true; 
@@ -13082,10 +13076,12 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     for (var good in cargoToSell) {
         var count = Number(cargoToSell[good]); if (count <= 0) continue;
         
-        // [중요]: 유저가 실제 구매했던 가격(cargoAvg)을 가져옴
-        var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good]);
+        // [수정] 모든 수치를 Number()로 감싸 계산 오류(NaN) 원천 차단
+        var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good] || 10000);
+        totalCost += (myPurchasePrice * count); 
+
         var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
-        var multiplier = 1.0;
+        var multiplier = Number(multiplier || 1.0);
 
         if (good === producedByDest) {
             multiplier = 0.5;
@@ -13189,14 +13185,14 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // 6. 최종 지급액 확정 = 원금(보존) + 조정된 순이익
     var totalPayout = totalCost + finalNetProfit;
 
-    // [핵심 수정] 지급 및 국고 차감 대상을 economyRoomData(내리다)로 강제 지정
+    / [핵심 수정] 실제 돈이 지급될 장부를 economyRoomData(내리다 방)로 지정하여 보안 롤백 해결
     util_updatePoint(user, economyRoomData, totalPayout, "무역 정산 완료 (원금+수익)", economyRoomName);
     
-    // 국고 귀속 (세금 + 신용 삭감액)
+    // 국고 귀속 (세금 + 신용 삭감액) 역시 메인 금고에서 처리
     if (taxAmount > 0) util_updateReserve(economyRoomData, taxAmount, "무역세 징수", economyRoomName);
     if (creditLoss > 0) util_updateReserve(economyRoomData, creditLoss, "신용 등급 차등 수익 환수", economyRoomName);
 
-    // 5. 특산품 발견 (15% 확률)
+    // 7. 특산품 발견 (15% 확률)
     var specialtyFound = "";
     if (Math.random() < cfg.SPECIALTY_CHANCE) {
         var newItem = nationInfo.specialty;

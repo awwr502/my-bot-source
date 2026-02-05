@@ -1253,7 +1253,8 @@ var CMD_LIST = {
         { cmd: "/경제전체리셋", desc: "모든 유저 자산/부채 초기화및 20만P 공평 지급", func: "_adminEconomyLogic" },
         { cmd: "/자정테스트", desc: "00시 리셋 로직 강제 트리거", func: "_adminEconomyLogic" },
         { cmd: "/연동진단", desc: "1:1 채팅방 계정 연동 상태 분석", func: "_adminUserManageLogic" },
-        { cmd: "/방목록", desc: "DB 전체 방 리스트 및 유저수 스캔", func: "_adminSystemLogic" }
+        { cmd: "/방목록", desc: "DB 전체 방 리스트 및 유저수 스캔", func: "_adminSystemLogic" },
+        { cmd: "/지분현황", desc: "전 구역 랜드마크 소유자 및 지분 상세 조회", func: "_adminEconomyLogic" }
     ]
 };
 
@@ -6311,7 +6312,10 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
                 replier.reply(formatError(user, "포인트 부족", "총 " + fp(totalPrice) + "P가 필요합니다."));
             } else {
                 // 결제 및 효과 적용 로직으로 진행
-                util_updatePoint(user, roomData, -totalPrice, "상점 구매: " + item.name + " x" + qty, roomName);
+                // 무역 물품은 후불 결제를 위해 여기서 차감하지 않음
+                if (item.effect !== "trade_cargo") {
+                    util_updatePoint(user, roomData, -totalPrice, "상점 구매: " + item.name + " x" + qty, roomName);
+                }
                 delete bankProcessState[targetUid];
                 if (typeof _handleShopEffect === 'function') {
                     _handleShopEffect(item, user, roomName, replier, data, targetUid, totalPrice, false, qty);
@@ -7724,11 +7728,13 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
 
     /* 요청사항 시작: 무역 물품 적재 로직 추가 */
     if (item.effect === "trade_cargo") {
-        // [보안 패치] 항해 중 화물 적재(순간이동) 차단
         if (user.voyage && user.voyage.active) {
              replier.reply(formatError(user, "적재 불가", "현재 선박이 항해 중입니다.\n귀항 후 다시 시도해주세요."));
-             return;
+             return; // 돈 차감 전 종료
         }
+
+        // 항해 중이 아님이 확인된 이 시점에 실제 결제 진행
+        util_updatePoint(user, roomData, -finalPrice, "무역 화물 매입: " + item.value + " x" + qty, roomName);
 
         var tradeCfg = SYSTEM_CONFIG.TRADE;
         var shipCfg = tradeCfg.SHIPS[user.shipLevel || 1];
@@ -7967,7 +7973,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         user.creditScore = Math.min(1000, (user.creditScore || 600) + totalRestore);
         user.dailyCreditRestoreCount = (user.dailyCreditRestoreCount || 0) + 1;
         if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(user, roomName);
-        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 사용 성공! (신용 +50)", "현재 점수: " + user.creditScore));
+        replier.reply(formatCommand("🛒 구매 완료", user, item.name + " 사용 성공! (신용 +" + totalRestore + ")", "현재 점수: " + user.creditScore + "점"));
     }
 
     /* [신규: Gemini 요청 사항] 경고삭제권(warnClear) 구매 완료 처리 */
@@ -9513,6 +9519,36 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid) {
                      "━━━━━━━━━━━━━━━\n" +
                      "💡 모든 유저가 동일한 출발선에서 다시 시작합니다.";
         replier.reply(formatAdmin("경제 시스템 재시작", resMsg));
+        return true;
+    }
+
+    if (msg === "/지분현황") {
+        var landMarket = data.landmarkMarket;
+        var report = [];
+        
+        for (var landName in landMarket) {
+            var owners = [];
+            var totalLandShares = 0;
+            
+            // 전 구역(모든 방)의 유저를 스캔하여 지분 보유자 추출
+            for (var r in data.rooms) {
+                for (var uId in data.rooms[r].users) {
+                    var u = data.rooms[r].users[uId];
+                    if (u.landHoldings && u.landHoldings[landName]) {
+                        var qty = Number(u.landHoldings[landName]);
+                        if (qty > 0) {
+                            owners.push(u.name + "(" + qty + ")");
+                            totalLandShares += qty;
+                        }
+                    }
+                }
+            }
+            
+            var ownerText = owners.length > 0 ? owners.join(", ") : "소유자 없음";
+            report.push("🏢 [" + landName + "] (총 " + totalLandShares + "지분)\n   👤 " + ownerText);
+        }
+        
+        replier.reply(formatAdmin("🏗️ 전 구역 부동산 지분 장부", report.join("\n\n")));
         return true;
     }
 

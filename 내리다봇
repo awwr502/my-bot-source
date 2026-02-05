@@ -13042,9 +13042,16 @@ function _processShipUpgrade(user, data, replier, roomName, cfg) {
  * [핵심 엔진] 무역 정산 및 재해 엔진 v1.5
  */
 function _processTradeArrival(user, data, replier, roomName, targetUid) {
-    // [수정] 1:1방 정산 시 메인방의 장부("내리다")를 정확히 참조하도록 경로 강제 고정
+    // 0. [에러 방지] 변수 선언 및 데이터 존재 여부 최우선 검증
+    if (!user || !user.voyage) return; // 항해 중이 아니면 즉시 종료
+    var v = user.voyage; 
+    
+    // 1:1방 정산 시 메인방의 장부("내리다")를 정확히 참조하도록 경로 강제 고정
     var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var economyRoomData = data.rooms[economyRoomName];
+
+    // [중복 방지] 이미 정산 로직이 도는 중이라면 통과
+    if (v.isProcessing === true) return;
 
     // 1. [핵심] 정산 시 부도 가드 (메인 구역 기준으로 잔액 체크)
     if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(economyRoomName)) {
@@ -13064,12 +13071,9 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         return; 
     }
 
-    // 부도가 아닐 경우 정산 시작
+    // 2. 부도가 아닐 경우 정산 시작 (잠금 처리)
     v.isProcessing = true; 
     v.isAlerted = false; // 부도가 풀렸으므로 알림 상태 초기화
-    var roomData = data.rooms[roomName];
-    var cfg = SYSTEM_CONFIG.TRADE;
-    var v = user.voyage;
 
    // [보안] 실시간 가방이 아닌, 출항 시 박제했던 스냅샷을 정산 대상으로 설정
     // 1. [Snapshot] 출항 시점의 고정 데이터들을 정산 대상으로 설정 (휘발성/롤백 방지)

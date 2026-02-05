@@ -7290,7 +7290,18 @@ if (msg === "/가이드") {
 
     var MAIN_NAME = "내리다"; 
     var is1to1 = (ALLOWED_ROOMS.indexOf(realRoom) === -1);
-    var logicRoom = is1to1 ? MAIN_NAME : roomName;
+    var logicRoom = is1to1 ? MAIN_NAME : roomName; 
+
+    // 1:1방 유저라면 세션(menuWait) 정보를 메인방으로 강제 복사하여 핸들러가 인식하게 함
+    if (is1to1) {
+        var pRoom = data.rooms[roomName];
+        var mRoom = data.rooms[MAIN_NAME];
+        if (pRoom && pRoom.features && mRoom && mRoom.features) {
+            if (pRoom.features.states.menuWait[targetUid]) {
+                mRoom.features.states.menuWait[targetUid] = pRoom.features.states.menuWait[targetUid];
+            }
+        }
+    }
     var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
 
     var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
@@ -7358,17 +7369,20 @@ if (actualFeatures && actualFeatures.states) {
     if (currentStates.menuWait[targetUid]) {
         var mType = currentStates.menuWait[targetUid].type;
        if (mType === 'blackjack_retry' && typeof _handleBlackjackRetry === 'function') {
-                if (_handleBlackjackRetry(msg, user, data, replier, logicRoom, targetUid)) {
-                    if (is1to1) delete currentStates.menuWait[targetUid];
-                    return;
-                }
+            if (_handleBlackjackRetry(msg, user, data, replier, logicRoom, targetUid)) {
+                return; 
             }
-            if (mType === 'blackjack_action' && typeof _handleBlackjackAction === 'function') {
-                if (_handleBlackjackAction(msg, user, data, replier, logicRoom, targetUid)) {
-                    if (is1to1) delete currentStates.menuWait[targetUid];
-                    return;
+        }
+        // [수정] 액션(Hit/Stay) 시 게임 종료 여부를 확인하여 세션 삭제 여부 결정
+        if (mType === 'blackjack_action' && typeof _handleBlackjackAction === 'function') {
+            if (_handleBlackjackAction(msg, user, data, replier, logicRoom, targetUid)) {
+                // [핵심] 메인방(logicRoom)의 세션이 사라졌을 때만(게임 종료) 1:1방 세션도 함께 삭제
+                if (is1to1 && !data.rooms[logicRoom].features.states.menuWait[targetUid]) {
+                    delete currentStates.menuWait[targetUid];
                 }
+                return;
             }
+        }
         }
 
     // 3. 통합 카지노 배팅 (채팅으로 '홀 5000' 등 입력 시)
@@ -7404,6 +7418,15 @@ if (typeof _runChatBonusLogic === 'function') {
 }
 
 //==========섹터25==========
+
+    // [관리자 전용] 봇 멈춤(데드락) 발생 시 강제 잠금 해제 명령어
+    if (isAdmin(sender, data, targetUid) && msg === "/락해제") {
+        if (typeof lock !== 'undefined') {
+            while (lock.isLocked()) { lock.unlock(); }
+            replier.reply("🔓 [시스템] 모든 데이터 잠금이 강제로 해제되었습니다.");
+            return;
+        }
+    }
 
     /* [v10.1] C. 관리자 명령어 처리 (트랜잭션 flow 유지) */
     if (!isProcessed && isAdmin(sender, data, targetUid)) {
@@ -7451,23 +7474,33 @@ if (typeof _runChatBonusLogic === 'function') {
             Log.error("🚨 [Critical Error in Catch]: " + err); 
         }
     } finally {
-        // 3. [성능 기록 및 락 해제]
-        if (typeof _perfStartTime !== 'undefined') {
-            var _pDur = java.lang.System.currentTimeMillis() - _perfStartTime;
-            if (typeof PERF_METRICS !== 'undefined') {
-                PERF_METRICS.avgLag = Math.floor((PERF_METRICS.avgLag * 9 + _pDur) / 10);
-                if (_pDur > PERF_METRICS.peakLag) PERF_METRICS.peakLag = _pDur;
-                PERF_METRICS.msgPerMin++;
+        // 3. [안전 장치] 성능 기록 로직 별도 분리
+        try {
+            if (typeof _perfStartTime !== 'undefined') {
+                var _pDur = java.lang.System.currentTimeMillis() - _perfStartTime;
+                if (typeof PERF_METRICS !== 'undefined') {
+                    PERF_METRICS.avgLag = Math.floor((PERF_METRICS.avgLag * 9 + _pDur) / 10);
+                    if (_pDur > PERF_METRICS.peakLag) PERF_METRICS.peakLag = _pDur;
+                    PERF_METRICS.msgPerMin++;
+                }
             }
+        } catch (e) { 
+            Log.error("Perf Metrics Error: " + e); 
         }
         
-        // [교정] 락 해제 무결성 보장: 현재 스레드가 락을 소유했을 때만 해제하여 크래시 방지
-        if (typeof lock !== 'undefined' && lock.isHeldByCurrentThread()) {
-            lock.unlock(); 
+        // 4. [교정] 현재 스레드 소유권 확인 후 안전한 락 해제
+        if (typeof lock !== 'undefined' && lock !== null) {
+            try {
+                if (lock.isHeldByCurrentThread()) {
+                    lock.unlock(); 
+                }
+            } catch (err) {
+                Log.error("Critical Lock Release Fail: " + err);
+            }
         }
     } 
 
-    // [계층 역순 종료] 섹터 19에서 시작된 구조 마감
+    // [계층 역순 종료] 
     } // LogicQueue.run 종료
     })); // LogicQueue.execute 종료
 

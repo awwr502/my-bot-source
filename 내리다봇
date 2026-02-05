@@ -4922,22 +4922,23 @@ if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
     var MAIN_ROOM = "내리다";
     var mainData = data.rooms[MAIN_ROOM];
     
-   // 메인 방에서 현재 유저와 같은 이름의 UID 탐색 및 강제 연결
+   /* [데이터 단일화] 1:1방은 데이터를 생성하지 않고 메인방의 객체를 직접 참조 */
     if (mainData && mainData.users) {
         for (var mUid in mainData.users) {
             if (mainData.users[mUid].name.trim() === cleanSender.trim()) {
-                targetUid = mUid; // UID를 메인방 것으로 강제 고정
-                user = mainData.users[mUid]; // 데이터 본체를 메인방 것으로 교체
+                targetUid = mUid; 
+                user = mainData.users[mUid]; // 본체 데이터 주소 연결
                 
-                // 1:1방 자체 데이터(roomData.users)에는 아무것도 저장하지 않음 (파편화 방지)
+                // [정화] 혹시나 1:1방 자체에 잘못 생성된 가짜 데이터가 있다면 파기
+                if (roomData.users[targetUid]) delete roomData.users[targetUid];
                 break;
             }
         }
     }
 
-    // 메인방에 데이터가 아예 없는 신규 유저라면? 가이드 출력 후 종료
+    // 메인방 데이터가 없는 유저는 1:1방 이용 불가 (가입 방지 가드)
     if (!user) {
-        replier.reply("🚫 [알림] 단체방('내리다')에 먼저 접속하여 계정을 생성해주세요!");
+        replier.reply("🚫 [미가입 사용자]\n단체방('내리다')에 먼저 접속하여 계정을 생성해야 1:1 기능을 이용할 수 있습니다.");
         return; 
     }
 }
@@ -4996,8 +4997,8 @@ if (!targetUid) {
     } catch(e) {}
 }
 
-// [C] UID는 확보되었으나 실제 게임 데이터(Object)가 없는 경우 초기화 실행
-if (!roomData.users[targetUid]) {
+// [C] UID는 확보되었으나 데이터가 없는 경우 초기화 (1:1 방은 생성 금지)
+if (ALLOWED_ROOMS.indexOf(roomName) !== -1 && !roomData.users[targetUid]) {
     var newUser = { uid: targetUid, name: cleanSender, imageHash: currentImgHash, lastDate: "" };
 
     USER_SCHEMA.forEach(function(item) {
@@ -5032,28 +5033,39 @@ if (!roomData.users[targetUid]) {
 
 //==========섹터20-2==========
 
-user = roomData.users[targetUid];
-
-/* [최종 해결] 1:1 채팅방 숫자 핸들러 통과를 위한 위치 교정 가드 */
+/* [데이터 & 가드 통합 엔진] 1:1방 동기화 및 숫자 핸들러 프리패스 */
 if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-    // 1. 허용된 명령어인지 확인
-    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
-    
-    // 2. 현재 유저가 어떠한 입력 대기 상태인지 정밀 확인
-    var inState = false;
-    if (roomData.features && roomData.features.states) {
-        var st = roomData.features.states;
-        // menuWait, bankProcess, selectWait 중 하나라도 내 UID가 있으면 숫자 입력 허용
-        if ((st.menuWait && st.menuWait[targetUid]) || 
-            (st.bankProcess && st.bankProcess[targetUid]) || 
-            (st.selectWait && st.selectWait[targetUid]) || 
-            (user && user.blackjackState)) {
-            inState = true;
-        }
+    // 1. 데이터 본체 연결: 1:1방은 무조건 '내리다' 방의 지갑을 사용
+    var mainRoomData = data.rooms["내리다"];
+    if (mainRoomData && mainRoomData.users[targetUid]) {
+        user = mainRoomData.users[targetUid]; 
+    } else {
+        user = roomData.users[targetUid];
     }
 
-    // [핵심] 식별(targetUid 확정)이 끝난 이 시점에서만 로직을 차단할지 결정함
+    // 2. 화이트리스트 및 상태 가드: 1:1방 전용 로직 차단 해제
+    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
+    
+    var inState = false;
+    // 현재 1:1 방(local)과 메인 방(main)의 모든 대기 상태를 이중 검사
+    var localSt = roomData.features ? roomData.features.states : null;
+    var mainSt = (mainRoomData && mainRoomData.features) ? mainRoomData.features.states : null;
+
+    var checkWait = function(st) {
+        if (!st) return false;
+        return (st.menuWait[targetUid] || st.bankProcess[targetUid] || st.selectWait[targetUid]);
+    };
+
+    if (checkWait(localSt) || checkWait(mainSt) || (user && user.blackjackState)) {
+        inState = true;
+    }
+
+    // 허용된 명령어도 아니고 대기 상태도 아니라면 로직 종료 (일반 채팅 무시)
     if (!isAllowedCmd && !inState) return;
+
+} else {
+    // 단체방일 경우: 자기 방 데이터를 본체로 사용
+    user = roomData.users[targetUid];
 }
 
 /* [v11.0] 주식 -> 랜드마크 데이터 자동 마이그레이션 */

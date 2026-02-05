@@ -4787,31 +4787,20 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
 
                         // 2. [강력 동기화] 1:1 방일 경우 "내리다" 방의 UID로 강제 전환 및 유령 데이터 제거
                         if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-                            var mainBase = data.rooms["내리다"];
-                            var currentRoomUsers = data.rooms[roomName] ? data.rooms[roomName].users : {};
-                            
-                            if (mainBase && mainBase.users) {
-                                for (var mId in mainBase.users) {
-                                    var mainCleanName = mainBase.users[mId].name.replace(/\s/g, "");
-                                    var senderCleanName = cleanSender.replace(/\s/g, "");
-                                    
-                                    if (mainCleanName === senderCleanName) {
-                                        targetUid = mId; // 메인 방 UID를 현재 식별값으로 강제 설정
-                                        globalData.nameToIdCache[cacheKey] = targetUid; // 캐시 강제 갱신
-                                        isSynced = true; 
-
-                                        /* [데이터 정화] 1:1방에 잘못 생성된 가짜 UID 유저가 있다면 즉시 삭제 */
-                                        for (var localId in currentRoomUsers) {
-                                            if (localId !== targetUid && currentRoomUsers[localId].name === cleanSender) {
-                                                delete data.rooms[roomName].users[localId];
-                                                Log.info("[정화] " + cleanSender + "님의 유령 데이터(" + localId + ")를 삭제했습니다.");
-                                            }
-                                        }
+                            var targetSearchName = cleanSender.replace(/\s/g, ""); // 공백 제거된 발신자 이름
+                            for (var r in data.rooms) {
+                                var rObj = data.rooms[r];
+                                for (var mId in rObj.users) {
+                                    if (rObj.users[mId].name.replace(/\s/g, "") === targetSearchName) {
+                                        targetUid = mId;
+                                        user = rObj.users[mId];
+                                        roomName = r; // 유저가 실제로 속한 방(예: 내리다)의 데이터를 참조하도록 방 이름도 스왑
+                                        isSynced = true;
                                         break;
                                     }
                                 }
+                                if (isSynced) break;
                             }
-                        }
 
                         // 3. 동기화 대상이 아닐 때만 기존 캐시 참조
                         if (!isSynced) targetUid = globalData.nameToIdCache[cacheKey];
@@ -5135,22 +5124,18 @@ data.rooms[roomName] = roomData;
 
 // [수정] 1:1 채팅방 전용 데이터 브릿지 및 연동 안내 메시지 추가
 if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
-    var MAIN_ROOM = "내리다";
-    var mainData = data.rooms[MAIN_ROOM];
-    
-    if (mainData && mainData.users) {
-        for (var mUid in mainData.users) {
-            var mainRawName = mainData.users[mUid].name.replace(/\s/g, "");
-            var currentRawSender = cleanSender.replace(/\s/g, "");
-            
-            if (mainRawName === currentRawSender) {
-                targetUid = mUid; 
-                user = mainData.users[mUid]; 
-                
-                if (roomData.users[targetUid]) delete roomData.users[targetUid];
+    var foundMaster = false;
+    var cleanTarget = cleanSender.replace(/\s/g, "");
+    for (var r in data.rooms) {
+        for (var mUid in data.rooms[r].users) {
+            if (data.rooms[r].users[mUid].name.replace(/\s/g, "") === cleanTarget) {
+                targetUid = mUid;
+                user = data.rooms[r].users[mUid];
+                foundMaster = true;
                 break;
             }
         }
+        if (foundMaster) break;
     }
 
     // [신규] 1:1 방 입장 유저 대상 닉네임 연동 필수 안내

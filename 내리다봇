@@ -2842,39 +2842,62 @@ function distributeRepayment(user, amount, roomName) {
     
     var remainingRepay = Math.floor(Number(amount));
     var initialAmount = remainingRepay;
-    var clearedCount = 0;
-    
-    if (!user.loan.items) user.loan.items = [];
-    user.loan.items.sort(function(a, b) { return a - b; });
-    
+
+    var creditGainTotal = 0; 
     var newItems = [];
+    var clearedCount = 0; // (참고용 카운트)
+
+    if (!user.loan.items) user.loan.items = [];
+    
+    // 들어온 순서대로 상환 처리 (FIFO 구조 유지)
     for (var i = 0; i < user.loan.items.length; i++) {
-        var loanItem = Number(user.loan.items[i]);
-        if (loanItem > 0 && remainingRepay >= loanItem) {
-            remainingRepay -= loanItem;
+        var item = user.loan.items[i];
+        
+        // [호환성] 구버전(숫자)과 신버전(객체) 데이터 모두 처리
+        var currentAmt = (typeof item === 'object') ? Number(item.amount) : Number(item);
+        var isHighLoan = (typeof item === 'object') ? item.isHigh : false;
+
+        if (remainingRepay >= currentAmt) {
+            // [완납 성공]: 해당 대출 건이 목록에서 사라짐
+            remainingRepay -= currentAmt;
             clearedCount++;
+            
+            // 조건: 고액 대출로 기록된 건이었다면 신용점수 +80 회복
+            if (isHighLoan) {
+                creditGainTotal += 80;
+            }
         } else {
-            loanItem -= remainingRepay;
+            // [부분 상환]: 잔액이 남아서 목록에 유지됨
+            currentAmt -= remainingRepay;
             remainingRepay = 0;
-            if (loanItem > 0) newItems.push(loanItem);
+            
+            // 남은 잔액을 다시 저장 (데이터 구조 유지)
+            if (typeof item === 'object') {
+                item.amount = currentAmt;
+                newItems.push(item);
+            } else {
+                newItems.push(currentAmt);
+            }
         }
     }
     
+    // 실제 갚은 총액 계산
     var actualRepayed = initialAmount - remainingRepay;
     user.loan.items = newItems;
+
+    // 남은 총 채무액 재계산
     var remainingTotal = 0;
     for (var i = 0; i < newItems.length; i++) { 
-        remainingTotal += Number(newItems[i]); 
+        var val = (typeof newItems[i] === 'object') ? Number(newItems[i].amount) : Number(newItems[i]);
+        remainingTotal += val; 
     }
     user.loan.debt = remainingTotal; 
 
-    // [보정]: getCreditInfo 호출 시 roomName을 전달하여 현재 방의 경제 지표에 맞는 신용 가점을 계산합니다.
-    var crInfo = getCreditInfo(user.creditScore || 600, roomName);
-    var restoreThreshold = Math.floor(crInfo.limit * 0.8);
-    var appliedGain = (actualRepayed >= restoreThreshold) ? (clearedCount * 80) : 0;
-
-    var nextScore = Math.min(1000, Number(user.creditScore || 600) + appliedGain);
-    util_setData(user, 'creditScore', nextScore, "대출 상환 가점", roomName);
+    // 신용점수 최종 반영 (최대 1000점)
+    if (creditGainTotal > 0) {
+        var nextScore = Math.min(1000, Number(user.creditScore || 600) + creditGainTotal);
+        util_setData(user, 'creditScore', nextScore, "고액 대출 완납 가점", roomName);
+    }
 
     // [확정]: 대출금이 완전히 0이 되었을 때만 채무 완납 처리 및 특수 채무 플래그를 해제합니다.
     if (user.loan.debt <= 0) {
@@ -6104,9 +6127,17 @@ function _handleBankStep2(msg, user, data, replier, roomName, targetUid) {
             var total = Math.floor(amt * finalRate);
             if (!user.loan || typeof user.loan !== 'object') user.loan = { debt: 0, items: [] };
             if (!user.loan.items) user.loan.items = [];
-            user.loan.debt = Number(user.loan.debt || 0) + Number(total);
-            user.loan.items.push(Number(total));
+
+            var isHighValue = (amt >= (cr.limit * 0.8)); 
             
+            // 기존 단순 숫자 push 대신 객체 형태로 저장하여 속성 부여
+            user.loan.items.push({ 
+                amount: Number(total), 
+                isHigh: isHighValue,
+                date: Date.now() 
+            });
+
+            user.loan.debt = Number(user.loan.debt || 0) + Number(total);
             util_updatePoint(user, roomData, amt, "은행 대출 실행", roomName);
 
             // [추가]: 유저 상태에 따른 자동 상환 비율 판정 및 안내 문구 조립

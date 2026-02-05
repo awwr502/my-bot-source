@@ -5049,28 +5049,40 @@ if (!data) return;
 var roomData = data.rooms[roomName] || { users: {} };
 data.rooms[roomName] = roomData;
 
-// [1] 1:1 채팅방 전용 데이터 브릿지 (Ghost Sync)
+// [수정] 1:1 채팅방 전용 데이터 브릿지 및 연동 안내 메시지 추가
 if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
     var MAIN_ROOM = "내리다";
     var mainData = data.rooms[MAIN_ROOM];
     
-   /* [데이터 단일화] 1:1방은 데이터를 생성하지 않고 메인방의 객체를 직접 참조 */
     if (mainData && mainData.users) {
         for (var mUid in mainData.users) {
             if (mainData.users[mUid].name.trim() === cleanSender.trim()) {
                 targetUid = mUid; 
-                user = mainData.users[mUid]; // 본체 데이터 주소 연결
+                user = mainData.users[mUid]; 
                 
-                // [정화] 혹시나 1:1방 자체에 잘못 생성된 가짜 데이터가 있다면 파기
                 if (roomData.users[targetUid]) delete roomData.users[targetUid];
                 break;
             }
         }
     }
 
-    // 메인방 데이터가 없는 유저는 1:1방 이용 불가 (가입 방지 가드)
+    // [신규] 1:1 방 입장 유저 대상 닉네임 연동 필수 안내
+    if (user && !user.hasSeenSyncNotice) {
+        var syncNotice = "🔔 [정보 연동 안내]\n" +
+                         "━━━━━━━━━━━━━━━\n" +
+                         "1:1 대화방의 모든 정보는 메인방('내리다')의\n" +
+                         "데이터와 실시간으로 연동됩니다.\n\n" +
+                         "⚠️ 주의사항:\n" +
+                         "반드시 메인방과 [닉네임]이 동일해야 하며,\n" +
+                         "닉네임 변경 시 연동이 끊길 수 있습니다.\n" +
+                         "━━━━━━━━━━━━━━━\n" +
+                         "💡 동일한 닉네임 사용 시 모든 자산이 공유됩니다.";
+        replier.reply(syncNotice);
+        user.hasSeenSyncNotice = true; // 안내 1회 제한
+    }
+
     if (!user) {
-        replier.reply("🚫 [미가입 사용자]\n단체방('내리다')에 먼저 접속하여 계정을 생성해야 1:1 기능을 이용할 수 있습니다.");
+        replier.reply("🚫 [미가입 사용자]\n단체방('내리다')에 먼저 접속하여 계정을 생성해야 1:1 기능을 이용할 수 있습니다.\n\n⚠️ 안내: 메인방과 닉네임이 일치해야 정보가 연동됩니다.");
         return; 
     }
 }
@@ -13681,6 +13693,7 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
     var dScore = _calcBJScore(state.dealerHand);
     
     delete roomData.features.states.menuWait[targetUid];
+    user.blackjackState = null;
     
     // [카운트 연동]
     user.totalGambleCount = (user.totalGambleCount || 0) + 1;
@@ -13756,6 +13769,10 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
 
     if (prize > 0 && resultStatus === "WIN") {
         // 1. [고정 세금 계산] 배팅금의 0.1배(10%)를 세금으로 책정
+        if (!util_isBankSolvent(roomName, prize)) {
+            replier.reply(formatError(user, "은행 지불 불능", "국가 부도 상태로 인해 상금을 지급할 수 없습니다.\n게임이 무효 처리되어 배팅금이 소멸되었습니다."));
+            return; // 상태는 이미 상단에서 파기되었으므로 안전하게 종료
+        }
         var taxAmount = Math.floor(state.bet * 0.1);
         var netIncome = prize; // prize는 이미 1.90배가 적용된 금액
 

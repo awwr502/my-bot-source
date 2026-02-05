@@ -12967,6 +12967,16 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         // user.shipName이 정의되지 않았을 경우(undefined)를 대비해 안전 가드 추가
         var shipName = (user.shipName !== undefined) ? user.shipName : "";
         var shipLabel = (shipName && shipName.length > 0) ? "'" + shipName + "'" : ship.name;
+
+        // [추가] 내가 현재 총독인 항구가 있는지 확인
+        var myGovernorTitle = "";
+        var pData = roomData.portData || {};
+        for (var pName in pData) {
+            if (pData[pName].governorUid === targetUid) {
+                myGovernorTitle = "\n🎖️ 나의 작위: [" + pName + " 총독]";
+                break;
+            }
+        }
         
         // [Gemini] 일반 교역품(수량) 및 특산품(종류) 분리 계산 로직
         var currentGeneralCount = 0;
@@ -12996,10 +13006,11 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         var menu = "📍 현재 위치: 무역 지부\n" +
                    "🚢 보유 선박: " + shipLabel + " (Lv." + shipLevel + ")\n" +
                    "📦 일반 교역품: " + currentGeneralCount + " / " + ship.capacity + " 칸\n" +
-                   "📦 특산품: " + currentSpecTypeCount + " / 5 종류\n\n" +
-                   "1. 🌍 세계 시세 확인\n" +
-                   "2. 🚢 출항 준비 (목적지)\n" +
-                   "3. 📦 항해 현황 (도착)\n" +
+                   "📦 특산품: " + currentSpecTypeCount + " / 5 종류\n" +
+                   (myGovernorTitle ? myGovernorTitle + "\n" : "") + "\n" +
+                   "1. 🌍 세계 시세 및 항구 투자\n" +
+                   "2. 🚢 출항 준비 (목적지 설정)\n" +
+                   "3. 📦 항해 현황 (도착 확인)\n" +
                    "4. 🛠️ 선박 관리 (개조)";
         
         replier.reply(formatCommand("⛵ 내리다 무역 지부", user, menu, "번호를 입력하세요."));
@@ -13238,23 +13249,39 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
 /* [서브] 🌍 세계 시세 리포트 */
 function _showTradeMarket(user, replier, roomData, cfg) {
     var market = roomData.features.tradeMarket || cfg.NATIONS;
-    var body = "🌏 각 국가의 실시간 수요입니다.\n(매시 30분 정각 시세 변동)\n━━━━━━━━━━━━━━━\n";
+    var pData = roomData.portData || {};
+    var body = "🌍 세계 교역 시세 및 항구 투자\n━━━━━━━━━━━━━━━\n" +
+               "각 국가의 발전도와 실시간 수요입니다.\n" +
+               "(발전 레벨이 높을수록 선호품 가격 상승!)\n\n";
+
+    var idx = 1;
     for (var n in market) {
-        var fav = market[n].favorite;
-        var hate = market[n].hate;
-        
-        // [지능형 매핑]: 품목명을 통해 해당 품목과 세트인 특산품 이름을 역추적함
-        var favSpec = ""; var hateSpec = "";
-        for (var rel in TRADE_RELATION) {
-            if (TRADE_RELATION[rel].produce === fav) favSpec = TRADE_RELATION[rel].set;
-            if (TRADE_RELATION[rel].produce === hate) hateSpec = TRADE_RELATION[rel].set;
+        var nInfo = market[n];
+        var pInfo = pData[n] || { level: 1, totalInvest: 0, governorUid: "" };
+        var govName = "없음 (공석)";
+        if (pInfo.governorUid && roomData.users[pInfo.governorUid]) {
+            govName = (pInfo.governorUid === user.uid ? "👑" : "") + roomData.users[pInfo.governorUid].name;
         }
 
-        body += "📍 " + n + "\n" +
-                "  🔺 선호: " + fav + (favSpec ? " (+" + favSpec + ")" : "") + "\n" +
-                "  🔹 기피: " + hate + (hateSpec ? " (-" + hateSpec + ")" : "") + "\n\n";
+        // [지능형 매핑]
+        var favSpec = ""; var hateSpec = "";
+        for (var rel in TRADE_RELATION) {
+            if (TRADE_RELATION[rel].produce === nInfo.favorite) favSpec = TRADE_RELATION[rel].set;
+            if (TRADE_RELATION[rel].produce === nInfo.hate) hateSpec = TRADE_RELATION[rel].set;
+        }
+
+        body += "📍 " + idx + ". " + n + " [Lv." + pInfo.level + "]\n" +
+                "  🔺 선호: " + nInfo.favorite + (favSpec ? " (+" + favSpec + ")" : "") + "\n" +
+                "  🔹 기피: " + nInfo.hate + (hateSpec ? " (-" + hateSpec + ")" : "") + "\n" +
+                "  👤 총독: " + govName + " (투자: " + fp(pInfo.totalInvest) + "P)\n\n";
+        idx++;
     }
-    body += "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+    body += "━━━━━━━━━━━━━━━\n" +
+            "💬 [투자 방법]\n" +
+            "• 번호 입력 시 해당 항구에 투자합니다.\n" +
+            "• 100만P당 발전 레벨이 1단계 상승합니다. (최대 Lv.30)\n" +
+            "• 최고 투자자는 해당 항구의 '총독'이 됩니다.\n\n" +
+            "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
     replier.reply(formatCommand("🌍 세계 시세 리포트", user, body, "메뉴 번호를 입력하세요."));
 }
 
@@ -13277,17 +13304,21 @@ function _prepareVoyage(user, replier, cfg, roomData) {
     }
 
     var market = roomData.features.tradeMarket || cfg.NATIONS;
+    var pData = roomData.portData || {};
     var nations = Object.keys(cfg.NATIONS);
     var nStr = ""; 
     
     for (var i = 0; i < nations.length; i++) {
         var nName = nations[i];
         var nInfo = market[nName];
-        // 국가명 옆에 (선호🔺 기피🔹) 정보 결합
-        nStr += (i + 1) + ". " + nName + " (" + nInfo.favorite + "🔺 " + nInfo.hate + "🔹)\n";
+        var govMark = (pData[nName] && pData[nName].governorUid === user.uid) ? " 👑" : "";
+        nStr += (i + 1) + ". " + nName + " (" + nInfo.favorite + "🔺 " + nInfo.hate + "🔹)" + govMark + "\n";
     }
 
-    nStr += "\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+    nStr += "\n━━━━━━━━━━━━━━━\n" +
+            "💡 👑표시는 당신이 총독인 항구입니다.\n" +
+            "도착 시 특산품을 최대 3배 획득합니다!\n\n" +
+            "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
     replier.reply(formatCommand("🚢 목적지 설정", user, "[내 보관함]\n" + cargoList.join("\n") + "\n\n[출항지 선택]\n" + nStr, "국가 번호를 입력하세요."));
 }
 
@@ -13543,11 +13574,17 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
         var multiplier = Number(multiplier || 1.0);
 
+        var pInfo = (roomData.portData && roomData.portData[v.dest]) ? roomData.portData[v.dest] : { level: 1 };
+        var portLevelBonus = (pInfo.level - 1) * (cfg.INVEST.BONUS_PER_LEVEL || 0.01);
+
         if (good === producedByDest) {
             multiplier = 0.5;
             disasterLog += "\n🚫 [과잉 공급]: 자국 생산물 '" + good + "'은 반입 제한(반값)";
         } else {
-            if (good === nationInfo.favorite) multiplier = rateInfo.pref;
+            if (good === nationInfo.favorite) {
+                // 선호 품목일 때만 항구 레벨 보너스 합산 (Lv.10 기준 +9%p)
+                multiplier = rateInfo.pref + portLevelBonus;
+            }
             else if (good === nationInfo.hate) multiplier = rateInfo.hate;
             else multiplier = rateInfo.norm;
         }
@@ -13656,8 +13693,17 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var specialtyFound = "";
     if (Math.random() < cfg.SPECIALTY_CHANCE) {
         var newItem = nationInfo.specialty;
-        user.specialties[newItem] = (user.specialties[newItem] || 0) + 1;
-        specialtyFound = "\n\n✨ [" + v.dest + "]의 특산품 '" + newItem + "'을 발견했습니다!";
+        var pInfo = (roomData.portData && roomData.portData[v.dest]) ? roomData.portData[v.dest] : { governorUid: "" };
+        var amount = 1;
+        if (pInfo.governorUid === targetUid) {
+            var min = cfg.INVEST.GOV_SPEC_MIN || 2;
+            var max = cfg.INVEST.GOV_SPEC_MAX || 3;
+            amount = Math.floor(Math.random() * (max - min + 1)) + min;
+        }
+
+        user.specialties[newItem] = (user.specialties[newItem] || 0) + amount;
+        specialtyFound = "\n\n✨ [" + v.dest + "]의 특산품 '" + newItem + "'을 발견했습니다!" + 
+                         (amount > 1 ? "\n(총독 특권으로 " + amount + "개 획득! 👑)" : "");
     }
     
     // [수정] 중복 선언 및 로직 제거, 정산 플래그 해제 통합

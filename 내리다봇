@@ -1632,6 +1632,45 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
 
     user.point = expectedPoint; 
 
+    // [감시 엔진] 1:1 대화방 카지노 어뷰징 실시간 모니터링 (구분선 제거 및 최적화)
+    if (delta > 0 && ALLOWED_ROOMS.indexOf(roomName) === -1 && user.casinoAuditStartTime > 0) {
+        var auditNow = Date.now();
+        // 1) 2분 이내 수익인지 검사
+        if (auditNow - user.casinoAuditStartTime <= 120000) {
+            var currentTotalAssets = Number(user.point) + Number(user.bank || 0);
+            
+            var lastCheckpoint = (user.casinoAuditAlertHistory && user.casinoAuditAlertHistory.length > 0)
+                ? user.casinoAuditAlertHistory[user.casinoAuditAlertHistory.length - 1]
+                : user.casinoAuditStartAssets;
+
+            // 2) 기준점 대비 2배 초과 달성 판정
+            if (currentTotalAssets >= lastCheckpoint * 2 && currentTotalAssets >= user.casinoAuditStartAssets * 2) {
+                if (!user.casinoAuditAlertHistory) user.casinoAuditAlertHistory = [];
+                user.casinoAuditAlertHistory.push(currentTotalAssets);
+
+                var alertLog = user.casinoAuditAlertHistory.map(function(val, idx) {
+                    return "• 알림" + (idx + 1) + "회: " + fp(val) + " P";
+                }).join("\n");
+
+                var alertTitle = user.casinoAuditAlertHistory.length === 1 ? "카지노 고수익 감지" : "고액 수익 지속 발생";
+                
+                var reportBody = "🚨 [" + alertTitle + "]\n" +
+                                 "━━━━━━━━━━━━━━━\n" +
+                                 "👤 대상자: " + user.name + " (ID: " + user.uid + ")\n" +
+                                 "📍 발생장소: 1:1 대화방 (" + roomName + ")\n" +
+                                 "💰 현재 잔액: " + fp(currentTotalAssets) + " P\n\n" +
+                                 "📈 발생사유: " + (reason || "카지노 게임 결과") + "\n\n" +
+                                 "📊 유저 현황:\n" +
+                                 "• 시작자산: " + fp(user.casinoAuditStartAssets) + " P\n" +
+                                 alertLog + "\n\n" + // 요청하신 대로 중간 구분선을 제거했습니다.
+                                 "⚠️ 관리자는 어뷰징 여부를 확인하십시오.\n" +
+                                 "━━━━━━━━━━━━━━━";
+
+                try { Api.replyRoom("베릭방", reportBody); } catch(e) { Log.error("Audit Alert Fail: " + e); }
+            }
+        }
+    }
+
     if (!GLOBAL_STAGING.active[user.uid]) {
         var lossRate = prePoint > 0 ? (prePoint - user.point) / prePoint : 0;
         if ((isNaN(user.point) || user.point === null || user.point !== expectedPoint) || (!user.skipHealing && lossRate >= 0.8)) {
@@ -5190,6 +5229,17 @@ if (user && user.lastDate !== today) {
 if (user.bank > 0 && (!user.lastBankUpdateTime || user.lastBankUpdateTime === 0)) {
     user.lastBankUpdateTime = Date.now();
 }
+
+// [감시 엔진] 3분 미사용 시 세션 자동 초기화 로직
+var nowTs = Date.now();
+if (user.lastBotUseTime > 0 && (nowTs - user.lastBotUseTime > 180000)) {
+    // 3분(180,000ms) 초과 시 감시 데이터 리셋
+    user.casinoAuditStartTime = 0;
+    user.casinoAuditStartAssets = 0;
+    user.casinoAuditAlertHistory = [];
+}
+// 모든 활동 시 마지막 봇 사용 시간 갱신 (세션 유지)
+user.lastBotUseTime = nowTs;
 
 util_stagingStart(user); 
 

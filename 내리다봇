@@ -7215,6 +7215,55 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
+/**
+     * [추가] 항구 투자 대상 선택 처리
+     * 기능: 시세표에서 번호 선택 시 투자 시간 검증 및 금액 입력 단계로 전환
+     */
+    else if (state.type === 'trade_market') {
+        var nations = Object.keys(tradeCfg.NATIONS);
+        var idx = parseInt(choice) - 1;
+
+        if (isNaN(idx) || idx < 0 || idx >= nations.length) {
+            replier.reply(formatError(user, "번호 오류", "1~5번 사이의 항구를 선택하세요."));
+            return true;
+        }
+
+        // [Gemini 요청 사항] 투자 시간 제한 체크 (07:00 ~ 23:59)
+        var h = new Date().getHours();
+        if (h < 7) {
+            replier.reply(formatError(user, "투자 불가 시간", "항구 투자는 07:00 ~ 23:59 사이에만 가능합니다.\n(현재 시각 기준 항만 폐쇄)"));
+            return true;
+        }
+
+        var destName = nations[idx];
+        var pData = (roomData.portData && roomData.portData[destName]) ? roomData.portData[destName] : { level: 1, totalInvest: 0, governorUid: "" };
+        
+        // 메뉴 대기 해제 후 실제 금액 입력을 위해 bankProcessState로 제어권 이관
+        delete menuWaitState[targetUid];
+        bankProcessState[targetUid] = { 
+            type: 'trade_invest_amount', 
+            time: Date.now(), 
+            extra: { dest: destName } 
+        };
+
+        var govName = "없음 (공석)";
+        if (pData.governorUid && roomData.users[pData.governorUid]) {
+            govName = roomData.users[pData.governorUid].name + " (" + fp(pData.totalInvest) + "P)";
+        }
+
+        var investBody = "📍 대상: " + destName + " (현재 Lv." + pData.level + ")\n" +
+                         "📈 현재 선호품 매입가 보너스: +" + (pData.level - 1) + "%\n" +
+                         "👤 현재 총독: " + govName + "\n\n" +
+                         "투자하실 금액을 입력해주세요.\n" +
+                         "(보유 포인트: " + fp(user.point) + "P)\n" +
+                         "━━━━━━━━━━━━━━━\n" +
+                         "💡 투자금은 국고로 귀속되며 반환되지 않습니다.\n" +
+                         "[취소] 입력 시 중단";
+
+        replier.reply(formatCommand("💰 " + destName + " 항구 투자", user, investBody));
+        return true;
+    }
+
 /* [기능 1-1] 상점 상세 선택 (복권 카테고리 내 번호 선택 처리) */
     else if (state.type === 'shop_detail') {
         delete menuWaitState[targetUid]; // 상세 선택 진입 시 메뉴 대기 해제

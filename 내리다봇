@@ -9157,21 +9157,44 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* 유저 삭제 (사채 전액 보전 및 계약 강제 삭제 적용) */
+    /* [v11.6] 유저 삭제 (UID/닉네임 통합 및 중복 방지 강화) */
     if (msg.indexOf("/유저삭제 ") === 0) {
-        var tn = msg.substring(6).trim();
+        var input = msg.substring(6).trim();
         var roomData = data.rooms[roomName];
-        var found = findUserByName(roomData, tn);
-        if (!found.length) { replier.reply(formatAdmin("오류", "대상 없음")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_delete", null, user, roomName); return true; }
-        
-        var targetId = found[0].id;
-        var targetData = found[0].data;
+        var targetId = null;
+        var targetData = null;
+
+        // [수정]: 1순위 - 입력값이 UID(Key)인지 즉시 확인
+        if (roomData.users[input]) {
+            targetId = input;
+            targetData = roomData.users[input];
+        } else {
+            // 2순위 - 닉네임 검색 (findUserByName은 모든 일치 항목을 배열로 반환)
+            var found = findUserByName(roomData, input);
+            
+            if (found.length === 0) {
+                replier.reply(formatAdmin("🚫 대상 없음", "[" + input + "] 유저를 찾을 수 없습니다."));
+                return true;
+            }
+            
+            // [해결]: 중복 닉네임 발견 시 즉시 삭제를 중단하고 선택 창 호출
+            if (found.length > 1) {
+                handleUserSelection(replier, targetUid, found, "admin_delete", null, user, roomName);
+                return true;
+            }
+            
+            // 단일 유저 발견 시
+            targetId = found[0].id;
+            targetData = found[0].data;
+        }
+
+        // 삭제 프로세스 시작 (targetId, targetData 확정 상태)
+        var tName = targetData.name;
         var refundLog = "";
         var refundCount = 0;
         var totalRefunded = 0;
 
-        // [수정] 출석일수 관계없이 모든 사채 계약 강제 정산 및 삭제
+        // 1. 사채 계약 정산 및 보전
         if (roomData.loanContracts) {
             for (var cid in roomData.loanContracts) {
                 var c = roomData.loanContracts[cid];
@@ -9182,14 +9205,14 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
                         util_updatePoint(lender, roomData, debtAmt, "사채 강제 정산", roomName);
                         totalRefunded += debtAmt;
                         refundCount++;
-                        try { Api.replyRoom(roomName, "🚬 [사채 강제 정산]\n" + targetData.name + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); } catch(e){}
+                        try { Api.replyRoom(roomName, "🚬 [사채 강제 정산]\n" + tName + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); } catch(e){}
                     }
-                    delete roomData.loanContracts[cid]; // 계약서 강제 파기
+                    delete roomData.loanContracts[cid];
                 }
             }
         }
 
-        // [신규] 은행 대출금 국고 회수 (폐쇄형 경제 안정화)
+        // 2. 은행 대출금 국고 회수
         if (targetData.loan && Number(targetData.loan.debt) > 0) {
             var bankDebt = Number(targetData.loan.debt);
             util_updateReserve(roomData, bankDebt, "대출금 국고 회수", roomName);
@@ -9198,24 +9221,30 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid) {
 
         if (refundCount > 0) refundLog += "\n⚠️ 사채 보전 완료: " + refundCount + "건 (" + fp(totalRefunded) + "P)";
 
+        // 3. 시스템 캐시 및 메모리 데이터 파기
         if (typeof uidCache !== 'undefined') {
-            for (var key in uidCache) {
-                if (uidCache[key] === targetId) delete uidCache[key];
-            }
+            for (var key in uidCache) { if (uidCache[key] === targetId) delete uidCache[key]; }
         }
+        if (globalData.nameToIdCache) {
+            delete globalData.nameToIdCache["GLOBAL_" + tName];
+        }
+
+        // 4. 데이터베이스 및 영구 명부 삭제
         delete roomData.users[targetId];
-            try {
-                var regFile = new java.io.File(REGISTRY_PATH);
-                if (regFile.exists()) {
-                    var regData = JSON.parse(FileStream.read(REGISTRY_PATH));
-                    delete regData[roomName + "_" + targetData.name];
-                    FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
-                }
-            } catch (e) { Log.error("Registry Delete Error: " + e); }
-            safeSaveData(data);
-            replier.reply(formatAdmin("유저 삭제 완료", "[" + targetData.name + "]님의 데이터를 영구 삭제했습니다." + refundLog));
+        try {
+            var regFile = new java.io.File(REGISTRY_PATH);
+            if (regFile.exists()) {
+                var regData = JSON.parse(FileStream.read(REGISTRY_PATH));
+                // 명부 키 형식(roomName_userName) 삭제
+                delete regData[roomName + "_" + tName];
+                FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
+            }
+        } catch (e) { Log.error("Registry Delete Error: " + e); }
+
+        safeSaveData(data);
+        replier.reply(formatAdmin("유저 삭제 완료", "[" + tName + "]님의 데이터를 영구 삭제하고 명부에서 파기했습니다." + refundLog));
         return true;
-    }
+        }
 
     if (msg.indexOf("/채굴시간복구 ") === 0) {
         var ps = msg.split(" "), addMin = parseInt(ps.pop()), tn = ps.slice(1).join(" ");

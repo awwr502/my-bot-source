@@ -11478,51 +11478,51 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         return true;
     }
 
-    /* [긴급] 전 수치(출석일수 포함) 강제 복구 엔진 (Hard Restore v6.0) */
+    /* [긴급] 전 서버/전 수치(출석, 랜드마크 포함) 강제 복구 엔진 v7.0 */
     if (msg.startsWith("/전체복원")) {
         var stablePath = BACKUP_DIR + "last_stable_backup.json";
         var stableFile = new java.io.File(stablePath);
 
         if (!stableFile.exists() || stableFile.length() === 0) {
-            replier.reply(formatAdmin("🚫 복구 실패", "안전 백업 파일(last_stable_backup.json)을 찾을 수 없습니다."));
+            replier.reply(formatAdmin("🚫 복구 실패", "안전 백업 파일(last_stable_backup.json)이 존재하지 않습니다."));
             return true;
         }
 
         try {
             var content = FileStream.read(stablePath);
-            if (!content) throw new Error("파일 내용이 비어있음");
-
-            // 1. 메모리 데이터 즉시 교체 (블랙박스 병합 생략)
             var backupObj = JSON.parse(content);
+
+            // 1. 시스템 전체 필드 강제 덮어쓰기 (랜드마크 시장가, 잭팟 등 포함)
+            // globalData를 주소값 자체로 교체하여 메모리 즉시 동기화
             globalData = backupObj;
-            
-            // 2. 헬러(Healer) 간섭 차단 및 포인트 정수화
+            globalData._isInitialized = true;
+
+            // 2. 헬러(Healer)의 역공습 차단을 위한 면제권 전수 부여
             for (var r in globalData.rooms) {
-                var room = globalData.rooms[r];
-                for (var uid in room.users) {
-                    var u = room.users[uid];
-                    u.skipHealing = true; // 복구 직후 보안 엔진이 롤백시키는 것 방지
-                    u.point = Math.floor(Number(u.point || 0));
-                    u.bank = Math.floor(Number(u.bank || 0));
+                var rObj = globalData.rooms[r];
+                for (var uid in rObj.users) {
+                    rObj.users[uid].skipHealing = true; // 복구 데이터 보호
                 }
             }
 
-            // 3. 물리 파일 강제 쓰기 및 세션 확정
-            FileStream.write(FILE_PATH, content);
-            safeSaveData(globalData, true); // true 인자로 즉시 백업본 생성
+            // 3. 물리 파일 즉시 강제 기록 (비동기 대기 없이 즉시 실행)
+            FileStream.write(FILE_PATH, JSON.stringify(globalData));
+            
+            // 4. 식별 캐시 초기화 (UID 꼬임 방지)
+            globalData.nameToIdCache = {};
 
-            var resBody = "✅ 데이터 전체 강제 복원 완료\n" +
+            var resBody = "✅ 시스템 전체 하드 복구 완료\n" +
                           "━━━━━━━━━━━━━━━\n" +
-                          "• 소스: last_stable_backup.json\n" +
-                          "• 범위: 출석일수, 유물, 무역, 자산 전체\n" +
-                          "• 조치: 블랙박스(로그) 병합 제외 (순수 백업본 주입)";
+                          "• 범위: 출석, 랜드마크 지분, 시세, 은행 재원\n" +
+                          "• 조치: 메모리 및 물리 DB 일치화 완료\n" +
+                          "• 주의: 복구된 파일이 '날아가기 전' 것인지 확인요망";
 
-            replier.reply(formatAdmin("🛠️ 시스템 하드 복구 보고", resBody));
-            Log.info("[Hard Restore] 사용자 요청에 의해 블랙박스 연산 없이 데이터를 롤백했습니다.");
+            replier.reply(formatAdmin("🛰️ 서버 통합 복구 보고", resBody));
+            Log.info("[Emergency] 시스템 전체 복구가 관리자에 의해 승인 및 완료되었습니다.");
 
         } catch (e) {
-            Log.error("Restore Logic Crash: " + e);
-            replier.reply(formatAdmin("🚫 복구 중단", "데이터 파싱 중 오류가 발생했습니다.\n사유: " + e.message));
+            Log.error("Full Restore Logic Crash: " + e);
+            replier.reply(formatAdmin("🚫 복구 중단", "데이터 엔진 결함: " + e.message));
         }
         return true;
     }

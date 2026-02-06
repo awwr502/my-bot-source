@@ -14583,9 +14583,9 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
         finalPick = bMap[pick] || pick;
     }
 
-    // 6. 포인트 차감 및 통계 기록
+    // 6. [변경] 포인트 선차감 제거: 기록만 수행하고 정산은 스케줄러(16-2)에서 처리
     user.skipHealing = true; 
-    util_updatePoint(user, mainRoomData, -amt, "카지노 배팅 참여 (" + pick + ")", MAIN_ZONE);
+    // util_updatePoint 차감 로직 삭제됨 (사용자 요청 반영)
     
     user.totalGambleCount = (user.totalGambleCount || 0) + 1;
     user.totalCasinoBet = (user.totalCasinoBet || 0) + amt;
@@ -14633,9 +14633,6 @@ function _handleCasinoBet(msg, user, data, replier, roomName, targetUid) {
 function _startBlackjackGame(user, data, replier, roomName, targetUid, betAmt) {
     var roomData = data.rooms[roomName];
     user.skipHealing = true;
-    
-    // 포인트 선차감 (게이트웨이 준수)
-    util_updatePoint(user, roomData, -betAmt, "블랙잭 배팅 참여", roomName);
 
     // 카드 생성 (1~10, JQK=10, A=11)
     var getCard = function() {
@@ -14794,44 +14791,36 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
                    "📢 결과: " + resultStr;
 
    // [수정] solvency 체크 시 1:1방 이름(roomName) 대신 국고가 실재하는 economyRoom 변수를 참조하도록 변경
-    if (prize > 0 && resultStatus === "WIN") {
-        var economyRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var economyRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
 
-        if (!util_isBankSolvent(economyRoom, prize)) {
-            replier.reply(formatError(user, "은행 지불 불능", "국가 부도 상태로 인해 상금을 지급할 수 없습니다.\n게임이 무효 처리되어 배팅금이 소멸되었습니다."));
-            return; 
+    if (resultStatus === "WIN") {
+        // [후정산] 승리 시: 원금 제외 '수익금'만 추가 지급
+        var netProfit = prize - state.bet; 
+        if (!util_isBankSolvent(economyRoom, netProfit)) {
+            replier.reply(formatError(user, "은행 지불 불능", "국고 부족으로 상금을 지급할 수 없습니다."));
+            return;
         }
         var taxAmount = Math.floor(state.bet * 0.1);
-        var netIncome = prize; // prize는 이미 1.90배가 적용된 금액
-
-        // 2. 세금 국고 환수 집행
+        var res = processRepayment(user, netProfit, targetUid, roomName);
+        util_updatePoint(user, roomData, Number(res.actualGain), "블랙잭 승리 수익", roomName);
         util_updateReserve(roomData, taxAmount, "블랙잭 이용세 징수", roomName);
 
-        // 3. [상환 처리] 세후 금액으로 빚 상환 진행
-        var res = processRepayment(user, netIncome, targetUid, roomName);
-
-        // 4. 최종 실수령액 지급
-        util_updatePoint(user, roomData, Number(res.actualGain), "블랙잭 정산 수익", roomName);
-
-        // 5. UI 메시지 조립 (카지노 이용세 고정 수치 표시)
-        finalMsg += "\n💰 획득: +" + fp(prize) + "P (1.90배 적용)";
-        finalMsg += "\n\n⚖️ 세금(10%): -" + fp(taxAmount) + "P (카지노 이용세)";
+        finalMsg += "\n💰 수익: +" + fp(netProfit) + "P (배당 적용)";
+        finalMsg += "\n⚖️ 세금(10%): -" + fp(taxAmount) + "P";
         if (res.repayMsg) finalMsg += res.repayMsg;
-        finalMsg += "\n💰 최종 수익: +" + fp(res.actualGain) + "P" + bonusTag;
-
+        
         var nowStr = new Date().getHours() + ":" + ("0" + new Date().getMinutes()).slice(-2);
         if (!user.dailyBlackjackWins) user.dailyBlackjackWins = [];
-        user.dailyBlackjackWins.unshift({ round: "BJ", res: "승리", profit: prize, time: nowStr });
-        user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "승리", profit: prize, isWin: true };
+        user.dailyBlackjackWins.unshift({ round: "BJ", res: "승리", profit: netProfit, time: nowStr });
     } 
-    else if (prize > 0 && resultStatus === "PUSH") {
-        // 무승부 시에는 세금 없이 원금만 반환
-        util_updatePoint(user, roomData, prize, "블랙잭 무승부 환급", roomName);
-        finalMsg += "\n💰 환급: +" + fp(prize) + "P (배팅금 반환)";
-        user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "무승부", profit: 0, isWin: false };
+    else if (resultStatus === "LOSE") {
+        // [후정산] 패배 시: 배팅 원금을 여기서 차감
+        util_updatePoint(user, roomData, -state.bet, "블랙잭 패배 차감", roomName);
+        finalMsg += "\n💀 손실: -" + fp(state.bet) + "P (배팅금 차감)";
     }
-    else {
-        user.lastCasinoResult = { type: "blackjack", round: "BJ", res: "패배", profit: -state.bet, isWin: false };
+    else if (resultStatus === "PUSH") {
+        // [후정산] 무승부 시: 선차감이 없었으므로 아무 작업도 하지 않음
+        finalMsg += "\n⚖️ 결과: 배팅금이 보존되었습니다.";
     }
 
     util_casinoRelayReply(replier, user, formatCommand("🏁 블랙잭 결과 Report", user, finalMsg + "\n\n🔁한번더 ❎그만", "내 잔액: " + fp(user.point) + "P"), roomName);

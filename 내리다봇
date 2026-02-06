@@ -6729,20 +6729,23 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
         var nextLevel = Math.min(cfg.MAX_LEVEL, Math.floor(pData.totalInvest / cfg.LEVEL_UP_STEP) + 1);
         pData.level = nextLevel;
 
-        // 5. 총독(Governor) 판정: 해당 항구의 최고 투자자 추적
+        // [수정] 1인 1국가 총독 제한 판정 및 메시지 처리
+        var myGovernedPorts = util_getUserGovernorPorts(targetUid, roomData);
+        var isAlreadyGovernorElsewhere = myGovernedPorts.length > 0 && myGovernedPorts.indexOf(dest) === -1;
+        var govBlockedReason = "";
+
         var isGovChanged = false;
-        var currentMaxInvest = 0;
-        var topUid = pData.governorUid;
+        var currentMaxInvest = (oldGovUid && pData.userInvests[oldGovUid]) ? pData.userInvests[oldGovUid] : 0;
 
-        // 기존 총독의 투자금 확인
-        if (topUid && pData.userInvests[topUid]) {
-            currentMaxInvest = pData.userInvests[topUid];
-        }
-
-        // 현재 유저가 기록을 갱신했는지 확인
         if (pData.userInvests[targetUid] > currentMaxInvest) {
-            pData.governorUid = targetUid;
-            if (oldGovUid !== targetUid) isGovChanged = true;
+            if (isAlreadyGovernorElsewhere) {
+                // 이미 타국 총독이면 투자만 반영하고 임명은 거부
+                isGovChanged = false;
+                govBlockedReason = "\n\n⚠️ [임명 보류]\n이미 '" + myGovernedPorts[0] + "'의 총독직을 수행 중입니다.\n중복 통치는 불가능하여 투자만 반영되었습니다.";
+            } else {
+                pData.governorUid = targetUid;
+                if (oldGovUid !== targetUid) isGovChanged = true;
+            }
         }
 
         // 6. 결과 메시지 구성
@@ -6753,9 +6756,10 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
         if (isGovChanged) {
             var oldGovName = (oldGovUid && roomData.users[oldGovUid]) ? "'" + roomData.users[oldGovUid].name + "'님" : "공석";
             resMsg += "\n\n🎊 [작위 변동]\n" + user.name + "님이 " + oldGovName + "을 밀어내고\n" +
-                      dest + "의 새로운 [총독]으로 임명되었습니다!\n\n" +
-                      "🎁 총독 특권:\n해당 국가 무역 시 특산품 발견량 증가!\n(기존 1개 ➔ 2~3개 획득)";
+                      dest + "의 새로운 [총독]으로 임명되었습니다!";
         }
+        
+        resMsg += govBlockedReason;
 
         replier.reply(formatCommand("🏗️ 항구 투자 완료", user, resMsg, "내 잔액: " + fp(user.point) + "P"));
         

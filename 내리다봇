@@ -9194,24 +9194,42 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
 
    if (msg === "/메모리정화") {
         var cleanCount = 0;
+        
+        // 정화 대상 경로 정의
+        var targetPaths = [data]; // 1. 최상단 data
         for (var r in data.rooms) {
-            var rObj = data.rooms[r];
-            if (!rObj || !rObj.users) continue;
-            for (var id in rObj.users) {
-                var u = rObj.users[id];
-                for (var key in u) {
-                    if (u[key] !== null && typeof u[key] === 'object') {
-                        try {
-                            if (u[key].getClass !== undefined || (u[key].constructor && u[key].constructor.name.indexOf("Replier") !== -1)) {
-                                delete u[key];
-                                cleanCount++;
-                            }
-                        } catch(e) { /* 무시 */ }
-                    }
-                }
+            targetPaths.push(data.rooms[r]); // 2. 각 방의 루트
+            if (data.rooms[r].features) targetPaths.push(data.rooms[r].features); // 3. 기능(features)
+            if (data.rooms[r].features && data.rooms[r].features.states) targetPaths.push(data.rooms[r].features.states); // 4. 상태(states)
+            
+            var users = data.rooms[r].users;
+            for (var id in users) {
+                targetPaths.push(users[id]); // 5. 모든 유저 개별 객체
             }
         }
-        replier.reply(formatAdmin("🧹 메모리 정화 완료", "총 " + cleanCount + "개의 오염 객체를 제거했습니다."));
+
+        // 모든 경로를 순회하며 객체 타입 검사 및 삭제
+        targetPaths.forEach(function(obj) {
+            if (!obj || typeof obj !== 'object') return;
+            for (var key in obj) {
+                try {
+                    var val = obj[key];
+                    if (val !== null && typeof val === 'object') {
+                        // 자바 객체이거나 리플라이어 명칭이 포함된 경우 즉시 제거
+                        if (val.getClass !== undefined || (val.constructor && val.constructor.name && val.constructor.name.indexOf("Replier") !== -1)) {
+                            delete obj[key];
+                            cleanCount++;
+                        }
+                    }
+                } catch(e) { 
+                    // 접근조차 안 되는(에러 나는) 객체는 오염된 것이므로 강제 삭제
+                    delete obj[key]; 
+                    cleanCount++; 
+                }
+            }
+        });
+
+        replier.reply(formatAdmin("🧹 고강도 정화 완료", "총 " + cleanCount + "개의 오염 물질을 제거했습니다.\n이제 /리로드 없이도 정상 저장이 가능합니다."));
         return true;
     };
 

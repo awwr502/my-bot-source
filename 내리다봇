@@ -1841,42 +1841,48 @@ function formatError(user, content, nextStep) {
 }
 
 /**
- * [신설] 실시간 에러 고발 엔진 (Error Push)
- * 기능: 시스템 장애 발생 시 관리자에게 즉시 카톡 리포트 전송
+ * [수정] 실시간 에러 고발 엔진 (Error Push v2.0)
+ * 기능: 명령어 여부와 관계없이 시스템 내부의 모든 논리 에러를 베릭방으로 즉시 보고합니다.
+ * 패치 내역: 일반 채팅 중 발생하는 무역 정산 에러 누락 방지를 위해 isCommand 필터 제거
  */
 function util_reportError(e, room, sender, msg) {
-    var isCommand = msg.startsWith("/") || 
-                    ["줍기", "수락", "거절", "취소", "잡았다요놈", "배팅취소"].indexOf(msg) !== -1 ||
-                    !isNaN(Number(msg));
-
-    if (!isCommand) {
-        Log.error("[Silent Error] " + sender + ": " + e.message);
-        return;
-    }
-
-    // [교정] 에러 메시지 한글 변환 로직
+    // 1. 에러 메시지 원본 추출
     var rawErr = e.message || String(e);
     var koErr = rawErr;
-    if (rawErr.indexOf("is not a function") !== -1) koErr = "실행할 함수를 찾을 수 없음 (로직 누락)";
-    else if (rawErr.indexOf("is not defined") !== -1) koErr = "정의되지 않은 변수 사용 (참조 오류)";
-    else if (rawErr.indexOf("null") !== -1 && rawErr.indexOf("read property") !== -1) koErr = "데이터가 비어있음 (객체 참조 실패)";
-    else if (rawErr.indexOf("JSON") !== -1) koErr = "데이터 파싱 실패 (JSON 규격 위반)";
 
-    var errLog = "🚨 [장애 발생 알림]\n" +
+    // 2. 에러 메시지 한글 변환 로직 (가독성 강화)
+    if (rawErr.indexOf("is not a function") !== -1) {
+        koErr = "실행할 함수를 찾을 수 없음 (로직 누락)";
+    } else if (rawErr.indexOf("is not defined") !== -1) {
+        koErr = "정의되지 않은 변수 사용 (참조 오류)";
+    } else if (rawErr.indexOf("null") !== -1 && rawErr.indexOf("read property") !== -1) {
+        koErr = "데이터가 비어있음 (객체 참조 실패)";
+    } else if (rawErr.indexOf("JSON") !== -1) {
+        koErr = "데이터 파싱 실패 (JSON 규격 위반)";
+    } else if (rawErr.indexOf("Circuit Breaker") !== -1 || rawErr.indexOf("중복") !== -1) {
+        koErr = "보안 엔진에 의한 로직 강제 차단 (복사 방지)";
+    }
+
+    // 3. 리포트 본문 조립
+    var errLog = "🚨 [시스템 장애 알림]\n" +
                  "━━━━━━━━━━━━━━━\n" +
                  "👤 발생 유저: " + sender + "\n" +
                  "📍 발생 장소: " + room + "\n" +
-                 "💬 입력 내용: " + msg + "\n" +
+                 "💬 입력 내용: " + (msg ? msg : "(텍스트 없음)") + "\n" +
                  "🚫 에러 내용: " + koErr + "\n" +
                  "━━━━━━━━━━━━━━━\n" +
-                 "💡 로그 확인 후 조치가 필요합니다.";
-    
+                 "⚠️ [주의] 스테이징 보호로 데이터는 롤백되었으나,\n" +
+                 "원인 해결 전까지 유저가 무한 루프에 빠질 수 있습니다.";
+
+    // 4. 베릭방 전송 및 로그 기록
     try { 
+        // 명령어 필터(!isCommand)를 제거했으므로 이제 모든 에러가 보고됩니다.
         Api.replyRoom("베릭방", errLog); 
     } catch(err) {
         Log.error("Error Report Send Fail: " + err);
     }
-    Log.error("[Error Push] " + sender + ": " + rawErr);
+    
+    Log.error("[Critical Error] " + sender + " (" + room + "): " + rawErr);
 }
 
 /**

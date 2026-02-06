@@ -7246,12 +7246,21 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 수정: 모든 하위 로직에서 참조할 공통 변수 선언 및 리다이렉션 (roomData 정의 추가)
+    // [수정] 모든 하위 로직에서 참조할 공통 변수 선언 및 리다이렉션
     var choice = msg.replace(/[^0-9]/g, "").trim();
     var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var roomData = data.rooms[logicRoom]; 
     var tradeCfg = SYSTEM_CONFIG.TRADE;
     var bankProcessState = roomData.features.states.bankProcess;
+
+    // [추가] 1:1 채팅방에서 무역 및 상점 기능 사용 차단 가드 로직
+    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+        if (state.type.startsWith('trade_') || state.type.startsWith('shop_')) {
+            delete menuWaitState[targetUid];
+            replier.reply("🚫 [기능 제한]\n무역 및 상점 관리 기능은 단체방('내리다')에서만 가능합니다.\n\n✅ 1:1 가능: 카지노, 은행, 내정보");
+            return true;
+        }
+    }
 
     // 처음으로 이동
     if (msg === "처음으로" || msg === "🏠 처음으로") {
@@ -7263,14 +7272,21 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
 
     // 뒤로가기 이동
     if (msg === "뒤로" || msg === "↩️ 뒤로") {
-        if (state.type === 'trade_select_cargo') {
-            var tradeCfg = SYSTEM_CONFIG.TRADE;
-            var roomData = data.rooms[roomName];
-            state.type = 'trade_depart'; // 상태를 이전 단계로 변경
-            state.depth = 2;
+        // [수정] 무역관련 서브메뉴에서 뒤로가기 시 무역 메인으로 복귀하도록 로직 보강
+        if (state.type.startsWith('trade_') && state.type !== 'trade_main') {
+            // 하역 설정(trade_select_cargo) 단계라면 목적지 선택으로 복귀
+            if (state.type === 'trade_select_cargo') {
+                state.type = 'trade_depart';
+                state.depth = 2;
+                state.time = Date.now();
+                _prepareVoyage(user, replier, tradeCfg, roomData);
+                return true;
+            }
+            // 그 외(시세, 개조 등)는 무역 메인 메뉴로 복귀
+            state.type = 'trade_main';
+            state.depth = 1;
             state.time = Date.now();
-            _prepareVoyage(user, replier, tradeCfg, roomData); // 목적지 선택 UI 호출
-            return true;
+            return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
         }
         if (state.type === 'help_cat') return _handleHelpEntry(replier, targetUid, menuWaitState);
         if (state.type === 'guide_detail') return _handleGuideEntry(replier, targetUid, menuWaitState);
@@ -7378,7 +7394,7 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         }
 
         var destName = nations[idx];
-        var pData = (roomData.portData && roomData.portData[destName]) ? roomData.portData[destName] : { level: 1, totalInvest: 0, governorUid: "" };
+        var pData = (roomData.features.portData && roomData.features.portData[destName]) ? roomData.features.portData[destName] : { level: 1, totalInvest: 0, governorUid: "" };
         
         // 메뉴 대기 해제 후 실제 금액 입력을 위해 bankProcessState로 제어권 이관
         delete menuWaitState[targetUid];
@@ -8493,10 +8509,11 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         user.cargoAvg[goodsType] = newAvg; // 새 평단가 기록
         user.cargo[goodsType] = oldQty + qty; // 수량 업데이트 (기존 한 줄 코드의 역할 수행)
 
-        replier.reply(formatCommand("🚢 화물 적재 완료", user, 
-            "[" + goodsType + " 상자] " + qty + "개를 배에 실었습니다.\n" +
-            "📍 현황: " + (currentCargoCount + qty) + " / " + shipCfg.capacity + " 칸 사용 중",
-            "출항 준비: [/무역]"));
+        var loadBody = "[" + goodsType + " 상자] " + qty + "개를 배에 실었습니다.\n" + 
+                       "📍 현황: " + (currentCargoCount + qty) + " / " + shipCfg.capacity + " 칸 사용 중\n\n" +
+                       "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+
+        replier.reply(formatCommand("🚢 화물 적재 완료", user, loadBody, "출항 준비: [/무역]"));
     }
 
     // 0. 스피또 복권 처리 로직
@@ -13528,7 +13545,7 @@ function _prepareVoyage(user, replier, cfg, roomData) {
     }
 
     var market = roomData.features.tradeMarket || cfg.NATIONS;
-    var pData = roomData.portData || {};
+    var pData = roomData.features.portData || {};
     var nations = Object.keys(cfg.NATIONS);
     var nStr = ""; 
     
@@ -13810,7 +13827,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
         var multiplier = Number(multiplier || 1.0);
 
-        var pInfo = (roomData.portData && roomData.portData[v.dest]) ? roomData.portData[v.dest] : { level: 1 };
+        var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { level: 1 };
         var portLevelBonus = (pInfo.level - 1) * (cfg.INVEST.BONUS_PER_LEVEL || 0.01);
 
         if (good === producedByDest) {

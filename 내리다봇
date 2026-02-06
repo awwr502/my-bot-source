@@ -759,87 +759,6 @@ function util_restoreDailyPoolsFromHistory(data, roomName) {
 }
 
 /**
- * [긴급] 무역 데이터 명칭 변경 마이그레이션 (Porto/Napoli Edition)
- * 기능: 투자금, 가방 속 특산품, 그리고 '현재 항해 중인 화물과 목적지'까지 모두 새 명칭으로 치환합니다.
- */
-function util_migrateTradeData(data) {
-    if (!data || !data.rooms) return;
-
-    var nationMap = { 
-        "브리타니아": "포르투", "샹그릴라": "코콜라", "엘도라도": "나폴리", 
-        "노르딕": "베라크루스", "사막의별": "킴벌리" 
-    };
-    var specMap = { 
-        "증기기관부품": "돼지고기", 
-        "고대찻잎": "강철",     // 샹그릴라(공예) 유산 -> 코콜라(공업) 특산품
-        "황금조각상": "도자기",   // 엘도라도(보석) 유산 -> 나폴리(공예) 특산품
-        "만년설삼": "금괴", 
-        "오아시스수정": "다이아몬드" 
-    };
-
-    for (var r in data.rooms) {
-        var room = data.rooms[r];
-        
-        // 1. 항구 투자 데이터 및 작위 명칭 이전
-        if (room.features && room.features.portData) {
-            for (var oldN in nationMap) {
-                if (room.features.portData[oldN]) {
-                    var newN = nationMap[oldN];
-                    room.features.portData[newN] = room.features.portData[oldN];
-                    delete room.features.portData[oldN];
-                }
-            }
-        }
-
-        // 2. 실시간 시세 데이터(tradeMarket) 이전
-        if (room.features && room.features.tradeMarket) {
-            for (var oldM in nationMap) {
-                if (room.features.tradeMarket[oldM]) {
-                    room.features.tradeMarket[nationMap[oldM]] = room.features.tradeMarket[oldM];
-                    delete room.features.tradeMarket[oldM];
-                }
-            }
-        }
-
-        // 3. 유저 데이터 정밀 세탁 (가방 및 진행 중인 항해)
-        if (room.users) {
-            for (var uid in room.users) {
-                var u = room.users[uid];
-                if (u.specialties) {
-                    for (var oldS in specMap) {
-                        if (u.specialties[oldS] !== undefined) {
-                            var qty = Number(u.specialties[oldS]);
-                            u.specialties[specMap[oldS]] = (u.specialties[specMap[oldS]] || 0) + qty;
-                            delete u.specialties[oldS];
-                        }
-                    }
-                }
-                if (u.voyage && u.voyage.active === true) {
-                    if (nationMap[u.voyage.dest]) u.voyage.dest = nationMap[u.voyage.dest];
-                    if (u.voyage.specialtySnapshot) {
-                        for (var oldSnapS in specMap) {
-                            if (u.voyage.specialtySnapshot[oldSnapS] !== undefined) {
-                                u.voyage.specialtySnapshot[specMap[oldSnapS]] = u.voyage.specialtySnapshot[oldSnapS];
-                                delete u.voyage.specialtySnapshot[oldSnapS];
-                            }
-                        }
-                    }
-                    if (u.voyage.marketSnapshot) {
-                        for (var oldMS in nationMap) {
-                            if (u.voyage.marketSnapshot[oldMS]) {
-                                u.voyage.marketSnapshot[nationMap[oldMS]] = u.voyage.marketSnapshot[oldMS];
-                                delete u.voyage.marketSnapshot[oldMS];
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-}
-
-/**
  * [Gemini 정밀 교정] 데이터베이스 로드 함수
  */
 function getDatabase() {
@@ -870,10 +789,7 @@ function getDatabase() {
             initialData = JSON.parse(content);
         }
 
-        var journalFile = new java.io.File(JOURNAL_PATH);
-    if (journalFile.exists() && journalFile.length() > 0) {
         recoverFromJournal(initialData);
-    }
 
     (function util_autoRepairTradeStuck(data) {
             if (!data || !data.rooms) return;
@@ -1164,20 +1080,15 @@ function safeSaveData(data, isForceBackup) {
             try {
                 var content = JSON.stringify(data, function(key, value) {
                     if (value === null || value === undefined) return value;
-                    if (typeof value === 'object') {
-                        // 1. 자바 기반 객체는 무조건 제외 (Replier 포함)
-                        if (typeof value.getClass === 'function' || 
-                            Object.prototype.toString.call(value).indexOf("Java") !== -1) {
-                            return undefined;
-                        }
-                        // 2. 생성자 이름에 Replier가 들어가면 제외
-                        try {
-                            if (value.constructor && value.constructor.name && value.constructor.name.includes("Replier")) {
-                                return undefined;
-                            }
-                        } catch(e) { return undefined; }
+                    try {
+                        // 미리 한번 변환 테스트를 거쳐 안전한지 확인합니다.
+                        JSON.stringify(value);
+                        return value;
+                    } catch (e) {
+                        // 변환 불가능한(오염된) 객체는 즉시 버리고 저장 진행
+                        Log.error("🗑️ 저장 부적합 객체 자동 폐기: " + key);
+                        return undefined;
                     }
-                    return value;
                 });
                 
                 var check = JSON.parse(content);
@@ -9194,85 +9105,62 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
    if (msg === "/메모리정화") {
         var cleanCount = 0;
         
-        // 1. 전역 상태 변수 리스트 (Sector 1 선언 변수들)
-        var globalStates = [
+        // 1. 모든 전역 변수 및 데이터 주머니 통합
+        var targets = [
+            data, globalData, GLOBAL_STAGING, 
             menuWaitState, bankProcessState, selectWaitState, 
             lottoPurchaseState, activeThefts, duelData, 
             miningState, loanRegisterState, loanContractWaitState
         ];
 
-        // 2. 조사 경로 확장 (전역 변수 포함)
-        var targetPaths = [data, globalData];
+        // 2. 방별/유저별 하부 구조까지 모두 타겟 리스트에 삽입
         for (var r in data.rooms) {
             var rObj = data.rooms[r];
-            targetPaths.push(rObj);
+            targets.push(rObj);
             if (rObj.features) {
-                targetPaths.push(rObj.features);
-                if (rObj.features.states) targetPaths.push(rObj.features.states);
+                targets.push(rObj.features);
+                if (rObj.features.states) targets.push(rObj.features.states);
             }
             if (rObj.users) {
                 for (var id in rObj.users) {
-                    targetPaths.push(rObj.users[id]);
-                    // 유저의 직전 작업 기록(lastAction) 내부도 정밀 조사
-                    if (rObj.users[id].lastAction) targetPaths.push(rObj.users[id].lastAction);
+                    var u = rObj.users[id];
+                    targets.push(u);
+                    if (u.lastAction) targets.push(u.lastAction);
+                    if (u.voyage) targets.push(u.voyage);
                 }
             }
         }
 
-        // 3. 전수 조사 및 삭제 실행
-        targetPaths.concat(globalStates).forEach(function(obj) {
+        // 3. [핵심] 실패 테스트 정화 실행
+        targets.forEach(function(obj) {
             if (!obj || typeof obj !== 'object') return;
             for (var key in obj) {
                 try {
-                    var val = obj[key];
-                    if (val !== null && typeof val === 'object') {
-                        // 자바 네이티브 객체나 리플라이어 속성이 보이면 무조건 삭제
-                        if (Object.prototype.toString.call(val) === '[object JavaObject]' || 
-                            val.getClass !== undefined || 
-                            (val.constructor && val.constructor.name && val.constructor.name.indexOf("Replier") !== -1)) {
-                            delete obj[key];
-                            cleanCount++;
-                        }
-                    }
-                } catch(e) {
+                    // 이 필드를 글자로 바꿀 수 있는지 테스트합니다.
+                    // 만약 SessionCacheReplier가 들어있다면 여기서 에러가 발생합니다.
+                    JSON.stringify(obj[key]); 
+                } catch (e) {
+                    // 에러가 났다면 그것이 바로 '범인'입니다. 즉시 삭제합니다.
                     delete obj[key];
                     cleanCount++;
                 }
             }
         });
 
-        // 4. [핵심] '내리다' 방 동작 불능 해결을 위한 캐시 강제 초기화
-        if (globalData) globalData.nameToIdCache = {}; 
+        // 4. 캐시 및 초기화 플래그 리셋 (내리다 방 무반응 해결)
+        if (globalData) {
+            globalData.nameToIdCache = {};
+            globalData._isInitialized = false; 
+        }
         
-        var resMsg = "총 " + cleanCount + "개의 오염 물질을 완전히 제거했습니다.\n\n" +
-                     "✅ 전역 상태 변수 정화 완료\n" +
-                     "✅ 유저 식별 캐시(Cache) 초기화 완료\n" +
-                     "✅ '내리다' 방 로직 락 해제 완료";
+        var resMsg = "총 " + cleanCount + "개의 정체불명 객체를 박멸했습니다.\n\n" +
+                     "✅ JSON 변환 불능 객체 전량 제거\n" +
+                     "✅ 시스템 전역 캐시 초기화 완료\n" +
+                     "✅ '내리다' 방 접속 엔진 복구 완료";
 
-        replier.reply(formatAdmin("🛰️ 시스템 올-킬 정화 완료", resMsg));
+        replier.reply(formatAdmin("☣️ 바이오하자드: 시스템 정화 완료", resMsg));
         return true;
     };
-
-   /* [신규] 데이터 전수조사 (명부 무시하고 DB 전체에서 닉네임 검색) */
-    if (msg.indexOf("/데이터전수조사 ") === 0) {
-        var targetNick = msg.substring(9).trim();
-        var report = ["📂 [" + targetNick + "] 전수 조사 결과"];
-        var foundCount = 0;
-
-        for (var r in data.rooms) {
-            var users = data.rooms[r].users;
-            for (var uid in users) {
-                if (users[uid].name.indexOf(targetNick) !== -1) {
-                    var u = users[uid];
-                    report.push("📍 방: " + r + "\n💰 자산: " + fp(u.point) + "P / " + fp(u.bank) + "P\n🔑 UID: " + uid);
-                    foundCount++;
-                }
-            }
-        }
-        if (foundCount === 0) return replier.reply(formatAdmin("조회 결과", "DB 내에 해당 닉네임과 일치하는 데이터가 전무합니다."));
-        replier.reply(formatAdmin("시스템 전수 스캔", report.join("\n\n")));
-        return true;
-    }
 
     /* [신규] 명부 강제 등록 (특정 닉네임을 특정 UID로 강제 바인딩) */
     if (msg.indexOf("/명부강제등록 ") === 0) {

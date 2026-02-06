@@ -13998,28 +13998,28 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     for (var good in cargoToSell) {
         var count = Number(cargoToSell[good]); if (count <= 0) continue;
         
-        // [수정] 모든 수치를 Number()로 감싸 계산 오류(NaN) 원천 차단
+        // 모든 계산의 기초가 되는 '원가'를 루프 최상단에서 먼저 정의합니다.
         var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good] || 10000);
-        totalCost += (myPurchasePrice * count); 
-
+        var itemCost = Number(myPurchasePrice * count); // 여기서 itemCost를 확실히 정의
+        
         var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
-        var multiplier = Number(multiplier || 1.0);
-
         var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { level: 1 };
-        var portLevelBonus = (pInfo.level - 1) * (cfg.INVEST.BONUS_PER_LEVEL || 0.01);
+        var portLevelBonus = Number((pInfo.level - 1) * (cfg.INVEST.BONUS_PER_LEVEL || 0.01));
+        var multiplier = 1.0;
 
         if (good === producedByDest) {
             multiplier = 0.5;
             disasterLog += "\n🚫 [과잉 공급]: 자국 생산물 '" + good + "'은 반입 제한(반값)";
         } else {
             if (good === nationInfo.favorite) {
-                // 원가 제외 순수익(Margin)을 먼저 계산한 뒤 발전도 보너스를 곱합니다.
-            var baseEarn = Math.floor(myPurchasePrice * rateInfo.pref * count);
-            var baseMargin = baseEarn - itemCost;
-            var bonusAmt = Math.floor(baseMargin * portLevelBonus);
-            
-            pBonusTotal += bonusAmt;
-            multiplier = ((baseEarn + bonusAmt) / itemCost); // 최종 수익률 역산
+                // 상단에서 선언된 itemCost를 안전하게 사용합니다.
+                var baseEarn = Math.floor(myPurchasePrice * rateInfo.pref * count);
+                var baseMargin = baseEarn - itemCost;
+                var bonusAmt = baseMargin > 0 ? Math.floor(baseMargin * portLevelBonus) : 0;
+                
+                pBonusTotal += bonusAmt;
+                // 0 나누기 방지를 위해 itemCost가 0보다 클 때만 배율 계산
+                multiplier = itemCost > 0 ? ((baseEarn + bonusAmt) / itemCost) : rateInfo.pref;
             }
             else if (good === nationInfo.hate) multiplier = rateInfo.hate;
             else multiplier = rateInfo.norm;

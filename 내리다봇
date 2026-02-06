@@ -1646,13 +1646,32 @@ function util_calculateNetWorth(user, roomData) {
 }
 
 /**
- * [신설: 원자적 스테이징 엔진] v1.0
- * 기능: 로직 시작 전 유저 데이터의 '가상 복사본'을 만들어 메모리에 격리합니다.
+ * [수정] 원자적 스테이징 엔진 (오염 방어형 v1.1)
+ * 기능: 복사 전 네이티브 객체(replier 등)를 필터링하여 롤백 지옥을 방지합니다.
  */
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
-    GLOBAL_STAGING.active[user.uid] = true;
-    GLOBAL_STAGING.cache[user.uid] = JSON.parse(JSON.stringify(user));
+    try {
+        // 복사 전 유저 객체에서 위험한 네이티브 속성이 있는지 검사하여 제거
+        for (var key in user) {
+            if (user[key] !== null && typeof user[key] === 'object') {
+                if (key === "replier" || key === "imageDB" || (user[key].constructor && user[key].constructor.name.includes("Replier"))) {
+                    delete user[key];
+                }
+            }
+        }
+        GLOBAL_STAGING.active[user.uid] = true;
+        // 가장 안전한 방식의 복제 수행
+        GLOBAL_STAGING.cache[user.uid] = JSON.parse(JSON.stringify(user, function(k, v) {
+            if (v && typeof v === 'object' && v.constructor && v.constructor.name.includes("Replier")) return undefined;
+            return v;
+        }));
+    } catch (e) {
+        Log.error("🚨 Staging Start Error (Forced Clean): " + e);
+        // 에러 발생 시 강제로 빈 껍데기라도 생성하여 로직 중단 방지
+        GLOBAL_STAGING.active[user.uid] = true;
+        GLOBAL_STAGING.cache[user.uid] = { uid: user.uid, name: user.name, point: user.point };
+    }
 }
 
 /**
@@ -9103,62 +9122,40 @@ function _adminLogLogic(msg, user, data, replier) {
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, sender) {
 
    if (msg === "/메모리정화") {
-        var cleanCount = 0;
+        // 1. 스테이징 시스템 완전 초기화 (가장 유력한 원인)
+        GLOBAL_STAGING = { active: {}, cache: {} };
         
-        // 1. 모든 전역 변수 및 데이터 주머니 통합
-        var targets = [
-            data, globalData, GLOBAL_STAGING, 
-            menuWaitState, bankProcessState, selectWaitState, 
-            lottoPurchaseState, activeThefts, duelData, 
-            miningState, loanRegisterState, loanContractWaitState
-        ];
+        // 2. 전역 상태 변수 강제 초기화 (숫자 명령어 안되는 문제 해결)
+        menuWaitState = {};
+        bankProcessState = {};
+        selectWaitState = {};
+        lottoPurchaseState = {};
+        activeThefts = {};
+        duelData = {};
+        miningState = {};
+        loanRegisterState = {};
+        loanContractWaitState = {};
 
-        // 2. 방별/유저별 하부 구조까지 모두 타겟 리스트에 삽입
+        // 3. 방별 데이터 구조 내의 상태값들도 일괄 삭제
         for (var r in data.rooms) {
-            var rObj = data.rooms[r];
-            targets.push(rObj);
-            if (rObj.features) {
-                targets.push(rObj.features);
-                if (rObj.features.states) targets.push(rObj.features.states);
-            }
-            if (rObj.users) {
-                for (var id in rObj.users) {
-                    var u = rObj.users[id];
-                    targets.push(u);
-                    if (u.lastAction) targets.push(u.lastAction);
-                    if (u.voyage) targets.push(u.voyage);
-                }
+            if (data.rooms[r].features && data.rooms[r].features.states) {
+                var st = data.rooms[r].features.states;
+                for (var key in st) { st[key] = {}; }
             }
         }
 
-        // 3. [핵심] 실패 테스트 정화 실행
-        targets.forEach(function(obj) {
-            if (!obj || typeof obj !== 'object') return;
-            for (var key in obj) {
-                try {
-                    // 이 필드를 글자로 바꿀 수 있는지 테스트합니다.
-                    // 만약 SessionCacheReplier가 들어있다면 여기서 에러가 발생합니다.
-                    JSON.stringify(obj[key]); 
-                } catch (e) {
-                    // 에러가 났다면 그것이 바로 '범인'입니다. 즉시 삭제합니다.
-                    delete obj[key];
-                    cleanCount++;
-                }
-            }
-        });
-
-        // 4. 캐시 및 초기화 플래그 리셋 (내리다 방 무반응 해결)
+        // 4. 캐시 및 DB 플래그 리셋
         if (globalData) {
             globalData.nameToIdCache = {};
-            globalData._isInitialized = false; 
+            globalData._isInitialized = false;
         }
-        
-        var resMsg = "총 " + cleanCount + "개의 정체불명 객체를 박멸했습니다.\n\n" +
-                     "✅ JSON 변환 불능 객체 전량 제거\n" +
-                     "✅ 시스템 전역 캐시 초기화 완료\n" +
-                     "✅ '내리다' 방 접속 엔진 복구 완료";
 
-        replier.reply(formatAdmin("☣️ 바이오하자드: 시스템 정화 완료", resMsg));
+        replier.reply(formatAdmin("☢️ 시스템 긴급 초기화 완료", 
+            "관리자님을 괴롭히던 모든 스테이징 락(Lock)과\n" +
+            "오염된 상태 변수를 강제로 비웠습니다.\n\n" +
+            "✅ 챌린저 스테이징 초기화\n" +
+            "✅ 모든 유저 대기 상태(숫자메뉴) 해제\n" +
+            "✅ 유저 식별 엔진 리부트"));
         return true;
     };
 

@@ -4202,26 +4202,25 @@ function _runSector16Logic(data, ctx) {
                 if (isWin) {
                     var mult = (bet.pick.length > 1) ? 4.0 : 1.9;
                     if (u.title === "도박왕") mult += 0.05; // 칭호 효과 연동
-                    var winAmt = Math.floor(bet.amount * mult);
                     
-                    // 당일 리포트 및 직전 결과 기록
-                    if (!u.dailyLadderWins) u.dailyLadderWins = [];
-                    u.dailyLadderWins.unshift({ round: casino.ladder.round, pick: bet.pick, profit: winAmt, time: nowStr });
-                    u.lastCasinoResult = { type: "ladder", round: casino.ladder.round, res: bet.pick, profit: winAmt, isWin: true };
-
-                    // 중앙은행 지불 능력 체크 (부도 방지)
-                    if (util_isBankSolvent(ctx.targetRoom, winAmt)) {
+                    // 후정산 방식: 승리 시 '수익금'만 추가 지급 (유저는 원금을 이미 보유 중)
+                    var winNetProfit = Math.floor(bet.amount * (mult - 1));
+                    
+                    if (util_isBankSolvent(ctx.targetRoom, winNetProfit)) {
                         u.skipHealing = true; // 고액 당첨 시 롤백 방지
-                        var res = processRepayment(u, winAmt, bet.uid || uid, ctx.targetRoom);
-                        util_updatePoint(u, mainRoomData, Number(res.actualGain), "사다리 적중 (" + result.full + ")", ctx.targetRoom);
+                        var res = processRepayment(u, winNetProfit, bet.uid || uid, ctx.targetRoom);
+                        util_updatePoint(u, mainRoomData, Number(res.actualGain), "사다리 적중 수익 (" + result.full + ")", ctx.targetRoom);
                         u.totalGambleWins = (u.totalGambleWins || 0) + 1;
-                        u.lastCasinoResult = { type: "ladder", round: casino.ladder.round, res: bet.pick, profit: winAmt, isWin: true };
+                        
+                        if (!u.dailyLadderWins) u.dailyLadderWins = [];
+                        u.dailyLadderWins.unshift({ round: casino.ladder.round, pick: bet.pick, profit: winNetProfit, time: nowStr });
+                        u.lastCasinoResult = { type: "ladder", round: casino.ladder.round, res: bet.pick, profit: winNetProfit, isWin: true };
                     }
                 } else {
-                    // 미적중 시 직전 결과만 업데이트 (손실액 기록)
+                    // 후정산 방식: 낙첨 시 배팅 원금을 여기서 비로소 차감
+                    util_updatePoint(u, mainRoomData, -bet.amount, "사다리 미적중 차감", ctx.targetRoom);
                     u.lastCasinoResult = { type: "ladder", round: casino.ladder.round, res: "미적중", profit: -bet.amount, isWin: false };
-            }
-         }
+                }
 
             // 3. 기록 아카이빙 및 초기화
             casino.ladder.history.unshift({ round: casino.ladder.round, res: result.full, time: Date.now() });
@@ -4289,16 +4288,27 @@ function _runSector16Logic(data, ctx) {
                 
                 if (!bu) continue;
 
-                if (bBet.pick === resTag) {
+               if (bBet.pick === resTag) {
                     var bMult = (resTag === "T") ? 8.0 : (resTag === "P" ? 2.0 : 1.95);
-                    var bWinAmt = Math.floor(bBet.amount * bMult);
-                    bu.skipHealing = true;
-                    var bRes = processRepayment(bu, bWinAmt, uid, ctx.targetRoom);
-                    util_updatePoint(bu, mainRoomData, Number(bRes.actualGain), "바카라 적중 (" + resName + ")", ctx.targetRoom);
-                    bu.totalCasinoWin = (bu.totalCasinoWin || 0) + bWinAmt;
-                    bu.lastCasinoResult = { type: "baccarat", round: casino.baccarat.round, res: resName, profit: bWinAmt, isWin: true };
-                    } else {
-                   bu.lastCasinoResult = { type: "baccarat", round: casino.baccarat.round, res: "미적중", profit: -bBet.amount, isWin: false };
+                    if (bu.title === "도박왕") bMult += 0.05;
+                    
+                    // 후정산 방식: 승리 시 '수익금'만 추가 지급
+                    var bNetProfit = Math.floor(bBet.amount * (bMult - 1));
+                    
+                    if (util_isBankSolvent(ctx.targetRoom, bNetProfit)) {
+                        bu.skipHealing = true;
+                        var bRes = processRepayment(bu, bNetProfit, uid, ctx.targetRoom);
+                        util_updatePoint(bu, mainRoomData, Number(bRes.actualGain), "바카라 적중 수익 (" + resName + ")", ctx.targetRoom);
+                        bu.totalCasinoWin = (bu.totalCasinoWin || 0) + bNetProfit;
+                        
+                        if (!bu.dailyBaccaratWins) bu.dailyBaccaratWins = [];
+                        bu.dailyBaccaratWins.unshift({ round: casino.baccarat.round, res: resName, profit: bNetProfit, time: nowStr });
+                        bu.lastCasinoResult = { type: "baccarat", round: casino.baccarat.round, res: resName, profit: bNetProfit, isWin: true };
+                    }
+                } else {
+                    // 후정산 방식: 낙첨 시 배팅 원금을 여기서 차감
+                    util_updatePoint(bu, mainRoomData, -bBet.amount, "바카라 미적중 차감", ctx.targetRoom);
+                    bu.lastCasinoResult = { type: "baccarat", round: casino.baccarat.round, res: "미적중", profit: -bBet.amount, isWin: false };
                 }
             }
 

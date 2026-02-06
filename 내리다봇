@@ -1647,29 +1647,22 @@ function util_calculateNetWorth(user, roomData) {
 }
 
 /**
- * [수정] 원자적 스테이징 엔진 (무적 복제 v1.2)
+ * [수정] 원자적 스테이징 엔진 (보안 강화 v1.3)
  */
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
     GLOBAL_STAGING.active[user.uid] = true;
     try {
-        // 복제 전 극도로 안전한 필터 적용
-        var safeCopy = {};
-        for (var key in user) {
-            var val = user[key];
-            if (val === null || typeof val === 'number' || typeof val === 'string' || typeof val === 'boolean' || Array.isArray(val)) {
-                safeCopy[key] = val;
-            } else if (typeof val === 'object') {
-                try {
-                    // 변환 가능한 객체만 복제
-                    safeCopy[key] = JSON.parse(JSON.stringify(val));
-                } catch(e) { /* 오염된 객체는 복제하지 않고 버림 */ }
-            }
-        }
-        GLOBAL_STAGING.cache[user.uid] = safeCopy;
+        // [핵심 패치]: 복제 전 유저 객체에서 Native 객체 유무를 한 번 더 검사 (크래시 방지)
+        var serialized = JSON.stringify(user, function(k, v) {
+            if (v && typeof v === 'object' && v.getClass) return undefined; // Java 객체 발견 시 제거
+            return v;
+        });
+        GLOBAL_STAGING.cache[user.uid] = JSON.parse(serialized);
     } catch (e) {
-        // 복제 실패 시 최소 정보로 강제 가동 (롤백 지옥 탈출용)
-        GLOBAL_STAGING.cache[user.uid] = { uid: user.uid, name: user.name, point: user.point, bank: user.bank };
+        // 복제 실패 시(오염 발생 시) 최소 정보로 강제 가동하여 롤백 지옥 탈출
+        Log.error("🚨 [Staging Crit] " + user.name + " 객체 오염 감지: " + e);
+        GLOBAL_STAGING.cache[user.uid] = { uid: user.uid, name: user.name, point: user.point, bank: user.bank, tier: user.tier || 0 };
     }
 }
 
@@ -5685,8 +5678,23 @@ if (user.inventory) {
     }
 }
 
+/* [v11.9.5] 데이터 정규화 및 객체 딥-클렌징 후 스테이징 진입 */
 var today = getSimpleDate();
 user.point = Number(user.point || 0);
+
+if (user) {
+    user.skipHealing = true;
+    // [강력 정화]: 세이브 포인트 생성 전, 객체에 붙은 모든 불순물(replier, imageDB 등 Java 객체) 완전 박멸
+    for (var k in user) {
+        if (typeof user[k] === 'function' || (user[k] && typeof user[k] === 'object' && (user[k].getClass || user[k].constructor.name === 'SessionCacheReplier'))) {
+            delete user[k];
+        }
+    }
+    // Staging 모드 활성화 (이제 깨끗해진 유저 객체로 안전한 스냅샷을 생성합니다)
+    util_stagingStart(user); 
+}
+
+var isProcessed = false; // 명령어 처리 확인 변수 초기화
 
 /* 민생지원금 즉시 체크 */
 if (user && user.lastDate !== today) {
@@ -7946,20 +7954,26 @@ if (msg === "/가이드") {
 var physicalRoom = data.rooms[roomName];
 var actualFeatures = physicalRoom ? physicalRoom.features : null;
 
-// 수정: states 하위 객체들의 존재 여부를 확인하여 일반 채팅 시 에러 발생 원천 차단
+// [v11.9.6] 숫자 핸들러 세션 인식 및 방간 동기화 보정
 if (actualFeatures && actualFeatures.states) { 
     var currentStates = actualFeatures.states;
     if (!currentStates.menuWait) currentStates.menuWait = {};
     if (!currentStates.bankProcess) currentStates.bankProcess = {};
     if (!currentStates.selectWait) currentStates.selectWait = {};
 
-    // [핵심 패치] 1:1방의 게임 세션을 메인방 데이터와 동기화하여 '스테이' 시 크래시 방지
-        if (is1to1 && currentStates.menuWait[targetUid]) {
-            var sessionData = currentStates.menuWait[targetUid];
-            if (data.rooms[MAIN_NAME] && data.rooms[MAIN_NAME].features) {
-                data.rooms[MAIN_NAME].features.states.menuWait[targetUid] = sessionData;
-            }
+    // 1:1 대화방 사용자의 경우 메인방('내리다')의 대기 상태를 최우선으로 복제하여 인식률 100% 보장
+    if (is1to1) {
+        var mRoom = data.rooms[MAIN_NAME];
+        if (mRoom && mRoom.features && mRoom.features.states) {
+            var mS = mRoom.features.states;
+            // 메인방에 세션이 있다면 현재방으로 가져오고, 현재방에 있다면 메인방으로 보냄 (양방향 싱크)
+            if (mS.menuWait[targetUid]) currentStates.menuWait[targetUid] = mS.menuWait[targetUid];
+            else if (currentStates.menuWait[targetUid]) mS.menuWait[targetUid] = currentStates.menuWait[targetUid];
+            
+            if (mS.bankProcess[targetUid]) currentStates.bankProcess[targetUid] = mS.bankProcess[targetUid];
+            else if (currentStates.bankProcess[targetUid]) mS.bankProcess[targetUid] = currentStates.bankProcess[targetUid];
         }
+    }
 
     // 1. 관리자 및 조작 핸들러
     if (typeof _handleAdminMain === 'function' && _handleAdminMain(msg, user, data, replier, roomName, targetUid)) return;

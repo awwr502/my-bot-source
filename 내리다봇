@@ -821,6 +821,9 @@ function util_restoreDailyPoolsFromHistory(data, roomName) {
 /**
  * [Gemini 정밀 교정] 데이터베이스 로드 함수
  */
+/**
+ * [v12.5] 데이터베이스 로드 및 유해 객체 전수 소각
+ */
 function getDatabase() {
     if (globalData && globalData._isInitialized === true) {
         return globalData;
@@ -829,88 +832,54 @@ function getDatabase() {
     var isAcquired = false;
     try {
         isAcquired = lock.tryLock(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
-        if (!isAcquired) {
-            Log.warn("⚠️ 데이터베이스가 현재 사용 중입니다. 잠시 후 재시도합니다.");
-            return globalData;
-        }
+        if (!isAcquired) return globalData;
 
         var file = new java.io.File(FILE_PATH);
         var initialData;
         
         if (!file.exists()) {
-            initialData = {
-                rooms: {}, admins: ["관리자"], botActive: true,
-                nickHistory: {}, adminLogs: [], economyDamping: 0.5,
-                lastDailyReset: "", isRecovering: false, nameToIdCache: {}
-            };
+            initialData = { rooms: {}, admins: ["관리자"], botActive: true, nameToIdCache: {} };
         } else {
             var content = FileStream.read(FILE_PATH);
-            if (!content) throw new Error("Empty File");
             initialData = JSON.parse(content);
         }
 
-        recoverFromJournal(initialData);
-
-    (function util_autoRepairTradeStuck(data) {
-            if (!data || !data.rooms) return;
-            for (var r in data.rooms) {
-                var users = data.rooms[r].users;
-                if (!users) continue;
-                for (var id in users) {
-                    var u = users[id];
-                    if (u.voyage && u.voyage.active === true && u.voyage.isProcessing === true) {
-                        u.voyage.isProcessing = false;
-                        u.voyage.isAlerted = false;
-                    }
-                }
-            }
-        })(initialData);
-        
+        // [핵심: 장부 소독 로직]
         if (initialData.rooms) {
-            for (var rName in initialData.rooms) {
-                var targetRoom = initialData.rooms[rName];
-                if (!targetRoom.features) {
-                    targetRoom.features = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
-                } else {
-                    var template = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
-                    if (!targetRoom.features.racing) targetRoom.features.racing = template.racing;
-                    if (!targetRoom.features.lotto) targetRoom.features.lotto = template.lotto;
-                    if (!targetRoom.features.stockMarket) targetRoom.features.stockMarket = template.stockMarket;
-                    if (!targetRoom.features.portData) targetRoom.features.portData = template.portData;
-                    if (!targetRoom.features.states) {
-                        targetRoom.features.states = template.states;
-                    } else {
-                        var s = targetRoom.features.states;
-                        var ts = template.states;
-                        for (var key in ts) {
-                            if (!s[key] || typeof s[key] !== 'object') s[key] = {};
+            for (var r in initialData.rooms) {
+                var users = initialData.rooms[r].users;
+                for (var uid in users) {
+                    var u = users[uid];
+                    // 가장 위험한 필드 3종 집중 검사
+                    var targets = ['voyage', 'lastAction', 'blackjackState'];
+                    targets.forEach(function(key) {
+                        if (u[key]) {
+                            try {
+                                // 문자로 변환해보고 'SessionCacheReplier'가 포함되어 있으면 강제 소각
+                                var str = JSON.stringify(u[key]);
+                                if (str.indexOf("SessionCacheReplier") !== -1 || str.indexOf("com.xfl") !== -1) {
+                                    throw new Error("오염 발견");
+                                }
+                            } catch (e) {
+                                delete u[key]; // 장부에서 즉시 파기
+                                Log.warn("🔥 [Purge] " + u.name + "의 오염된 " + key + " 데이터를 소각했습니다.");
+                            }
                         }
-                    }
+                    });
                 }
-                if (!targetRoom.loanPools) targetRoom.loanPools = {};
-                if (!targetRoom.loanContracts) targetRoom.loanContracts = {};
-                if (targetRoom.bankReserve === undefined) targetRoom.bankReserve = 10000;
             }
         }
-        
-        if (!initialData.nameToIdCache) initialData.nameToIdCache = {};
+
+        recoverFromJournal(initialData);
         initialData._isInitialized = true;
         globalData = initialData;
         return globalData;
 
     } catch (e) {
-        Log.error("DB Load Error: " + e);
-        var stableFile = new java.io.File(BACKUP_DIR + "last_stable_backup.json");
-        if (stableFile.exists()) {
-            globalData = JSON.parse(FileStream.read(BACKUP_DIR + "last_stable_backup.json"));
-            if (globalData) globalData._isInitialized = true;
-            return globalData;
-        }
-        return null;
+        Log.error("DB Load/Purge Error: " + e);
+        return globalData;
     } finally {
-        if (isAcquired) {
-            lock.unlock();
-        }
+        if (isAcquired) lock.unlock();
     }
 }
 

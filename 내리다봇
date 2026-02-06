@@ -1646,31 +1646,29 @@ function util_calculateNetWorth(user, roomData) {
 }
 
 /**
- * [수정] 원자적 스테이징 엔진 (오염 방어형 v1.1)
- * 기능: 복사 전 네이티브 객체(replier 등)를 필터링하여 롤백 지옥을 방지합니다.
+ * [수정] 원자적 스테이징 엔진 (무적 복제 v1.2)
  */
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
+    GLOBAL_STAGING.active[user.uid] = true;
     try {
-        // 복사 전 유저 객체에서 위험한 네이티브 속성이 있는지 검사하여 제거
+        // 복제 전 극도로 안전한 필터 적용
+        var safeCopy = {};
         for (var key in user) {
-            if (user[key] !== null && typeof user[key] === 'object') {
-                if (key === "replier" || key === "imageDB" || (user[key].constructor && user[key].constructor.name.includes("Replier"))) {
-                    delete user[key];
-                }
+            var val = user[key];
+            if (val === null || typeof val === 'number' || typeof val === 'string' || typeof val === 'boolean' || Array.isArray(val)) {
+                safeCopy[key] = val;
+            } else if (typeof val === 'object') {
+                try {
+                    // 변환 가능한 객체만 복제
+                    safeCopy[key] = JSON.parse(JSON.stringify(val));
+                } catch(e) { /* 오염된 객체는 복제하지 않고 버림 */ }
             }
         }
-        GLOBAL_STAGING.active[user.uid] = true;
-        // 가장 안전한 방식의 복제 수행
-        GLOBAL_STAGING.cache[user.uid] = JSON.parse(JSON.stringify(user, function(k, v) {
-            if (v && typeof v === 'object' && v.constructor && v.constructor.name.includes("Replier")) return undefined;
-            return v;
-        }));
+        GLOBAL_STAGING.cache[user.uid] = safeCopy;
     } catch (e) {
-        Log.error("🚨 Staging Start Error (Forced Clean): " + e);
-        // 에러 발생 시 강제로 빈 껍데기라도 생성하여 로직 중단 방지
-        GLOBAL_STAGING.active[user.uid] = true;
-        GLOBAL_STAGING.cache[user.uid] = { uid: user.uid, name: user.name, point: user.point };
+        // 복제 실패 시 최소 정보로 강제 가동 (롤백 지옥 탈출용)
+        GLOBAL_STAGING.cache[user.uid] = { uid: user.uid, name: user.name, point: user.point, bank: user.bank };
     }
 }
 
@@ -5097,6 +5095,21 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                             }
                         }
 
+                        // 추가: 유저가 식별된 직후, 객체에 붙은 모든 불순물(Replier 등)을 강제 제거
+                if (targetUid && data.rooms[roomName].users[targetUid]) {
+                    var u = data.rooms[roomName].users[targetUid];
+                    for (var key in u) {
+                        if (u[key] !== null && typeof u[key] === 'object') {
+                            try {
+                                // JSON으로 변환해보고 에러나면 즉시 삭제 (가장 확실한 판별법)
+                                JSON.stringify(u[key]);
+                            } catch (e) {
+                                delete u[key]; // 오염된 필드(lastAction 등) 즉시 삭제
+                            }
+                        }
+                    }
+                }
+
                         // [중계 시스템] 유저 입력 실시간 탈취
                         // 유저가 카지노 감시 모드일 때, 해당 유저가 치는 모든 채팅을 중계방에 전송
                         if (user && user.casinoAuditStartTime > 0 && roomName !== CASINO_RELAY_ROOM) {
@@ -5677,6 +5690,16 @@ user.point = Number(user.point || 0);
 /* 민생지원금 즉시 체크 */
 if (user && user.lastDate !== today) {
     checkEconomicStimulus(user, roomName, false);
+}
+
+if (user) {
+    user.skipHealing = true;
+    // 유저 객체 최상단에 숨은 네이티브 속성(replier, imageDB 등) 제거
+    for (var k in user) {
+        if (typeof user[k] === 'function' || (user[k] && typeof user[k] === 'object' && user[k].getClass)) {
+            delete user[k];
+        }
+    }
 }
 
 /* [신규] 기존 예금자 이자 엔진 강제 활성화 */

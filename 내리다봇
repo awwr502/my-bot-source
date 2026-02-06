@@ -13407,46 +13407,56 @@ function _showGovernorOffice(user, replier, roomData, myPorts) {
 function _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid) {
     var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var roomData = data.rooms[economyRoomName];
-    var mState = data.rooms[roomName].features.states.menuWait;
-    var state = mState[targetUid];
-    var myPorts = state.myPorts;
     
-    // 추가: '뒤로' 입력 시 무역 메인 메뉴로 리다이렉트
+    // [수정] 1:1 대화방과 메인방 세션 동시 참조 및 '뒤로' 기능 완벽 복구
+    var localMState = data.rooms[roomName].features.states.menuWait;
+    var mainMState = data.rooms["내리다"].features.states.menuWait;
+    var state = localMState[targetUid] || mainMState[targetUid];
+    
+    if (!state) return false;
+    var myPorts = state.myPorts || [];
+
+    // [수정] 뒤로가기 시 양쪽 방의 세션을 모두 삭제하여 먹통 현상 방지
     if (msg === "뒤로" || msg === "↩️ 뒤로") {
-        delete mState[targetUid];
+        delete localMState[targetUid];
+        delete mainMState[targetUid];
         return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
     }
 
     var totalAvailable = 0;
-    myPorts.forEach(function(p) { totalAvailable += Number(roomData.portData[p].collectedTariff || 0); });
+    myPorts.forEach(function(p) { totalAvailable += Number(roomData.features.portData[p].collectedTariff || 0); });
 
     var withdrawAmt = 0;
     if (msg === "전부") {
         withdrawAmt = totalAvailable;
     } else {
-        // 수정: 입력값을 숫자로 파싱하여 부분 수령 금액으로 처리
+        // [수정] 숫자가 아닌 문자를 제거하고 순수 금액만 파싱 (부분 수령 로직)
         withdrawAmt = parseInt(msg.replace(/[^0-9]/g, ""));
     }
 
-    if (isNaN(withdrawAmt) || withdrawAmt <= 0) return; // 숫자가 아니면 무시
+    if (isNaN(withdrawAmt) || withdrawAmt <= 0) return; 
 
     if (withdrawAmt > totalAvailable) {
-        return replier.reply(formatError(user, "수령 불가", "정산 가능한 최대 금액(" + fp(totalAvailable) + "P)을 초과했습니다."));
+        replier.reply(formatError(user, "수령 불가", "정산 가능한 최대 금액(" + fp(totalAvailable) + "P)을 초과했습니다."));
+        return true;
     }
 
-    // 실제 데이터 차감 로직 (보유한 항구 주머니에서 순차적 차감)
-    var remainingToWithdraw = withdrawAmt;
+    // [수정] 각 항구 주머니에서 입력한 금액만큼 순차적 차감 (데이터 정합성 유지)
+    var remaining = withdrawAmt;
     myPorts.forEach(function(p) {
-        if (remainingToWithdraw <= 0) return;
-        var portPool = Number(roomData.portData[p].collectedTariff || 0);
-        var take = Math.min(remainingToWithdraw, portPool);
-        roomData.portData[p].collectedTariff = portPool - take;
-        remainingToWithdraw -= take;
+        if (remaining <= 0) return;
+        var pool = Number(roomData.features.portData[p].collectedTariff || 0);
+        var take = Math.min(remaining, pool);
+        roomData.features.portData[p].collectedTariff = pool - take;
+        remaining -= take;
     });
 
     user.skipHealing = true;
     util_updatePoint(user, roomData, withdrawAmt, "총독 자치령 관세 수령", economyRoomName);
-    delete mState[targetUid];
+    
+    // 작업 완료 후 세션 삭제
+    delete localMState[targetUid];
+    delete mainMState[targetUid];
     
     replier.reply(formatCommand("✅ 관세 정산 완료", user, 
         "자치령의 관세를 국고로부터 정산받았습니다.\n\n" +
@@ -13454,6 +13464,7 @@ function _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid
         "🏛️ 남은 세입: " + fp(totalAvailable - withdrawAmt) + "P", 
         "내 잔액: " + fp(user.point) + "P"));
     safeSaveData(data, true);
+    return true;
 }
 
 /**

@@ -1320,6 +1320,7 @@ var CMD_LIST = {
         { cmd: "/데이터이전", desc: "[구닉] > [신닉] 자산 이전", func: "_adminUserManageLogic" },
         { cmd: "/닉네임기록", desc: "[닉네임] 변경 이력 조회", func: "_adminUserManageLogic" },
         { cmd: "/메모리정화", desc: "메모리 내 오염된 네이티브 객체 강제 제거", func: "_adminUserManageLogic" },
+        { cmd: "/전체데이터세척", desc: "전 서버 유저 객체 일괄 재건축 및 오염 제거", func: "_adminUserManageLogic" },
         { cmd: "/출석초기화", desc: "[닉네임] 오늘 기록 삭제", func: "_adminUserManageLogic" },
         { cmd: "/채굴시간복구", desc: "[닉네임] [분] 개별 복구", func: "_adminUserManageLogic" },
         { cmd: "/전체채굴복구", desc: "00시 누락분 + 오늘 채굴분 자동 합산 복구", func: "_adminUserManageLogic" },
@@ -9144,7 +9145,69 @@ function _adminLogLogic(msg, user, data, replier) {
  */
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, sender) {
 
-   if (msg === "/메모리정화") {
+         if (msg === "/전체데이터세척") {
+        var roomCount = 0;
+        var userCount = 0;
+
+        // 1. 전역 상태 및 스테이징 즉시 박멸 (에러 유발지점)
+        GLOBAL_STAGING = { active: {}, cache: {} };
+        menuWaitState = {}; bankProcessState = {}; selectWaitState = {};
+        lottoPurchaseState = {}; activeThefts = {}; duelData = {};
+        miningState = {}; loanRegisterState = {}; loanContractWaitState = {};
+
+        // 2. 전 서버 루프 시작
+        for (var rName in data.rooms) {
+            var roomObj = data.rooms[rName];
+            if (!roomObj || !roomObj.users) continue;
+            roomCount++;
+
+            // 방 내부의 대기 상태값 초기화
+            if (roomObj.features && roomObj.features.states) {
+                for (var sKey in roomObj.features.states) { roomObj.features.states[sKey] = {}; }
+            }
+
+            for (var uid in roomObj.users) {
+                var oldUser = roomObj.users[uid];
+                var newUser = { uid: uid, name: oldUser.name, lastDate: oldUser.lastDate || "" };
+
+                // [핵심] USER_SCHEMA에 정의된 순수 데이터만 새 객체로 복사
+                USER_SCHEMA.forEach(function(schema) {
+                    if (oldUser[schema.key] !== undefined) {
+                        // 객체나 배열은 참조를 끊기 위해 JSON 변환 (에러 시 기본값)
+                        try {
+                            var val = oldUser[schema.key];
+                            if (typeof val === 'object' && val !== null) {
+                                newUser[schema.key] = JSON.parse(JSON.stringify(val));
+                            } else {
+                                newUser[schema.key] = val;
+                            }
+                        } catch(e) { newUser[schema.key] = schema.default; }
+                    } else {
+                        newUser[schema.key] = schema.default;
+                    }
+                });
+
+                // 오염된 구 객체를 버리고 새 객체로 교체
+                roomObj.users[uid] = newUser;
+                userCount++;
+            }
+        }
+
+        // 3. 즉시 물리 저장 및 메모리 동기화
+        safeSaveData(data, true);
+        if (typeof globalData !== 'undefined') globalData = data;
+
+        var resMsg = "전 서버 데이터 정화 사업이 완료되었습니다.\n\n" +
+                     "🏰 대상 구역: " + roomCount + "개 방\n" +
+                     "👥 정화 유저: " + userCount + "명 전체\n" +
+                     "🛡️ 조치: 객체 재건축 및 스테이징 락 해제\n\n" +
+                     "✅ 이제 모든 유저가 정상 작동합니다.";
+
+        replier.reply(formatAdmin("🛰️ 서버 통합 데이터 세척 보고", resMsg));
+        return true;
+    }
+
+        if (msg === "/메모리정화") {
         // 1. 스테이징 시스템 완전 초기화 (가장 유력한 원인)
         GLOBAL_STAGING = { active: {}, cache: {} };
         

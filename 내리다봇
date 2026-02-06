@@ -1614,6 +1614,23 @@ function util_stagingRollback(user, roomName) {
  */
 function util_updatePoint(user, roomData, delta, reason, roomName) {
     if (!user || isNaN(delta) || delta === 0) return;
+
+    // [감시] 동일 사유로 연속 지급(delta > 0)되는 경우 체크
+    if (delta > 0 && user.lastAction && user.lastAction.cmd === reason) {
+        var timeGap = Date.now() - user.lastAction.time;
+        
+        // 무역 정산은 최소 1시간 이상 걸리는 작업이므로 10초(10000ms) 차단 적용
+        if (reason.indexOf("무역 정산") !== -1 && timeGap < 10000) {
+            Log.error("🚨 [무역 복사 차단] " + user.name + " (" + timeGap + "ms)");
+            throw new Error("무역 정산 중복 실행 방지 작동 (5초 가드)");
+        }
+        
+        // 그 외 일반 활동(스피또, 박스 등)은 정상적인 연속 호출을 고려해 1초(1000ms)만 방어
+        else if (timeGap < 1000) {
+            Log.error("🚨 [연타 과부하 차단] " + user.name + " : " + reason);
+            throw new Error("시스템 과부하 방지 (연타 차단)");
+        }
+    }
     
     // [v10.0] 스테이징 활성화 여부에 따른 동적 참조
     var targetUser = GLOBAL_STAGING.active[user.uid] ? user : user;

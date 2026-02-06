@@ -7258,7 +7258,7 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     // 처리 가능 타입에 무역(trade) 관련 상태들을 일괄 추가
     var types = [
         'shop_category', 'shop_detail', 'help', 'help_cat', 'help_item', 
-        'guide_menu', 'guide_detail', // <-- 가이드 관련 상태 추가
+        'guide_menu', 'guide_detail', 
         'trade_main', 'trade_market', 'trade_depart', 'trade_status', 'trade_ship',
         'trade_select_cargo', 'casino_main', 'casino_ladder', 'casino_baccarat',
         'casino_ladder_sub', 'casino_baccarat_sub' 
@@ -7267,25 +7267,16 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
 
     var NAV_BAR = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
+   // 1. 공통 가드 (시간초과/취소)
     if (Date.now() - state.time > 30000 || msg === "취소" || msg === "❎취소") {
         delete menuWaitState[targetUid];
-        if (msg === "취소" || msg === "❎취소") {
-            replier.reply(formatCommand("🚫 작업 취소", user, "도움말 및 메뉴 이용을 종료했습니다."));
-        } else {
-            replier.reply(formatError(user, "선택 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
-        }
+        var cancelMsg = state.type.startsWith('casino') ? "카지노에서 퇴거했습니다." : "메뉴 이용을 종료했습니다.";
+        replier.reply(formatCommand("🚫 작업 취소", user, cancelMsg));
         if (msg.startsWith("/")) return false;
         return true;
     }
 
-    // [수정] 모든 하위 로직에서 참조할 공통 변수 선언 및 리다이렉션
-    var choice = msg.replace(/[^0-9]/g, "").trim();
-    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-    var roomData = data.rooms[logicRoom]; 
-    var tradeCfg = SYSTEM_CONFIG.TRADE;
-    var bankProcessState = roomData.features.states.bankProcess;
-
-    // [추가] 1:1 채팅방에서 무역 및 상점 기능 사용 차단 가드 로직
+    // 2. [추가] 1:1 채팅방 무역 및 상점 기능 사용 차단 (네비게이션 전 선행 가드)
     if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
         if (state.type.startsWith('trade_') || state.type.startsWith('shop_')) {
             delete menuWaitState[targetUid];
@@ -7294,40 +7285,48 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         }
     }
 
-    // 처음으로 이동
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+
+    // 3. 통합 네비게이션: 처음으로 이동
     if (msg === "처음으로" || msg === "🏠 처음으로") {
         if (state.type.startsWith('help')) return _handleHelpEntry(replier, targetUid, menuWaitState);
         if (state.type.startsWith('guide')) return _handleGuideEntry(replier, targetUid, menuWaitState);
         if (state.type.startsWith('shop')) { delete menuWaitState[targetUid]; return _gameShopLogic("/상점", user, data, replier, roomName, targetUid); }
         if (state.type.startsWith('trade')) { delete menuWaitState[targetUid]; return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid); }
+        if (state.type.startsWith('casino')) { delete menuWaitState[targetUid]; return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid); }
     }
 
-    // 뒤로가기 이동
+    // 4. 통합 네비게이션: 뒤로가기 이동
     if (msg === "뒤로" || msg === "↩️ 뒤로") {
-        // [수정] 무역관련 서브메뉴에서 뒤로가기 시 무역 메인으로 복귀하도록 로직 보강
+        // A. 무역 서브메뉴 -> 무역 메인
         if (state.type.startsWith('trade_') && state.type !== 'trade_main') {
-            // 하역 설정(trade_select_cargo) 단계라면 목적지 선택으로 복귀
             if (state.type === 'trade_select_cargo') {
-                state.type = 'trade_depart';
-                state.depth = 2;
-                state.time = Date.now();
-                _prepareVoyage(user, replier, tradeCfg, roomData);
+                state.type = 'trade_depart'; state.depth = 2; state.time = Date.now();
+                _prepareVoyage(user, replier, SYSTEM_CONFIG.TRADE, data.rooms[logicRoom]);
                 return true;
             }
-            // 그 외(시세, 개조 등)는 무역 메인 메뉴로 복귀
-            state.type = 'trade_main';
-            state.depth = 1;
-            state.time = Date.now();
             return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
         }
+        // B. 카지노 서브메뉴 -> 카지노 메인
+        if (state.type.startsWith('casino_') && state.type !== 'casino_main') {
+            return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid);
+        }
+        // C. 상점 상세 -> 상점 카테고리
+        if (state.type === 'shop_detail') {
+            return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
+        }
+        // D. 조회형 메뉴 (도움말/가이드) 계층 이동
         if (state.type === 'help_cat') return _handleHelpEntry(replier, targetUid, menuWaitState);
         if (state.type === 'guide_detail') return _handleGuideEntry(replier, targetUid, menuWaitState);
         if (state.type === 'help_item') {
-            var prevCat = state.extra.cat;
-            return _handleHelpCategory(replier, user, prevCat, targetUid, menuWaitState, NAV_BAR);
+            return _handleHelpCategory(replier, user, state.extra.cat, targetUid, menuWaitState, NAV_BAR);
         }
-        if (state.type === 'help') { delete menuWaitState[targetUid]; replier.reply("📖 이을 종료했습니다."); return true; }
-        // (상점/무역 뒤로가기는 기존 로직 유지)
+        if (state.type === 'help') { delete menuWaitState[targetUid]; replier.reply("📖 이용을 종료했습니다."); return true; }
+
+        // E. 그 외 최상위 메뉴에서 뒤로는 종료 처리
+        delete menuWaitState[targetUid];
+        replier.reply(formatCommand("🚪 메뉴 종료", user, "이전 화면이 없어 퇴거합니다."));
+        return true;
     }
 
     // 2. [명령어 통로]
@@ -7762,16 +7761,17 @@ if (msg === "/가이드") {
         return (mw[targetUid] || bp[targetUid] || sw[targetUid]);
       };
 
-// 1:1 채팅방 가드 로직 강화 (현재 방과 메인 방 세션 동시 체크)
-    var inState = false;
-    if (checkSession(localSt) || checkSession(mainSt) || (user && user.blackjackState)) {
-        inState = true;
-    }
+// [격리 가드] "내리다" 방은 모든 기능 통과, 1:1 방은 지정된 3종 명령어와 핸들러만 허용
+    var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
+    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
 
-    // 1:1 대화방(!isGroupRoom)일 때 허용된 명령어와 게임/은행 세션만 통과 (무역 차단)
+    // 현재 세션 상태 통합 판정 (무역 관련 voyage 조건 제거하여 1:1 방 간섭 차단)
+    var inState = checkSession(localSt) || checkSession(mainSt) || (user && user.blackjackState);
+    
+    // 1:1 대화방(!isGroupRoom)이면서 허용된 명령어나 세션 중이 아니면 즉시 차단
     if (!isGroupRoom && !isAllowedCmd && !inState) return;
 
-    // 무역 도착 정산 처리 (단체방에서만 작동하도록 제한)
+    // 무역 도착 정산: 단체방("내리다")에서만 트리거되도록 수정하여 1:1 방 무역 정산 오작동 방지
     if (isGroupRoom && user && user.voyage && user.voyage.active === true) {
         var v = user.voyage;
         if (Date.now() >= (v.arrival || 0) && v.isProcessing !== true) {

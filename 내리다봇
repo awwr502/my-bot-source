@@ -1162,16 +1162,22 @@ function safeSaveData(data, isForceBackup) {
         run: function() {
             lock.lock(); 
             try {
-                var content = JSON.stringify(data, function(key, value) {
-                    if (value !== null && typeof value === 'object') {
-                        if (value.constructor && (value.constructor.name.indexOf("Replier") !== -1 || value.constructor.name === "SessionCacheReplier")) {
-                            return undefined; // 시스템 객체는 저장하지 않고 통과
-                        }
-                        if (typeof value.getClass === 'function') {
-                            return undefined; // 자바 네이티브 객체 제외
+                vvar content = JSON.stringify(data, function(key, value) {
+                    if (value === null) return value;
+                    if (typeof value === 'object') {
+                        // 1. 자바 클래스 기반 객체인지 체크 (메신저봇 네이티브 객체 포함)
+                        try {
+                            if (value.getClass !== undefined || 
+                                (value.constructor && value.constructor.name && (
+                                    value.constructor.name.indexOf("Replier") !== -1 || 
+                                    value.constructor.name.indexOf("Session") !== -1
+                                ))) {
+                                return undefined; // 발견 즉시 제거
+                            }
+                        } catch(e) {
+                            return undefined; // 접근 시 에러나는 객체도 오염군으로 판단하여 제거
                         }
                     }
-                    if (key === "Executor" || key === "SaveExecutor") return undefined;
                     return value;
                 });
                 
@@ -1403,6 +1409,7 @@ var CMD_LIST = {
         { cmd: "/유저데이터", desc: "상세 JSON 데이터 확인", func: "_adminUserManageLogic" },
         { cmd: "/데이터이전", desc: "[구닉] > [신닉] 자산 이전", func: "_adminUserManageLogic" },
         { cmd: "/닉네임기록", desc: "[닉네임] 변경 이력 조회", func: "_adminUserManageLogic" },
+        { cmd: "/메모리정화", desc: "메모리 내 오염된 네이티브 객체 강제 제거", func: "_adminUserManageLogic" },
         { cmd: "/출석초기화", desc: "[닉네임] 오늘 기록 삭제", func: "_adminUserManageLogic" },
         { cmd: "/채굴시간복구", desc: "[닉네임] [분] 개별 복구", func: "_adminUserManageLogic" },
         { cmd: "/전체채굴복구", desc: "00시 누락분 + 오늘 채굴분 자동 합산 복구", func: "_adminUserManageLogic" },
@@ -9184,6 +9191,30 @@ function _adminLogLogic(msg, user, data, replier) {
  * 수정 사항: [Gemini 요청 사항] 오류 지급 칭호 박탈을 위한 /칭호회수 명령어 추가
  */
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, sender) {
+
+   if (msg === "/메모리정화") {
+        var cleanCount = 0;
+        for (var r in data.rooms) {
+            var rObj = data.rooms[r];
+            if (!rObj.users) continue;
+            for (var id in rObj.users) {
+                var u = rObj.users[id];
+                // 유저 객체 내부에 숨어있는 네이티브 객체 전수 조사
+                for (var key in u) {
+                    if (u[key] !== null && typeof u[key] === 'object') {
+                        try {
+                            if (u[key].getClass !== undefined || (u[key].constructor && u[key].constructor.name.indexOf("Replier") !== -1)) {
+                                delete u[key];
+                                cleanCount++;
+                            }
+                        } catch(e) { delete u[key]; cleanCount++; }
+                    }
+                }
+            }
+        }
+        replier.reply(formatAdmin("🧹 메모리 정화 완료", "총 " + cleanCount + "개의 오염 객체를 메모리에서 제거했습니다.\n이제 정상적으로 저장됩니다."));
+        return true;
+    }
 
    /* [신규] 데이터 전수조사 (명부 무시하고 DB 전체에서 닉네임 검색) */
     if (msg.indexOf("/데이터전수조사 ") === 0) {

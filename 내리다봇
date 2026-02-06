@@ -9195,41 +9195,62 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
    if (msg === "/메모리정화") {
         var cleanCount = 0;
         
-        // 정화 대상 경로 정의
-        var targetPaths = [data]; // 1. 최상단 data
+        // 1. 전역 상태 변수 리스트 (Sector 1 선언 변수들)
+        var globalStates = [
+            menuWaitState, bankProcessState, selectWaitState, 
+            lottoPurchaseState, activeThefts, duelData, 
+            miningState, loanRegisterState, loanContractWaitState
+        ];
+
+        // 2. 조사 경로 확장 (전역 변수 포함)
+        var targetPaths = [data, globalData];
         for (var r in data.rooms) {
-            targetPaths.push(data.rooms[r]); // 2. 각 방의 루트
-            if (data.rooms[r].features) targetPaths.push(data.rooms[r].features); // 3. 기능(features)
-            if (data.rooms[r].features && data.rooms[r].features.states) targetPaths.push(data.rooms[r].features.states); // 4. 상태(states)
-            
-            var users = data.rooms[r].users;
-            for (var id in users) {
-                targetPaths.push(users[id]); // 5. 모든 유저 개별 객체
+            var rObj = data.rooms[r];
+            targetPaths.push(rObj);
+            if (rObj.features) {
+                targetPaths.push(rObj.features);
+                if (rObj.features.states) targetPaths.push(rObj.features.states);
+            }
+            if (rObj.users) {
+                for (var id in rObj.users) {
+                    targetPaths.push(rObj.users[id]);
+                    // 유저의 직전 작업 기록(lastAction) 내부도 정밀 조사
+                    if (rObj.users[id].lastAction) targetPaths.push(rObj.users[id].lastAction);
+                }
             }
         }
 
-        // 모든 경로를 순회하며 객체 타입 검사 및 삭제
-        targetPaths.forEach(function(obj) {
+        // 3. 전수 조사 및 삭제 실행
+        targetPaths.concat(globalStates).forEach(function(obj) {
             if (!obj || typeof obj !== 'object') return;
             for (var key in obj) {
                 try {
                     var val = obj[key];
                     if (val !== null && typeof val === 'object') {
-                        // 자바 객체이거나 리플라이어 명칭이 포함된 경우 즉시 제거
-                        if (val.getClass !== undefined || (val.constructor && val.constructor.name && val.constructor.name.indexOf("Replier") !== -1)) {
+                        // 자바 네이티브 객체나 리플라이어 속성이 보이면 무조건 삭제
+                        if (Object.prototype.toString.call(val) === '[object JavaObject]' || 
+                            val.getClass !== undefined || 
+                            (val.constructor && val.constructor.name && val.constructor.name.indexOf("Replier") !== -1)) {
                             delete obj[key];
                             cleanCount++;
                         }
                     }
-                } catch(e) { 
-                    // 접근조차 안 되는(에러 나는) 객체는 오염된 것이므로 강제 삭제
-                    delete obj[key]; 
-                    cleanCount++; 
+                } catch(e) {
+                    delete obj[key];
+                    cleanCount++;
                 }
             }
         });
 
-        replier.reply(formatAdmin("🧹 고강도 정화 완료", "총 " + cleanCount + "개의 오염 물질을 제거했습니다.\n이제 /리로드 없이도 정상 저장이 가능합니다."));
+        // 4. [핵심] '내리다' 방 동작 불능 해결을 위한 캐시 강제 초기화
+        if (globalData) globalData.nameToIdCache = {}; 
+        
+        var resMsg = "총 " + cleanCount + "개의 오염 물질을 완전히 제거했습니다.\n\n" +
+                     "✅ 전역 상태 변수 정화 완료\n" +
+                     "✅ 유저 식별 캐시(Cache) 초기화 완료\n" +
+                     "✅ '내리다' 방 로직 락 해제 완료";
+
+        replier.reply(formatAdmin("🛰️ 시스템 올-킬 정화 완료", resMsg));
         return true;
     };
 

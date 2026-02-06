@@ -1579,7 +1579,17 @@ function util_updateLandmark(user, landName, delta, reason, roomName) {
         if (safeUser) {
             var roomData = getDatabase().rooms[roomName || "내리다"];
             if (roomData) roomData.users[user.uid] = JSON.parse(JSON.stringify(safeUser));
-            try { Api.replyRoom(roomName || "베릭", "🛡️ [부동산 보안 엔진] 데이터 오염 감지\n대상: " + user.name + "\n상태: 데이터 롤백 완료"); } catch(e){}
+            var landBody = "❌ 내용: 데이터 오염(NaN/음수) 감지\n" +
+                           "🏢 대상: [" + landName + "] 지분 데이터";
+
+            var landMsg = util_formatSecurityLog(
+                "🛡️ [LANDMARK: 부동산 보안 엔진]", 
+                user.name, 
+                rName, 
+                landBody, 
+                "보안 프로토콜에 의해 해당 유저 데이터 롤백 완료"
+            );
+            try { Api.replyRoom("베릭방", landMsg); } catch(e){}
         }
     }
 }
@@ -1615,7 +1625,17 @@ function util_updateBank(user, roomData, delta, reason, roomName) {
         if (safeUser) {
             // [핵심: 돈복사 방지] 예금 연산 오류 시 유저 데이터 전체 롤백
             if (roomData) roomData.users[user.uid] = JSON.parse(JSON.stringify(safeUser));
-            try { Api.replyRoom(roomName || "베릭", "🛡️ [은행 보안 엔진] 자산 오염 차단\n대상: " + user.name + "\n상태: 안전 세이브 지점으로 전체 복구되었습니다."); } catch(e){}
+            var bankBody = "❌ 내용: 예금 자산 오염(연산 오류) 차단\n" +
+                           "💰 수치: " + fp(delta) + "P (이전: " + fp(preBank) + "P)";
+
+            var bankMsg = util_formatSecurityLog(
+                "🛡️ [BANK: 은행 보안 엔진]", 
+                user.name, 
+                rName, 
+                bankBody, 
+                "안전 세이브 지점으로 전체 복구 완료 (Audit 필요)"
+            );
+            try { Api.replyRoom("베릭방", bankMsg); } catch(e){}
         }
     }
 }
@@ -1743,9 +1763,19 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
         var dropLimit = Math.max(cr.limit * 1.2, (user.point || 0) * 0.4); 
         
         if (Math.abs(delta) > dropLimit) {
-            var shieldMsg = "🛡️ [보안 시스템 작동]\n• 대상: " + user.name + "\n• 내용: 비정상 지출(한도 초합) 감지\n✅ 결과: 자산 보호를 위해 거래를 차단하고 롤백했습니다.";
-            Api.replyRoom("내리다", shieldMsg);
-            Api.replyRoom("베릭방", "🚨 [Security Alert]\n" + user.name + " (" + reason + ") 차단됨");
+            var guardBody = "⚠️ 내용: 비정상 지출(신용한도 초과) 감지\n" +
+                            "💵 시도: " + fp(Math.abs(delta)) + "P (한도: " + fp(dropLimit) + "P)\n" +
+                            "📈 사유: " + (reason || "미분류 활동");
+
+            var guardMsg = util_formatSecurityLog(
+                "🛡️ [GUARD: 침식 방어 작동]", 
+                user.name, 
+                "내리다", 
+                guardBody, 
+                "자산 보호를 위해 해당 거래를 차단하고 데이터 롤백"
+            );
+            Api.replyRoom("내리다", guardMsg);
+            try { Api.replyRoom("베릭방", "🚨 [Security Alert] " + user.name + " (" + reason + ") 차단됨"); } catch(e) {}
 
             throw new Error("신용 등급[" + cr.label + "] 지출 한도 초과 (침식 방어)");
         }
@@ -1858,8 +1888,17 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
             for (var r in db.rooms) { if (db.rooms[r].users[user.uid]) { safeUser = db.rooms[r].users[user.uid]; break; } }
             if (safeUser) {
                 if (roomData) roomData.users[user.uid] = JSON.parse(JSON.stringify(safeUser)); // 해당 유저만 롤백
-                try { Api.replyRoom(roomName, "🛡️ [보안 엔진] 비정상 변동 차단 및 해당 유저 데이터 롤백 완료"); } catch(e){}
-            }
+               var gateBody = "❌ 내용: 포인트 연산 오류 또는 비인가 급감 발생\n" +
+                               "📊 상태: " + fp(prePoint) + "P ➔ " + fp(user.point) + "P";
+
+                var gateMsg = util_formatSecurityLog(
+                    "🚨 [GATEWAY: 비정상 변동 감지]", 
+                    user.name, 
+                    roomName, 
+                    gateBody, 
+                    "시스템 자가 보호를 위해 해당 유저 데이터 즉시 롤백"
+                );
+                try { Api.replyRoom(roomName, gateMsg); } catch(e){}
         }
     }
 
@@ -1935,51 +1974,6 @@ function formatError(user, content, nextStep) {
     var msg = "🚫 오류 발생\n━━━━━━━━━━━━━━━\n" + nameTag + "님\n사유: " + content + "\n━━━━━━━━━━━━━━━"; 
     if (nextStep) msg += "\n💡 [가이드]: " + nextStep; 
     return msg; 
-}
-
-/**
- * [수정] 실시간 에러 고발 엔진 (Error Push v2.0)
- * 기능: 명령어 여부와 관계없이 시스템 내부의 모든 논리 에러를 베릭방으로 즉시 보고합니다.
- * 패치 내역: 일반 채팅 중 발생하는 무역 정산 에러 누락 방지를 위해 isCommand 필터 제거
- */
-function util_reportError(e, room, sender, msg) {
-    // 1. 에러 메시지 원본 추출
-    var rawErr = e.message || String(e);
-    var koErr = rawErr;
-
-    // 2. 에러 메시지 한글 변환 로직 (가독성 강화)
-    if (rawErr.indexOf("is not a function") !== -1) {
-        koErr = "실행할 함수를 찾을 수 없음 (로직 누락)";
-    } else if (rawErr.indexOf("is not defined") !== -1) {
-        koErr = "정의되지 않은 변수 사용 (참조 오류)";
-    } else if (rawErr.indexOf("null") !== -1 && rawErr.indexOf("read property") !== -1) {
-        koErr = "데이터가 비어있음 (객체 참조 실패)";
-    } else if (rawErr.indexOf("JSON") !== -1) {
-        koErr = "데이터 파싱 실패 (JSON 규격 위반)";
-    } else if (rawErr.indexOf("Circuit Breaker") !== -1 || rawErr.indexOf("중복") !== -1) {
-        koErr = "보안 엔진에 의한 로직 강제 차단 (복사 방지)";
-    }
-
-    // 3. 리포트 본문 조립
-    var errLog = "🚨 [시스템 장애 알림]\n" +
-                 "━━━━━━━━━━━━━━━\n" +
-                 "👤 발생 유저: " + sender + "\n" +
-                 "📍 발생 장소: " + room + "\n" +
-                 "💬 입력 내용: " + (msg ? msg : "(텍스트 없음)") + "\n" +
-                 "🚫 에러 내용: " + koErr + "\n" +
-                 "━━━━━━━━━━━━━━━\n" +
-                 "⚠️ [주의] 스테이징 보호로 데이터는 롤백되었으나,\n" +
-                 "원인 해결 전까지 유저가 무한 루프에 빠질 수 있습니다.";
-
-    // 4. 베릭방 전송 및 로그 기록
-    try { 
-        // 명령어 필터(!isCommand)를 제거했으므로 이제 모든 에러가 보고됩니다.
-        Api.replyRoom("베릭방", errLog); 
-    } catch(err) {
-        Log.error("Error Report Send Fail: " + err);
-    }
-    
-    Log.error("[Critical Error] " + sender + " (" + room + "): " + rawErr);
 }
 
 /**

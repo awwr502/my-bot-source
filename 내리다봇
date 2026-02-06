@@ -13182,13 +13182,15 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
 
         // [추가] 내가 현재 총독인 항구가 있는지 확인
         var myGovernorTitle = "";
-        var pData = roomData.portData || {};
+        var myPorts = []; 
+        var pData = roomData.portData || {}; 
+        
         for (var pName in pData) {
             if (pData[pName].governorUid === targetUid) {
-                myGovernorTitle = "\n🎖️ 나의 작위: [" + pName + " 총독]";
-                break;
+                myPorts.push(pName);
             }
         }
+        if (myPorts.length > 0) myGovernorTitle = "\n🎖️ 나의 작위: [" + myPorts.join(", ") + " 총독]";
         
         // [Gemini] 일반 교역품(수량) 및 특산품(종류) 분리 계산 로직
         var currentGeneralCount = 0;
@@ -13244,7 +13246,7 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // [추가] 총독 집무실(관세 정산) 대기 상태 핸들러 연결
+    // [추가] 총독 집무실 세입 정산 핸들러 연결
     if (state.type === 'trade_governor_office') {
         _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid);
         return true;
@@ -13300,8 +13302,9 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             };
             delete menuWaitState[targetUid];
             } else if (choice === "6") {
-            var myPorts = util_getUserGovernorPorts(targetUid, roomData);
-            if (myPorts.length === 0) return replier.reply(formatError(user, "접근 불가", "총독 권한이 없습니다."));
+            var myPorts = [];
+            for (var p in roomData.portData) { if (roomData.portData[p].governorUid === targetUid) myPorts.push(p); }
+            if (myPorts.length === 0) return replier.reply(formatError(user, "권한 없음", "총독 작위를 보유한 항구가 없습니다."));
             _showGovernorOffice(user, replier, roomData, myPorts);
             menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), depth: 2, myPorts: myPorts };
         } else {
@@ -13348,55 +13351,47 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
 /**
  * [추가] 🚢 총독 집무실 UI 출력 및 정산 대기 로직
  */
-/* =====요청사항 시작===== */
+
 function _showGovernorOffice(user, replier, roomData, myPorts) {
-    var body = "총독님, 자치령에서 징수된 관세가 국고에 보관 중입니다.\n\n[자치령별 관세 적립 현황]\n";
-    var totalAll = 0;
+    var body = "총독님, 각 자치령에서 취합된 세입 현황입니다.\n\n";
+    var totalAvailable = 0;
     myPorts.forEach(function(pName, i) {
-        var pInfo = roomData.features.portData[pName] || {};
-        var amt = Number(pInfo.collectedTariff || 0);
-        totalAll += amt;
-        body += (i + 1) + ". " + pName + ": " + fp(amt) + "P\n";
+        var tariff = Number(roomData.portData[pName].collectedTariff || 0);
+        totalAvailable += tariff;
+        body += (i + 1) + ". " + pName + " : " + fp(tariff) + "P " + (tariff > 0 ? "💰" : "⚪") + "\n";
     });
-    body += "\n💰 총 가용 정산금: " + fp(totalAll) + "P\n━━━━━━━━━━━━━━━\n" +
-            "💡 [정산 방법]\n• 번호 입력: 해당 항구 관세 수령\n• [전부] 입력: 모든 자치령 관세 일괄 정산\n\n↩️ 뒤로 / ❎취소";
+    body += "\n💵 정산 가능 총액: " + fp(totalAvailable) + "P\n━━━━━━━━━━━━━━━\n💬 [수령 방법]\n• 개별 수령: [번호] 입력\n• 일괄 수령: [전부] 입력\n\n↩️ 뒤로 / ❎취소";
     replier.reply(formatCommand("🏛️ 총독 집무실 (관세 정산)", user, body, "수령하실 번호를 입력하세요."));
 }
 
 function _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid) {
     var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-    var economyRoomData = data.rooms[economyRoomName];
-    var roomData = data.rooms[roomName] || economyRoomData;
-    var state = roomData.features.states.menuWait[targetUid];
-    var myPorts = state.myPorts;
-    var totalSettled = 0;
-    var pData = roomData.features.portData;
+    var roomData = data.rooms[economyRoomName];
+    var menuState = data.rooms[roomName].features.states.menuWait[targetUid];
+    var myPorts = menuState.myPorts;
+    var totalCollect = 0;
+    var portNames = [];
 
     if (msg === "전부") {
         myPorts.forEach(function(p) {
-            var amt = Number(pData[p].collectedTariff || 0);
-            totalSettled += amt;
-            pData[p].collectedTariff = 0;
+            var amt = Number(roomData.portData[p].collectedTariff || 0);
+            if (amt > 0) { totalCollect += amt; roomData.portData[p].collectedTariff = 0; portNames.push(p); }
         });
     } else {
         var idx = parseInt(msg.replace(/[^0-9]/g, "")) - 1;
         if (isNaN(idx) || idx < 0 || idx >= myPorts.length) return;
         var pName = myPorts[idx];
-        totalSettled = Number(pData[pName].collectedTariff || 0);
-        pData[pName].collectedTariff = 0;
+        totalCollect = Number(roomData.portData[pName].collectedTariff || 0);
+        if (totalCollect > 0) { roomData.portData[pName].collectedTariff = 0; portNames.push(pName); }
     }
 
-    if (totalSettled <= 0) {
-        replier.reply(formatError(user, "정산 불가", "수령할 관세가 없습니다."));
-        return;
-    }
+    if (totalCollect <= 0) return replier.reply(formatError(user, "정산 실패", "수령할 관세가 없습니다."));
 
-    util_updatePoint(user, economyRoomData, totalSettled, "총독 자치령 관세 수령", economyRoomName);
-    delete roomData.features.states.menuWait[targetUid];
+    user.skipHealing = true;
+    util_updatePoint(user, roomData, totalCollect, "총독 자치령 관세 수령", economyRoomName);
+    delete data.rooms[roomName].features.states.menuWait[targetUid];
     
-    replier.reply(formatCommand("✅ 국고 세입 정산 완료", user, 
-        "국고(중앙은행)로부터 자치령 관세 정산을 완료했습니다.\n\n💰 정산 금액: +" + fp(totalSettled) + "P\n🏛️ 상태: 세입 장부 초기화 완료", 
-        "내 잔액: " + fp(user.point) + "P"));
+    replier.reply(formatCommand("✅ 국고 세입 정산 완료", user, "자치령의 관세를 국고로부터 정산받았습니다.\n\n📍 대상 항구: " + portNames.join(", ") + "\n💰 수령 총액: +" + fp(totalCollect) + "P\n🏛️ 상태: 세입 장부 초기화 완료", "내 잔액: " + fp(user.point) + "P"));
     safeSaveData(data, true);
 }
 
@@ -13982,26 +13977,21 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         disasterLog += "\n🏴‍☠️ [해적]: 마진의 10%(-" + fp(piracyLoot) + "P)를 약탈당했습니다.";
     }
 
-    // [수정] 총독 관세(Tariff) 1% 계산 및 적립 로직 추가
-    var margin = totalRevenue - totalCost;
+    // [v1.8] 총독 관세 징수 및 본인 면제 로직
+    var margin = totalRev - totalCost;
     var taxRate = (user.title === "기부왕") ? 0.05 : 0.10;
-    var taxAmount = margin > 0 ? Math.floor(margin * taxRate) : 0;
-    var afterTaxMargin = margin - taxAmount;
+    var taxAmt = margin > 0 ? Math.floor(margin * taxRate) : 0;
+    var afterTax = margin - taxAmt;
 
-    var tariffAmount = 0;
-    var govInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : null;
+    var govInfo = (roomData.portData && roomData.portData[v.dest]) ? roomData.portData[v.dest] : null;
     var govTag = "";
     if (govInfo && govInfo.governorUid && govInfo.governorUid !== "") {
         if (govInfo.governorUid !== targetUid) {
-            tariffAmount = Math.floor(totalRevenue * 0.01);
-            afterTaxMargin -= tariffAmount;
-            govInfo.collectedTariff = (Number(govInfo.collectedTariff) || 0) + tariffAmount;
-            var govUser = roomData.users[govInfo.governorUid];
-            govTag = "\n🛡️ 관세(1%): -" + fp(tariffAmount) + "P (" + (govUser ? govUser.name : "총독") + " 징수)";
-        } else {
-            // 본인 국가일 경우 로그에만 남김 (출력은 안 함)
-            govTag = "\n👑 [자치령 특권]: 관세 면제 적용";
-        }
+            var tariff = Math.floor(totalRev * 0.01); afterTax -= tariff;
+            govInfo.collectedTariff = (Number(govInfo.collectedTariff) || 0) + tariff;
+            var gUser = roomData.users[govInfo.governorUid];
+            govTag = "\n🛡️ 관세(1%): -" + fp(tariff) + "P (" + (gUser ? gUser.name : "총독") + " 징수)";
+        } else { govTag = "\n👑 [자치령 특권]: 관세 면제 적용"; }
     }
 
     // 신용 등급 수익 배율 적용

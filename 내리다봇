@@ -14000,6 +14000,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var piracyLog = ""; // <--- 누락 지뢰 1: 해적 로그 변수 선언
     var taxAmount = 0;  // <--- 누락 지뢰 2: 세금 변수 선언
     var taxTag = "";    // <--- 누락 지뢰 3: 세금 태그 변수 선언
+    var pBonusTotal = 0; // 발전도 보너스 합계 초기화
     
     var triggeredDisaster = (Math.random() < 0.25) ? ["STORM", "FIRE", "CORRO", "PIRACY"][Math.floor(Math.random() * 4)] : null; 
 
@@ -14030,6 +14031,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             if (good === nationInfo.favorite) {
                 // 선호 품목일 때만 항구 레벨 보너스 합산 (Lv.10 기준 +9%p)
                 multiplier = rateInfo.pref + portLevelBonus;
+                pBonusTotal += Math.floor(myPurchasePrice * portLevelBonus * count);
             }
             else if (good === nationInfo.hate) multiplier = rateInfo.hate;
             else multiplier = rateInfo.norm;
@@ -14150,54 +14152,45 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     if (taxAmount > 0) util_updateReserve(economyRoomData, taxAmount, "무역세 징수", economyRoomName);
     if (creditLoss > 0) util_updateReserve(economyRoomData, creditLoss, "신용 등급 차등 수익 환수", economyRoomName);
 
-    // 7. 특산품 발견 (15% 확률)
+    // 7. 특산품 발견 및 수량 표시 처리 (총독 권한 연동)
     var specialtyFound = "";
-    if (Math.random() < cfg.SPECIALTY_CHANCE) {
+    if (Math.random() < cfg.SPECIALTY_CHANCE) { // 상수 0.50 (50%) 적용
         var newItem = nationInfo.specialty;
-        var pInfo = (roomData.portData && roomData.portData[v.dest]) ? roomData.portData[v.dest] : { governorUid: "" };
-        var amount = 1;
-        if (pInfo.governorUid === targetUid) {
-            var min = cfg.INVEST.GOV_SPEC_MIN || 2;
-            var max = cfg.INVEST.GOV_SPEC_MAX || 3;
+        var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { governorUid: "" };
+        
+        var isGov = (pInfo.governorUid === targetUid);
+        var amount = 1; // 일반 유저 기본 획득량
+        
+        if (isGov) {
+            // 총독일 경우 상수의 최소(1)~최대(3) 범위를 따름
+            var min = Number(cfg.INVEST.GOV_SPEC_MIN); 
+            var max = Number(cfg.INVEST.GOV_SPEC_MAX);
             amount = Math.floor(Math.random() * (max - min + 1)) + min;
         }
 
         user.specialties[newItem] = (user.specialties[newItem] || 0) + amount;
-        specialtyFound = "\n\n✨ [" + v.dest + "]의 특산품 '" + newItem + "'을 발견했습니다!" + 
-                         (amount > 1 ? "\n(총독 특권으로 " + amount + "개 획득! 👑)" : "");
-    }
-    
-    // [수정] 중복 선언 및 로직 제거, 정산 플래그 해제 통합
-    user.voyage.active = false; 
-    user.voyage.isProcessing = false; 
-    user.tradeCount = (user.tradeCount || 0) + 1;
-    var tCount = user.tradeCount;
-    var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
-
-    if (tCount >= 200) {
-        util_checkAndAwardTitle(user, rStub, "해상왕", 5104, "🔱", "내리다 해상 연맹", "누적 무역 200회 달성", "[장착 효과]: 바다의 지배자. 모든 항해 재해(폭풍우, 해적 등) 발생 확률이 0%가 됩니다.", roomName);
-    } else if (tCount >= 150) {
-        util_checkAndAwardTitle(user, rStub, "대항해사", 5103, "🧭", "내리다 해상 연맹", "누적 무역 150회 달성", "모든 항로를 파악한 바다의 전문가입니다.", roomName);
-    } else if (tCount >= 100) {
-        util_checkAndAwardTitle(user, rStub, "항해사", 5102, "🌊", "내리다 해상 연맹", "누적 무역 100회 달성", "파도를 읽고 배를 진두지휘하는 실력자입니다.", roomName);
-    } else if (tCount >= 50) {
-        util_checkAndAwardTitle(user, rStub, "견습선원", 5101, "⚓", "내리다 해상 연맹", "누적 무역 50회 달성", "바다의 기초를 배우기 시작한 유망주입니다.", roomName);
+        
+        // 총독일 경우에만 x수량 표시, 일반 유저는 발견 메시지만 출력
+        specialtyFound = "\n\n✨특산품 '" + newItem + "' " + (isGov ? "x" + amount + " " : "") + "발견!";
     }
 
-    // 리포트용 변수 매핑 및 태그 생성
-    var grossRevenue = totalRevenue; 
-    var netProfit = finalNetProfit; 
-    var cargoDisplay = (cargoSummary && cargoSummary.length > 0) ? cargoSummary.join(", ") : v.dest + " 수출품";
-    var baseTax = cfg.BASE_TAX || 0.1;
-    var taxTag = (taxRate > baseTax) ? " (자산가 누진 적용)" : "";
+    // 8. 적재 품목 요약 생성 (예: 식료품x30)
+    var cargoDisplayList = [];
+    for (var k in cargoToSell) { if (Number(cargoToSell[k]) > 0) cargoDisplayList.push(k + "x" + cargoToSell[k]); }
+    for (var s in specialtyToSell) { if (Number(specialtyToSell[s]) > 0) cargoDisplayList.push(s + "x" + specialtyToSell[s]); }
+    var cargoSummaryStr = cargoDisplayList.join(", ");
 
-    var report = "📍 도착지: " + v.dest + " (🪙" + cargoDisplay + ")\n\n" +
-                 "💰 총 매출: " + fp(totalRevenue) + "P" + seaKingTag +
-                 (disasterLog || "") + 
-                 (govTag || "") + "\n" +
+    // 9. 리포트 본문 조립 (순서 변경 및 레이아웃 개편)
+    var report = getDisplayName(user) + "님\n" +
+                 "📍 도착지: " + v.dest + " (" + cargoSummaryStr + ")\n\n" +
+                 "[⚓ 항해 및 세금 기록]\n" +
+                 (disasterLog ? disasterLog : "• 항해 상태: 이상 없음 " + seaKingTag) + "\n" +
+                 "🏗️ 발전도 보너스(Lv." + pInfo.level + "): +" + fp(pBonusTotal) + "P ✨\n" +
+                 (govTag ? govTag : "") + 
                  "⚖️ 무역세(" + (Number(taxRate || 0.1) * 100).toFixed(0) + "%): -" + fp(taxAmt) + "P" + taxTag + "\n\n" +
-                 "💵 최종 수익: +" + fp(finalNetProfit) + "P" + 
-                 (specialtyFound || "");
+                 "💵 순 수익: " + (finalNetProfit >= 0 ? "+" : "") + fp(finalNetProfit) + "P\n" +
+                 "💰 총 매출액: " + fp(totalRevenue) + "P" +
+                 specialtyFound;
 
     // 결과 메시지 생성 및 전송
     var resultMsg = formatCommand("🌊 [항해 일지: 무역 보고]", user, report, "누적 무역: " + user.tradeCount + "회 / 잔액: " + fp(user.point) + "P");

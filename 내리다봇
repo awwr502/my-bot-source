@@ -5531,7 +5531,7 @@ if (!targetUid) {
         if (regFile.exists()) {
             var registry = JSON.parse(FileStream.read(REGISTRY_PATH));
             
-            // 1차 시도: 현재 방 이름으로 검색
+            // 1차 시도: 현재 방 이름으로 검색 (단체방 복구용)
             if (registry[regKey]) {
                 targetUid = registry[regKey]; 
                 globalData.nameToIdCache[cacheKey] = targetUid; 
@@ -5547,9 +5547,16 @@ if (!targetUid) {
                     isIdentityRecovered = true;
                     Log.info("[Identity Restore] " + cleanSender + "님 신분 복구 완료 (Main Linked).");
                     
-                    // 1:1방 유저 객체를 메인방 객체로 리다이렉트
-                    if (ALLOWED_ROOMS.indexOf(roomName) === -1 && data.rooms["내리다"] && data.rooms["내리다"].users[targetUid]) {
-                        user = data.rooms["내리다"].users[targetUid];
+                    // [핵심 패치] 1:1 방이라면, UID를 찾은 즉시 '내리다' 방의 데이터(지갑)를 강제 연동합니다.
+                    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+                        var mainData = data.rooms["내리다"];
+                        if (mainData && mainData.users[targetUid]) {
+                            user = mainData.users[targetUid]; // 지갑 연결 성공
+                        } else {
+                            // 명부엔 있는데 실제 데이터가 없는 경우 (좀비 UID) -> 차단
+                            replier.reply("🚫 [연동 실패: 데이터 없음]\n명부에는 등록되어 있으나 메인 서버('내리다')에 실제 데이터가 존재하지 않습니다.\n관리자에게 문의하여 데이터를 복구하세요.");
+                            return; 
+                        }
                     }
                 }
             }
@@ -5559,9 +5566,9 @@ if (!targetUid) {
 
 // 3. [신규 생성] 진짜 신규 유저일 경우
 if (!targetUid) {
-    // [핵심 수정] 1:1 대화방에서는 절대로 신규 UID를 생성하지 않고 차단
+    // [핵심 가드] 1:1 대화방에서는 절대로 신규 UID를 생성하지 않고 차단 (중복 가입 방지)
     if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
-        replier.reply("🚫 [연동 실패: 데이터 없음]\n메인 서버('내리다')에 계정이 없거나 명부와 연결되지 않았습니다.\n먼저 단체방에 입장하거나 관리자에게 문의하세요.");
+        replier.reply("🚫 [연동 실패: 미가입]\n메인 서버('내리다')에 계정이 없거나 명부와 연결되지 않았습니다.\n먼저 단체방에 입장하거나 관리자에게 문의하세요.");
         return;
     }
 
@@ -5577,7 +5584,8 @@ if (!targetUid) {
     } catch(e) {}
 }
 
-// [C] UID는 확보되었으나 데이터가 없는 경우 초기화 (1:1 방은 생성 금지)
+// [C] UID는 확보되었으나 데이터가 없는 경우 초기화
+// [수정] 1:1 방(ALLOWED_ROOMS에 없음)일 경우, 위에서 user를 연동하지 못했다면 절대 생성하지 않도록 조건 강화
 if (ALLOWED_ROOMS.indexOf(roomName) !== -1 && !roomData.users[targetUid]) {
     var newUser = { uid: targetUid, name: cleanSender, imageHash: currentImgHash, lastDate: "" };
 

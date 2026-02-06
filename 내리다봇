@@ -1647,22 +1647,48 @@ function util_calculateNetWorth(user, roomData) {
 }
 
 /**
- * [수정] 원자적 스테이징 엔진 (보안 강화 v1.3)
+ * [v11.9.9 최종] 원자적 스테이징 - 강력 정화 엔진 (Native Object Stripper)
+ * 기능: 유저 객체 복제 시 '자바 객체'나 '함수'가 감지되면 즉시 폐기하고 순수 데이터만 남김.
  */
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
     GLOBAL_STAGING.active[user.uid] = true;
+
     try {
-        // [핵심 패치]: 복제 전 유저 객체에서 Native 객체 유무를 한 번 더 검사 (크래시 방지)
-        var serialized = JSON.stringify(user, function(k, v) {
-            if (v && typeof v === 'object' && v.getClass) return undefined; // Java 객체 발견 시 제거
-            return v;
+        // [근본 해결책] JSON 변환 시 'Replacer' 함수를 통해 모든 키/값을 전수 조사
+        var cleanJson = JSON.stringify(user, function(key, value) {
+            // 1. null이나 undefined는 통과
+            if (value === null || value === undefined) return value;
+            
+            // 2. 객체인 경우 정밀 검사
+            if (typeof value === 'object') {
+                // 자바(Native) 객체 특성 감지 시 즉시 태워버림 (undefined 반환 시 JSON에서 제외됨)
+                if (value.getClass || value.toString().startsWith("com.xfl") || value instanceof java.lang.Object) {
+                    return undefined; 
+                }
+                // replier, imageDB 등 위험 키워드 강제 차단
+                if (key === "replier" || key === "imageDB" || key === "kakaolink") {
+                    return undefined;
+                }
+            }
+            // 3. 함수 타입은 저장 불가하므로 제외
+            if (typeof value === 'function') return undefined;
+
+            return value; // 검사를 통과한 순수 데이터만 리턴
         });
-        GLOBAL_STAGING.cache[user.uid] = JSON.parse(serialized);
+
+        GLOBAL_STAGING.cache[user.uid] = JSON.parse(cleanJson);
+
     } catch (e) {
-        // 복제 실패 시(오염 발생 시) 최소 정보로 강제 가동하여 롤백 지옥 탈출
-        Log.error("🚨 [Staging Crit] " + user.name + " 객체 오염 감지: " + e);
-        GLOBAL_STAGING.cache[user.uid] = { uid: user.uid, name: user.name, point: user.point, bank: user.bank, tier: user.tier || 0 };
+        // 만약 이 정화 과정조차 실패하면, 정말 최소한의 데이터만 가진 새 객체를 생성 (시스템 멈춤 방지)
+        Log.error("🚨 [Critical] 정화 실패, 비상 객체 생성: " + e);
+        GLOBAL_STAGING.cache[user.uid] = { 
+            uid: user.uid, 
+            name: user.name, 
+            point: Number(user.point || 0), 
+            bank: Number(user.bank || 0),
+            tier: user.tier || 0
+        };
     }
 }
 
@@ -5684,13 +5710,6 @@ user.point = Number(user.point || 0);
 
 if (user) {
     user.skipHealing = true;
-    // [강력 정화]: 세이브 포인트 생성 전, 객체에 붙은 모든 불순물(replier, imageDB 등 Java 객체) 완전 박멸
-    for (var k in user) {
-        if (typeof user[k] === 'function' || (user[k] && typeof user[k] === 'object' && (user[k].getClass || user[k].constructor.name === 'SessionCacheReplier'))) {
-            delete user[k];
-        }
-    }
-    // Staging 모드 활성화 (이제 깨끗해진 유저 객체로 안전한 스냅샷을 생성합니다)
     util_stagingStart(user); 
 }
 

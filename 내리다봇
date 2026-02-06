@@ -840,25 +840,16 @@ function util_migrateTradeData(data) {
  * [Gemini 정밀 교정] 데이터베이스 로드 함수
  */
 function getDatabase() {
+    if (globalData && globalData._isInitialized === true) {
+        return globalData;
+    }
 
-    // [1] RAM 캐시 체크를 최상단으로 이동 (로그 도배 방지 핵심)
-    // 메모리에 데이터가 있다면 아래의 마이그레이션/힐러 로직을 모두 건너뛰고 즉시 반환합니다.
-    var isAcquired = false;
-    try {
-        // 수정: 락을 1초간만 시도하여 리로드 시 좀비 타이머와의 충돌(멈춤)을 방지합니다.
-        isAcquired = lock.tryLock(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
-        if (!isAcquired) {
-            Log.warn("⚠️ 데이터베이스가 현재 사용 중입니다. 잠시 후 재시도합니다.");
-            return globalData; 
-        }
-
-        // 수정: 리로드 시 락 충돌 방지를 위해 tryLock을 적용하고 함수 완결성을 보장함
     var isAcquired = false;
     try {
         isAcquired = lock.tryLock(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
         if (!isAcquired) {
             Log.warn("⚠️ 데이터베이스가 현재 사용 중입니다. 잠시 후 재시도합니다.");
-            return globalData; 
+            return globalData;
         }
 
         var file = new java.io.File(FILE_PATH);
@@ -884,7 +875,6 @@ function getDatabase() {
 
         (function util_autoRepairTradeStuck(data) {
             if (!data || !data.rooms) return;
-            var count = 0;
             for (var r in data.rooms) {
                 var users = data.rooms[r].users;
                 if (!users) continue;
@@ -893,11 +883,9 @@ function getDatabase() {
                     if (u.voyage && u.voyage.active === true && u.voyage.isProcessing === true) {
                         u.voyage.isProcessing = false;
                         u.voyage.isAlerted = false;
-                        count++;
                     }
                 }
             }
-            if (count > 0) Log.info("[Auto-Healer] 로드 시 고착 유저 " + count + "명 해제 완료");
         })(initialData);
         
         if (initialData.rooms) {
@@ -928,9 +916,8 @@ function getDatabase() {
         }
         
         if (!initialData.nameToIdCache) initialData.nameToIdCache = {};
-        
-        initialData._isInitialized = true; 
-        globalData = initialData; 
+        initialData._isInitialized = true;
+        globalData = initialData;
         return globalData;
 
     } catch (e) {
@@ -938,7 +925,7 @@ function getDatabase() {
         var stableFile = new java.io.File(BACKUP_DIR + "last_stable_backup.json");
         if (stableFile.exists()) {
             globalData = JSON.parse(FileStream.read(BACKUP_DIR + "last_stable_backup.json"));
-            if (globalData) globalData._isInitialized = true; 
+            if (globalData) globalData._isInitialized = true;
             return globalData;
         }
         return null;

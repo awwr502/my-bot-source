@@ -662,7 +662,6 @@ function util_recalculateDailyPools(data, roomName) {
             var amount = Math.abs(Number(parts[2])); 
             var reason = parts[4]; 
 
-            /* =====요청사항 시작===== */
             // 1. 카지노 배당금 집계 (원금 누적 방식으로 통일)
             if (reason.indexOf("홀짝 적중") !== -1) {
                 var originalBet = amount / 0.85; 
@@ -6588,22 +6587,30 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
     }
 
     if (msg === "처음으로" || msg === "🏠 처음으로") {
+        // 무역 관련 아이템(Cat 6)이거나 적재 완료 상태인지 판별
+        var isTradeFlow = (state.extra && ((state.extra.item && state.extra.item.cat === 6) || (state.extra.prevItems && state.extra.prevItems[0] && state.extra.prevItems[0].cat === 6))) || (state.type === 'trade_cargo_done');
+        
         delete bankProcessState[targetUid];
+        if (isTradeFlow) return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
         return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
     }
 
     if (msg === "뒤로" || msg === "↩️ 뒤로") {
-        // [수정] 각 상태별로 한 단계 전 메뉴로 돌아가도록 분기 처리
+        var isTradeFlow = (state.extra && ((state.extra.item && state.extra.item.cat === 6) || (state.extra.prevItems && state.extra.prevItems[0] && state.extra.prevItems[0].cat === 6))) || (state.type === 'trade_cargo_done');
+        
         if (state.type === 'shop_quantity') {
             var prevItems = state.extra.prevItems || [];
             bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: prevItems } };
             var list = prevItems.map(function(it, i) { return (i + 1) + ". " + it.icon + " " + it.name + " : " + fp(getItemPrice(it, user, roomName)) + "P"; });
-            replier.reply(formatCommand("🛒 상점 물품 목록", user, list.join("\n") + SHOP_NAV, "구매할 번호를 입력하세요."));
-        } else if (state.type === 'shop_buy' || state.type === 'ship_rename_input') {
+            
+            // [수정] 섹터5를 참조하지 않고 무역용 타이틀 고정 출력
+            var title = isTradeFlow ? "무역 물품 적재 센터" : (SHOP_CATEGORIES[state.extra.item.cat] || "상점");
+            replier.reply(formatCommand("🛒 " + title, user, list.join("\n") + SHOP_NAV, "구매할 번호를 입력하세요."));
+        } else if (state.type === 'shop_buy' || state.type === 'ship_rename_input' || state.type === 'trade_cargo_done') {
             delete bankProcessState[targetUid];
+            if (isTradeFlow) return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
             return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
         } else if (state.type === 'ship_rename_confirm') {
-            // 확인창에서 뒤로가면 다시 이름 입력창으로 이동
             bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now(), extra: state.extra };
             replier.reply(formatCommand("📝 선박 이름 입력", user, "변경하실 선박의 이름을 다시 입력해주세요.\n(2~8자, 띄어쓰기 포함)" + SHOP_NAV, "취소: [취소]"));
         }
@@ -8471,7 +8478,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
 
     /* [2. 아이템 효과별 실행 로직] */
 
-    /* 요청사항 시작: 무역 물품 적재 로직 추가 */
+    /* 무역 물품 적재 로직 추가 */
     if (item.effect === "trade_cargo") {
         if (user.voyage && user.voyage.active) {
              replier.reply(formatError(user, "적재 불가", "현재 선박이 항해 중입니다.\n귀항 후 다시 시도해주세요."));
@@ -8517,6 +8524,8 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         
         user.cargoAvg[goodsType] = newAvg; // 새 평단가 기록
         user.cargo[goodsType] = oldQty + qty; // 수량 업데이트 (기존 한 줄 코드의 역할 수행)
+
+        bankProcessState[targetUid] = { type: 'trade_cargo_done', time: Date.now() };
 
         var loadBody = "[" + goodsType + " 상자] " + qty + "개를 배에 실었습니다.\n" + 
                        "📍 현황: " + (currentCargoCount + qty) + " / " + shipCfg.capacity + " 칸 사용 중\n\n" +
@@ -13366,10 +13375,24 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
  */
 
 function _showGovernorOffice(user, replier, roomData, myPorts) {
+    if (!roomData.features.portData) {
+        roomData.features.portData = {
+            "브리타니아": { level: 1, totalInvest: 0, governorUid: "", collectedTariff: 0 },
+            "샹그릴라":   { level: 1, totalInvest: 0, governorUid: "", collectedTariff: 0 },
+            "엘도라도":   { level: 1, totalInvest: 0, governorUid: "", collectedTariff: 0 },
+            "노르딕":     { level: 1, totalInvest: 0, governorUid: "", collectedTariff: 0 },
+            "사막의별":   { level: 1, totalInvest: 0, governorUid: "", collectedTariff: 0 }
+        };
+    }
+    var pData = roomData.features.portData;
+
     var body = "총독님, 각 자치령에서 취합된 세입 현황입니다.\n\n";
     var totalAvailable = 0;
     myPorts.forEach(function(pName, i) {
-        var tariff = Number(roomData.portData[pName].collectedTariff || 0);
+        // [방어] 특정 항구 데이터가 비어있을 경우 기본값 할당
+        if (!pData[pName]) pData[pName] = { level: 1, totalInvest: 0, governorUid: "", collectedTariff: 0 };
+        
+        var tariff = Number(pData[pName].collectedTariff || 0);
         totalAvailable += tariff;
         body += (i + 1) + ". " + pName + " : " + fp(tariff) + "P " + (tariff > 0 ? "💰" : "⚪") + "\n";
     });
@@ -13769,7 +13792,6 @@ function _showVoyageStatus(user, replier, data, roomName) {
     // 최종 예상 이익 = (마진 - 세금) * 신용배율
     var estimatedNetProfit = Math.floor((margin - taxAmount) * creditMult);
     var finalReceipt = tCost + estimatedNetProfit; // 최종 수령액 = 원금 + 조정된 이익
-    /* =====요청사항 끝===== */
 
     var cargoDisplay = "📦 적재함: " + totalCargoInShip + " / " + shipCapacity + " 칸\n" + currentCargoLines.join("\n") + "\n\n";
 
@@ -13818,7 +13840,7 @@ function _showTradeShop(user, replier, roomData, cfg) {
     });
     
     var shopContent = list.join("\n") + "\n\n💰 보유 포인트: " + fp(user.point) + "P" + "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
-    replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[6], user, shopContent, "구매할 물품의 번호를 입력하세요."));
+    replier.reply(formatCommand("🛒 무역 물품 적재 센터", user, shopContent, "구매할 물품의 번호를 입력하세요."));
 }
 
 /**

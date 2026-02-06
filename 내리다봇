@@ -1664,49 +1664,27 @@ function util_calculateNetWorth(user, roomData) {
 }
 
 /**
- * [v11.9.9 최종] 원자적 스테이징 - 강력 정화 엔진 (Native Object Stripper)
- * 기능: 유저 객체 복제 시 '자바 객체'나 '함수'가 감지되면 즉시 폐기하고 순수 데이터만 남김.
+ * [v12.0 Final] 원자적 스테이징 - 화이트리스트 스냅샷
+ * 기능: 전체 객체를 복사하지 않고, 핵심 자산만 안전하게 추출하여 저장함. (크래시 원천 봉쇄)
  */
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
     GLOBAL_STAGING.active[user.uid] = true;
 
-    try {
-        // [근본 해결책] JSON 변환 시 'Replacer' 함수를 통해 모든 키/값을 전수 조사
-        var cleanJson = JSON.stringify(user, function(key, value) {
-            // 1. null이나 undefined는 통과
-            if (value === null || value === undefined) return value;
-            
-            // 2. 객체인 경우 정밀 검사
-            if (typeof value === 'object') {
-                // 자바(Native) 객체 특성 감지 시 즉시 태워버림 (undefined 반환 시 JSON에서 제외됨)
-                if (value.getClass || value.toString().startsWith("com.xfl") || value instanceof java.lang.Object) {
-                    return undefined; 
-                }
-                // replier, imageDB 등 위험 키워드 강제 차단
-                if (key === "replier" || key === "imageDB" || key === "kakaolink") {
-                    return undefined;
-                }
-            }
-            // 3. 함수 타입은 저장 불가하므로 제외
-            if (typeof value === 'function') return undefined;
+    // [Safe Snapshot] 복잡한 객체는 버리고 핵심만 수동으로 담습니다.
+    // 이렇게 하면 오염된 Native 객체가 딸려들어갈 틈이 없습니다.
+    var safeSnapshot = {
+        uid: user.uid,
+        name: user.name,
+        point: Number(user.point || 0),
+        bank: Number(user.bank || 0),
+        tier: Number(user.tier || 0),
+        creditScore: Number(user.creditScore || 600),
+        // 필요한 경우 인벤토리는 배열 여부만 확인 후 복사 (없으면 빈배열)
+        inventory: Array.isArray(user.inventory) ? JSON.parse(JSON.stringify(user.inventory)) : []
+    };
 
-            return value; // 검사를 통과한 순수 데이터만 리턴
-        });
-
-        GLOBAL_STAGING.cache[user.uid] = JSON.parse(cleanJson);
-
-    } catch (e) {
-        // 만약 이 정화 과정조차 실패하면, 정말 최소한의 데이터만 가진 새 객체를 생성 (시스템 멈춤 방지)
-        Log.error("🚨 [Critical] 정화 실패, 비상 객체 생성: " + e);
-        GLOBAL_STAGING.cache[user.uid] = { 
-            uid: user.uid, 
-            name: user.name, 
-            point: Number(user.point || 0), 
-            bank: Number(user.bank || 0),
-            tier: user.tier || 0
-        };
-    }
+    GLOBAL_STAGING.cache[user.uid] = safeSnapshot;
 }
 
 /**
@@ -5733,30 +5711,25 @@ if (user.inventory) {
     }
 }
 
-/* [v11.9.9] 데이터 정규화 및 좀비 데이터 정밀 소각 엔진 */
+/* [v11.9.9 긴급] 안전 모드 진입 */
 var today = getSimpleDate();
 user.point = Number(user.point || 0);
 
 if (user) {
-    // 1. [정밀 타격] 오염되기 쉬운 객체들만 개별적으로 무결성 테스트
-    var riskyFields = ['voyage', 'lastAction', 'blackjackState', 'mining', 'cargo', 'specialties'];
+    user.skipHealing = true;
     
-    for (var i = 0; i < riskyFields.length; i++) {
-        var key = riskyFields[i];
-        if (user[key]) {
-            try {
-                // 해당 필드만 따로 떼어서 변환 시도. 여기서 에러나면 그놈이 범인임.
-                JSON.stringify(user[key]);
-            } catch (e) {
-                // 에러 발생 시 해당 필드만 소각 (유저 전체 데이터는 살림)
-                delete user[key];
-                Log.error("♻️ [Hazard Disposal] " + user.name + "님의 오염된 '" + key + "' 데이터를 폐기했습니다.");
+    // [Safe Purge] Native 객체 감지 시 검사 없이 즉시 삭제 (try-catch 없이 직접 타입 체크)
+    for (var k in user) {
+        var val = user[k];
+        // 값이 있고, 객체인데, 자바스크립트 순수 객체가 아닌 경우(getClass 존재 등)
+        if (val && typeof val === 'object') {
+            if (val.getClass || (val.toString && val.toString().startsWith("com.xfl"))) {
+                delete user[k]; // 묻지도 따지지도 않고 삭제
             }
         }
     }
-
-    // 2. 헬러 및 스테이징 가동
-    user.skipHealing = true;
+    
+    // 안전해진 상태에서 스테이징 시도
     util_stagingStart(user); 
 }
 

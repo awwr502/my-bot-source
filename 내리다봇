@@ -1152,21 +1152,40 @@ function safeSaveData(data, isForceBackup) {
         // 모든 방의 검사가 끝난 시점에 한 번만 치유 보고서 발송
         if (isHealed && healReports.length > 0) {
             try {
-                var reportMsg = "🚨 [데이터 자가 치유 작동]\n손상 의심 데이터를 제외하고 정상 저장되었습니다.\n\n" +
-                                "[치유 내역]\n• " + healReports.join("\n• ") + "\n\n" +
-                                "⚠️ 관리자는 해당 유저의 활동을 점검하십시오.";
-                Api.replyRoom("내리다", reportMsg);
-                Api.replyRoom("베릭방", "🩹 [Healer Audit]\n━━━━━━━━━━━━━━━\n" + healReports.join("\n") + "\n━━━━━━━━━━━━━━━");
+                var healerBody = "🩹 내용: 손상 의심 데이터 정밀 수리 완료\n" +
+                                 "👥 대상 목록:\n• " + healReports.join("\n• ");
+                
+                var healerMsg = util_formatSecurityLog(
+                    "🚨 [HEALER: 데이터 자가 치유 작동]", 
+                    "SURGICAL_REPAIR", 
+                    "SYSTEM", 
+                    healerBody, 
+                    "정상 데이터 필터링 후 안전하게 저장 완료"
+                );
+
+                Api.replyRoom("내리다", healerMsg); 
+                Api.replyRoom("베릭방", healerMsg); 
             } catch(e) {}
         }
 
     } catch (validationError) {
+
         // 검증 실패 시 로그 남기고 저장 중단 (파일 오염 방지)
         Log.error("!!! [데이터 오염 방지 작동] !!!");
         Log.error("사유: " + validationError.message);
-        try {
-            Api.replyRoom("베릭방", "🚨 [데이터 보호 시스템 작동]\n심각한 데이터 오염이 감지되어 자동 저장을 차단했습니다.\n사유: " + validationError.message + "\n\n⚠️ 관리자는 즉시 시스템을 점검하십시오.");
-        } catch (e) {}
+        
+        var quarantineBody = "❌ 사유: " + validationError.message + "\n" +
+                             "⚠️ 위험: 비정상 데이터(NaN/누락)가 파일 오염 시도";
+        
+        var quarantineMsg = util_formatSecurityLog(
+            "🚨 [QUARANTINE: 데이터 오염 차단]", 
+            "STORAGE_ENGINE", 
+            "베릭방", 
+            quarantineBody, 
+            "자동 저장 프로세스 즉시 중단 및 파일 보호"
+        );
+
+        try { Api.replyRoom("베릭방", quarantineMsg); } catch (e) {}
         return; 
     }
 
@@ -1223,11 +1242,21 @@ function safeSaveData(data, isForceBackup) {
                     }
                 }
                 
-                content = null; 
+                content = null; // 메모리 해제
             } catch (e) {
+                // [수정]: 물리적 저장 장애 시 섹터 11 표준 보안 UI로 비상 알림 발송
                 Log.error("Async Save Fail: " + e.message);
-                var saveErr = "🚨 [시스템 비상: 저장 마비]\n━━━━━━━━━━━━━━━\n• 사유: " + e.message + "\n⚠️ 기기 저장소 권한 및 용량을 확인하세요.";
-                try { Api.replyRoom("베릭방", saveErr); } catch (err) {}
+                var criticalBody = "❌ 사유: " + e.message + "\n" +
+                                   "⚠️ 위기: 시스템 영속성(Persistence) 상실";
+                
+                var criticalMsg = util_formatSecurityLog(
+                    "🚨 [CRITICAL: 저장소 마비]", 
+                    "SAVE_EXECUTOR", 
+                    "SYSTEM", 
+                    criticalBody, 
+                    "기기 저장소 권한 및 가용 용량 즉시 점검 요망"
+                );
+                try { Api.replyRoom("베릭방", criticalMsg); } catch (err) {}
             } finally {
                 lock.unlock();
                 java.lang.System.gc(); 

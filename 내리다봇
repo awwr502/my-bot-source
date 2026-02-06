@@ -9890,6 +9890,9 @@ if (msg === "/전체채굴복구") {
  * 기능: 경제지표, 데이터교정, 물가조정, 포인트 지급/차감/뿌리기, 각종 초기화, 재원수정 및 충전, 자가복원
  */
 function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sender) {
+// [핵심] 1:1방 또는 베릭방에서 실행 시에도 실제 은행 데이터가 있는 "내리다" 방을 참조하도록 고정
+    var logicZone = (roomName === "베릭방" || ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var roomData = data.rooms[logicZone];
 
     /* [테스트] 자정 리셋 로직 강제 실행 */
     if (msg === "/자정테스트") {
@@ -9919,13 +9922,12 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
             return true;
         }
 
-        var roomData = data.rooms[roomName];
         if (!roomData) return true;
 
-        // [보안 교체] 직접 할당 대신 보안 엔진을 통한 차액(delta) 계산 및 적용
+        // [교정] roomName이 아닌 logicZone(내리다)의 재원을 수정함
         var currentRes = Number(roomData.bankReserve || 0);
         var delta = val - currentRes;
-        util_updateReserve(roomData, delta, "재원 수정", roomName);
+        util_updateReserve(roomData, delta, "재원 수정", logicZone);
         
         roomData.bankReserve = val;
         safeSaveData(data);
@@ -9940,7 +9942,8 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
    if (msg === "/국고로그") {
     try {
         var logs = [];
-        var filesToRead = [JOURNAL_PATH, BASE_DIR + "total_history.log"];
+        // [교정] History(과거)를 먼저 넣고 Journal(현재)을 나중에 넣어 Newest가 배열 끝에 오게 함
+        var filesToRead = [BASE_DIR + "total_history.log", JOURNAL_PATH];
 
         filesToRead.forEach(function(path) {
             var file = new java.io.File(path);
@@ -9951,7 +9954,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         });
 
         var filteredLogs = [];
-        // 오늘 발생한 모든 국고 변동 추출 (최신순)
+        // 오늘 발생한 모든 국고 변동 추출 (최신순: 배열 끝부터 탐색)
         for (var i = logs.length - 1; i >= 0; i--) {
             var line = logs[i].trim();
             if (!line) continue;
@@ -9962,6 +9965,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
             if (!isNaN(brDelta) && brDelta !== 0) {
                 var sign = brDelta > 0 ? "➕" : "➖";
                 var uName = "알 수 없음";
+                // 전역 유저 탐색으로 이름 확보
                 for (var r in data.rooms) {
                     if (data.rooms[r].users[parts[0]]) {
                         uName = data.rooms[r].users[parts[0]].name;
@@ -9970,21 +9974,21 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
                 }
                 filteredLogs.push("• [" + parts[4] + "] " + uName + " | " + sign + fp(Math.abs(brDelta)) + "P");
             }
+            // 너무 많은 로그 출력 방지 (최근 30건)
+            if (filteredLogs.length >= 30) break;
         }
 
-        var readMore = "\u200b".repeat(500); // 전체보기 유도용 공백
-        var targetZone = (roomName === "베릭방" || ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-        var roomData = data.rooms[targetZone];
+        var readMore = "\u200b".repeat(500); 
         var resultBody = "🏦 현재 금고 잔액: " + fp(roomData.bankReserve) + "P\n" +
                          "━━━━━━━━━━━━━━━" + readMore + "\n" +
-                         (filteredLogs.length > 0 ? filteredLogs.join("\n") : "금일 국고 변동 기록이 없습니다.");
+                         (filteredLogs.length > 0 ? filteredLogs.join("\n") : "최근 국고 변동 기록이 없습니다.");
 
         replier.reply(formatAdmin("🏛️ 오늘 국고 전체 변동 장부", resultBody));
     } catch (e) {
         replier.reply(formatAdmin("🚫 조회 실패", "로그 통합 분석 오류: " + e));
     }
     return true;
-}
+   }
 
     /* [신규] 은행 긴급 재원 충전 (기존 잔액에 추가 합산) */
     if (msg.indexOf("/재원충전 ") === 0) {
@@ -9993,11 +9997,10 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
             replier.reply(formatAdmin("오류", "충전할 금액을 양의 숫자로 입력하세요.\n예) /재원충전 100000"));
             return true;
         }
-        var roomData = data.rooms[roomName];
         if (!roomData) return true;
 
-        // [보안 교체] 직접 합산(+=) 대신 보안 엔진 호출
-        util_updateReserve(roomData, val, "재원 충전", roomName);
+        // [교정] logicZone(내리다) 재원에 합산
+        util_updateReserve(roomData, val, "재원 충전", logicZone);
         
         safeSaveData(data);
         

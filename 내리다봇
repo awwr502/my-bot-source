@@ -822,7 +822,8 @@ function util_restoreDailyPoolsFromHistory(data, roomName) {
  * [Gemini 정밀 교정] 데이터베이스 로드 함수
  */
 /**
- * [v12.5] 데이터베이스 로드 및 유해 객체 전수 소각
+ * [v12.5 최종형] 데이터베이스 로드 및 유해 객체(SessionCacheReplier) 전수 소각 엔진
+ * 기능: 장부를 읽어올 때 유저 데이터에 박제된 자바 객체를 탐지하여 즉시 제거함으로써 앱 크래시를 방지합니다.
  */
 function getDatabase() {
     if (globalData && globalData._isInitialized === true) {
@@ -832,37 +833,47 @@ function getDatabase() {
     var isAcquired = false;
     try {
         isAcquired = lock.tryLock(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
-        if (!isAcquired) return globalData;
+        if (!isAcquired) {
+            Log.warn("⚠️ 데이터베이스가 현재 사용 중입니다. 잠시 후 재시도합니다.");
+            return globalData;
+        }
 
         var file = new java.io.File(FILE_PATH);
         var initialData;
         
         if (!file.exists()) {
-            initialData = { rooms: {}, admins: ["관리자"], botActive: true, nameToIdCache: {} };
+            initialData = {
+                rooms: {}, admins: ["관리자"], botActive: true,
+                nickHistory: {}, adminLogs: [], economyDamping: 0.5,
+                lastDailyReset: "", isRecovering: false, nameToIdCache: {}
+            };
         } else {
             var content = FileStream.read(FILE_PATH);
+            if (!content) throw new Error("Empty File");
             initialData = JSON.parse(content);
         }
 
-        // [핵심: 장부 소독 로직]
+        // =====요청사항 시작: 데이터 정화(Purge) 엔진 가동=====
         if (initialData.rooms) {
             for (var r in initialData.rooms) {
                 var users = initialData.rooms[r].users;
+                if (!users) continue;
                 for (var uid in users) {
                     var u = users[uid];
-                    // 가장 위험한 필드 3종 집중 검사
-                    var targets = ['voyage', 'lastAction', 'blackjackState'];
-                    targets.forEach(function(key) {
+                    // 오염 가능성이 가장 높은 핵심 필드 전수 조사
+                    var riskyFields = ['voyage', 'lastAction', 'blackjackState', 'mining', 'cargo', 'specialties'];
+                    riskyFields.forEach(function(key) {
                         if (u[key]) {
                             try {
-                                // 문자로 변환해보고 'SessionCacheReplier'가 포함되어 있으면 강제 소각
-                                var str = JSON.stringify(u[key]);
-                                if (str.indexOf("SessionCacheReplier") !== -1 || str.indexOf("com.xfl") !== -1) {
-                                    throw new Error("오염 발견");
+                                // 문자열 변환 테스트를 통해 SessionCacheReplier(자바 객체) 포함 여부 확인
+                                var testStr = JSON.stringify(u[key]);
+                                if (testStr.indexOf("SessionCacheReplier") !== -1 || testStr.indexOf("com.xfl") !== -1) {
+                                    throw new Error("Contamination Detected");
                                 }
-                            } catch (e) {
-                                delete u[key]; // 장부에서 즉시 파기
-                                Log.warn("🔥 [Purge] " + u.name + "의 오염된 " + key + " 데이터를 소각했습니다.");
+                            } catch (purgeError) {
+                                // 오염된 필드만 장부에서 즉시 파기 (유저 전체 삭제 방지)
+                                delete u[key]; 
+                                Log.warn("🔥 [Purge] " + u.name + "님의 오염된 '" + key + "' 필드를 소각했습니다.");
                             }
                         }
                     });

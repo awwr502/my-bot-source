@@ -622,6 +622,18 @@ function recoverFromJournal(data) {
         });
 
         if (recoveryCount > 0 || skipCount > 0) {
+            // 1. 기록 보존 (히스토리 이관)
+            var rawLogs = FileStream.read(JOURNAL_PATH);
+            FileStream.append(BASE_DIR + "total_history.log", rawLogs);
+
+            // 2. 물리 파일 즉시 확정 저장
+            safeSaveData(data, true); 
+
+            // 3. [중요] 알림 전 파일 삭제 (도배 방지 핵심)
+            var jFile = new java.io.File(JOURNAL_PATH);
+            if (jFile.exists()) jFile.delete();
+
+            // 4. 표준 보안 UI 메시지 조립
             var recoverBody = "✅ 내용: 블랙박스 로그 정밀 복구 완료\n" +
                               "📊 처리: " + recoveryCount + "건 복구 / " + skipCount + "건 필터링\n" +
                               "📄 소스: " + JOURNAL_PATH;
@@ -631,27 +643,12 @@ function recoverFromJournal(data) {
                 "JOURNAL_REPLAY", 
                 "SYSTEM", 
                 recoverBody, 
-                "메모리 동기화 및 물리 파일(attendance.json) 즉시 확정 저장"
+                "메모리 동기화 및 복구 로그 물리적 파기 완료"
             );
 
+            // 5. 결과 보고 (도배가 발생하지 않음)
             Log.info("[Recovery] " + recoveryCount + "건 복구 완료");
             try { Api.replyRoom("베릭방", recoverMsg); } catch(e) {}
-
-            // [중복 복구 방지 및 기록 보존 로직]:
-            // 1. 현재 복구에 사용된 로그를 '전체 보관용 파일'에 따로 저장합니다. (디스코드 전송용)
-            var historyPath = BASE_DIR + "total_history.log";
-            var rawLogs = FileStream.read(JOURNAL_PATH);
-            FileStream.append(historyPath, rawLogs);
-
-            // 2. 물리 파일(attendance.json)에 복구된 잔액을 즉시 확정 저장합니다.
-            safeSaveData(data, true); 
-
-            // 3. 복구용 로그(transaction.log)만 비워서 다음 리로드 시 중복 연산을 차단합니다.
-            var jFile = new java.io.File(JOURNAL_PATH);
-            if (jFile.exists()) {
-                jFile.delete(); 
-                Log.info("[Recovery] 로그 이관 및 복구용 파일 초기화 완료.");
-            }
         }
     } catch (e) {
         Log.error("Journal Recovery Error: " + e);
@@ -870,7 +867,6 @@ function getDatabase() {
         // [3] 마이그레이션 및 힐러 로직 (파일을 읽었을 때만 1회 실행)
         if (typeof util_migrateTradeData === 'function') {
             util_migrateTradeData(initialData);
-            Log.info("✅ 데이터베이스 로드 및 무역 마이그레이션 완료."); // 로그를 이 위치로 이동
         }
 
         recoverFromJournal(initialData);

@@ -5530,11 +5530,28 @@ if (!targetUid) {
         var regFile = new java.io.File(REGISTRY_PATH);
         if (regFile.exists()) {
             var registry = JSON.parse(FileStream.read(REGISTRY_PATH));
+            
+            // 1차 시도: 현재 방 이름으로 검색
             if (registry[regKey]) {
                 targetUid = registry[regKey]; 
                 globalData.nameToIdCache[cacheKey] = targetUid; 
                 isIdentityRecovered = true;
-                Log.info("[Identity Restore] " + cleanSender + "님 신분 복구 완료.");
+                Log.info("[Identity Restore] " + cleanSender + "님 신분 복구 완료 (Local).");
+            } 
+            // [추가] 2차 시도: '내리다' 메인 키로 검색 (1:1방 연동 핵심)
+            else {
+                var mainKey = "내리다_" + cleanSender;
+                if (registry[mainKey]) {
+                    targetUid = registry[mainKey];
+                    globalData.nameToIdCache[cacheKey] = targetUid;
+                    isIdentityRecovered = true;
+                    Log.info("[Identity Restore] " + cleanSender + "님 신분 복구 완료 (Main Linked).");
+                    
+                    // 1:1방 유저 객체를 메인방 객체로 리다이렉트
+                    if (ALLOWED_ROOMS.indexOf(roomName) === -1 && data.rooms["내리다"] && data.rooms["내리다"].users[targetUid]) {
+                        user = data.rooms["내리다"].users[targetUid];
+                    }
+                }
             }
         }
     } catch(e) { Log.error("Registry Read Error"); }
@@ -5542,6 +5559,12 @@ if (!targetUid) {
 
 // 3. [신규 생성] 진짜 신규 유저일 경우
 if (!targetUid) {
+    // [핵심 수정] 1:1 대화방에서는 절대로 신규 UID를 생성하지 않고 차단
+    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+        replier.reply("🚫 [연동 실패: 데이터 없음]\n메인 서버('내리다')에 계정이 없거나 명부와 연결되지 않았습니다.\n먼저 단체방에 입장하거나 관리자에게 문의하세요.");
+        return;
+    }
+
     targetUid = generateUUID();
     globalData.nameToIdCache[cacheKey] = targetUid;
     

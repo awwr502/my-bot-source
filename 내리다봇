@@ -6589,7 +6589,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
     // 공통 네비게이션 바 정의 (중간 단계 안내용)
     var SHOP_NAV = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
-    // 1. 공통 가드 및 취소 로직
+    // 1. 공통 가드 및 취소/네비게이션 로직
     if (Date.now() - state.time > 30000 || msg === "취소" || msg === "❎취소") {
         delete bankProcessState[targetUid];
         var cancelMsg = state.type.indexOf('ship_') !== -1 ? "선박 명명 절차를 중단했습니다." : "상점 이용을 종료합니다.";
@@ -6597,33 +6597,38 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
+    // [개선] 무역 흐름 판정 로직 (아이템 카테고리 6번 체크)
+    var isTradeFlow = (function() {
+        if (!state.extra) return false;
+        if (state.extra.item && state.extra.item.cat === 6) return true;
+        if (state.extra.prevItems && state.extra.prevItems[0] && state.extra.prevItems[0].cat === 6) return true;
+        if (state.type === 'trade_invest_amount') return true;
+        return false;
+    })();
+
     if (msg === "처음으로" || msg === "🏠 처음으로") {
-        // 무역 관련 아이템(Cat 6)이거나 적재 완료 상태인지 판별
-        var isTradeFlow = (state.extra && ((state.extra.item && state.extra.item.cat === 6) || (state.extra.prevItems && state.extra.prevItems[0] && state.extra.prevItems[0].cat === 6))) || (state.type === 'trade_cargo_done');
-        
         delete bankProcessState[targetUid];
         if (isTradeFlow) return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
         return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
     }
 
     if (msg === "뒤로" || msg === "↩️ 뒤로") {
-        var isTradeFlow = (state.extra && ((state.extra.item && state.extra.item.cat === 6) || (state.extra.prevItems && state.extra.prevItems[0] && state.extra.prevItems[0].cat === 6))) || (state.type === 'trade_cargo_done');
+        var isTradeFlow = (state.extra && ((state.extra.item && state.extra.item.cat === 6) || (state.extra.prevItems && state.extra.prevItems[0] && state.extra.prevItems[0].cat === 6))) || (state.type === 'trade_cargo_done') || (state.type === 'trade_invest_amount');
         
         if (state.type === 'shop_quantity') {
             var prevItems = state.extra.prevItems || [];
             bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: prevItems } };
             var list = prevItems.map(function(it, i) { return (i + 1) + ". " + it.icon + " " + it.name + " : " + fp(getItemPrice(it, user, roomName)) + "P"; });
-            
-            // [수정] 섹터5를 참조하지 않고 무역용 타이틀 고정 출력
             var title = isTradeFlow ? "무역 물품 적재 센터" : (SHOP_CATEGORIES[state.extra.item.cat] || "상점");
             replier.reply(formatCommand("🛒 " + title, user, list.join("\n") + SHOP_NAV, "구매할 번호를 입력하세요."));
-        } else if (state.type === 'shop_buy' || state.type === 'ship_rename_input' || state.type === 'trade_cargo_done') {
+        } else if (state.type === 'ship_rename_confirm') {
+            // [복구] 선박 이름 확정 단계에서 뒤로가기 시 입력 단계로 복귀
+            bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now(), extra: state.extra };
+            replier.reply(formatCommand("📝 선박 이름 입력", user, "변경하실 선박의 이름을 다시 입력해주세요.\n(2~8자, 띄어쓰기 포함)" + SHOP_NAV, "취소: [취소]"));
+        } else if (state.type === 'shop_buy' || state.type === 'ship_rename_input' || state.type === 'trade_cargo_done' || state.type === 'trade_invest_amount') {
             delete bankProcessState[targetUid];
             if (isTradeFlow) return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
             return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
-        } else if (state.type === 'ship_rename_confirm') {
-            bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now(), extra: state.extra };
-            replier.reply(formatCommand("📝 선박 이름 입력", user, "변경하실 선박의 이름을 다시 입력해주세요.\n(2~8자, 띄어쓰기 포함)" + SHOP_NAV, "취소: [취소]"));
         }
         return true;
     }
@@ -7757,19 +7762,17 @@ if (msg === "/가이드") {
         return (mw[targetUid] || bp[targetUid] || sw[targetUid]);
       };
 
-// [중요] 단체방(내리다)은 가드를 통과시키기 위한 변수 추가
-    var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
-
-    // 현재 게임 중이거나 메뉴가 열려있는지 확인
-    if (checkSession(localSt) || checkSession(mainSt) || (user && user.blackjackState) || (user && user.voyage && user.voyage.active === true)) {
+// 1:1 채팅방 가드 로직 강화 (현재 방과 메인 방 세션 동시 체크)
+    var inState = false;
+    if (checkSession(localSt) || checkSession(mainSt) || (user && user.blackjackState)) {
         inState = true;
     }
 
-    // 수정: 1:1 대화방(!isGroupRoom)이면서, 허용된 명령어도 아니고, 세션 중도 아닐 때만 리턴(차단)하도록 수정
+    // 1:1 대화방(!isGroupRoom)일 때 허용된 명령어와 게임/은행 세션만 통과 (무역 차단)
     if (!isGroupRoom && !isAllowedCmd && !inState) return;
 
-    // 무역 도착 정산 처리 (가드를 통과한 유저만 대상)
-    if (user && user.voyage && user.voyage.active === true) {
+    // 무역 도착 정산 처리 (단체방에서만 작동하도록 제한)
+    if (isGroupRoom && user && user.voyage && user.voyage.active === true) {
         var v = user.voyage;
         if (Date.now() >= (v.arrival || 0) && v.isProcessing !== true) {
             if (typeof _processTradeArrival === 'function') {

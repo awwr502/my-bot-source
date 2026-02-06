@@ -865,44 +865,31 @@ function getDatabase() {
             initialData = JSON.parse(content);
         }
 
-        // [일회성] 파일을 읽어온 직후 새 명칭으로 데이터를 세탁합니다.
-        util_migrateTradeData(initialData);
+        // [핵심] 파일에서 데이터를 읽어온 '최초 1회' 혹은 '/리로드' 시에만 실행됩니다.
+        if (typeof util_migrateTradeData === 'function') {
+            util_migrateTradeData(initialData);
+        }
 
         // 2. 블랙박스(Journal) 로그 즉시 복구 병합
         recoverFromJournal(initialData);
 
-        // [신규] 무역 정산 고착(stuck) 유저 자동 복구 엔진 (Auto-Healer)
-        // 기능: /리로드 시 정산 잠금(isProcessing)이 true로 굳은 유저들을 찾아 자동으로 풀어줍니다.
+        // [신규] 무역 정산 고착(stuck) 유저 자동 복구 엔진 (로드 시 1회만 수행)
         (function util_autoRepairTradeStuck(data) {
             if (!data || !data.rooms) return;
             var count = 0;
             for (var r in data.rooms) {
                 var users = data.rooms[r].users;
+                if (!users) continue;
                 for (var id in users) {
                     var u = users[id];
-                    // 항해 중(active)인데 정산 중(isProcessing)인 상태에서 멈춘 유저 탐색
                     if (u.voyage && u.voyage.active === true && u.voyage.isProcessing === true) {
-                        u.voyage.isProcessing = false; // 락 해제
-                        u.voyage.isAlerted = false;    // 부도 알림 상태 초기화
+                        u.voyage.isProcessing = false; 
+                        u.voyage.isAlerted = false;
                         count++;
                     }
                 }
             }
-            if (count > 0) {
-                var healerBody = "🛠️ 내용: 무역 정산 프로세스 고착 유저 감지\n" +
-                                 "👤 인원: 총 " + count + "명 락(Lock) 강제 해제";
-                
-                var healerMsg = util_formatSecurityLog(
-                    "🩹 [HEALER: 무역 고착 복구]", 
-                    "AUTO_REPAIR", 
-                    "GLOBAL", 
-                    healerBody, 
-                    "isProcessing 플래그 초기화 및 항해 세션 정상화"
-                );
-                
-                Log.info("[Auto-Healer] " + count + "명 해제 완료");
-                try { Api.replyRoom("베릭방", healerMsg); } catch(e) {}
-            }
+            if (count > 0) Log.info("[Auto-Healer] 로드 시 고착 유저 " + count + "명 해제 완료");
         })(initialData);
         
         // 3. [무결성 유지] 방별 독립성 및 Feature 템플릿 강제 이식 (기존 로직 보존)

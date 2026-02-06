@@ -14229,6 +14229,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         // 모든 계산의 기초가 되는 '원가'를 루프 최상단에서 먼저 정의합니다.
         var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good] || 10000);
         var itemCost = Number(myPurchasePrice * count); // 여기서 itemCost를 확실히 정의
+
+        totalCost += itemCost;
         
         var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
         var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { level: 1 };
@@ -14293,6 +14295,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             }
         }
 
+        totalCost += (sBasePrice * sCount);
+
         if (parentGood === producedByDest) {
             sMult = 0;
             disasterLog += "\n🚫 [통관 거부]: 자국 특산품 '" + sName + "'은 전량 압수되었습니다.";
@@ -14314,21 +14318,21 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     }
 
     // 5. [핵심] 순수익(마진) 기반 차등 정산 로직
-    var margin = totalRevenue - totalCost; // 순수 마진 산출
-    var piracyLoot = 0;
-
-    // 해적 약탈 (마진에서 10% 차감)
+    var margin = totalRevenue - totalCost; // 순수 마진(이익금) 산출
+    
+    // [재해] 해적 약탈 (마진이 있을 때만 마진에서 10% 차감)
     if (triggeredDisaster === "PIRACY" && margin > 0) {
         piracyLoot = Math.floor(margin * 0.1);
         margin -= piracyLoot;
         disasterLog += "\n🏴‍☠️ [해적]: 마진의 10%(-" + fp(piracyLoot) + "P)를 약탈당했습니다.";
     }
 
-    // [v1.8] 총독 관세 징수 및 본인 면제 로직
+    // [세금] 기부왕 혜택 적용 및 이득일 때만 세금 발생
     var taxRate = (user.title === "기부왕") ? 0.05 : 0.10;
-    var taxAmt = margin > 0 ? Math.floor(margin * taxRate) : 0;
-    var afterTaxMargin = margin - taxAmt;
+    taxAmount = margin > 0 ? Math.floor(margin * taxRate) : 0; 
+    var afterTaxMargin = margin - taxAmount;
 
+    // [관세] 총독 관세 징수 로직
     var pDataPath = roomData.features.portData;
     var govInfo = (pDataPath && pDataPath[v.dest]) ? pDataPath[v.dest] : null;
     var govTag = "";
@@ -14344,13 +14348,12 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         }
     }
 
-    // 신용 등급 수익 배율 적용
+    // [신용] 등급별 수익 배율 적용 (마진에만 적용)
     var crInfo = getCreditInfo(user.creditScore, roomName);
     var creditMult = util_getTradeCreditMult(crInfo.grade);
-    var finalNetProfit = Math.floor(afterTaxMargin * creditMult); // 최종 조정된 순이익
-    var creditLoss = Math.max(0, afterTaxMargin - finalNetProfit); // 신용 등급으로 인해 국고로 환수되는 금액
+    var finalNetProfit = Math.floor(afterTaxMargin * creditMult); 
 
-    // 폭풍우 수리비 (최종 수익에서 차감)
+    // [재해] 폭풍우 수리비 (최종 수익에서 차감)
     var repairFee = 0;
     if (triggeredDisaster === "STORM") {
         repairFee = Math.floor(Math.abs(finalNetProfit) * 0.1 + 10000);
@@ -14358,13 +14361,16 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         disasterLog += "\n🌊 [폭풍우]: 선체 파손 수리비 " + fp(repairFee) + "P 지출";
     }
 
-    // 6. 최종 지급액 확정 = 원금(보존) + 조정된 순이익
+    // [최종] 지급액 확정 = 원금(보존) + 모든 보정이 끝난 순이익
     var totalPayout = totalCost + finalNetProfit;
 
-    // [핵심 수정] 실제 돈이 지급될 장부를 economyRoomData(내리다 방)로 지정하여 보안 롤백 해결
+    // 포인트 지급 및 국고 연동
     util_updatePoint(user, economyRoomData, totalPayout, "무역 정산 완료 (원금+수익)", economyRoomName);
     
-    // 국고 귀속 (세금 + 신용 삭감액) 역시 메인 금고에서 처리
+    // [버그 수정] 누적 무역 횟수 증가 로직 (확정)
+    util_setData(user, 'tradeCount', (user.tradeCount || 0) + 1, "무역 횟수 누적", roomName);
+    
+    // 국고 귀속 (세금) 처리
     if (taxAmount > 0) util_updateReserve(economyRoomData, taxAmount, "무역세 징수", economyRoomName);
     if (creditLoss > 0) util_updateReserve(economyRoomData, creditLoss, "신용 등급 차등 수익 환수", economyRoomName);
 

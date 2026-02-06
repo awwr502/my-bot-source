@@ -13226,6 +13226,8 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
                    "4. 🛠️ 선박 관리 (개조)\n" +
                    "5. 🛒 무역 물품 구매 (화물 적재)";
         
+        if (myPorts.length > 0) menu += "\n6. 🏛️ 국고 세입 정산 (총독 전용)";
+        
         replier.reply(formatCommand("⛵ 내리다 무역 지부", user, menu, "번호를 입력하세요."));
         menuWaitState[targetUid] = { type: 'trade_main', time: Date.now(), depth: 1 };
         return true;
@@ -13241,6 +13243,13 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg);
         return true;
     }
+
+    // [추가] 총독 집무실(관세 정산) 대기 상태 핸들러 연결
+    if (state.type === 'trade_governor_office') {
+        _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid);
+        return true;
+    }
+
     if (msg === "뒤로") {
         if (state.depth === 1) {
             delete menuWaitState[targetUid];
@@ -13290,6 +13299,11 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
                 extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } 
             };
             delete menuWaitState[targetUid];
+            } else if (choice === "6") {
+            var myPorts = util_getUserGovernorPorts(targetUid, roomData);
+            if (myPorts.length === 0) return replier.reply(formatError(user, "접근 불가", "총독 권한이 없습니다."));
+            _showGovernorOffice(user, replier, roomData, myPorts);
+            menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), depth: 2, myPorts: myPorts };
         } else {
             replier.reply(formatError(user, "번호 오류", "1~4번 사이를 선택하세요."));
         }
@@ -13329,6 +13343,61 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
     }
 
     return false;
+}
+
+/**
+ * [추가] 🚢 총독 집무실 UI 출력 및 정산 대기 로직
+ */
+/* =====요청사항 시작===== */
+function _showGovernorOffice(user, replier, roomData, myPorts) {
+    var body = "총독님, 자치령에서 징수된 관세가 국고에 보관 중입니다.\n\n[자치령별 관세 적립 현황]\n";
+    var totalAll = 0;
+    myPorts.forEach(function(pName, i) {
+        var pInfo = roomData.features.portData[pName] || {};
+        var amt = Number(pInfo.collectedTariff || 0);
+        totalAll += amt;
+        body += (i + 1) + ". " + pName + ": " + fp(amt) + "P\n";
+    });
+    body += "\n💰 총 가용 정산금: " + fp(totalAll) + "P\n━━━━━━━━━━━━━━━\n" +
+            "💡 [정산 방법]\n• 번호 입력: 해당 항구 관세 수령\n• [전부] 입력: 모든 자치령 관세 일괄 정산\n\n↩️ 뒤로 / ❎취소";
+    replier.reply(formatCommand("🏛️ 총독 집무실 (관세 정산)", user, body, "수령하실 번호를 입력하세요."));
+}
+
+function _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid) {
+    var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var economyRoomData = data.rooms[economyRoomName];
+    var roomData = data.rooms[roomName] || economyRoomData;
+    var state = roomData.features.states.menuWait[targetUid];
+    var myPorts = state.myPorts;
+    var totalSettled = 0;
+    var pData = roomData.features.portData;
+
+    if (msg === "전부") {
+        myPorts.forEach(function(p) {
+            var amt = Number(pData[p].collectedTariff || 0);
+            totalSettled += amt;
+            pData[p].collectedTariff = 0;
+        });
+    } else {
+        var idx = parseInt(msg.replace(/[^0-9]/g, "")) - 1;
+        if (isNaN(idx) || idx < 0 || idx >= myPorts.length) return;
+        var pName = myPorts[idx];
+        totalSettled = Number(pData[pName].collectedTariff || 0);
+        pData[pName].collectedTariff = 0;
+    }
+
+    if (totalSettled <= 0) {
+        replier.reply(formatError(user, "정산 불가", "수령할 관세가 없습니다."));
+        return;
+    }
+
+    util_updatePoint(user, economyRoomData, totalSettled, "총독 자치령 관세 수령", economyRoomName);
+    delete roomData.features.states.menuWait[targetUid];
+    
+    replier.reply(formatCommand("✅ 국고 세입 정산 완료", user, 
+        "국고(중앙은행)로부터 자치령 관세 정산을 완료했습니다.\n\n💰 정산 금액: +" + fp(totalSettled) + "P\n🏛️ 상태: 세입 장부 초기화 완료", 
+        "내 잔액: " + fp(user.point) + "P"));
+    safeSaveData(data, true);
 }
 
 /**
@@ -13913,10 +13982,22 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         disasterLog += "\n🏴‍☠️ [해적]: 마진의 10%(-" + fp(piracyLoot) + "P)를 약탈당했습니다.";
     }
 
-    // 세금 계산 (기부왕 5%, 일반 10%)
+    // [수정] 총독 관세(Tariff) 1% 계산 및 적립 로직 추가
+    var margin = totalRevenue - totalCost;
     var taxRate = (user.title === "기부왕") ? 0.05 : 0.10;
     var taxAmount = margin > 0 ? Math.floor(margin * taxRate) : 0;
     var afterTaxMargin = margin - taxAmount;
+
+    var tariffAmount = 0;
+    var govInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : null;
+    var govTag = "";
+    if (govInfo && govInfo.governorUid && govInfo.governorUid !== "") {
+        tariffAmount = Math.floor(totalRevenue * 0.01);
+        afterTaxMargin -= tariffAmount; // 마진에서 관세 추가 공제
+        govInfo.collectedTariff = (Number(govInfo.collectedTariff) || 0) + tariffAmount; // 총독 장부에 적립
+        var govUser = roomData.users[govInfo.governorUid];
+        govTag = "\n🛡️ 관세(1%): -" + fp(tariffAmount) + "P (" + (govUser ? govUser.name : "총독") + " 징수)";
+    }
 
     // 신용 등급 수익 배율 적용
     var crInfo = getCreditInfo(user.creditScore, roomName);

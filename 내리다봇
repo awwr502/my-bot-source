@@ -844,11 +844,13 @@ function util_migrateTradeData(data) {
  */
 function getDatabase() {
 
-    // 1. RAM 상주 데이터 우선 반환 (물리적 파일 읽기 생략으로 응답 속도 극대화)
+    // [1] RAM 캐시 체크를 최상단으로 이동 (로그 도배 방지 핵심)
+    // 메모리에 데이터가 있다면 아래의 마이그레이션/힐러 로직을 모두 건너뛰고 즉시 반환합니다.
     if (globalData && globalData.rooms && Object.keys(globalData.rooms).length > 0) {
         return globalData; 
     }
 
+    // [2] 캐시가 없을 때만(최초 실행/리로드) 아래 로직 수행
     try {
         var file = new java.io.File(FILE_PATH);
         var initialData;
@@ -865,15 +867,13 @@ function getDatabase() {
             initialData = JSON.parse(content);
         }
 
-        // [핵심] 파일에서 데이터를 읽어온 '최초 1회' 혹은 '/리로드' 시에만 실행됩니다. (도배 방지)
+        // [3] 마이그레이션 및 힐러 로직 (파일을 읽었을 때만 1회 실행)
         if (typeof util_migrateTradeData === 'function') {
-            util_migrateTradeData(initialData);
+            util_migrateTradeData(initialData); 
         }
 
-        // 2. 블랙박스(Journal) 로그 즉시 복구 병합
         recoverFromJournal(initialData);
 
-        // [신규] 무역 정산 고착(stuck) 유저 자동 복구 엔진 (로드 시 1회만 수행)
         (function util_autoRepairTradeStuck(data) {
             if (!data || !data.rooms) return;
             var count = 0;
@@ -883,7 +883,7 @@ function getDatabase() {
                 for (var id in users) {
                     var u = users[id];
                     if (u.voyage && u.voyage.active === true && u.voyage.isProcessing === true) {
-                        u.voyage.isProcessing = false; 
+                        u.voyage.isProcessing = false;
                         u.voyage.isAlerted = false;
                         count++;
                     }
@@ -892,16 +892,14 @@ function getDatabase() {
             if (count > 0) Log.info("[Auto-Healer] 로드 시 고착 유저 " + count + "명 해제 완료");
         })(initialData);
         
-        // 3. [무결성 유지] 방별 독립성 및 Feature 템플릿 강제 이식 (기존 로직 보존)
+        // [4] 무결성 유지 및 템플릿 이식
         if (initialData.rooms) {
             for (var rName in initialData.rooms) {
                 var targetRoom = initialData.rooms[rName];
                 if (!targetRoom.features) {
-                    if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
-                        targetRoom.features = ROOM_FEATURE_TEMPLATE();
-                    }
+                    targetRoom.features = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
                 } else {
-                    var template = ROOM_FEATURE_TEMPLATE();
+                    var template = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
                     if (!targetRoom.features.racing) targetRoom.features.racing = template.racing;
                     if (!targetRoom.features.lotto) targetRoom.features.lotto = template.lotto;
                     if (!targetRoom.features.stockMarket) targetRoom.features.stockMarket = template.stockMarket;
@@ -921,10 +919,8 @@ function getDatabase() {
                 if (targetRoom.bankReserve === undefined) targetRoom.bankReserve = 10000;
             }
         }
-
-        if (!initialData.nameToIdCache) initialData.nameToIdCache = {};
         
-        globalData = initialData;
+        globalData = initialData; // 메모리에 저장
         return globalData;
     } catch (e) {
         Log.error("DB Load Error: " + e);

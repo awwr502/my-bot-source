@@ -43,6 +43,9 @@
     }
 })();
 
+/* [v10.5] 시스템 전역 제어 변수 */
+var _lastHealNotifyTime = 0; // [추가] 헬러 알림 중복 방지용 타임스탬프
+
 /* [v10.0] 원자적 액션 스테이징(Staging) 시스템 전역 객체 */
 var GLOBAL_STAGING = {
     active: {}, // { uid: boolean } 스테이징 모드 활성화 여부
@@ -1058,9 +1061,9 @@ function safeSaveData(data, isForceBackup) {
             for (var uid in room.users) {
                 var u = room.users[uid];
 
-                // [중요] 관리자 본인의 닉네임이나 UID가 일치하면 헬러가 절대로 건드리지 않음
+                // [중요] 관리자이거나 면제권이 있는 경우 헬러 감시 패스 (중복 알림 방지 핵심)
                 if (u.skipHealing === true || isAdmin(u.name, data, u.uid)) {
-                    u.skipHealing = false; // 면제권 사용 후 초기화
+                    u.skipHealing = false; 
                     continue; 
                 }
 
@@ -1129,8 +1132,9 @@ function safeSaveData(data, isForceBackup) {
             } // 유저 루프 종료 (3번째 중괄호)
         } // 방 루프 종료 (4번째 중괄호)
 
-        // 모든 방의 검사가 끝난 시점에 한 번만 치유 보고서 발송
-        if (isHealed && healReports.length > 0) {
+        // 모든 방의 검사가 끝난 시점에 한 번만 치유 보고서 발송 (5초 쿨타임 적용)
+        if (isHealed && healReports.length > 0 && (Date.now() - _lastHealNotifyTime > 5000)) {
+            _lastHealNotifyTime = Date.now(); // [수정] 마지막 알림 시간 갱신
             try {
                 var healerBody = "🩹 내용: 손상 의심 데이터 정밀 수리 완료\n" +
                                  "👥 대상 목록:\n• " + healReports.join("\n• ");

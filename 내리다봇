@@ -2308,26 +2308,24 @@ function util_getGiniCorrection(user, roomName) {
     var data = getDatabase(); // [수정] 데이터 로드를 최상단으로 이동
     if (!data || !data.rooms || !data.rooms[roomName]) return { tax: 1.0, reward: 1.0, level: "안정" };
 
-    var gini = util_calculateGini(roomName);
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    if (!data.rooms[logicRoom]) return { tax: 1.0, reward: 1.0, level: "안정" };
+
+    var gini = util_calculateGini(logicRoom);
     var conf = INTELLIGENT_CONFIG.ECONOMY;
     
     if (gini < conf.GINI_CRITICAL) return { tax: 1.0, reward: 1.0, level: "안정" };
 
     var today = getSimpleDate();
-    // [수정] 이제 data 객체가 정의된 상태에서 안전하게 참조합니다.
-    if (gini >= conf.GINI_CRITICAL && data.lastGiniAlertDate !== today) {
+    if (data.lastGiniAlertDate !== today) {
         data.lastGiniAlertDate = today; 
-        
-        var ecoBody = "⚠️ 내용: 구역 내 빈부격차 임계치 초과\n" +
-                      "📊 지니계수: " + gini.toFixed(3) + " (기준: " + conf.GINI_CRITICAL + ")";
-        
-        var alertMsg = util_formatSecurityLog("🚨 [ECONOMY: 빈부격차 경보]", "SYSTEM", roomName, ecoBody, "지능형 누진세 및 서민 지원책 가동");
+        var alertMsg = util_formatSecurityLog("🚨 [ECONOMY: 빈부격차 경보]", "SYSTEM", logicRoom, 
+            "📊 지니계수: " + gini.toFixed(3), "3단계 계층별 차등 수칙 가동");
         try { Api.replyRoom("베릭방", alertMsg); } catch(e) {}
     }
 
-    var room = data.rooms[roomName];
-    var percentile = util_getNetWorthPercentile(user, roomName);
-    var intensity = (gini - conf.GINI_CRITICAL) / (1 - conf.GINI_CRITICAL); // 격차 강도 (0~1)
+    var percentile = util_getNetWorthPercentile(user, logicRoom);
+    var intensity = (gini - conf.GINI_CRITICAL) / (1 - conf.GINI_CRITICAL);
     
     // 기본값 (중산층)
     var res = { tax: 1.0, reward: 1.0, level: "중산층" };
@@ -2381,9 +2379,9 @@ function util_getEcoMultiplier(roomName) {
  * 기능: 통합 엔진 배율을 적용하여 실시간 단품가(1개 가격)를 산출합니다.
  */
 function getItemPrice(item, user, roomName) {
-    var multiplier = util_getEcoMultiplier(roomName);
-    var giniCorr = util_getGiniCorrection(user, roomName);
-    var basePrice = Math.floor(Number(item.price) * multiplier * giniCorr.tax);
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var multiplier = util_getEcoMultiplier(logicRoom);
+    var giniCorr = util_getGiniCorrection(user, logicRoom);
 
     // 기초가(Base) 설정: 무역 물품일 경우 섹터 1의 상수를 우선 참조
     var rawPrice = Number(item.price);

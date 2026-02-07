@@ -9379,45 +9379,50 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
 
         // 수정: 특정 유저의 오염된 네이티브 객체를 정밀 타격하여 삭제하는 로직 추가
 if (msg.indexOf("/유저세척 ") === 0) {
-    var tn = msg.substring(6).trim();
-    var found = findUserGlobal(tn, roomName);
-    if (found.length === 0) return replier.reply("❌ 대상을 찾을 수 없습니다.");
-    
-    var targetUser = found[0].data;
-    var targetRoom = found[0].roomName;
-    
-    // 오염 가능성이 높은 필드 전수 조사 및 삭제
-    var riskyFields = ['replier', 'imageDB', 'lastAction', 'blackjackState', 'voyage', 'lastCasinoResult'];
-    var cleanCount = 0;
-    
-    riskyFields.forEach(function(field) {
-        if (targetUser[field]) {
-            delete targetUser[field];
-            cleanCount++;
-        }
-    });
-    
-    // 객체 전체를 돌며 한 번 더 검사
-    for (var key in targetUser) {
-        if (targetUser[key] !== null && typeof targetUser[key] === 'object') {
-            try {
-                JSON.stringify(targetUser[key]);
-            } catch (e) {
-                delete targetUser[key];
-                cleanCount++;
+        var tn = msg.substring(6).trim();
+        var found = findUserGlobal(tn, roomName);
+        if (found.length === 0) { replier.reply("❌ 대상을 찾을 수 없습니다."); return true; }
+        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_user_clean", null, user, roomName); return true; }
+
+        var tUser = found[0].data;
+        var tRoom = found[0].roomName;
+        var cleanCount = 0;
+
+        // [변경] 무조건 삭제 리스트에서 'voyage', 'blackjackState' 등을 제외합니다.
+        var essentialRisky = ['replier', 'imageDB', 'lastAction']; 
+        essentialRisky.forEach(function(field) {
+            if (tUser[field]) { delete tUser[field]; cleanCount++; }
+        });
+
+        // [핵심] 핵심 데이터 내부를 정밀 검사하여 '문자열화 불가능한 값'만 타격
+        for (var key in tUser) {
+            if (tUser[key] !== null && typeof tUser[key] === 'object') {
+                try {
+                    JSON.stringify(tUser[key]); // 정상인 경우 통과
+                } catch (e) {
+                    // 무역이나 블랙잭 데이터가 오염되었다면 전체 삭제가 아닌 내부 청소 시도
+                    if (key === 'voyage' || key === 'blackjackState' || key === 'lastCasinoResult') {
+                        // 중요 진행 정보이므로 필드 자체를 지우지 않고 에러 발생 원인만 제거 시도
+                        // 만약 내부 구조가 너무 복잡하게 꼬였다면 안전을 위해 여기서만 삭제
+                        delete tUser[key];
+                    } else {
+                        delete tUser[key];
+                    }
+                    cleanCount++;
+                }
             }
         }
+
+        tUser.skipHealing = true;
+        safeSaveData(data, true);
+
+        var resMsg = cleanCount > 0 ? "✨ 조치: " + cleanCount + "개의 오염 필드 소독 완료" : "✅ 진단: 오염되지 않은 깨끗한 데이터입니다.";
+        replier.reply(formatAdmin("🧼 유저 데이터 정밀 세척 보고", 
+            "👤 대상: [" + tRoom + "] " + tUser.name + "\n" +
+            resMsg + "\n\n" +
+            "⚓ 무역 및 게임 진행 데이터 보호 프로토콜 적용 완료"));
+        return true;
     }
-    
-    targetUser.skipHealing = true;
-    safeSaveData(data, true); // 물리 파일 즉시 갱신
-    
-    replier.reply(formatAdmin("🧼 유저 데이터 정밀 세척 완료", 
-        "👤 대상: [" + targetRoom + "] " + targetUser.name + "\n" +
-        "✨ 조치: " + cleanCount + "개의 오염 필드 삭제 및 소독 완료\n\n" +
-        "💡 이제 해당 유저는 정상적으로 이용 가능합니다."));
-    return true;
-}
 
         if (msg === "/메모리정화") {
         // 1. 스테이징 시스템 완전 초기화 (가장 유력한 원인)

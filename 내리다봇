@@ -1179,19 +1179,21 @@ function safeSaveData(data, isForceBackup) {
      */
     SaveExecutor.execute(new java.lang.Runnable({
         run: function() {
-            lock.lock(); 
+            var isAcquired = false; 
             try {
+                isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                if (!isAcquired) return; // 다른 스레드가 이미 작업 중이면 즉시 종료하여 병목 방지
+
                 var content = JSON.stringify(data, function(key, value) {
                     // 1. 값이 없거나 기본 타입(숫자, 문자 등)이면 그대로 통과
                     if (value === null || typeof value !== 'object') return value;
 
-                    // 2. 자바 네이티브 객체(getClass)나 세션 리플라이어 발견 시 '삭제'가 아닌 '제외' 처리
+                    // 2. 자바 네이티브 객체나 세션 리플라이어 발견 시 '제외' 처리
                     if (value.getClass !== undefined || 
                         (value.constructor && value.constructor.name && value.constructor.name.indexOf('SessionCache') !== -1) ||
                         (typeof value.reply === 'function' && typeof value.getAddress === 'function')) {
-                        return undefined; // JSON에서 해당 필드 자체를 증발시킴
+                        return undefined; 
                     }
-                    
                     return value;
                 });
                 
@@ -1209,7 +1211,7 @@ function safeSaveData(data, isForceBackup) {
                     if (orgFile.exists()) orgFile.delete();
                     tempFile.renameTo(orgFile);
 
-                    // [핵심] 모든 물리적 파일 저장이 끝난 이 시점에서 면제권을 일괄 회수합니다.
+                    // 모든 물리적 파일 저장이 끝난 시점에서 면제권을 일괄 회수
                     for (var r in data.rooms) {
                         if (!data.rooms[r].users) continue;
                         for (var id in data.rooms[r].users) {
@@ -1235,7 +1237,10 @@ function safeSaveData(data, isForceBackup) {
                 var saveErr = "🚨 [시스템 비상: 저장 마비]\n━━━━━━━━━━━━━━━\n• 사유: " + e.message + "\n⚠️ 기기 저장소 권한 및 용량을 확인하세요.";
                 try { Api.replyRoom("베릭방", saveErr); } catch (err) {}
             } finally {
-                lock.unlock();
+                // 중요: 락을 성공적으로 획득했을 때만 해제 (IllegalMonitorStateException 방지)
+                if (isAcquired) {
+                    lock.unlock();
+                }
                 java.lang.System.gc(); 
             }
         }

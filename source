@@ -5277,54 +5277,6 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
                 // [2번] 실시간 하이프(채팅량) 기록
                 roomData.features.msgCount = (roomData.features.msgCount || 0) + 1;
 
-                // 1. 핵심 로직 함수 호출 (모든 인자 누락 없이 전달)
-                if (user) {
-                    _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData);
-                }
-
-            } finally {
-                // [내부 try 닫기] 데이터 잠금(Lock) 해제 가드
-                if (typeof lock !== 'undefined' && lock !== null && lock.isHeldByCurrentThread()) {
-                    lock.unlock(); 
-                }
-            }
-        } catch (e) {
-            // [외부 try 닫기] 에러 발생 시 데이터 복구 및 로그 기록
-            if (typeof util_stagingRollback === 'function' && user && user.uid) {
-                util_stagingRollback(user, roomName);
-            }
-            
-            if (typeof util_reportError === 'function') {
-                try { util_reportError(e, roomName, cleanSender, msg); } catch(err) {}
-            }
-
-            try {
-                if (typeof replier !== 'undefined' && typeof formatError === 'function') {
-                    var safeUser = { name: cleanSender, point: 0, bank: 0 }; 
-                    replier.reply(formatError(safeUser, "시스템 보호 작동", "일시적인 오류가 감지되어 복구되었습니다.\n다시 시도해주세요."));
-                }
-            } catch (innerError) { 
-                Log.error("🚨 [Critical Error Handler Failed]: " + innerError); 
-            }
-        } finally {
-            // [외부 try 닫기] 성능 측정 및 지연 시간 최종 기록
-            try {
-                if (typeof _perfStartTime !== 'undefined') {
-                    var _pDur = java.lang.System.currentTimeMillis() - _perfStartTime;
-                    if (typeof PERF_METRICS !== 'undefined') {
-                        PERF_METRICS.avgLag = Math.floor((PERF_METRICS.avgLag * 9 + _pDur) / 10);
-                        if (_pDur > PERF_METRICS.peakLag) PERF_METRICS.peakLag = _pDur;
-                        PERF_METRICS.msgPerMin++;
-                    }
-                }
-            } catch (err) { Log.error("Perf Logging Fail: " + err); }
-        }
-    } // LogicQueue.run 종료
-        })); // LogicQueue.execute 종료
-    } // ParallelPool.run 종료
-})); // ParallelPool.execute 종료
-}; // action 함수 완전 종료
-
                /* [안전 패치] 템플릿 구조 변경 시 실시간 반영 (누락 데이터 자동 생성) */
 
                 // [v11.0] 6대 랜드마크 일일 배당금 누적 주머니 자동 복구 로직 (Healer)
@@ -5739,6 +5691,53 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
         user = roomData.users[targetUid];
     }
 }
+
+// 1. 핵심 로직 함수 호출 (모든 인자 누락 없이 전달)
+        if (user) {
+            _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData);
+        }
+
+    } catch (e) {
+        // [Rollback] 에러 발생 시 데이터 복구
+        if (typeof util_stagingRollback === 'function' && user && user.uid) {
+            util_stagingRollback(user, roomName);
+        }
+        
+        // [Log] 시스템 로그 기록
+        if (typeof util_reportError === 'function') {
+            try { util_reportError(e, roomName, cleanSender, msg); } catch(err) {}
+        }
+
+        // [Reply] 사용자 알림 (중첩 try 문법 오류 수정 완료)
+        try {
+            if (typeof replier !== 'undefined' && typeof formatError === 'function') {
+                var safeUser = { name: cleanSender, point: 0, bank: 0 }; 
+                replier.reply(formatError(safeUser, "시스템 보호 작동", "일시적인 오류가 감지되어 복구되었습니다.\n다시 시도해주세요."));
+            }
+        } catch (innerError) { 
+            Log.error("🚨 [Critical Error Handler Failed]: " + innerError); 
+        }
+    } finally {
+        // [Lock Release] 락 해제 및 지연 시간 측정
+        try {
+            if (typeof _perfStartTime !== 'undefined') {
+                var _pDur = java.lang.System.currentTimeMillis() - _perfStartTime;
+                if (typeof PERF_METRICS !== 'undefined') {
+                    PERF_METRICS.avgLag = Math.floor((PERF_METRICS.avgLag * 9 + _pDur) / 10);
+                    if (_pDur > PERF_METRICS.peakLag) PERF_METRICS.peakLag = _pDur;
+                    PERF_METRICS.msgPerMin++;
+                }
+            }
+            if (typeof lock !== 'undefined' && lock !== null && lock.isHeldByCurrentThread()) {
+                lock.unlock(); 
+            }
+        } catch (err) { Log.error("Lock Release Fail: " + err); }
+    }
+} // LogicQueue.run 종료
+    })); // LogicQueue.execute 종료
+} // ParallelPool.run 종료
+    })); // ParallelPool.execute 종료
+}; // action 함수 완전 종료
 
 //==========섹터20-2==========
 

@@ -5190,20 +5190,30 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
     var forbiddenKeys = ['replier', 'imageDB'];
     forbiddenKeys.forEach(function(k) { if (u[k]) delete u[k]; });
     
-    // 2단계: 재귀적 검사를 통한 변종 자바 객체 박멸 (JSON 변환 테스트)
     for (var key in u) {
-        if (u[key] !== null && typeof u[key] === 'object') {
-            try {
-                // 이 줄에서 에러가 나면 해당 필드가 오염된 것임
-                JSON.stringify(u[key]);
-            } catch (serializationError) {
-                // 오염된 필드(주로 lastAction 등)를 즉시 삭제하여 팅김 방지
-                delete u[key]; 
-                Log.warn("⚠️ [" + u.name + "] 데이터 오염 감지 및 즉시 격리: " + key);
-            }
-        }
-    }
-}
+                        var val = u[key];
+                        // 1. 객체 형태인 경우 정밀 검사
+                        if (val !== null && typeof val === 'object') {
+                            // 자바 네이티브 객체의 특징(getClass 등)이 발견되면 즉시 필드 삭제
+                            if (val.getClass !== undefined || (val.constructor && val.constructor.name.indexOf('SessionCache') !== -1)) {
+                                delete u[key];
+                                Log.warn("🗑️ [Memory Clean] " + u.name + "의 오염된 네이티브 필드(" + key + ") 소각 완료");
+                            } else {
+                                // 2. 내부 깊숙이 숨은 오염물 체크 (직렬화 테스트)
+                                try {
+                                    JSON.stringify(val);
+                                } catch (e) {
+                                    delete u[key]; // 변환 실패 시 즉시 삭제
+                                    Log.error("🚨 [Deep Clean] " + u.name + "의 직렬화 불가 필드(" + key + ") 강제 제거");
+                                }
+                            }
+                        }
+                        // 3. 필드 자체가 함수(Function)인 경우도 네이티브 흔적이므로 삭제
+                        if (typeof val === 'function') {
+                            delete u[key];
+                        }
+                    }
+
                         // [중계 시스템] 유저 입력 실시간 탈취
                         // 유저가 카지노 감시 모드일 때, 해당 유저가 치는 모든 채팅을 중계방에 전송
                         if (user && user.casinoAuditStartTime > 0 && roomName !== CASINO_RELAY_ROOM) {

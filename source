@@ -5130,6 +5130,8 @@ function _runSector18Logic(data, ctx) {
 
 // [수정] user 변수 및 캐시 키 선언부 보강 (참조 오류 방지)
 action = function(room, msg, sender, isGroupChat, replier, imageDB) {
+   this.action = function(room, msg, sender, isGroupChat, replier, imageDB) {
+    Log.debug("📩 본체 진입 성공: [" + room + "] " + sender + " -> " + msg);
     _perfStartTime = java.lang.System.currentTimeMillis();
     _msgReceiveTime = Date.now();
     
@@ -5138,7 +5140,7 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
             var realRoom = room ? room.trim() : ""; 
             var roomName = realRoom; 
             var cleanSender = sender ? String(sender).trim() : "";
-            var user = null; // [핵심] user 변수를 스코프 최상단에 명시적 선언
+            var user = null;
 
             if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && isGroupChat === true) return;
             if (cleanSender === "오픈채팅봇") return;
@@ -5146,7 +5148,8 @@ action = function(room, msg, sender, isGroupChat, replier, imageDB) {
             // [Step 2] 순차 처리 엔진 가동
             LogicQueue.execute(new java.lang.Runnable({
                 run: function() {
-                    var nowTs = Date.now();
+                    try {
+                        var nowTs = Date.now();
                     var user = null; 
                     var targetUid = null;
                     var cacheKey = "GLOBAL_" + cleanSender;
@@ -5696,28 +5699,27 @@ if (user) {
 
 // [닫는 괄호] 섹터 19에서 시작된 try 구문을 여기서 닫습니다.
 } catch (e) {
-    // [Rollback] 에러 발생 시 데이터 복구
-    if (typeof util_stagingRollback === 'function' && user && user.uid) {
-        util_stagingRollback(user, roomName);
-    }
-    
-    // [Log] 시스템 로그 기록 (객체 대신 문자열만 사용)
-    if (typeof util_reportError === 'function') {
-        try { util_reportError(e, roomName, cleanSender, msg); } catch(err) {}
-    }
-
-    // [Reply] 사용자 알림 (오염된 user 객체를 직접 넘기지 않음)
-    try {
-        if (typeof replier !== 'undefined' && typeof formatError === 'function') {
-            // user 객체 대신 최소한의 정보만 가진 껍데기(Dummy)를 생성하여 전달
-            var safeUser = { name: cleanSender, point: 0, bank: 0 }; 
-            replier.reply(formatError(safeUser, "시스템 보호 작동", "일시적인 오류가 감지되어 복구되었습니다.\n다시 시도해주세요."));
+        // [Rollback] 에러 발생 시 데이터 복구
+        if (typeof util_stagingRollback === 'function' && user && user.uid) {
+            util_stagingRollback(user, roomName);
         }
-    } catch (err) { 
-        Log.error("🚨 [Critical Error Handler Failed]: " + err); 
-    }
-} finally {
-        // [Lock Release] 락 해제
+        
+        // [Log] 시스템 로그 기록
+        if (typeof util_reportError === 'function') {
+            try { util_reportError(e, roomName, cleanSender, msg); } catch(err) {}
+        }
+
+        // [Reply] 사용자 알림 (오염된 user 객체 대신 Dummy 사용)
+        try {
+            if (typeof replier !== 'undefined' && typeof formatError === 'function') {
+                var safeUser = { name: cleanSender, point: 0, bank: 0 }; 
+                replier.reply(formatError(safeUser, "시스템 보호 작동", "일시적인 오류가 감지되어 복구되었습니다.\n다시 시도해주세요."));
+            }
+        } catch (err) { 
+            Log.error("🚨 [Critical Error Handler Failed]: " + err); 
+        }
+    } finally {
+        // [Lock Release] 락 해제 및 성능 데이터 기록
         try {
             if (typeof _perfStartTime !== 'undefined') {
                 var _pDur = java.lang.System.currentTimeMillis() - _perfStartTime;
@@ -5732,11 +5734,9 @@ if (user) {
             }
         } catch (err) { Log.error("Lock Release Fail: " + err); }
     }
-
-    // [계층 역순 종료] 모든 박스를 여기서 닫습니다.
-    } // LogicQueue.run 종료
+} // LogicQueue.run 종료
     })); // LogicQueue.execute 종료
-    } // ParallelPool.run 종료
+} // ParallelPool.run 종료
     })); // ParallelPool.execute 종료
 }; // action 함수 완전 종료
 

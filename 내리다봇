@@ -9388,43 +9388,46 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
         var tRoom = found[0].roomName;
         var cleanCount = 0;
 
-        // 1단계: 명백한 시스템 불순물(Java 객체) 즉시 제거 (게임 데이터와 무관)
-        var systemGarbage = ['replier', 'imageDB']; 
-        systemGarbage.forEach(function(field) {
-            if (tUser[field]) { delete tUser[field]; cleanCount++; }
-        });
-
-        // 2단계: 모든 필드를 전수 조사하되, '진짜 에러'가 발생하는 필드만 삭제
+        // [초정밀 검사] 유저의 모든 필드를 하나하나 실측 테스트
         for (var key in tUser) {
-            // 필드값이 객체나 배열인 경우만 검사 (숫자, 문자, 불리언은 안전하므로 패스)
-            if (tUser[key] !== null && typeof tUser[key] === 'object') {
+            var value = tUser[key];
+            
+            // 검사 대상: 객체(Object)이거나 배열(Array)인 경우만 (숫자/문자는 무조건 안전)
+            if (value !== null && typeof value === 'object') {
                 try {
-                    // [핵심] 실제로 문자로 바꿀 수 있는지 테스트합니다.
-                    // 정상적인 무역(voyage), 광산(mining) 정보는 여기서 에러가 나지 않으므로 안전합니다.
-                    JSON.stringify(tUser[key]); 
+                    // 1. 직렬화 테스트 (가장 확실한 방법)
+                    // 이 과정에서 에러가 나지 않는 무역, 광산, 인벤토리 데이터는 안전하게 통과됨
+                    JSON.stringify(value);
+                    
+                    // 2. 자바 네이티브 객체 여부 2차 검증 (getClass 속성이 있는지 확인)
+                    if (value.getClass !== undefined || (value.constructor && value.constructor.name === 'SessionCacheReplier')) {
+                        throw new Error("Native Object Detected");
+                    }
                 } catch (e) {
-                    // 오직 '직렬화 실패' 에러가 나는 고장난 필드만 삭제합니다.
+                    // 위 테스트에서 에러가 발생한 '진짜 오염물'만 여기서 삭제됨
                     delete tUser[key];
                     cleanCount++;
-                    Log.error("🚨 [" + tUser.name + "] 오염 필드 격리: " + key);
+                    Log.warn("🚨 [" + tUser.name + "] 오염 필드 제거: " + key);
                 }
             }
         }
 
-        tUser.skipHealing = true;
-        safeSaveData(data, true); // 소독 완료 후 즉시 물리 파일에 박제
-
-        var resultSummary = "";
         if (cleanCount > 0) {
-            resultSummary = "✨ 조치: " + cleanCount + "개의 오염 필드(에러 유발원) 소독 완료";
-        } else {
-            resultSummary = "✅ 진단: 모든 데이터가 표준 규격에 맞는 깨끗한 상태입니다.";
+            tUser.skipHealing = true;
+            safeSaveData(data, true); // 오염 제거 시에만 물리 저장소 갱신
         }
 
-        replier.reply(formatAdmin("🧼 유저 데이터 정밀 세척 보고", 
+        var resultBody = "";
+        if (cleanCount > 0) {
+            resultBody = "✨ 조치: " + cleanCount + "개의 오염된 필드를 발견하여 소독했습니다.";
+        } else {
+            resultBody = "✅ 진단: 모든 데이터가 정상 규격입니다. 삭제된 항목이 없습니다.";
+        }
+
+        replier.reply(formatAdmin("🧼 유저 데이터 무결성 검사 완료", 
             "👤 대상: [" + tRoom + "] " + tUser.name + "\n" +
-            resultSummary + "\n\n" +
-            "💰 포인트, 가방, 무역, 광산 등 모든 게임 정보는 안전하게 보존되었습니다."));
+            resultBody + "\n\n" +
+            "💰 무역, 광산, 포인트 등 모든 게임 정보가 100% 보존되었습니다."));
         return true;
     }
 

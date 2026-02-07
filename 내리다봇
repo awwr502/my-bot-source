@@ -1057,8 +1057,11 @@ function safeSaveData(data, isForceBackup) {
             for (var uid in room.users) {
                 var u = room.users[uid];
 
-                // [1] 면제권 체크: 저장이 완료될 때까지 보안 엔진의 접근을 차단
-                if (u.skipHealing === true) continue; 
+                // [중요] 관리자 본인의 닉네임이나 UID가 일치하면 헬러가 절대로 건드리지 않음
+                if (u.skipHealing === true || isAdmin(u.name, data, u.uid)) {
+                    u.skipHealing = false; // 면제권 사용 후 초기화
+                    continue; 
+                }
 
                 // [2] 정밀 부분 복구 로직 (Surgical Repair)
                 if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
@@ -2305,25 +2308,26 @@ function util_calculateGini(roomName) {
  * 기능: 지니 계수에 따라 자산가에게는 누진세를, 서민에게는 보너스를 부여하는 지능형 수치를 반환
  */
 function util_getGiniCorrection(user, roomName) {
+    var data = getDatabase(); // [수정] 데이터 로드를 최상단으로 이동
+    if (!data || !data.rooms || !data.rooms[roomName]) return { tax: 1.0, reward: 1.0, level: "안정" };
+
     var gini = util_calculateGini(roomName);
     var conf = INTELLIGENT_CONFIG.ECONOMY;
     
     if (gini < conf.GINI_CRITICAL) return { tax: 1.0, reward: 1.0, level: "안정" };
 
     var today = getSimpleDate();
+    // [수정] 이제 data 객체가 정의된 상태에서 안전하게 참조합니다.
     if (gini >= conf.GINI_CRITICAL && data.lastGiniAlertDate !== today) {
-        data.lastGiniAlertDate = today; // 알림 기록 저장
+        data.lastGiniAlertDate = today; 
         
         var ecoBody = "⚠️ 내용: 구역 내 빈부격차 임계치 초과\n" +
                       "📊 지니계수: " + gini.toFixed(3) + " (기준: " + conf.GINI_CRITICAL + ")";
         
-        var alertMsg = util_formatSecurityLog("🚨 [ECONOMY: 빈부격차 경보]", "SYSTEM", roomName, ecoBody, "지능형 누진세 및 서민 지원책 강제 가동");
-        
-        // 상점 이용 시마다 뜨지 않도록 관리자 방(베릭방)으로만 전송 권장
+        var alertMsg = util_formatSecurityLog("🚨 [ECONOMY: 빈부격차 경보]", "SYSTEM", roomName, ecoBody, "지능형 누진세 및 서민 지원책 가동");
         try { Api.replyRoom("베릭방", alertMsg); } catch(e) {}
     }
 
-    var data = getDatabase();
     var room = data.rooms[roomName];
     var eco = calculateEconomy(data, roomName);
     var myNetWorth = util_calculateNetWorth(user, room);
@@ -2578,16 +2582,25 @@ function getDisplayName(user) {
 
 /* [수정] 관리자 여부 확인 함수 (FIXED_ADMINS 체크 추가) */
 function isAdmin(sender, data, uid) {
-    var name = String(sender).trim();
+    if (!sender) return false;
+    // [수정] 닉네임 내부의 모든 공백을 제거하여 비교 (정확도 100%)
+    var cleanInputName = String(sender).replace(/\s/g, "");
     
-    // 1. 소스코드에 하드코딩된 이름은 데이터베이스 확인 없이 즉시 마스터 권한 부여
-    if (FIXED_ADMINS.indexOf(name) !== -1) return true;
+    // 마스터 닉네임 리스트도 공백 제거 후 비교
+    var masterMatched = FIXED_ADMINS.some(function(adminName) {
+        return adminName.replace(/\s/g, "") === cleanInputName;
+    });
     
-    // 2. UID 기반 마스터 인증
+    if (masterMatched) return true;
     if (uid && adminUIDs.indexOf(uid) !== -1) return true;
 
-    // 3. 부관리자 등 일반 관리자 명단 체크
-    if (data && data.admins && data.admins.indexOf(name) !== -1) return true;
+    // 부관리자 명단 체크
+    if (data && data.admins) {
+        var adminMatched = data.admins.some(function(name) {
+            return name.replace(/\s/g, "") === cleanInputName;
+        });
+        if (adminMatched) return true;
+    }
 
     return false;
 }

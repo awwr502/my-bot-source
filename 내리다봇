@@ -14840,8 +14840,22 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     }
 
     // [세금] 기부왕 혜택 적용 및 이득일 때만 세금 발생
-    var taxRate = (user.title === "기부왕") ? 0.05 : 0.10;
-    taxAmount = margin > 0 ? Math.floor(margin * taxRate) : 0; 
+    var percentile = util_getNetWorthPercentile(user, roomName);
+    var autoTaxRate = 0.05; // 기본 하한선 5%
+
+    // 1. 자산 비율에 따른 기본 관세 책정 (상위 15%는 10%, 상위 40%는 7%, 그 외 5%)
+    if (percentile <= 15) autoTaxRate = 0.10;
+    else if (percentile <= 40) autoTaxRate = 0.07;
+    else autoTaxRate = 0.05;
+
+    // 2. [자율 지능] 국고 위기 상태라면 자동으로 추가 관세 부과 (방어 기제)
+    if (roomData.lastBankAlert === "warning") autoTaxRate += 0.02;
+    else if (roomData.lastBankAlert === "disaster") autoTaxRate += 0.05;
+
+    // 3. [칭호 혜택] 기부왕은 모든 계산이 끝난 최종 세율에서 50% 자동 감면
+    if (user.title === "기부왕") autoTaxRate *= 0.5;
+
+    taxAmount = margin > 0 ? Math.floor(margin * autoTaxRate) : 0;
     var afterTaxMargin = margin - taxAmount;
 
     // [관세] 총독 관세 징수 로직

@@ -1398,6 +1398,7 @@ var CMD_LIST = {
         { cmd: "/진단", desc: "[닉네임] 유저 상태 정밀 분석", func: "_adminUserManageLogic" },
         { cmd: "/유저세척", desc: "[닉네임] 오염된 데이터 정밀 소독", func: "_adminUserManageLogic" },
         { cmd: "/핵소독", desc: "[닉네임] 에러 필드 강제 삭제 (최후수단)", func: "_adminUserManageLogic" },
+        { cmd: "/광산자동복구", desc: "[닉네임] 백업본 기반 광산 데이터 자동 복구", func: "_adminUserManageLogic" },
         { cmd: "/무역복구", desc: "[닉네임] 정산 꼬임 강제 해제 및 재시작", func: "_adminUserManageLogic" },
         { cmd: "/블랙박스", desc: "[닉네임] 최근 거래 내역 역추적", func: "_adminUserManageLogic" },
         { cmd: "/부동산자산복구", desc: "유저 평단가 기반 시세 긴급 복구", func: "_adminEconomyLogic" },
@@ -10167,6 +10168,73 @@ if (msg === "/전체채굴복구") {
         }
         return true;
     }
+
+    if (msg.indexOf("/광산자동복구 ") === 0) {
+    var tn = msg.substring(8).trim();
+    var found = findUserGlobal(tn, roomName);
+    
+    if (found.length === 0) return replier.reply("❌ 현재 데이터에서 유저를 찾을 수 없습니다.");
+    if (found.length > 1) { 
+        handleUserSelection(replier, targetUid, found, "admin_mining_auto", {}, user, roomName); 
+        return true; 
+    }
+
+    var tUser = found[0].data;
+    var tId = found[0].id;
+
+    try {
+        // 1. 마지막으로 저장된 백업 파일 로드 (가장 안정적인 종료 시점 데이터)
+        var backupPath = "sdcard/msgbot/data/attendance_backup.json";
+        var backupRaw = FileStream.read(backupPath);
+        if (!backupRaw) throw new Error("백업 파일을 찾을 수 없습니다.");
+        
+        var backupData = JSON.parse(backupRaw);
+        var backupUser = null;
+
+        // 2. 백업 데이터 전수 조사하여 해당 유저의 마지막 기록 추출
+        for (var r in backupData.rooms) {
+            if (backupData.rooms[r].users[tId]) {
+                backupUser = backupData.rooms[r].users[tId];
+                break;
+            }
+        }
+
+        if (!backupUser) {
+            replier.reply("⚠️ 해당 유저의 과거 기록이 백업본에 존재하지 않습니다.");
+            return true;
+        }
+
+        // 3. 마지막 종료 시점의 수치 확인 (유실된 데이터만 선택적 복구)
+        var oldTime = Number(backupUser.totalMiningTime || 0);
+        var oldArtifact = Number(backupUser.artifactPieces || 0);
+
+        if (oldTime === 0 && oldArtifact === 0) {
+            replier.reply("⚠️ 백업본의 데이터도 0입니다. 복구할 내용이 없습니다.");
+            return true;
+        }
+
+        // 4. 현재 데이터에 주입 (포인트 등 다른 자산은 건드리지 않음)
+        tUser.totalMiningTime = oldTime;
+        tUser.artifactPieces = oldArtifact;
+        tUser.skipHealing = true;
+
+        safeSaveData(data, true); // 즉시 물리 저장 및 동기화
+
+        var resBody = "👤 대상: " + tUser.name + "\n" +
+                      "📅 복구 시점: 백업 스냅샷 데이터 기반\n" +
+                      "━━━━━━━━━━━━━━━\n" +
+                      "⛏️ 누적 채굴: " + fp(oldTime) + "분 (복구완료)\n" +
+                      "🧩 유물 조각: " + oldArtifact + "개 (복구완료)\n" +
+                      "━━━━━━━━━━━━━━━\n" +
+                      "✅ 마지막 정상 종료 시점으로 데이터가 자동 복원되었습니다.";
+
+        replier.reply(formatAdmin("🤖 광산 자동 스냅샷 복구", resBody));
+
+    } catch (e) {
+        replier.reply("❌ 자동 복구 실패: " + e.message);
+    }
+    return true;
+}
 
     if (msg === "/배당금강제정산") {
         data.lastDailyReset = ""; 

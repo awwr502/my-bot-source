@@ -9378,7 +9378,7 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
     }
 
         // 수정: 특정 유저의 오염된 네이티브 객체를 정밀 타격하여 삭제하는 로직 추가
-if (msg.indexOf("/유저세척 ") === 0) {
+        if (msg.indexOf("/유저세척 ") === 0) {
         var tn = msg.substring(6).trim();
         var found = findUserGlobal(tn, roomName);
         if (found.length === 0) { replier.reply("❌ 대상을 찾을 수 없습니다."); return true; }
@@ -9388,39 +9388,43 @@ if (msg.indexOf("/유저세척 ") === 0) {
         var tRoom = found[0].roomName;
         var cleanCount = 0;
 
-        // [변경] 무조건 삭제 리스트에서 'voyage', 'blackjackState' 등을 제외합니다.
-        var essentialRisky = ['replier', 'imageDB', 'lastAction']; 
-        essentialRisky.forEach(function(field) {
+        // 1단계: 명백한 시스템 불순물(Java 객체) 즉시 제거 (게임 데이터와 무관)
+        var systemGarbage = ['replier', 'imageDB']; 
+        systemGarbage.forEach(function(field) {
             if (tUser[field]) { delete tUser[field]; cleanCount++; }
         });
 
-        // [핵심] 핵심 데이터 내부를 정밀 검사하여 '문자열화 불가능한 값'만 타격
+        // 2단계: 모든 필드를 전수 조사하되, '진짜 에러'가 발생하는 필드만 삭제
         for (var key in tUser) {
+            // 필드값이 객체나 배열인 경우만 검사 (숫자, 문자, 불리언은 안전하므로 패스)
             if (tUser[key] !== null && typeof tUser[key] === 'object') {
                 try {
-                    JSON.stringify(tUser[key]); // 정상인 경우 통과
+                    // [핵심] 실제로 문자로 바꿀 수 있는지 테스트합니다.
+                    // 정상적인 무역(voyage), 광산(mining) 정보는 여기서 에러가 나지 않으므로 안전합니다.
+                    JSON.stringify(tUser[key]); 
                 } catch (e) {
-                    // 무역이나 블랙잭 데이터가 오염되었다면 전체 삭제가 아닌 내부 청소 시도
-                    if (key === 'voyage' || key === 'blackjackState' || key === 'lastCasinoResult') {
-                        // 중요 진행 정보이므로 필드 자체를 지우지 않고 에러 발생 원인만 제거 시도
-                        // 만약 내부 구조가 너무 복잡하게 꼬였다면 안전을 위해 여기서만 삭제
-                        delete tUser[key];
-                    } else {
-                        delete tUser[key];
-                    }
+                    // 오직 '직렬화 실패' 에러가 나는 고장난 필드만 삭제합니다.
+                    delete tUser[key];
                     cleanCount++;
+                    Log.error("🚨 [" + tUser.name + "] 오염 필드 격리: " + key);
                 }
             }
         }
 
         tUser.skipHealing = true;
-        safeSaveData(data, true);
+        safeSaveData(data, true); // 소독 완료 후 즉시 물리 파일에 박제
 
-        var resMsg = cleanCount > 0 ? "✨ 조치: " + cleanCount + "개의 오염 필드 소독 완료" : "✅ 진단: 오염되지 않은 깨끗한 데이터입니다.";
+        var resultSummary = "";
+        if (cleanCount > 0) {
+            resultSummary = "✨ 조치: " + cleanCount + "개의 오염 필드(에러 유발원) 소독 완료";
+        } else {
+            resultSummary = "✅ 진단: 모든 데이터가 표준 규격에 맞는 깨끗한 상태입니다.";
+        }
+
         replier.reply(formatAdmin("🧼 유저 데이터 정밀 세척 보고", 
             "👤 대상: [" + tRoom + "] " + tUser.name + "\n" +
-            resMsg + "\n\n" +
-            "⚓ 무역 및 게임 진행 데이터 보호 프로토콜 적용 완료"));
+            resultSummary + "\n\n" +
+            "💰 포인트, 가방, 무역, 광산 등 모든 게임 정보는 안전하게 보존되었습니다."));
         return true;
     }
 

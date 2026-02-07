@@ -2326,28 +2326,23 @@ function util_getGiniCorrection(user, roomName) {
     }
 
     var room = data.rooms[roomName];
-    var eco = calculateEconomy(data, roomName);
-    var myNetWorth = util_calculateNetWorth(user, room);
-    
-    // 평균 자산보다 높으면 '자산가', 낮으면 '서민'으로 분류
-    var isWealthy = myNetWorth > eco.average;
+    var percentile = util_getNetWorthPercentile(user, roomName);
     var intensity = (gini - conf.GINI_CRITICAL) / (1 - conf.GINI_CRITICAL); // 격차 강도 (0~1)
+    
+    // 기본값 (중산층)
+    var res = { tax: 1.0, reward: 1.0, level: "중산층" };
 
-    if (isWealthy) {
-        // 자산가: 세금 가산 (최대 +20%)
-        return { 
-            tax: 1.0 + (conf.MAX_PROGRESSIVE_TAX * intensity), 
-            reward: 1.0, 
-            level: "불평등(누진세 가산)" 
-        };
-    } else {
-        // 서민: 보상 강화 (최대 1.5배)
-        return { 
-            tax: 1.0, 
-            reward: 1.0 + ((conf.REWARD_BOOST_LIMIT - 1.0) * intensity), 
-            level: "불평등(서민 지원)" 
-        };
+    if (percentile <= 15) {
+        // 상류층 (엘리트): 누진세 적용 (최대 +50%)
+        res.tax = 1.0 + (conf.MAX_PROGRESSIVE_TAX * intensity);
+        res.level = "상류층(누진)";
+    } else if (percentile >= 70) {
+        // 부양층 (서민): 보상 강화 (최대 1.5배)
+        res.reward = 1.0 + ((conf.REWARD_BOOST_LIMIT - 1.0) * intensity);
+        res.level = "부양층(지원)";
     }
+    
+    return res;
 }
 
 /**
@@ -2362,10 +2357,12 @@ function util_getEcoMultiplier(roomName) {
 
     // 섹터 8의 통합 경제 지표 호출 (채권/부채 반영 수치)
     var currentEco = calculateEconomy(data, roomName);
-    var rawRatio = currentEco.total / roomData.economyBase;
+    var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.3;
     
-    // 물가 완충 비율(Damping) 적용
-    var damping = (data.economyDamping !== undefined) ? data.economyDamping : 0.5;
+    // 물가 배율이 1.2배를 초과할 경우, 0.3이었던 완충력을 최대 0.5까지 높여 물가 상승 억제
+    if (rawRatio > 1.2) {
+        damping = Math.min(0.5, damping + (rawRatio - 1.2) * 0.5);
+    }
     var multiplier = 1 + (rawRatio - 1) * damping;
     
     if (multiplier > 2.0) {
@@ -4639,7 +4636,12 @@ function _runSector17Logic(data, ctx) {
             
             if (eco.total > 0) {
                 var oldBase = rObj.economyBase || eco.total;
-                rObj.economyBase = Math.floor(Math.sqrt(oldBase * eco.total));
+                if (eco.total > oldBase) {
+                    var weight = 0.6;
+                    rObj.economyBase = Math.floor((oldBase * (1 - weight)) + (eco.total * weight));
+                } else {
+                    rObj.economyBase = Math.floor(Math.sqrt(oldBase * eco.total));
+                }
                 Log.info("[" + rName + "] 경제 기준점 자동 조정 완료: " + fp(rObj.economyBase) + "P");
             }
         }
@@ -4661,6 +4663,8 @@ function _runSector17Logic(data, ctx) {
         for (var rName in data.rooms) {
             var roomObj = data.rooms[rName];
             var eco = calculateEconomy(data, rName);
+            var isTaxCut = (Number(roomObj.bankReserve) > Number(roomObj.economyBase));
+            var taxMultiplier = isTaxCut ? 0.5 : 1.0;
             var wealthyThreshold = eco.average * 3; // 평균 자산의 3배 초과 시 부유층
 
             var ecoCfg = SYSTEM_CONFIG.ECO; 
@@ -4681,7 +4685,7 @@ function _runSector17Logic(data, ctx) {
                 else if (netWorth > 100000) taxRate = 0.01;  // 10만P 초과: 1%
 
                 if (taxRate > 0) {
-                    var tax = Math.floor(netWorth * taxRate);
+                    var tax = Math.floor(netWorth * taxRate * taxMultiplier);
                     if (u.title === "기부왕") {
                         tax = Math.floor(tax * 0.5);
                     }
@@ -4710,9 +4714,10 @@ function _runSector17Logic(data, ctx) {
 
             // [자동 보고] 정산 내역이 있을 때만 결과 출력
             if (reportTaxCount > 0 || reportPurgeCount > 0) {
+               var taxStatus = (Number(roomObj.bankReserve) > Number(roomObj.economyBase)) ? " (호황기 50% 감면 적용)" : "";
                var reportMsg = "🌙 [야간 경제 안정화 정산 보고]\n" +
                                 "━━━━━━━━━━━━━━━\n" +
-                                "✅ 보유세(누진제) 징수 완료\n" +
+                                "✅ 보유세(누진제) 징수 완료" + taxStatus + "\n" +
                                 "• 납세 인원: " + reportTaxCount + "명\n" +
                                 "• 총 세수: +" + fp(reportTotalTax) + "P (국고 입고)\n\n" +
                                 "✅ 유령 유저 데이터 정리\n" +
@@ -13346,14 +13351,20 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
             return true; 
         }
 
-       // [핵심] 보상 계산을 위한 기초 데이터 호출
-        var pol = util_getActivePolicy(roomData); // 정부 정책
-        var multiplier = util_getEcoMultiplier(roomName); // 시장 물가 배율
-        var emergencyMult = util_getEmergencyMultiplier(roomName); // 국고 위기 배율
+       var eco = calculateEconomy(data, roomName);
+        var avgAsset = eco.average || 500000; // 데이터가 없을 경우 최소 기준 50만P 설정
+        
+        // 평균 자산의 2%를 보상액으로 결정 (예: 평균 87만P 기준 약 17,400P)
+        var baseReward = Math.floor(avgAsset * 0.02); 
+        
+        // 약간의 재미를 위해 보상액의 ±5% 범위에서 난수 발생
+        var variance = baseReward * 0.05;
+        baseReward = Math.floor(baseReward + (Math.random() * (variance * 2) - variance));
 
-        var minR = SYSTEM_CONFIG.ECO.ATTEND_MIN || 1000;
-        var maxR = SYSTEM_CONFIG.ECO.ATTEND_MAX || 1500;
-        var baseReward = Math.floor(Math.random() * (maxR - minR + 1)) + minR;
+        var pol = util_getActivePolicy(roomData); // 정부 정책
+        var multiplier = util_getEcoMultiplier(roomName); // 시장 물가 배율
+        var emergencyMult = util_getEmergencyMultiplier(roomName); // 국고 위기 배율
+        var giniCorr = util_getGiniCorrection(user, roomName); // 계층별 보정
         
         // 1. 시장 물가 및 정부 정책 배율 적용
         var baseResult = Math.floor(baseReward * multiplier * (pol.attendMult || 1.0));

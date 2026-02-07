@@ -10179,81 +10179,69 @@ if (msg === "/전체채굴복구") {
     var tId = found[0].id;
 
     try {
-        // [수정] 수사 보고서에서 확인된 '진짜' 경로들 위주로 재편성
-        var folders = [
-            "/sdcard/msgbot/data/",
-            "/storage/emulated/0/msgbot/data/",
-            "/sdcard/msgbot/"
-        ];
+        var dataPath = "/sdcard/msgbot/data/";
+        var backupFile = "last_stable_backup.json";
         
-        var targetFile = "last_stable_backup.json";
-        var backupRaw = null;
-        var finalPath = "";
-        
-        // 수정: 폴더 내 1,400개 파일 중 우리가 원하는 파일이 있는지 정밀 검색
-        for (var i = 0; i < folders.length; i++) {
-            var path = folders[i] + targetFile;
-            var fileChecker = new java.io.File(path);
-            
-            if (fileChecker.exists() && fileChecker.isFile()) {
-                var raw = FileStream.read(path);
-                if (raw && raw.length > 100) {
-                    backupRaw = raw;
-                    finalPath = path;
-                    break;
+        // 1. [초정밀 세정] 오직 로그용 .txt 파일만 소각 (데이터 임시파일 .json/.tmp 절대 보존)
+        var dir = new java.io.File(dataPath);
+        var files = dir.listFiles();
+        var cleanCount = 0;
+        if (files) {
+            for (var i = 0; i < files.length; i++) {
+                var fName = files[i].getName();
+                // 조건: LOG_TEMP_로 시작 AND .txt로 끝나는 파일만 타격
+                if (fName.indexOf("LOG_TEMP_") === 0 && fName.endsWith(".txt")) {
+                    if (files[i].delete()) cleanCount++;
                 }
             }
         }
 
-        if (!backupRaw) {
-            // 파일이 없는 경우, 파일 관리자 앱에서 '정확한 이름' 확인 가이드 출력
-            throw new Error("파일을 찾을 수 없습니다.\n\n⚠️ 확인사항:\n1. 파일명이 정확히 '" + targetFile + "' 인가요?\n2. 혹시 끝에 .txt 가 붙어있진 않나요?\n3. 현재 데이터 폴더에 로그 파일이 너무 많아 정리가 필요합니다.");
+        // 2. [정밀 탐색] 백업 파일 로드 시도
+        var backupPaths = [
+            dataPath + backupFile,
+            "/storage/emulated/0/msgbot/data/" + backupFile,
+            "/sdcard/msgbot/" + backupFile
+        ];
+        
+        var backupRaw = null;
+        for (var j = 0; j < backupPaths.length; j++) {
+            var raw = FileStream.read(backupPaths[j]);
+            if (raw && raw.length > 100) { backupRaw = raw; break; }
         }
+
+        if (!backupRaw) throw new Error("백업 파일을 찾을 수 없습니다.");
         
         var backupData = JSON.parse(backupRaw);
         var backupUser = null;
 
-        // 2. 백업 데이터 전수 조사하여 해당 유저의 마지막 기록 추출
         for (var r in backupData.rooms) {
-            if (backupData.rooms[r].users[tId]) {
+            if (backupData.rooms[r].users && backupData.rooms[r].users[tId]) {
                 backupUser = backupData.rooms[r].users[tId];
                 break;
             }
         }
 
-        if (!backupUser) {
-            replier.reply("⚠️ 해당 유저의 과거 기록이 백업본에 존재하지 않습니다.");
-            return true;
-        }
+        if (!backupUser) throw new Error("백업본에 해당 유저 기록이 없습니다.");
 
-        // 3. 마지막 종료 시점의 수치 확인 (유실된 데이터만 선택적 복구)
-        var oldTime = Number(backupUser.totalMiningTime || 0);
-        var oldArtifact = Number(backupUser.artifactPieces || 0);
-
-        if (oldTime === 0 && oldArtifact === 0) {
-            replier.reply("⚠️ 백업본의 데이터도 0입니다. 복구할 내용이 없습니다.");
-            return true;
-        }
-
-        // 4. 현재 데이터에 주입 (포인트 등 다른 자산은 건드리지 않음)
-        tUser.totalMiningTime = oldTime;
-        tUser.artifactPieces = oldArtifact;
+        // 3. 복구 데이터 주입
+        tUser.totalMiningTime = Number(backupUser.totalMiningTime || 0);
+        tUser.artifactPieces = Number(backupUser.artifactPieces || 0);
         tUser.skipHealing = true;
 
-        safeSaveData(data, true); // 즉시 물리 저장 및 동기화
+        safeSaveData(data, true); 
 
-        var resBody = "👤 대상: " + tUser.name + "\n" +
-                      "📅 복구 시점: 백업 스냅샷 데이터 기반\n" +
-                      "━━━━━━━━━━━━━━━\n" +
-                      "⛏️ 누적 채굴: " + fp(oldTime) + "분 (복구완료)\n" +
-                      "🧩 유물 조각: " + oldArtifact + "개 (복구완료)\n" +
-                      "━━━━━━━━━━━━━━━\n" +
-                      "✅ 마지막 정상 종료 시점으로 데이터가 자동 복원되었습니다.";
-
-        replier.reply(formatAdmin("🤖 광산 자동 스냅샷 복구", resBody));
+        replier.reply(formatAdmin("🤖 지능형 광산 자동 복구", 
+            "👤 대상: " + tUser.name + "\n" +
+            "🧹 청소: 로그 찌꺼기(.txt) " + cleanCount + "개 소각\n" +
+            "🛡️ 보안: 데이터 임시파일(.json) 보존 완료\n" +
+            "━━━━━━━━━━━━━━━\n" +
+            "⛏️ 누적 채굴: " + fp(tUser.totalMiningTime) + "분\n" +
+            "🧩 유물 조각: " + tUser.artifactPieces + "개\n" +
+            "━━━━━━━━━━━━━━━\n" +
+            "✅ 복구가 안전하게 완료되었습니다."));
 
     } catch (e) {
-        replier.reply("❌ 자동 복구 실패: " + e.message);
+        replier.reply("❌ 복구 실패: " + e.message);
     }
     return true;
 }

@@ -9400,83 +9400,49 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
         var tId = found[0].id;
         var tRoom = found[0].roomName;
 
-        // [핵심] 루프(for)를 돌지 않고 에러 유발 가능성이 있는 모든 칸을 '직접' 소각
-        // 값을 읽지 않고 바로 메모리 주소에서 날려버리므로 충돌을 피합니다.
-        delete tUser.lastAction;
-        delete tUser.voyage;
-        delete tUser.blackjackState;
-        delete tUser.replier;
-        delete tUser.imageDB;
-        delete tUser.lastCasinoResult;
+        var removedFields = [];
+        var riskyTarget = {
+            'lastAction': '직전 작업기록',
+            'voyage': '항해/무역 정보',
+            'blackjackState': '블랙잭 게임상태',
+            'replier': '시스템 응답객체',
+            'imageDB': '프로필 데이터',
+            'lastCasinoResult': '카지노 최근기록'
+        };
+
+        // 1. 실제 데이터가 있는 필드만 골라 소각하고 리스트에 추가
+        for (var key in riskyTarget) {
+            if (tUser[key] !== undefined) {
+                delete tUser[key];
+                removedFields.push(riskyTarget[key]);
+            }
+        }
         
-        // 스테이징 캐시도 강제 삭제
-        if (typeof GLOBAL_STAGING !== 'undefined') {
+        // 2. 스테이징 캐시 강제 삭제 여부 확인
+        if (typeof GLOBAL_STAGING !== 'undefined' && GLOBAL_STAGING.active[tId]) {
             delete GLOBAL_STAGING.active[tId];
             delete GLOBAL_STAGING.cache[tId];
+            removedFields.push("스테이징 락(Lock)");
+        }
+
+        var resultSummary = "";
+        var isClean = (removedFields.length === 0);
+
+        if (isClean) {
+            resultSummary = "✅ 진단: 오염 의심 필드가 없는 [클린]한 상태입니다.";
+        } else {
+            resultSummary = "✨ 조치: " + removedFields.join(", ") + " 소각 완료";
         }
 
         tUser.skipHealing = true;
-        safeSaveData(data, true); // 소독된 상태를 즉시 물리 파일에 강제 기록
+        safeSaveData(data, true); 
 
-        replier.reply(formatAdmin("☢️ 초정밀 핵소독 완료", 
+        var footerMsg = isClean ? "별도의 조치가 필요하지 않습니다." : "💰 포인트 등 순수 자산은 안전합니다.\n⚠️ 삭제된 활동은 다시 시작(출항/입장)해주세요.";
+
+        replier.reply(formatAdmin("☢️ 초정밀 핵소독 보고서", 
             "👤 대상: [" + tRoom + "] " + tUser.name + "\n" +
-            "✨ 조치: 에러 유발 필드(무역/진행데이터) 강제 소각 완료\n\n" +
-            "💰 포인트/가방/티어 등 순수 자산은 안전합니다.\n" +
-            "⚠️ 무역 중이었다면 다시 출항을 보내주세요."));
-        return true;
-    }
-
-        // 수정: 특정 유저의 오염된 네이티브 객체를 정밀 타격하여 삭제하는 로직 추가
-        if (msg.indexOf("/유저세척 ") === 0) {
-        var tn = msg.substring(6).trim();
-        var found = findUserGlobal(tn, roomName);
-        if (found.length === 0) { replier.reply("❌ 대상을 찾을 수 없습니다."); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_user_clean", null, user, roomName); return true; }
-
-        var tUser = found[0].data;
-        var tRoom = found[0].roomName;
-        var cleanCount = 0;
-
-        // [초정밀 검사] 유저의 모든 필드를 하나하나 실측 테스트
-        for (var key in tUser) {
-            var value = tUser[key];
-            
-            // 검사 대상: 객체(Object)이거나 배열(Array)인 경우만 (숫자/문자는 무조건 안전)
-            if (value !== null && typeof value === 'object') {
-                try {
-                    // 1. 직렬화 테스트 (가장 확실한 방법)
-                    // 이 과정에서 에러가 나지 않는 무역, 광산, 인벤토리 데이터는 안전하게 통과됨
-                    JSON.stringify(value);
-                    
-                    // 2. 자바 네이티브 객체 여부 2차 검증 (getClass 속성이 있는지 확인)
-                    if (value.getClass !== undefined || (value.constructor && value.constructor.name === 'SessionCacheReplier')) {
-                        throw new Error("Native Object Detected");
-                    }
-                } catch (e) {
-                    // 위 테스트에서 에러가 발생한 '진짜 오염물'만 여기서 삭제됨
-                    delete tUser[key];
-                    cleanCount++;
-                    Log.warn("🚨 [" + tUser.name + "] 오염 필드 제거: " + key);
-                }
-            }
-        }
-
-        if (cleanCount > 0) {
-            tUser.skipHealing = true;
-            safeSaveData(data, true); // 오염 제거 시에만 물리 저장소 갱신
-        }
-
-        var resultBody = "";
-        if (cleanCount > 0) {
-            resultBody = "✨ 조치: " + cleanCount + "개의 오염된 필드를 발견하여 소독했습니다.";
-        } else {
-            resultBody = "✅ 진단: 모든 데이터가 정상 규격입니다. 삭제된 항목이 없습니다.";
-        }
-
-        replier.reply(formatAdmin("🧼 유저 데이터 무결성 검사 완료", 
-            "👤 대상: [" + tRoom + "] " + tUser.name + "\n" +
-            resultBody + "\n\n" +
-            "💰 무역, 광산, 포인트 등 모든 게임 정보가 100% 보존되었습니다."));
+            resultSummary + "\n\n" +
+            footerMsg));
         return true;
     }
 

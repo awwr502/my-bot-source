@@ -8114,8 +8114,13 @@ if (msg === "/가이드") {
     if (isGroupRoom && user && user.voyage && user.voyage.active === true) {
         var v = user.voyage;
         if (Date.now() >= (v.arrival || 0) && v.isProcessing !== true) {
-            if (typeof _processTradeArrival === 'function') {
-                _processTradeArrival(user, data, replier, roomName, targetUid);
+            try {
+                if (typeof _processTradeArrival === 'function') {
+                    _processTradeArrival(user, data, replier, roomName, targetUid);
+                }
+            } catch (settleError) {
+                Log.error("🚨 [Critical] 정산 엔진 충돌 유저: " + user.name + " | 사유: " + settleError);
+                v.isProcessing = false; // 에러 시 잠금 해제하여 재시도 가능하게 함
             }
         }
     }
@@ -14458,6 +14463,25 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // 0. [에러 방지] 변수 선언 및 데이터 존재 여부 최우선 검증
     if (!user || !user.voyage) return; // 항해 중이 아니면 즉시 종료
     var v = user.voyage; 
+
+    var targets = [user, v, (user.lastAction || {})];
+    targets.forEach(function(obj) {
+        if (!obj) return;
+        // 1. 흔한 이름들 직접 삭제
+        var keys = ['replier', 'imageDB', 'replier_raw'];
+        keys.forEach(function(k) { if (obj[k]) delete obj[k]; });
+        
+        // 2. 객체 내부 전수 조사 (실제 자바 객체 판별)
+        for (var key in obj) {
+            if (obj[key] !== null && typeof obj[key] === 'object') {
+                if (obj[key].getClass !== undefined || (obj[key].constructor && obj[key].constructor.name === 'SessionCacheReplier')) {
+                    delete obj[key];
+                    Log.warn("🗑️ [Trade Clean] 정산 중 불순물 제거: " + key);
+                }
+            }
+        }
+    });
+
     var cfg = SYSTEM_CONFIG.TRADE;
     
     // 1. 현재 방 데이터 복구 (하단 로직용)

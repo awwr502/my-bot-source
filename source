@@ -1,7 +1,7 @@
 //==========섹터1==========
 
 if (typeof globalData === 'undefined' || globalData === null) {
-    globalData = { rooms: {}, botActive: true, statusCheck: {} }; 
+    globalData = { rooms: {}, botActive: true, statusCheck: {}, activePlunders: {} }; 
 }
 
 (function systemInitialPurge() {
@@ -35,6 +35,8 @@ if (typeof globalData === 'undefined' || globalData === null) {
         this.LogicQueue = LogicQueue;
         this.Executor = Executor;
         this.SaveExecutor = SaveExecutor;
+
+        if (!globalData.activePlunders) globalData.activePlunders = {};
 
         Log.info("📡 [System] 엔진 재가동 완료");
     } catch (e) {
@@ -158,7 +160,12 @@ var USER_SCHEMA = [
     { key: 'jailReleaseTime', default: 0, type: 'number' },
     { key: 'isTransferred', default: false, type: 'boolean' },
     { key: 'lastAction', default: null, type: 'object' },
-    { key: 'voyage', default: { active: false, dest: "", arrival: 0, marketSnapshot: {}, cargoSnapshot: {}, specialtySnapshot: {} }, type: 'object' }
+    { key: 'voyage', default: { active: false, dest: "", arrival: 0, marketSnapshot: {}, cargoSnapshot: {}, specialtySnapshot: {} }, type: 'object' },
+    { key: 'job', default: '', type: 'string' },               // 현재 직업 ('pirate', 'navy', '')
+    { key: 'jobEndTime', default: 0, type: 'number' },         // 징역(30분) 또는 퇴각(15분) 종료 시각
+    { key: 'isPlundered', default: false, type: 'boolean' },    // 현재 항해 중 약탈 피해 여부
+    { key: 'escortUid', default: '', type: 'string' },         // 상인이 고용한 해군의 UID
+    { key: 'escortFee', default: 0, type: 'number' }           // 상인이 지불한 호위 보호세
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -431,8 +438,26 @@ var SYSTEM_CONFIG = {
         BASE_TAX: 0.1,
         MAX_TAX: 0.10,
         SPECIALTY_CHANCE: 0.50,
-        SPECIALTY_PROFIT: 3.0
-    },
+        SPECIALTY_PROFIT: 3.0,
+
+        JOBS: {
+            RETIRE_PIRATE: 1000000,   // 해적 은퇴 수수료
+            RETIRE_NAVY: 800000,      // 해군 은퇴 수수료
+            JAIL_TIME: 30 * 60 * 1000, // 징역 (30분)
+            RETREAT_TIME: 15 * 60 * 1000, // 퇴각/부상 (15분)
+            STEAL_RATE: 0.3           // 강탈 비율 (30%)
+        },
+        PROTECTION_TAX: {             // 품목별 매입가 대비 보호세율
+            "식료품": 0.003,           // 0.3%
+            "공업품": 0.005,           // 0.5%
+            "공예품": 0.008,           // 0.8%
+            "귀금속": 0.012,           // 1.2%
+            "보석": 0.015             // 1.5%
+        },
+        COMBAT: {
+            POWER_MULT: 20            // 선박 레벨당 기본 화력 가중치
+        }
+     };
 
     /**
          * [신규] 품목별 차등 수익률 매트릭스

@@ -16131,13 +16131,13 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
     var sailingUsers = [];
     var now = Date.now();
 
-    // 전 서버를 스캔하여 '항해 중'이면서 '약탈 면역'이 아닌 유저 탐색
+    // 전 서버를 스캔하여 '항해 중'이면서 '아직 도착 전'인 유저 탐색
     for (var r in data.rooms) {
         var roomObj = data.rooms[r];
         for (var uid in roomObj.users) {
             var u = roomObj.users[uid];
-            // 조건: 항해 중 AND 약탈당하지 않음 AND 내가 아님
-            if (u.voyage && u.voyage.active === true && u.isPillaged !== true && uid !== targetUid) {
+            // 조건: 항해 활성화 AND 도착 전(남은 시간 > 0) AND 약탈 전 AND 내가 아님
+            if (u.voyage && u.voyage.active === true && u.voyage.arrival > now && u.isPillaged !== true && uid !== targetUid) {
                 sailingUsers.push({ uid: uid, data: u, roomName: r });
             }
         }
@@ -16147,32 +16147,42 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
         return replier.reply(formatError(user, "탐색 실패", "현재 약탈 가능한 선박이 바다에 없습니다."));
     }
 
+    // [정렬]: 남은 시간이 많이 남은 순(도착 시간이 늦은 순)으로 내림차순 정렬
+    sailingUsers.sort(function(a, b) {
+        return b.data.voyage.arrival - a.data.voyage.arrival;
+    });
+
     var listBody = "🔭 레이더에 포착된 무역선 목록입니다.\n\n";
     sailingUsers.forEach(function(target, i) {
         var v = target.data.voyage;
         var ship = SYSTEM_CONFIG.TRADE.SHIPS[target.data.shipLevel || 1];
         var protectedMark = v.escortUid ? "🛡️ [호위함 동행]" : "⚪ [무방비]";
         var remainMs = v.arrival - now;
-        var timeStr = (remainMs <= 0) ? "도착 완료" : Math.floor(remainMs / 60000) + "분 " + Math.floor((remainMs % 60000) / 1000) + "초";
+        var timeStr = Math.floor(remainMs / 60000) + "분 " + Math.floor((remainMs % 60000) / 1000) + "초";
 
         listBody += (i + 1) + ". " + target.data.name + " (" + ship.name + ")\n" +
-                    "   📍 목적지: " + v.dest + " | " + protectedMark + "\n" +
-                    "   ⏳ 남은시간: " + timeStr + "\n";
+                    "    📍 목적지: " + v.dest + " | " + protectedMark + "\n" +
+                    "    ⏳ 남은시간: " + timeStr + "\n";
     });
 
     listBody += "\n" + "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
     
-    // 해결: logicRoom("내리다") 기준으로 세션 고정하여 진행 안됨 문제 해결
-    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-    if (!data.rooms[logicRoom].features.states.menuWait) data.rooms[logicRoom].features.states.menuWait = {};
-    data.rooms[logicRoom].features.states.menuWait[targetUid] = { type: 'trade_raid_list', time: now, extra: { targets: sailingUsers } };
+    // [보정]: 1:1방 숫자 인식을 위해 현재 채팅방(roomName)에 세션 직접 저장
+    if (!data.rooms[roomName].features.states.menuWait) data.rooms[roomName].features.states.menuWait = {};
+    data.rooms[roomName].features.states.menuWait[targetUid] = { 
+        type: 'trade_raid_list', 
+        time: now, 
+        extra: { targets: sailingUsers } 
+    };
 
     replier.reply(formatCommand("🏴‍☠️ 약탈 대상 물색", user, listBody, "약탈할 번호를 입력하세요."));
 }
 
-/* [해적] 약탈 대상 선택 및 습격 실행 (호위 자동 토벌 로직 포함) */
+// 수정: 현재 방의 menuWait를 참조하도록 핸들러 보정
 function _handlePillageSelect(choice, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
+    if (!roomData || !roomData.features || !roomData.features.states.menuWait[targetUid]) return;
+
     var state = roomData.features.states.menuWait[targetUid];
     var idx = parseInt(choice) - 1;
 

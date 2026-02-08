@@ -10725,6 +10725,27 @@ if (msg === "/전체채굴복구") {
     return false;
 }
 
+if (msg === "/전체직업초기화") {
+        var count = 0;
+        for (var r in data.rooms) {
+            for (var uid in data.rooms[r].users) {
+                var u = data.rooms[r].users[uid];
+                if (u.job) {
+                    u.job = null;
+                    u.infamy = 0;
+                    u.fame = 0;
+                    u.currentBounty = 0;
+                    u.jobJoinDate = "";
+                    u.skipHealing = true;
+                    count++;
+                }
+            }
+        }
+        safeSaveData(data, true);
+        replier.reply(formatAdmin("🧹 전 서버 직업 정화 완료", "총 " + count + "명의 직업 데이터를 초기화했습니다."));
+        return true;
+    }
+
 //==========섹터35==========
 
 /**
@@ -14234,6 +14255,14 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
 
     var choice = msg.replace(/[^0-9]/g, "").trim();
 
+    if (user.job && (choice === "2" || choice === "3" || choice === "5")) {
+        var jobName = (user.job === 'pirate' ? "해적" : "해군");
+        replier.reply(formatError(user, "상업 활동 제한", 
+            "현재 [" + jobName + "] 신분이므로 직접적인 상업 활동이 금지됩니다.\n" +
+            "조합 사무소에서 직업을 은퇴한 후 이용해주세요."));
+        return true;
+    }
+
     /* [분기 2] 목적지 선택 및 출항 */
     if (state.type === 'trade_depart') {
         var nations = Object.keys(tradeCfg.NATIONS);
@@ -15101,7 +15130,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         for (var r in data.rooms) { if (data.rooms[r].users[v.escortUid]) { navyObj = data.rooms[r].users[v.escortUid]; break; } }
         if (navyObj) {
             util_updatePoint(navyObj, data.rooms["내리다"], v.escortFee, "해상 호위 업무 정산: " + user.name, "내리다");
-            escortLog = "\n🛡️ [호위 완료]: 해군 '" + navyObj.name + "'에게 보호세 지급 완료";
+            navyObj.fame = (navyObj.fame || 0) + 5; // 호위 성공 시 명성 +5 부여
+            escortLog = "\n🛡️ [호위 완료]: 해군 '" + navyObj.name + "'에게 보호세 지급 및 명성(+5) 부여";
         }
     }
 
@@ -15983,13 +16013,30 @@ function _showJobEnlistmentMenu(user, replier, roomData, targetUid) {
         if (user.job === 'pirate') return _showPirateMenu(user, replier, roomData, targetUid);
         if (user.job === 'navy') return _showNavyMenu(user, replier, roomData, targetUid);
     }
-    var body = "📍 장소: 해상 조합 사무소\n\n상업 활동 외의 특별한 길을 걷고자 하는 선원들을 위한 공간입니다. 한 번 직업을 가지면 은퇴 시 막대한 비용이 발생하니 신중히 선택하세요.\n\n1. 🏴‍☠️ 해적 (약탈과 자유)\n2. 👮 해군 (토벌과 명예)\n\n↩️ 뒤로 / ❎취소";
+    var body = "📍 장소: 해상 조합 사무소\n\n" +
+               "⚠️ [가입 전 필수 주의사항]\n" +
+               "1. 직업 보유 시 상인 행동(출항/적재)이 전면 금지됩니다.\n" +
+               "2. 가입 즉시 보유 중인 '총독' 권한이 박탈됩니다.\n\n" +
+               "위 조건을 숙지하신 후 전직을 결정해 주세요.\n\n" +
+               "1. 🏴‍☠️ 해적 (약탈과 자유)\n" +
+               "2. 👮 해군 (토벌과 명예)\n\n" +
+               "↩️ 뒤로 / ❎취소";
     replier.reply(formatCommand("⚓ 조합 사무소", user, body, "원하시는 직업 번호를 입력하세요."));
     roomData.features.states.menuWait[targetUid] = { type: 'trade_job_enlist', time: Date.now(), depth: 2 };
 }
 
 function _handleJobJoin(choice, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
+
+    if (roomData.features && roomData.features.portData) {
+        var pData = roomData.features.portData;
+        for (var pName in pData) {
+            if (pData[pName].governorUid === targetUid) {
+                pData[pName].governorUid = ""; // 총독 공석 처리
+            }
+        }
+    }
+
     if (choice === "1") {
         user.job = 'pirate';
         user.infamy = 0;
@@ -16010,23 +16057,43 @@ function _handleJobJoin(choice, user, data, replier, roomName, targetUid) {
 
 /* [상인] 호위 해군 리스트 출력 및 고용 프로세스 시작 */
 function _handleEscortHire(choice, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
-    var state = roomData.features.states.menuWait[targetUid];
-    var cargoSnap = state.selCargo || {};
-    var specSnap = state.selSpec || {};
+    var roomData = data.rooms[roomName];
+    var state = roomData.features.states.menuWait[targetUid];
+    var cargoSnap = state.selCargo || {};
+    var specSnap = state.selSpec || {};
+    var tradeCfg = SYSTEM_CONFIG.TRADE;
+    var market = roomData.features.tradeMarket || tradeCfg.NATIONS;
+    var nInfo = market[state.dest];
 
-    // 1. 보호세 총액 계산 (품목별 차등 세율 적용)
-    var totalTax = 0;
-    for (var g in cargoSnap) {
-        var cost = (SYSTEM_CONFIG.TRADE.GOODS_COST[g] || 10000);
-        var taxRate = (SYSTEM_CONFIG.TRADE.JOBS.ESCORT_TAX[g] || 0.05);
-        totalTax += Math.floor(cost * cargoSnap[g] * taxRate);
-    }
+    // 1. 예상 마진 계산 (수익 - 원가)
+    var totalEstRevenue = 0;
+    var totalEstCost = 0;
+    
+    // 일반 화물 계산
+    for (var g in cargoSnap) {
+        var count = Number(cargoSnap[g]);
+        var uCost = Number((user.cargoAvg && user.cargoAvg[g]) || tradeCfg.GOODS_COST[g]);
+        totalEstCost += (uCost * count);
+        
+        var rInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.25, norm: 1.05, hate: 0.8 };
+        var mult = (g === nInfo.favorite) ? rInfo.pref : (g === nInfo.hate ? rInfo.hate : rInfo.norm);
+        totalEstRevenue += Math.floor(uCost * mult * count);
+    }
+    // 특산품 계산
     for (var s in specSnap) {
-        // 특산품은 원가 기준 8% 고정 세율 적용 (밸런스 고려)
-        var sCost = 20000; // 평균 원가 근사치
-        totalTax += Math.floor(sCost * specSnap[s] * 0.08);
+        var sCount = Number(specSnap[s]);
+        var pG = "";
+        for (var rel in TRADE_RELATION) { if (TRADE_RELATION[rel].set === s) { pG = TRADE_RELATION[rel].produce; break; } }
+        var sBase = tradeCfg.SPECIALTY_COST[pG] || 10000;
+        totalEstCost += (sBase * sCount);
+        
+        var sMult = (pG === nInfo.favorite) ? tradeCfg.SPECIALTY_PROFIT : (pG === nInfo.hate ? 0.5 : 1.0);
+        totalEstRevenue += Math.floor(sBase * sCount * sMult);
     }
+
+    var estMargin = totalEstRevenue - totalEstCost;
+    // 보호세: 마진의 10% (손실 중이라면 최소 1000P 적용)
+    var totalTax = Math.max(1000, Math.floor(estMargin * 0.1));
 
     // 2. 현재 활동 가능한(퇴각 중이 아닌) 해군 리스트 추출
     var navyList = [];
@@ -16050,7 +16117,7 @@ function _handleEscortHire(choice, user, data, replier, roomName, targetUid) {
     var body = "🛡️ [해군 호위단 모집]\n" +
                "━━━━━━━━━━━━━━━\n" +
                "현재 고용 가능한 해군 목록입니다.\n" +
-               "(화물 원가 기준 보호세: " + fp(totalTax) + "P)\n\n";
+               "(예상 순이익 기준 보호세: " + fp(totalTax) + "P)\n\n";
 
     navyList.forEach(function(n, i) {
         body += (i + 1) + ". 👮 " + n.name + " (명성: " + n.fame + ")\n";
@@ -16313,7 +16380,7 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         // 해군 승리: 해적 징역, 약탈 세션 파기
         pirate.pillageCooldownEndTime = Date.now() + (30 * 60 * 1000);
         pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
-        navy.fame = (navy.fame || 0) + 15;
+        navy.fame = (navy.fame || 0) + 10;
         navy.totalCaptureSuccess = (navy.totalCaptureSuccess || 0) + 1;
         
         // 국고 현상금 지급 (기본 3만 + 해적이 쌓은 현상금)

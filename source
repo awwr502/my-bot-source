@@ -14373,10 +14373,13 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
     body += (selList.length > 0 ? selList.join("\n") : "- 선택된 화물 없음 -");
 
     body += "\n\n\n💬 [입력 방법]\n" +
-            "• 판매 품목 지정: [번호] [수량]\n" +
-            "• 모든 화물 선택: [전부]\n" +
-            "• 출항 : [출항]\n\n" +
-            "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+            "• 판매 품목 지정: [번호] [수량]\n" +
+            "• 모든 화물 선택: [전부]\n" +
+            "• 호위 : [호위] (해군 고용)\n" +
+            "• 출항 : [출항]\n\n" +
+            "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+
+    var nextStep = "판매할 품목을 고른 후 [호위] 또는 [출항]을 입력하세요.";
 
     var nextStep = "판매할 번호와 수량을 입력하세요. [취소] 입력 시 무역이 중단됩니다.";
     replier.reply(formatCommand("🚢 무역 하역 설정", user, body, nextStep));
@@ -15000,6 +15003,37 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     var creditLoss = afterTaxMargin - finalNetProfit; // 신용 등급에 따른 수익 차감액 계산
 
+    var pillageLog = "";
+    var escortLog = "";
+
+    // [1] 유저 해적 약탈 정산 (마진 기반: 상인 원금 보호)
+    if (v.isPillaged === true && v.pirateUid) {
+        var pRate = (cfg.JOBS && cfg.JOBS.PIRATE) ? cfg.JOBS.PIRATE.pillageRate : 0.3;
+        // 핵심: 수익(finalNetProfit)이 발생했을 때만 30%를 강탈함 (원금 totalCost는 절대 보존)
+        var pillageLoss = finalNetProfit > 0 ? Math.floor(finalNetProfit * pRate) : 0;
+        
+        if (pillageLoss > 0) {
+            finalNetProfit -= pillageLoss;
+            var pirateObj = null;
+            // 전 서버에서 해적 객체 탐색 및 강탈금 지급
+            for (var r in data.rooms) { if (data.rooms[r].users[v.pirateUid]) { pirateObj = data.rooms[r].users[v.pirateUid]; break; } }
+            if (pirateObj) {
+                util_updatePoint(pirateObj, data.rooms["내리다"], pillageLoss, "해상 약탈 성공 수익: " + user.name, "내리다");
+                pillageLog = "\n🏴‍☠️ [약탈 피해]: 수익의 " + (pRate * 100) + "%(-" + fp(pillageLoss) + "P)가 해적에게 강탈됨";
+            }
+        }
+    }
+
+    // [2] 해군 호위세 최종 지급 (목적지 무사 도착 시)
+    if (v.escortUid && v.escortFee > 0) {
+        var navyObj = null;
+        for (var r in data.rooms) { if (data.rooms[r].users[v.escortUid]) { navyObj = data.rooms[r].users[v.escortUid]; break; } }
+        if (navyObj) {
+            util_updatePoint(navyObj, data.rooms["내리다"], v.escortFee, "해상 호위 업무 정산: " + user.name, "내리다");
+            escortLog = "\n🛡️ [호위 완료]: 해군 '" + navyObj.name + "'에게 보호세 지급 완료";
+        }
+    }
+
     // [재해] 폭풍우 수리비 (최종 수익에서 차감)
     var repairFee = 0;
     if (triggeredDisaster === "STORM") {
@@ -15055,7 +15089,9 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                  "📈 순수 이익: +" + fp(margin) + "P\n" +
                  (disasterLog ? disasterLog.trim() + "\n" : "") +
                  "⚖️ 무역세(10%): -" + fp(taxAmount) + "P\n" +
-                 (govTag ? govTag.trim() + "\n" : "") +
+                 (pillageLog ? pillageLog.trim() + "\n" : "") +
+                 (escortLog ? escortLog.trim() + "\n" : "") +
+                 (govTag ? govTag.trim() + "\n" : "") +
                  "\n" +
                  "🎊 최종 수령액: " + fp(totalPayout) + "P\n" +
                  "(신용 " + crInfo.label + " " + (creditMult * 100).toFixed(0) + "%지급)\n" +

@@ -7773,18 +7773,7 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
 
 
 
-    // [수정] 네비게이션 로직을 최상단으로 배치하여 모든 숫자 로직보다 우선권을 가집니다.
-    
-    // 1. 통합 네비게이션: 처음으로 이동
-    if (msg === "처음으로" || msg === "🏠 처음으로") {
-        delete menuWaitState[targetUid];
-        if (state.type.startsWith('shop')) return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
-        if (state.type.startsWith('trade')) return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
-        if (state.type.startsWith('casino')) return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid);
-        return _handleMenuStep4("/도움말", user, data, replier, roomName, targetUid);
-    }
-
-    // 2. 통합 네비게이션: 뒤로가기 이동
+    // 수정: 개별 네비게이션(처음으로/취소) 로직을 제거하고 '뒤로' 가기 로직의 계층만 정밀화함 (섹터 24에서 중앙 처리하므로 삭제)
     if (msg === "뒤로" || msg === "↩️ 뒤로") {
         if (state.type === 'trade_select_cargo') {
             state.type = 'trade_depart'; state.depth = 2; state.time = Date.now();
@@ -7798,18 +7787,6 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         if (state.type.startsWith('help')) { replier.reply("📖 이용을 종료했습니다."); return true; }
         
         replier.reply(formatCommand("🚪 메뉴 종료", user, "이용을 종료했습니다."));
-        return true;
-    }
-
-    // 3. 공통 가드 (시간초과 및 취소)
-    if (Date.now() - state.time > 30000 || msg === "취소" || msg === "❎취소") {
-        delete menuWaitState[targetUid];
-        if (msg === "취소" || msg === "❎취소") {
-            replier.reply(formatCommand("🚫 작업 취소", user, "이용을 종료했습니다."));
-        } else {
-            replier.reply(formatError(user, "선택 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
-        }
-        if (msg.startsWith("/")) return false;
         return true;
     }
 
@@ -8361,7 +8338,33 @@ if (actualFeatures && actualFeatures.states) {
         }
     }
 
-    // 1. 관리자 및 조작 핸들러
+// 추가: 모든 숫자/메뉴 핸들러가 작동하기 전, 네비게이션 키워드를 최상단에서 가로챔 (수정/추가)
+    var NAV_KEYWORDS = ["뒤로", "↩️ 뒤로", "처음으로", "🏠 처음으로", "취소", "❎취소"];
+    if (inState && NAV_KEYWORDS.indexOf(msg.trim()) !== -1) {
+        var input = msg.trim();
+        var clearAll = function(uid, rName) {
+            var rooms = [data.rooms[rName], data.rooms["내리다"]];
+            rooms.forEach(function(r) { if(r && r.features && r.features.states) {
+                var s = r.features.states; ["menuWait", "bankProcess", "selectWait", "lottoPurchase"].forEach(function(k) { if(s[k]) delete s[k][uid]; });
+            }});
+        };
+
+        if (input.indexOf("취소") !== -1) {
+            clearAll(targetUid, roomName);
+            replier.reply(formatCommand("🚫 작업 종료", user, "진행 중이던 모든 대기 상태를 해제했습니다."));
+            return true;
+        } 
+        if (input.indexOf("처음으로") !== -1) {
+            var stType = (inState.type || ""); clearAll(targetUid, roomName);
+            if (stType.startsWith('trade')) return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
+            if (stType.startsWith('casino')) return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid);
+            if (stType.startsWith('shop')) return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
+            replier.reply(formatCommand("🏠 처음으로", user, "메인 화면으로 돌아왔습니다.")); return true;
+        }
+        // '뒤로'는 각 핸들러의 계층 정보가 필요하므로 하단 Step 핸들러로 위임하여 처리
+    }
+
+    // 1. 관리자 및 조작 핸들러 (네비게이션 바로 다음 우선순위)
     if (typeof _handleAdminMain === 'function' && _handleAdminMain(msg, user, data, replier, roomName, targetUid)) return;
     if (typeof _handleAdminManiStep === 'function' && _handleAdminManiStep(msg, user, data, replier, roomName, targetUid)) return;
 

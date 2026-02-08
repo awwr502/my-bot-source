@@ -7644,7 +7644,9 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         'shop_category', 'shop_detail', 'help', 'help_cat', 'help_item', 
         'guide_menu', 'guide_detail', 
         'trade_main', 'trade_market', 'trade_depart', 'trade_status', 'trade_ship',
-        'trade_select_cargo', 'trade_governor_office', 'casino_main', 'casino_ladder', 'casino_baccarat',
+        'trade_select_cargo', 'trade_governor_office', 'trade_escort_select', 
+        'trade_pirate_menu', 'trade_navy_menu', 'trade_raid_list', 'trade_battle_list',
+        'casino_main', 'casino_ladder', 'casino_baccarat',
         'casino_ladder_sub', 'casino_baccarat_sub' 
     ];
     if (types.indexOf(state.type) === -1) return false;
@@ -14091,11 +14093,15 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
 
     var choice = msg.replace(/[^0-9]/g, "").trim();
 
-    /* [분기 1] 메인 메뉴 처리 */
+    /* [분기 1] 무역 메인 메뉴 처리 (6, 7번 가변 슬롯 반영) */
     if (state.type === 'trade_main') {
+        var myPorts = util_getUserGovernorPorts(targetUid, roomData);
+        var hasGov = myPorts.length > 0;
+        var job = user.job; // null, 'pirate', 'navy'
+
         if (choice === "1") {
             _showTradeMarket(user, replier, roomData, tradeCfg);
-        menuWaitState[targetUid] = { type: 'trade_market', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
+            menuWaitState[targetUid] = { type: 'trade_market', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
         } else if (choice === "2") {
             if (user.voyage && user.voyage.active === true) {
                 _showVoyageStatus(user, replier, data, roomName); 
@@ -14105,43 +14111,63 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             _prepareVoyage(user, replier, tradeCfg, roomData);
             menuWaitState[targetUid] = { type: 'trade_depart', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
         } else if (choice === "3") {
-            if (user.voyage && user.voyage.active === true) {
-                _showVoyageStatus(user, replier, data, roomName); 
-                delete menuWaitState[targetUid]; // 항해 중이면 정보 보여주고 종료
-            } else {
-                _showVoyageStatus(user, replier, data, roomName); 
-                // 항해 중이 아니면 "선박 없음"을 보여주고 메뉴 대기 상태(trade_main)를 유지하여 다른 번호 입력 가능
-                state.time = Date.now(); 
-            }
+            _showVoyageStatus(user, replier, data, roomName);
+            state.time = Date.now();
         } else if (choice === "4") {
             _manageShip(user, replier, tradeCfg);
             menuWaitState[targetUid] = { type: 'trade_ship', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
         } else if (choice === "5") {
-            // 수정: data.rooms[roomName] 대신 리디렉션된 roomData를 사용하여 참조 오류 방지
             _showTradeShop(user, replier, roomData, tradeCfg);
-            
             if (!roomData.features.states.bankProcess) roomData.features.states.bankProcess = {};
-            
             roomData.features.states.bankProcess[targetUid] = { 
-                type: 'shop_buy', 
-                time: Date.now(), 
-                extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } 
+                type: 'shop_buy', time: Date.now(), extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } 
             };
             delete menuWaitState[targetUid];
-            } else if (choice === "6") {
-            var myPorts = [];
-            var pData = roomData.features.portData || {};
-            for (var p in pData) { 
-                if (pData[p].governorUid === targetUid) myPorts.push(p); 
+        } 
+        // [6번 슬롯: 총독 우선, 없을 시 직업]
+        else if (choice === "6") {
+            if (hasGov) {
+                _showGovernorOffice(user, replier, roomData, myPorts);
+                menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), depth: 2, myPorts: myPorts, originRoom: state.originRoom || roomName };
+            } else if (job) {
+                if (job === 'pirate') _showPirateMenu(user, replier, roomData, targetUid);
+                else _showNavyMenu(user, replier, roomData, targetUid);
+            } else {
+                replier.reply(formatError(user, "번호 오류", "선택하신 메뉴가 존재하지 않습니다."));
             }
-            if (myPorts.length === 0) return replier.reply(formatError(user, "권한 없음", "총독 작위를 보유한 항구가 없습니다."));
-            _showGovernorOffice(user, replier, roomData, myPorts);
-            menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), depth: 2, myPorts: myPorts, originRoom: state.originRoom || roomName };
+        } 
+        // [7번 슬롯: 총독과 직업이 모두 있을 때만 노출]
+        else if (choice === "7" && hasGov && job) {
+            if (job === 'pirate') _showPirateMenu(user, replier, roomData, targetUid);
+            else _showNavyMenu(user, replier, roomData, targetUid);
         } else {
-            replier.reply(formatError(user, "번호 오류", "1~6번 사이를 선택하세요."));
+            var maxChoice = (hasGov && job) ? 7 : (hasGov || job ? 6 : 5);
+            replier.reply(formatError(user, "번호 오류", "1~" + maxChoice + "번 사이를 선택하세요."));
         }
         return true;
     }
+
+    /* [해상전/직업 서브 핸들러 모음] */
+    // 1. 해적 전용 메뉴
+    if (state.type === 'trade_pirate_menu') {
+        if (choice === "1") _showRaidList(user, replier, data, roomName, targetUid);
+        else if (choice === "2") _showPirateInfo(user, replier);
+        else if (choice === "3") _processPirateRetire(user, data, replier, roomName, targetUid);
+        else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요." + NAV_BAR));
+        return true;
+    }
+    // 2. 해군 전용 메뉴
+    if (state.type === 'trade_navy_menu') {
+        if (choice === "1") _showBattleList(user, replier, roomData, targetUid);
+        else if (choice === "2") _showNavyInfo(user, replier);
+        else if (choice === "3") _processNavyRetire(user, data, replier, roomName, targetUid);
+        else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요." + NAV_BAR));
+        return true;
+    }
+    // 3. 약탈/토벌/호위 세부 선택
+    if (state.type === 'trade_raid_list') { _handlePillageSelect(choice, user, data, replier, roomName, targetUid); return true; }
+    if (state.type === 'trade_battle_list') { _handleCombatSelect(choice, user, data, replier, roomName, targetUid); return true; }
+    if (state.type === 'trade_escort_select') { _handleEscortHire(choice, user, data, replier, roomName, targetUid); return true; }
 
     /* [분기 2] 목적지 선택 및 출항 */
     if (state.type === 'trade_depart') {

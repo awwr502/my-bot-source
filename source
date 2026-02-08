@@ -1,7 +1,7 @@
 //==========섹터1==========
 
 if (typeof globalData === 'undefined' || globalData === null) {
-    globalData = { rooms: {}, botActive: true, statusCheck: {}, activePlunders: {} }; 
+    globalData = { rooms: {}, botActive: true, statusCheck: {} }; 
 }
 
 (function systemInitialPurge() {
@@ -35,8 +35,6 @@ if (typeof globalData === 'undefined' || globalData === null) {
         this.LogicQueue = LogicQueue;
         this.Executor = Executor;
         this.SaveExecutor = SaveExecutor;
-
-        if (!globalData.activePlunders) globalData.activePlunders = {};
 
         Log.info("📡 [System] 엔진 재가동 완료");
     } catch (e) {
@@ -160,12 +158,7 @@ var USER_SCHEMA = [
     { key: 'jailReleaseTime', default: 0, type: 'number' },
     { key: 'isTransferred', default: false, type: 'boolean' },
     { key: 'lastAction', default: null, type: 'object' },
-    { key: 'voyage', default: { active: false, dest: "", arrival: 0, marketSnapshot: {}, cargoSnapshot: {}, specialtySnapshot: {} }, type: 'object' },
-    { key: 'job', default: '', type: 'string' },               // 현재 직업 ('pirate', 'navy', '')
-    { key: 'jobEndTime', default: 0, type: 'number' },         // 징역(30분) 또는 퇴각(15분) 종료 시각
-    { key: 'isPlundered', default: false, type: 'boolean' },    // 현재 항해 중 약탈 피해 여부
-    { key: 'escortUid', default: '', type: 'string' },         // 상인이 고용한 해군의 UID
-    { key: 'escortFee', default: 0, type: 'number' }           // 상인이 지불한 호위 보호세
+    { key: 'voyage', default: { active: false, dest: "", arrival: 0, marketSnapshot: {}, cargoSnapshot: {}, specialtySnapshot: {} }, type: 'object' }
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -438,26 +431,8 @@ var SYSTEM_CONFIG = {
         BASE_TAX: 0.1,
         MAX_TAX: 0.10,
         SPECIALTY_CHANCE: 0.50,
-        SPECIALTY_PROFIT: 3.0,
-
-        JOBS: {
-            RETIRE_PIRATE: 1000000,   // 해적 은퇴 수수료
-            RETIRE_NAVY: 800000,      // 해군 은퇴 수수료
-            JAIL_TIME: 30 * 60 * 1000, // 징역 (30분)
-            RETREAT_TIME: 15 * 60 * 1000, // 퇴각/부상 (15분)
-            STEAL_RATE: 0.3           // 강탈 비율 (30%)
-        },
-        PROTECTION_TAX: {             // 품목별 매입가 대비 보호세율
-            "식료품": 0.003,           // 0.3%
-            "공업품": 0.005,           // 0.5%
-            "공예품": 0.008,           // 0.8%
-            "귀금속": 0.012,           // 1.2%
-            "보석": 0.015             // 1.5%
-        },
-        COMBAT: {
-            POWER_MULT: 20            // 선박 레벨당 기본 화력 가중치
-        }
-     },
+        SPECIALTY_PROFIT: 3.0
+    },
 
     /**
          * [신규] 품목별 차등 수익률 매트릭스
@@ -2663,19 +2638,6 @@ function util_checkUserState(user, uid, roomName) {
         return { canAction: false, reason: "현재 징역 중입니다. (" + timeStr + " 남음)" };
     }
 
-    // 기능: 무역 전쟁 중 발생한 특수 상태(징역 30분 / 퇴각 15분)를 검증합니다.
-    if (user.jobEndTime && now < user.jobEndTime) {
-        var jDiff = user.jobEndTime - now;
-        var jRemainMin = Math.ceil(jDiff / (1000 * 60));
-        var statusLabel = (user.job === 'pirate') ? "징역" : "전투 부상(퇴각)";
-        var actionLabel = (user.job === 'pirate') ? "수감" : "치료";
-        
-        return { 
-            canAction: false, 
-            reason: "현재 무역 " + statusLabel + " 중입니다. (" + jRemainMin + "분 후 " + actionLabel + " 해제)" 
-        };
-    }
-
     // 2. 광산 채굴 상태 체크
     if (user.mining && user.mining.active) {
         return { canAction: false, reason: "현재 광산에서 채굴 작업 중입니다." };
@@ -3029,39 +2991,6 @@ function util_getPortLevelBonus(portName, roomData) {
 
     // (레벨 - 1) * 1% 보너스 적용
     return (level - 1) * (cfg.BONUS_PER_LEVEL || 0.01);
-}
-
-/**
- * [신설] 해군 호위 및 자동 토벌 엔진 v1.0
- * 기능: 약탈 대상의 해군 스펙을 확인하여 해적과의 교전 결과를 반환합니다.
- * (추가) 해적 패배 시 벌금 징수 및 30분간 '무역 징역' 상태로 전환합니다.
- */
-function util_processNavyDefense(roomName, pirate, victim, replier) {
-    if (victim.features && victim.features.navy && victim.features.navy.hired) {
-        var navyPower = victim.features.navy.power || 0;
-        var piratePower = pirate.stats ? (pirate.stats.atk || 10) : 10;
-
-        if (navyPower > piratePower) {
-            // 해군 승리 로직
-            util_updatePoint(pirate, null, -2000, "해군 토벌 벌금", roomName);
-            
-            // util_checkUserState와 연동되는 징역 상태 부여
-            pirate.job = 'pirate';
-            pirate.jobEndTime = Date.now() + (30 * 60 * 1000); // 30분 징역
-            
-            safeSaveData(getDatabase());
-            
-            var msg = "⚓ [해군 토벌 발생]\n" +
-                      "━━━━━━━━━━━━━━━\n" +
-                      "대상은 [" + victim.features.navy.name + "] 호위대가 보호 중입니다.\n\n" +
-                      "⚔️ 교전 결과: 해군 압승!\n" +
-                      "📢 " + pirate.name + "님은 제압되어 벌금 2,000P가 징수되고 30분간 투옥됩니다.";
-            
-            replier.reply(msg);
-            return true; // 방어 성공 (약탈 중단)
-        }
-    }
-    return false; // 방어 실패 또는 해군 없음 (약탈 진행)
 }
 
 //==========섹터12==========
@@ -3988,69 +3917,6 @@ function _runSector16Logic(data, ctx) {
 
     var mainRoomData = data.rooms[ctx.targetRoom];
     if (!mainRoomData || !mainRoomData.features) return; 
-
-    // 기능: 3분 동안 해군의 저지가 없었던 약탈 건을 성공으로 확정하고 정산합니다.
-    if (globalData.activePlunders) {
-        for (var victimId in globalData.activePlunders) {
-            var p = globalData.activePlunders[victimId];
-            
-            // 3분(180,000ms) 경과 여부 확인
-            if (nowTs - p.startTime >= 180000) {
-                var pirate = null;
-                var victim = null;
-                var tradeCfg = SYSTEM_CONFIG.TRADE;
-
-                // 전역 유저 탐색으로 해적과 희생자 객체 확보
-                for (var r in data.rooms) {
-                    if (data.rooms[r].users[p.pirateUid]) pirate = data.rooms[r].users[p.pirateUid];
-                    if (data.rooms[r].users[victimId]) victim = data.rooms[r].users[victimId];
-                }
-
-                if (pirate && victim && victim.voyage && victim.voyage.active) {
-                    var v = victim.voyage;
-                    var totalCargoValue = 0;
-                    var mSnap = v.marketSnapshot || tradeCfg.NATIONS;
-                    var nSnap = mSnap[v.dest] || tradeCfg.NATIONS[v.dest];
-
-                    // 1. 일반 화물 가치 계산 (출항 스냅샷 기준)
-                    for (var g in (v.cargoSnapshot || {})) {
-                        var qty = Number(v.cargoSnapshot[g]);
-                        var uCost = Number((victim.cargoAvg && victim.cargoAvg[g]) || tradeCfg.GOODS_COST[g]);
-                        var rInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.25, norm: 1.05, hate: 0.8 };
-                        var mult = (g === nSnap.favorite) ? rInfo.pref : (g === nSnap.hate ? rInfo.hate : rInfo.norm);
-                        totalCargoValue += Math.floor(uCost * mult * qty);
-                    }
-
-                    // 2. 특산품 가치 계산
-                    for (var s in (v.specialtySnapshot || {})) {
-                        var sQty = Number(v.specialtySnapshot[s]);
-                        totalCargoValue += Math.floor(10000 * tradeCfg.SPECIALTY_PROFIT * sQty);
-                    }
-
-                    // 3. 해적 수익 확정 (가치의 30%) 및 지급
-                    var stealAmt = Math.floor(totalCargoValue * tradeCfg.JOBS.STEAL_RATE);
-                    var res = processRepayment(pirate, stealAmt, p.pirateUid, ctx.targetRoom);
-                    util_updatePoint(pirate, mainRoomData, Number(res.actualGain), "해적 약탈 성공 수익", ctx.targetRoom);
-
-                    // 4. 희생자 피해 기록 (정산 시 30% 차감 플래그)
-                    victim.isPlundered = true;
-
-                    var successMsg = "🏴‍☠️ [약탈 성공: 해적 승리]\n" +
-                                     "━━━━━━━━━━━━━━━\n" +
-                                     "👤 해적: " + pirate.name + "\n" +
-                                     "📦 피해자: " + victim.name + "\n" +
-                                     "💰 강탈액: " + fp(stealAmt) + "P (화물의 30%)\n" +
-                                     "━━━━━━━━━━━━━━━\n" +
-                                     "🛡️ 해군의 저지가 없어 약탈이 완료되었습니다.";
-                    
-                    Api.replyRoom(ctx.targetRoom, successMsg);
-                    ctx.isUpdated = true;
-                }
-                // 처리 완료된 약탈 데이터 삭제
-                delete globalData.activePlunders[victimId];
-            }
-        }
-    }
 
     var racingData = mainRoomData.features.racing;
     var lotto = mainRoomData.features.lotto;
@@ -6835,34 +6701,6 @@ function _handleBankStep2(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
     return false;
-}
-
-// (추가) 해군 고용 시스템 처리 함수
-function util_hireNavy(roomName, sender, navyType) {
-    var data = getDatabase();
-    var user = data.rooms[roomName].users[sender];
-    var navyTiers = {
-        "견습병": { power: 50, cost: 5000 },
-        "정예병": { power: 250, cost: 30000 },
-        "해군대장": { power: 1000, cost: 150000 }
-    };
-
-    var selected = navyTiers[navyType];
-    if (!selected) return formatError(user, "등급 오류", "견습병, 정예병, 해군대장 중 선택하세요.");
-    if (user.point < selected.cost) return formatError(user, "잔액 부족", "고용 비용 " + fp(selected.cost) + "P가 부족합니다.");
-
-    if (!user.features) user.features = {};
-    user.features.navy = {
-        hired: true,
-        name: navyType,
-        power: selected.power,
-        hireTime: Date.now()
-    };
-
-    util_updatePoint(user, data.rooms[roomName], -selected.cost, "해군 " + navyType + " 고용", roomName);
-    safeSaveData(data);
-
-    return formatCommand("⚓ 해군 고용 완료", user, "[" + navyType + "] 호위대가 배속되었습니다.\n이제 해적의 위협으로부터 안전하게 보호받습니다.\n(방어력: " + selected.power + ")", "현재 잔액: " + fp(user.point) + "P");
 }
             
 //==========섹터22-3==========

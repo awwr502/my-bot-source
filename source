@@ -3698,6 +3698,11 @@ function runScheduler() {
                 util_autoClearTimeouts(data);
             }
 
+            // 0-1. 해상 약탈 타이머 및 직업 미활동 감시 (1초 주기)
+            if (typeof _runSeaPillageScheduler === 'function') {
+                _runSeaPillageScheduler(data, ctx);
+            }
+
             // 모든 섹터가 공유할 상태 객체 (Context)
             var ctx = {
                 isUpdated: false,
@@ -3858,6 +3863,72 @@ function _sendToDashboard(data, ctx) {
             } catch (e) { Log.error("Dashboard Sync Error: " + e); }
         }
     }));
+}
+
+/**
+ * [신설] 해상 약탈 실시간 프로세서 및 직업 유지관리 엔진
+ * 기능 1: 3분간 토벌되지 않은 약탈 세션을 '성공'으로 확정 정산
+ * 기능 2: 7일간 무역/약탈/토벌 활동이 없는 유저의 직업 강제 박탈
+ */
+function _runSeaPillageScheduler(data, ctx) {
+    var nowTs = Date.now();
+
+    // [Part 1: 3분 약탈 타이머 감시]
+    for (var rName in data.rooms) {
+        var roomObj = data.rooms[rName];
+        if (!roomObj.features || !roomObj.features.activePillages) continue;
+
+        var pillages = roomObj.features.activePillages;
+        for (var victimUid in pillages) {
+            var p = pillages[victimUid];
+            
+            // 3분(180,000ms) 경과 체크
+            if (nowTs - p.startTime >= 180000) {
+                // 토벌 대기 중인 해군이 없거나, 토벌에 실패하여 시간이 만료된 경우
+                if (typeof _processPillageSuccess === 'function') {
+                    // Sector 53의 약탈 성공 정산 함수 호출
+                    _processPillageSuccess(victimUid, p, data, rName);
+                    delete pillages[victimUid]; // 세션 종료
+                    ctx.isUpdated = true;
+                }
+            }
+        }
+    }
+
+    // [Part 2: 7일 미활동 직업 박탈] (매일 00시 10분에 1회 수행)
+    if (ctx.now.getHours() === 0 && ctx.now.getMinutes() === 10 && data.lastJobCleanupDate !== ctx.today) {
+        data.lastJobCleanupDate = ctx.today;
+        var oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+        var purgeCount = 0;
+
+        for (var r in data.rooms) {
+            var users = data.rooms[r].users;
+            for (var uid in users) {
+                var u = users[uid];
+                if (u.job) {
+                    // 마지막 직업 활동(무역/약탈/토벌) 시간 체크
+                    var lastAct = u.lastJobActivityTime || new Date(u.jobJoinDate).getTime() || 0;
+                    if (nowTs - lastAct > oneWeekMs) {
+                        var jobName = (u.job === 'pirate' ? "해적" : "해군");
+                        u.job = null;
+                        u.jobJoinDate = "";
+                        u.infamy = 0;
+                        u.fame = 0;
+                        u.currentBounty = 0;
+                        
+                        try {
+                            Api.replyRoom(r, "📢 [인사 행정 알림]\n유저 '" + u.name + "'님은 7일간 해상 활동이 없어 [" + jobName + "] 직위에서 자동 해임되었습니다.");
+                        } catch(e) {}
+                        purgeCount++;
+                    }
+                }
+            }
+        }
+        if (purgeCount > 0) {
+            Log.info("[System] 장기 미활동 직업군 " + purgeCount + "명 정리 완료.");
+            ctx.isUpdated = true;
+        }
+    }
 }
 
 //==========섹터16-2==========

@@ -8324,19 +8324,25 @@ if (actualFeatures && actualFeatures.states) {
     if (!currentStates.bankProcess) currentStates.bankProcess = {};
     if (!currentStates.selectWait) currentStates.selectWait = {};
 
-    // 1:1 대화방 사용자의 경우 메인방('내리다')의 대기 상태를 최우선으로 복제하여 인식률 100% 보장
-    if (is1to1) {
+    // [보정] 1:1 대화방 뿐만 아니라 '베릭방'(관제실) 유저의 경우 메인방('내리다')의 세션을 최우선 동기화
+    if (is1to1 || roomName === "베릭방") {
         var mRoom = data.rooms[MAIN_NAME];
         if (mRoom && mRoom.features && mRoom.features.states) {
             var mS = mRoom.features.states;
-            // 메인방에 세션이 있다면 현재방으로 가져오고, 현재방에 있다면 메인방으로 보냄 (양방향 싱크)
-            if (mS.menuWait[targetUid]) currentStates.menuWait[targetUid] = mS.menuWait[targetUid];
-            else if (currentStates.menuWait[targetUid]) mS.menuWait[targetUid] = currentStates.menuWait[targetUid];
-            
-            if (mS.bankProcess[targetUid]) currentStates.bankProcess[targetUid] = mS.bankProcess[targetUid];
-            else if (currentStates.bankProcess[targetUid]) mS.bankProcess[targetUid] = currentStates.bankProcess[targetUid];
+            // 모든 대기열 키(menuWait, bankProcess 등)를 전수 조사하여 동기화
+            var sKeys = ["menuWait", "bankProcess", "selectWait", "lottoPurchase"];
+            sKeys.forEach(function(k) {
+                if (mS[k] && mS[k][targetUid]) {
+                    currentStates[k][targetUid] = mS[k][targetUid];
+                } else if (currentStates[k] && currentStates[k][targetUid]) {
+                    mS[k][targetUid] = currentStates[k][targetUid];
+                }
+            });
         }
     }
+
+    // [중요] 동기화된 이후의 상태를 기반으로 활성 세션을 정의 (인식률 100% 보장)
+    var activeSession = currentStates.menuWait[targetUid] || currentStates.bankProcess[targetUid] || currentStates.selectWait[targetUid];
 
 // 추가: 모든 숫자/메뉴 핸들러가 작동하기 전, 네비게이션 키워드를 최상단에서 가로챔 (수정/추가)
     var NAV_KEYWORDS = ["뒤로", "↩️ 뒤로", "처음으로", "🏠 처음으로", "취소", "❎취소"];

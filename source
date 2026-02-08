@@ -8079,251 +8079,133 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     }
 
      /* [기능 1] 상점 카테고리 선택 */
-
     else if (state.type === 'shop_category') {
-
         var catId = parseInt(choice);
-
         if (isNaN(catId) || !SHOP_CATEGORIES[catId]) {
-
             delete menuWaitState[targetUid];
-
             replier.reply(formatError(user, "번호 오류", "올바른 카테고리 번호를 선택해주세요."));
-
         } 
-
         // 5번(특수/복권) 카테고리 선택 시 서브 메뉴로 분기
-
         else if (catId === 5) {
-
             menuWaitState[targetUid] = { type: 'shop_detail', category: '5', time: Date.now() };
-
             
-
             // [수정] 스피또 가격 자동 계산 (설정값 * 물가배율)
-
             var spittoBase = SYSTEM_CONFIG.ECO.SPITTO.PRICE;
-
             var spittoPrice = Math.floor(spittoBase * util_getEcoMultiplier(roomName));
 
-
-
             var lotteryMenu = "원하시는 복권 번호를 입력하세요.\n\n" +
-
                               "1. 로또 (추첨식: 22:00 발표)\n" +
-
                               "2. 스피또 (즉석식: " + fp(spittoPrice) + "P)";
-
             
-
             replier.reply(formatCommand("🎫 특수/복권 상점", user, lotteryMenu, "취소: [취소] / 입력 대기: 30초"));
-
         }
-
-
 
         else if (catId === 6) {
-
             var filteredItems = [];
-
             for (var i = 0; i < SHOP_ITEMS.length; i++) {
-
                 if (SHOP_ITEMS[i].cat === 6) filteredItems.push(SHOP_ITEMS[i]);
-
             }
-
             var list = [];
-
             for (var j = 0; j < filteredItems.length; j++) {
-
                 var item = filteredItems[j];
-
                 list.push((j + 1) + ". " + item.icon + " " + item.name + " : " + fp(getItemPrice(item, user, roomName)) + "P");
-
             }
-
             // 상점 구매 대기 상태로 전환
-
             bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: filteredItems } };
-
             delete menuWaitState[targetUid]; 
-
             var shopContent = list.join("\n") + "\n\n💰 보유 포인트: " + fp(user.point) + "P";
-
             replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[6], user, shopContent, "구매할 물품의 번호를 입력하세요."));
-
         }
-
-
 
         else {
-
             var filteredItems = [];
-
             for (var i = 0; i < SHOP_ITEMS.length; i++) {
-
                 if (SHOP_ITEMS[i].cat === catId) filteredItems.push(SHOP_ITEMS[i]);
-
             }
-
-
 
             if (filteredItems.length === 0) {
-
                 delete menuWaitState[targetUid];
-
                 replier.reply(formatSimple("🛒 상점 알림", "해당 카테고리에 물품이 없습니다.", "다른 번호를 선택하세요."));
-
             } else {
-
                 var list = [];
-
                 for (var j = 0; j < filteredItems.length; j++) {
-
                     var item = filteredItems[j];
-
                     list.push((j + 1) + ". " + item.icon + " " + item.name + " : " + fp(getItemPrice(item, user, roomName)) + "P");
-
                 }
-
                 bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: filteredItems } };
-
                 delete menuWaitState[targetUid]; // 메뉴 대기 해제 -> 상점 구매 대기 진입
-
                 var shopContent = list.join("\n") + "\n\n💰 보유 포인트: " + fp(user.point) + "P";
-
                 replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[catId], user, shopContent, "구매할 물품의 번호를 입력하세요."));
-
             }
-
         }
-
         return true;
     } 
 
     /* [기능 2] 항구 투자 대상 선택 처리 */
     else if (state.type === 'trade_market') {
         var nations = Object.keys(tradeCfg.NATIONS);
-
         var idx = parseInt(choice) - 1;
 
-
-
         if (isNaN(idx) || idx < 0 || idx >= nations.length) {
-
             replier.reply(formatError(user, "번호 오류", "1~5번 사이의 항구를 선택하세요."));
-
             return true;
-
         }
-
-
 
         // [Gemini 요청 사항] 투자 시간 제한 체크 (07:00 ~ 23:59)
-
         var h = new Date().getHours();
-
         if (h < 7) {
-
             replier.reply(formatError(user, "투자 불가 시간", "항구 투자는 07:00 ~ 23:59 사이에만 가능합니다.\n(현재 시각 기준 항만 폐쇄)"));
-
             return true;
-
         }
-
-
 
         var destName = nations[idx];
-
         var pData = (roomData.features.portData && roomData.features.portData[destName]) ? roomData.features.portData[destName] : { level: 1, totalInvest: 0, governorUid: "" };
-
         
-
         // 메뉴 대기 해제 후 실제 금액 입력을 위해 bankProcessState로 제어권 이관
-
         delete menuWaitState[targetUid];
-
         bankProcessState[targetUid] = { 
-
             type: 'trade_invest_amount', 
-
             time: Date.now(), 
-
             extra: { dest: destName } 
-
         };
 
-
-
         var govName = "없음 (공석)";
-
         if (pData.governorUid && roomData.users[pData.governorUid]) {
-
             govName = roomData.users[pData.governorUid].name + " (" + fp(pData.totalInvest) + "P)";
-
         }
 
-
-
         var investBody = "📍 대상: " + destName + " (현재 Lv." + pData.level + ")\n" +
-
                          "📈 현재 선호품 매입가 보너스: +" + (pData.level - 1) + "%\n" +
-
                          "👤 현재 총독: " + govName + "\n\n" +
-
                          "투자하실 금액을 입력해주세요.\n" +
-
                          "(보유 포인트: " + fp(user.point) + "P)\n" +
-
                          "━━━━━━━━━━━━━━━\n" +
-
                          "💡 투자금은 국고로 귀속되며 반환되지 않습니다.\n" +
-
                          "[취소] 입력 시 중단";
 
-
-
         replier.reply(formatCommand("💰 " + destName + " 항구 투자", user, investBody));
-
         return true;
-
     }
 
-
-
-/* [기능 1-1] 상점 상세 선택 (복권 카테고리 내 번호 선택 처리) */
-
-   else if (state.type === 'shop_detail') {
+    /* [기능 1-1] 상점 상세 선택 (복권 카테고리 내 번호 선택 처리) */
+    else if (state.type === 'shop_detail') {
         delete menuWaitState[targetUid]; // 상세 선택 진입 시 메뉴 대기 해제
-
         
-
         if (state.category === '5') { // 복권 카테고리인 경우
-
             if (choice === "1") { // 로또 선택 시
-
                 var lottoItem = null;
-
                 for(var i=0; i<SHOP_ITEMS.length; i++) { 
-
                     if(SHOP_ITEMS[i].effect === "lotto") { lottoItem = SHOP_ITEMS[i]; break; } 
-
                 }
-
                 // 로또는 단권 구매이므로 바로 구매 확인 단계로 이동
-
                 bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: [lottoItem] } };
-
                 _handleBankStep5("1", user, data, replier, roomName, targetUid);
-
             } 
-
             else if (choice === "2") { // 스피또 선택 시
                 var spittoItem = null;
                 for(var i=0; i<SHOP_ITEMS.length; i++) { 
                     if(SHOP_ITEMS[i].effect === "spitto") { spittoItem = SHOP_ITEMS[i]; break; } 
                 }
-
                 // 스피또는 여러 개 구매가 가능하므로 수량 입력 단계로 이동
                 bankProcessState[targetUid] = { type: 'shop_quantity', time: Date.now(), extra: { item: spittoItem } };
                 replier.reply(formatCommand("🔢 스피또 수량 입력", user, "구매하실 [스피또 복권]의 수량을 입력해주세요.", "취소: [취소]"));
@@ -8360,6 +8242,7 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         return true;
     }
 
+    /* [기타 무역 관련 핸들러] */
     else if (state.type === 'trade_job_enlist') { _handleJobJoin(choice, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_governor_office') { _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_select_cargo') { _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
@@ -8371,10 +8254,10 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         return true;
     }
     else if (state.type === 'trade_navy_menu') {
-    else if (choice === "1") _showBattleList(user, replier, roomData, targetUid);
-    else if (choice === "2") _showNavyInfo(user, replier);
-    else if (choice === "3") _processNavyRetire(user, data, replier, roomName, targetUid);
-    else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요." + NAV_BAR));
+        if (choice === "1") _showBattleList(user, replier, roomData, targetUid);
+        else if (choice === "2") _showNavyInfo(user, replier);
+        else if (choice === "3") _processNavyRetire(user, data, replier, roomName, targetUid);
+        else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요." + NAV_BAR));
         return true;
     }
     else if (state.type === 'trade_raid_list') { _handlePillageSelect(choice, user, data, replier, roomName, targetUid); return true; }

@@ -7758,55 +7758,48 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     if (state.type === 'trade_main') {
         var myPorts = util_getUserGovernorPorts(targetUid, roomData);
         var hasGov = myPorts.length > 0;
-        var job = user.job;
 
-        // [내부 헬퍼] 유저의 직업 상태에 따라 알맞은 메뉴(가입/해적/해군)를 호출
-        var routeJobMenu = function() {
-            if (job === 'pirate') _showPirateMenu(user, replier, roomData, targetUid);
-            else if (job === 'navy') _showNavyMenu(user, replier, roomData, targetUid);
-            else _showJobEnlistmentMenu(user, replier, roomData, targetUid); // 조합 사무소로 연결
-        };
-
-        if (choice === "1") {
-            _showTradeMarket(user, replier, roomData, tradeCfg);
-            menuWaitState[targetUid] = { type: 'trade_market', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
-        } else if (choice === "2") {
-            if (user.voyage && user.voyage.active === true) {
-                _showVoyageStatus(user, replier, data, roomName); 
-                delete menuWaitState[targetUid]; 
-                return true;
-            }
-            _prepareVoyage(user, replier, tradeCfg, roomData);
-            menuWaitState[targetUid] = { type: 'trade_depart', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
-        } else if (choice === "3") {
-            _showVoyageStatus(user, replier, data, roomName);
-            state.time = Date.now();
-        } else if (choice === "4") {
-            _manageShip(user, replier, tradeCfg);
-            menuWaitState[targetUid] = { type: 'trade_ship', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
-        } else if (choice === "5") {
-            _showTradeShop(user, replier, roomData, tradeCfg);
-            if (!roomData.features.states.bankProcess) roomData.features.states.bankProcess = {};
-            roomData.features.states.bankProcess[targetUid] = { 
-                type: 'shop_buy', time: Date.now(), extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } 
-            };
-            delete menuWaitState[targetUid];
-        } 
-        else if (choice === "6") {
-            if (hasGov) {
-                _showGovernorOffice(user, replier, roomData, myPorts);
-                menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), depth: 2, myPorts: myPorts, originRoom: state.originRoom || roomName };
-            } else {
-                routeJobMenu();
-            }
-        } 
-        else if (choice === "7") {
-            if (hasGov) routeJobMenu();
-            else replier.reply(formatError(user, "번호 오류", "6번 메뉴까지만 이용 가능합니다."));
-        } else {
-            var maxChoice = hasGov ? 7 : 6;
-            replier.reply(formatError(user, "번호 오류", "1~" + maxChoice + "번 사이를 선택하세요."));
-        }
+        // 수정: 지역 변수(routeJobMenu) 소멸 문제를 해결하기 위해 직접 함수 호출 방식으로 변경
+        if (choice === "1") {
+            _showTradeMarket(user, replier, roomData, tradeCfg);
+            menuWaitState[targetUid] = { type: 'trade_market', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
+        } else if (choice === "2") {
+            if (user.voyage && user.voyage.active === true) {
+                _showVoyageStatus(user, replier, data, roomName); 
+                return true;
+            }
+            _prepareVoyage(user, replier, tradeCfg, roomData);
+            menuWaitState[targetUid] = { type: 'trade_depart', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
+        } else if (choice === "3") {
+            _showVoyageStatus(user, replier, data, roomName);
+            state.time = Date.now();
+        } else if (choice === "4") {
+            _manageShip(user, replier, tradeCfg);
+            menuWaitState[targetUid] = { type: 'trade_ship', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
+        } else if (choice === "5") {
+            _showTradeShop(user, replier, roomData, tradeCfg);
+            if (!roomData.features.states.bankProcess) roomData.features.states.bankProcess = {};
+            roomData.features.states.bankProcess[targetUid] = { 
+                type: 'shop_buy', time: Date.now(), extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } 
+            };
+            delete menuWaitState[targetUid];
+        } else if (choice === "6") {
+            if (hasGov) {
+                _showGovernorOffice(user, replier, roomData, myPorts);
+                menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), depth: 2, myPorts: myPorts, originRoom: state.originRoom || roomName };
+            } else {
+                _showJobEnlistmentMenu(user, replier, roomData, targetUid); // 직접 호출로 수정
+            }
+        } else if (choice === "7") {
+            if (hasGov) {
+                _showJobEnlistmentMenu(user, replier, roomData, targetUid); // 직접 호출로 수정
+            } else {
+                replier.reply(formatError(user, "번호 오류", "6번 메뉴까지만 이용 가능합니다."));
+            }
+        } else {
+            var maxChoice = hasGov ? 7 : 6;
+            replier.reply(formatError(user, "번호 오류", "1~" + maxChoice + "번 사이를 선택하세요."));
+        }
         return true;
     }
 
@@ -14505,6 +14498,12 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
         return;
     }
 
+    // 추가: '호위' 키워드 입력 시 해군 고용 핸들러를 호출하는 로직 삽입
+    if (input === "호위") {
+        _handleEscortHire(input, user, data, replier, roomName, targetUid);
+        return;
+    }
+
     if (input === "출항") {
 
         // 1. 출항 시 부도 가드 추가
@@ -15998,6 +15997,37 @@ function _processNavyRetire(user, data, replier, roomName, targetUid) {
     user.jobJoinDate = "";
     
     replier.reply(formatCommand("📝 명예 전역 완료", user, "복무를 마치고 민간인 신분으로 돌아왔습니다.\n(" + fp(fee) + "P 차감됨)"));
+    safeSaveData(data, true);
+}
+
+// 추가: 전직을 관리하는 '조합 사무소' UI와 '전직 처리' 핸들러 구현
+function _showJobEnlistmentMenu(user, replier, roomData, targetUid) {
+    if (user.job) {
+        if (user.job === 'pirate') return _showPirateMenu(user, replier, roomData, targetUid);
+        if (user.job === 'navy') return _showNavyMenu(user, replier, roomData, targetUid);
+    }
+    var body = "📍 장소: 해상 조합 사무소\n\n상업 활동 외의 특별한 길을 걷고자 하는 선원들을 위한 공간입니다. 한 번 직업을 가지면 은퇴 시 막대한 비용이 발생하니 신중히 선택하세요.\n\n1. 🏴‍☠️ 해적 (약탈과 자유)\n2. 👮 해군 (토벌과 명예)\n\n↩️ 뒤로 / ❎취소";
+    replier.reply(formatCommand("⚓ 조합 사무소", user, body, "원하시는 직업 번호를 입력하세요."));
+    roomData.features.states.menuWait[targetUid] = { type: 'trade_job_enlist', time: Date.now(), depth: 2 };
+}
+
+function _handleJobJoin(choice, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    if (choice === "1") {
+        user.job = 'pirate';
+        user.infamy = 0;
+        user.currentBounty = 0;
+        user.jobJoinDate = getSimpleDate();
+        replier.reply(formatCommand("🏴‍☠️ 해적단 가입 완료", user, "이제 당신은 자유로운 영혼, 해적입니다!\n바다 위의 무역선들을 습격하여 악명을 떨치세요."));
+    } else if (choice === "2") {
+        user.job = 'navy';
+        user.fame = 0;
+        user.jobJoinDate = getSimpleDate();
+        replier.reply(formatCommand("👮 해군 임관 완료", user, "내리다 해군의 일원이 되신 것을 환영합니다!\n해적을 토벌하고 상인들을 보호하여 명예를 쌓으세요."));
+    } else {
+        return replier.reply(formatError(user, "번호 오류", "1번(해적) 또는 2번(해군)을 선택하세요."));
+    }
+    delete roomData.features.states.menuWait[targetUid];
     safeSaveData(data, true);
 }
 

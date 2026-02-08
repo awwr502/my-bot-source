@@ -14991,8 +14991,10 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         var multiplier = 1.0;
 
         if (good === producedByDest) {
-            multiplier = 0.5;
-            disasterLog += "\n🚫 [과잉 공급]: 자국 생산물 '" + good + "'은 반입 제한(반값)";
+            multiplier = 0; // 매출액 0 처리
+            totalCost -= itemCost; // 원가 계산에서 제외 (내 가방에 그대로 남으므로)
+            disasterLog += "\n🚫 [반입 제한]: 자국 생산물 '" + good + "'은 매입이 거부되어 창고로 반환되었습니다.";
+            // 실제 유저의 가방 수량을 삭감하지 않기 위해 아래에서 건너뜀
         } else {
             if (good === nationInfo.favorite) {
                 // 상단에서 선언된 itemCost를 안전하게 사용합니다.
@@ -15026,10 +15028,11 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             soldLog.push("• " + good + " x" + count + ": " + fp(earn) + "P " + sign);
         }
         
-        // 가방 비우기
-        if (user.cargo) user.cargo[good] = 0;
-        if (user.cargoAvg) user.cargoAvg[good] = 0;
-    }
+        // 매입 거부된 품목이 아닐 때만 가방(평단가/수량)을 비움
+        if (good !== producedByDest) {
+            if (user.cargo) user.cargo[good] = 0;
+            if (user.cargoAvg) user.cargoAvg[good] = 0;
+        }
 
     // 3. 특산품 정산 (specialtyToSell 스냅샷 기반 루프)
     for (var sName in specialtyToSell) {
@@ -15052,7 +15055,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
         if (parentGood === producedByDest) {
             sMult = 0;
-            disasterLog += "\n🚫 [통관 거부]: 자국 특산품 '" + sName + "'은 전량 압수되었습니다.";
+            totalCost -= (sBasePrice * sCount); // 원가 제외
+            disasterLog += "\n🚫 [통관 거부]: 자국 특산품 '" + sName + "'은 매입이 거부되어 창고로 반환되었습니다.";
         } else if (parentGood === nationInfo.favorite) {
             sMult = cfg.SPECIALTY_PROFIT;
             sTag = "⭐ [세트수요]";
@@ -15066,8 +15070,10 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         if (sMult > 0) {
             soldLog.push("• [특] " + sName + " x" + sCount + ": " + fp(sRev) + "P " + sTag);
         }
-        // 실제 유저의 특산품 가방 비움
-        if (user.specialties) user.specialties[sName] = 0;
+        // 매입 거부된 특산품이 아닐 때만 가방에서 삭제
+        if (parentGood !== producedByDest) {
+            if (user.specialties) user.specialties[sName] = 0;
+        }
     }
 
     // 5. [핵심] 순수익(마진) 기반 차등 정산 로직

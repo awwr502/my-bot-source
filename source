@@ -7697,17 +7697,13 @@ function _handleMenuStep3(msg, user, data, replier, roomName, targetUid) {
     return false;
 }
 
-//==========섹터23-4==========
-
-/* [독립형 함수] 메뉴 선택 대기 처리 4단계 (상점/도움말/가이드) */
 function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
-    // [핵심] 숫자 입력 시에는 메인 방이 아니라 '현재 유저가 있는 방(1:1방)'의 대기 상태를 확인해야 함
     var currentRoomData = data.rooms[roomName]; 
     if (!currentRoomData || !currentRoomData.features) return false;
     
     var menuWaitState = currentRoomData.features.states.menuWait;
 
-    // 추가: 통합 도움말 진입점 (/가이드 삭제 통합)
+    // [1] 도움말 명령어 진입점
     if (msg === "/도움말") {
         menuWaitState[targetUid] = { type: 'help_main', time: Date.now() };
         var menu = "1. 📘 기초 입문 가이드\n" +
@@ -7723,9 +7719,8 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     }
 
     if (!menuWaitState || !menuWaitState[targetUid]) return false;
-
     var state = menuWaitState[targetUid];
-    // 처리 가능 타입 리스트 최적화 (help_main 통합)
+
     var types = [
         'shop_category', 'shop_detail', 'help_main', 
         'trade_main', 'trade_market', 'trade_depart', 'trade_status', 'trade_ship',
@@ -7735,9 +7730,11 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         'casino_main', 'casino_ladder', 'casino_baccarat',
         'casino_ladder_sub', 'casino_baccarat_sub' 
     ];
+    if (types.indexOf(state.type) === -1) return false;
 
     var NAV_BAR = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
+    // [2] 타임아웃 및 취소 가드
     if (Date.now() - state.time > 30000 || msg === "취소" || msg === "❎취소") {
         delete menuWaitState[targetUid];
         if (msg === "취소" || msg === "❎취소") {
@@ -7749,163 +7746,58 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // [수정] 모든 하위 로직에서 참조할 공통 변수 선언 및 리다이렉션
+    // [3] 공통 변수 정의 (중복 선언 해결)
     var choice = msg.replace(/[^0-9]/g, "").trim();
     var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var roomData = data.rooms[logicRoom]; 
     var tradeCfg = SYSTEM_CONFIG.TRADE;
     var bankProcessState = roomData.features.states.bankProcess;
 
-    // 1. 1:1 채팅방 기능 제한 가드
-    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
-        if (state.type.startsWith('trade_') || state.type.startsWith('shop_')) {
-            delete menuWaitState[targetUid];
-            replier.reply("🚫 [기능 제한]\n무역 및 상점 관리 기능은 단체방('내리다')에서만 가능합니다.\n\n✅ 1:1 가능: 카지노, 은행, 내정보");
-            return true;
-        }
-    }
+    // [4] 1:1 채팅방 가드
+    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+        if (state.type.startsWith('trade_') || state.type.startsWith('shop_')) {
+            delete menuWaitState[targetUid];
+            replier.reply("🚫 [기능 제한]\n무역 및 상점 관리 기능은 단체방('내리다')에서만 가능합니다.\n\n✅ 1:1 가능: 카지노, 은행, 내정보");
+            return true;
+        }
+    }
 
-    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-
-    // 수정: Syntax Error(줄바꿈) 해결 및 함수 종료 중괄호(}) 추가
+    // [5] 상세 로직 분기 시작
+    
+    // A. 통합 가이드 시스템 (help_main)
     if (state.type === 'help_main') {
         var helpData = {
             "1": { 
                 title: "📘 기초 입문 가이드", 
-                text: `1. 시스템 시작 및 계정 보안
-• [신규 가입]: 단체방에서 채팅 시 즉시 UID 발급 및 10만P 지급.
-• [/코드확인]: 기기 변경 대비 1:1 고유 복구 코드 확인.
-• [/계정연동 코드]: 이전 계정 데이터를 현재 계정으로 복제.
-
-2. 성장의 기반: 출석체크
-• [/출석]: 매일 포인트와 신용(+2) 획득.
-• [물가 연동]: 보상액은 서버 통화량과 국고 상태에 따라 매일 변동.
-• [신불자 제한]: 신용 500점 미만 시 보상의 20%가 국고 환수.
-
-3. 신분 상승: 티어 시스템
-• [/승급]: 아이언~챌린저 등급 상승 도전.
-• [승급 기회]: 매일 무료 1회, 상점에서 추가 구매 가능(할증제).
-• [강등 방어]: 실버 이상 하락 위험 시 '방어권'으로 보호.
-• [피버 타임]: 매주 일요일 승급 확률 소폭 상승.
-
-💡 관련 명령어: /출석, /내정보, /코드확인, /계정연동, /승급` 
+                text: "1. 시스템 시작 및 계정 보안\n• [신규 가입]: 단체방 채팅 시 즉시 UID 발급 및 10만P 지급.\n• [/코드확인]: 기기 변경 대비 1:1 고유 복구 코드 확인.\n• [/계정연동 코드]: 이전 계정 데이터를 현재 계정으로 복제.\n\n2. 성장의 기반: 출석체크\n• [/출석]: 매일 포인트와 신용(+2) 획득.\n• [물가 연동]: 보상액은 서버 통화량과 국고 상태에 따라 변동.\n• [신불자]: 신용 500점 미만 시 보상의 20%가 국고 환수.\n\n3. 신분 상승: 티어 시스템\n• [/승급]: 아이언~챌린저 등급 상승 도전.\n• [승급 기회]: 매일 무료 1회, 상점에서 추가 구매 가능(할증제).\n• [강등 방어]: 실버 이상 하락 위험 시 '방어권'으로 보호.\n\n💡 관련 명령어: /출석, /내정보, /코드확인, /계정연동, /승급" 
             },
             "2": { 
                 title: "🏦 중앙은행 및 신용 경제 가이드", 
-                text: `1. 중앙은행 국고 시스템
-• [순환 경제]: 모든 지출(상점, 세금 등)은 '중앙은행 금고'로 귀속.
-• [지급준비율]: 총 예금의 20%는 법정 준비금으로 보유, 부족 시 출금 제한.
-• [국가 부도]: 국고 고갈 시 부도 선포 및 모든 투자 활동 동결.
-
-2. 신용 점수와 등급 (/신용등급)
-• [등급 영향]: 등급 상승 시 대출 한도 증가, 이율 하락, 무역 수익 상승.
-• [신용 관리]: 상환 및 기부(1만P당 +10점)로 회복 가능.
-• [신용불량자]: 500점 미만 시 수익의 50% 채무 상환으로 강제 징수.
-
-3. 예금과 대출 (/은행)
-• [복리 이자]: 실시간 누적되어 자정 지급. ([자산왕] 장착 시 1.5배)
-• [자동 상환]: 빚 보유 시 수익 발생 시 비율별 선차감.
- - 은행대출: 30% / 사채·신불: 50% / 대환채무: 70%
-
-💡 관련 명령어: /은행, /신용등급, /대출한도, /상환, /기부` 
+                text: "1. 중앙은행 국고 시스템\n• [순환 경제]: 모든 지출(상점, 세금 등)은 국고로 귀속.\n• [지급준비율]: 총 예금의 20%는 준비금으로 보유, 부족 시 출금 제한.\n• [국가 부도]: 국고 고갈 시 부도 선포 및 모든 경제 동결.\n\n2. 신용 점수와 등급 (/신용등급)\n• [등급 영향]: 등급 상승 시 한도 증가, 이율 하락, 무역 수익 상승.\n• [신용 관리]: 상환 및 기부(1만P당 +10점)로 회복 가능.\n• [신용불량]: 500점 미만 시 수익의 50%가 자동 상환 징수.\n\n3. 예금과 대출 (/은행)\n• [복리 이자]: 예금액에 이자가 실시간 누적되어 자정 지급.\n• [자동 상환]: 빚 보유 시 수익 발생 시 비율별 선차감.\n - 은행대출: 30% / 사채·신불: 50% / 대환채무: 70%\n\n💡 관련 명령어: /은행, /신용등급, /대출한도, /상환, /기부" 
             },
             "3": { 
                 title: "🏢 랜드마크 부동산 투자 가이드", 
-                text: `1. 부동산 시장 거래
-• [운영 시간]: 07:00 ~ 23:59 (야간 거래 중단).
-• [시세 변동]: 10분마다 시장 수요, 거래량, 정책에 따라 변동.
-• [양도소득세]: 지분 매각 시 마진의 5~10% 세금 징수.
-
-2. 6대 핵심 시설과 확정 배당
-• [대상]: 광산, 낚시터, 카지노, 중앙은행, 백화점, 경마장.
-• [배당]: 각 시설 지분 1위는 자정마다 24시간 누적 운영 수익 독점 배당.
-• [지분 보너스]: 10지분 초과 시 1지분당 10%씩 배당 효율 단리 상승.
-• [전설의 큰손]: '등기부' 10장 수집 시 배당금 10% 추가 보너스.
-
-3. 지능형 경제 교정 (지니 계수)
-• 자산 불평등 심화 시 상류층(상위 15%) 추가 누진세 및 서민층 보상 강화 적용.
-
-💡 관련 명령어: /랜드마크, /투자, /매각, /내부동산, /배당현황` 
+                text: "1. 부동산 시장 거래\n• [운영 시간]: 07:00 ~ 23:59 (야간 거래 중단).\n• [시세 변동]: 10분마다 시장 수요와 정책에 따라 변동.\n• [양도세]: 지분 매각 시 마진의 5~10% 세금 징수.\n\n2. 6대 핵심 시설과 확정 배당\n• [대상]: 광산, 낚시터, 카지노, 중앙은행, 백화점, 경마장.\n• [배당]: 각 시설 지분 1위는 자정마다 24시간 누적 수익 독점 배당.\n• [보너스]: 10지분 초과 시 1지분당 10%씩 배당 효율 상승.\n• [전설의 큰손]: '등기부' 10장 수집 시 배당금 10% 추가 보너스.\n\n3. 지능형 경제 교정\n• 불평등 심화 시 상류층 누진세 및 서민층 보상 배율 가동.\n\n💡 관련 명령어: /랜드마크, /투자, /매각, /내부동산, /배당현황" 
             },
             "4": { 
                 title: "⚓ 무역 및 해상 교역 가이드", 
-                text: `1. 해상 무역의 원리 (/무역)
-• [시세 고정]: 출항 순간의 시세가 도착 시까지 보존됨.
-• [선박 개조]: 카라벨(10칸) → 프리깃(25칸) → 갤리온(40칸) 개조.
-• [특산품]: 도착 항구에서 발견하며 [총독]인 경우 최대 3배 획득.
-
-2. 항해 재해 및 특권
-• [돌발 이벤트]: 25% 확률로 폭풍우, 화재, 부식 등의 재해 발생.
-• [해상왕]: 무역 200회 달성 시 모든 재해 확률 0% 무력화.
-
-3. 해상 교전: 해적과 해군
-• [해적]: 상선 습격하여 마진 30% 강탈. 성공 시 현상금 누적.
-• [해군]: 해적 토벌(현상금 수령) 및 상인 호위 임무 수행.
-• [교전 공식]: 선박 레벨 높을수록 승률 상승. 패배 해군은 15분간 퇴각.
-
-💡 관련 명령어: /무역, /항해현황, /선박관리, /투자(항구), /조합사무소` 
+                text: "1. 해상 무역의 원리 (/무역)\n• [시세 고정]: 출항 순간의 시세가 도착 시까지 보존됨.\n• [선박 개조]: 카라벨 → 프리깃 → 갤리온으로 성능 강화.\n• [특산품]: 도착 항구에서 낮은 확률 발견, [총독]은 최대 3배 획득.\n\n2. 항해 재해 및 특권\n• [돌발 이벤트]: 25% 확률로 폭풍우, 화재, 부식 등 재해 발생.\n• [해상왕]: 무역 200회 달성 시 칭호 장착으로 모든 재해 무력화.\n\n3. 해상 교전: 해적과 해군\n• [해적]: 상선 습격하여 마진 30% 강탈 및 현상금 누적.\n• [해군]: 해적 토벌 및 상인 호위 임무(보호세) 수행.\n• [전투]: 선박 레벨이 높을수록 승률 상승, 패배 해군은 퇴각.\n\n💡 관련 명령어: /무역, /항해현황, /선박관리, /투자(항구), /조합사무소" 
             },
             "5": { 
                 title: "🎰 통합 카지노 및 로또 가이드", 
-                text: `1. 중앙 카지노 (1:1 채팅 전용)
-• [사다리]: 2분 주기. 단일 1.9배, 조합 4.0배 배당.
-• [바카라]: 3분 주기. P(2.0), B(1.95), T(8.0) 배팅.
-• [블랙잭]: 1:1 대결. [도박왕] 장착 시 모든 배당 +0.05 가산.
-
-2. 로또 및 스피또
-• [로또]: 1~15 중 3개 숫자 선택. 매일 22시 추첨, 상금 무제한 이월.
-• [스피또]: 즉석 확인 복권. 낙첨 편지 15장 시 [행운의 부적] 획득.
-
-⚠️ 주의사항: 국가 부도 시 카지노 이용이 제한됩니다.
-
-💡 관련 명령어: /카지노, /로또정보, /스피또, /구매(7, 14)` 
+                text: "1. 중앙 카지노 (1:1 채팅 전용)\n• [사다리]: 2분 주기. 단일 1.9배 / 조합 4.0배 배당.\n• [바카라]: 3분 주기. P(2.0) / B(1.95) / T(8.0) 배팅 가능.\n• [블랙잭]: 딜러와 1:1 대결. [도박왕] 장착 시 배당 +0.05 가산.\n\n2. 로또 및 스피또\n• [로또]: 1~15 중 3개 선택. 매일 22시 추첨 및 상금 이월.\n• [스피또]: 즉석 확인 복권. 낙첨 편지 15장 시 [행운의 부적] 획득.\n\n⚠️ 주의: 국가 부도 선포 시 카지노 이용이 제한됩니다.\n\n💡 관련 명령어: /카지노, /로또정보, /스피또, /구매(7, 14)" 
             },
             "6": { 
                 title: "⛏️ 생산 및 약탈 활동 가이드", 
-                text: `1. 방치형 광산 (/광산시작)
-• [수익]: 분당 포인트 자동 적립. 빚이 한도의 80% 초과 시 효율 1.5배.
-• [희귀 광물]: 구리, 금, 다이아 발견 시 수십 배의 보너스 수익.
-• [유물 조각]: 0.1% 확률 발견, 50개 시 [도굴왕] 작위 수여.
-
-2. 강태공의 낚시 (/낚시)
-• [쿨타임]: 10분마다 1회. [낚시왕] 장착 시 판매 수익 20% 추가.
-
-3. 도둑질 (/도둑질)
-• [강탈]: 타인 현금의 10% 탈취 (30초 소요). 유물 조각도 강탈 가능.
-• [방어]: 30초 내 [잡았다요놈] 입력 시 도둑을 체포(징역 1시간)합니다.
-
-💡 관련 명령어: /광산시작, /광산정보, /광산종료, /낚시, /도둑질, 잡았다요놈` 
+                text: "1. 방치형 광산 (/광산시작)\n• [수익]: 분당 포인트 자동 적립. 빚 80% 초과 시 효율 1.5배 폭증.\n• [희귀 광물]: 구리, 금, 다이아 발견 시 수십 배 보너스.\n• [유물 조각]: 0.1% 확률 발견, 50개 수집 시 [도굴왕] 수여.\n\n2. 강태공의 낚시 (/낚시)\n• [쿨타임]: 10분마다 1회. [낚시왕] 장착 시 판매 수익 20% 추가.\n\n3. 그림자 활동: 도둑질 (/도둑질)\n• [강탈]: 타인 현금의 10% 탈취 (30초 소요). 유물 조각도 강탈 가능.\n• [방어]: 30초 내 [잡았다요놈] 입력 시 도둑 체포(징역 1시간).\n\n💡 관련 명령어: /광산시작, /광산정보, /낚시, /도둑질, 잡았다요놈" 
             },
             "7": { 
                 title: "🎒 가방 및 아이템 수집 가이드", 
-                text: `1. 인벤토리 관리 (/가방)
-• 아이콘, 칭호, 소모품, 수집품(유물/등기부) 확인 및 관리.
-• [/장착 번호]: 아이템 실시간 적용 (신불자 불가).
-
-2. 아이템 분해 및 랜덤박스
-• [/분해 번호]: 아이콘 분해 시 조각 획득. 5개당 '이용권' 1매 변환.
-• [랜덤박스]: 이용권으로 노말~레전더리 아이콘을 획득.
-
-3. 수집 업적 칭호
-• [수집대마왕]: 모든 아이콘 수집 기록 보유자. 상점 15% 상시 할인.
-• [도굴왕]: 유물 50개 수집 시 광물 발견 확률 대폭 상승.
-
-💡 관련 명령어: /가방, /장착, /분해, /아이콘초기화` 
+                text: "1. 인벤토리 관리 (/가방)\n• 보유 아이콘, 칭호, 소모품, 수집품(유물/등기부) 확인 및 관리.\n• [/장착 번호]: 아이템을 닉네임에 실시간 적용 (신불자 불가).\n\n2. 아이템 분해 및 랜덤박스\n• [/분해 번호]: 아이콘 분해 시 조각 획득. 5개당 '이용권' 1매 변환.\n• [랜덤박스]: 이용권으로 노말~레전더리 아이콘을 획득.\n\n3. 수집 업적 칭호\n• [수집대마왕]: 모든 아이콘 수집 기록 보유자. 상점 15% 할인.\n• [도굴왕]: 유물 50개 수집 시 광물 발견 확률 대폭 상승.\n\n💡 관련 명령어: /가방, /장착, /분해, /아이콘초기화" 
             },
             "8": { 
                 title: "🏛️ 가상 정부 및 정책 가이드", 
-                text: `1. 의회 안건 및 투표 (/의회)
-• [일정]: 20:00 안건 상정 → 23:50 마감 → 익일 00:05 정책 발효.
-• [가중 투표]: 티어 비례 표수 행사 (아이언 1표 ~ 다이아 이상 3표).
-• [참여 보상]: 투표 참여 시 국고에서 거마비 2,000P 즉시 지급.
-
-2. 정책의 영향력
-• 투표 결과에 따라 세율, 채굴 효율, 대출 한도 등이 서버 전체에 반영.
-
-3. 국가 민생 지원금
-• 순자산이 평균의 40% 미만 시 생계비 자동 지급.
-
-💡 관련 명령어: /의회, /투표` 
+                text: "1. 의회 안건 및 투표 (/의회)\n• [일정]: 20:00 안건 상정 → 23:50 마감 → 00:05 정책 발효.\n• [가중 투표]: 티어 비례 표수 행사 (아이언 1표 ~ 다이아 이상 3표).\n• [참여 보상]: 투표 시 국고에서 거마비 2,000P 즉시 지급.\n\n2. 정책의 영향력\n• 투표에 따라 세율, 채굴 효율, 대출 한도 등이 서버 전체에 반영.\n\n3. 국가 민생 지원금\n• 순자산이 평균의 40% 미만 시 생계비 자동 지급.\n\n💡 관련 명령어: /의회, /투표" 
             }
         };
 
@@ -7919,292 +7811,149 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    return false;
-}
-
-    /* [분기 1] 무역 메인 메뉴 입력 처리 (6, 7번 가변 슬롯 완벽 대응) */
-    if (state.type === 'trade_main') {
-        var myPorts = util_getUserGovernorPorts(targetUid, roomData);
-        var hasGov = myPorts.length > 0;
-
-        // 수정: 지역 변수(routeJobMenu) 소멸 문제를 해결하기 위해 직접 함수 호출 방식으로 변경
-        if (choice === "1") {
-            _showTradeMarket(user, replier, roomData, tradeCfg);
-            menuWaitState[targetUid] = { type: 'trade_market', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
-        } else if (choice === "2") {
-            if (user.voyage && user.voyage.active === true) {
-                _showVoyageStatus(user, replier, data, roomName); 
-                delete menuWaitState[targetUid]; // 항해 중일 땐 여기서 대기 종료
-                return true;
-            }
-            // 항해 중이 아닐 때만 정상적으로 다음 단계(목적지 선택)로 진행
-            _prepareVoyage(user, replier, tradeCfg, roomData);
-            menuWaitState[targetUid] = { type: 'trade_depart', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
-        } else if (choice === "3") {
-            _showVoyageStatus(user, replier, data, roomName);
-            delete menuWaitState[targetUid]; // 상태 해제 (트랩 방지)
-        } else if (choice === "4") {
-            _manageShip(user, replier, tradeCfg);
-            menuWaitState[targetUid] = { type: 'trade_ship', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
-        } else if (choice === "5") {
-            _showTradeShop(user, replier, roomData, tradeCfg);
-            if (!roomData.features.states.bankProcess) roomData.features.states.bankProcess = {};
-            roomData.features.states.bankProcess[targetUid] = { 
-                type: 'shop_buy', time: Date.now(), extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } 
-            };
-            delete menuWaitState[targetUid];
-        } else if (choice === "6") {
-            if (hasGov) {
-                _showGovernorOffice(user, replier, roomData, myPorts);
-                menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), depth: 2, myPorts: myPorts, originRoom: state.originRoom || roomName };
-            } else {
-                _showJobEnlistmentMenu(user, replier, roomData, targetUid); // 직접 호출로 수정
-            }
-        } else if (choice === "7") {
-            if (hasGov) {
-                _showJobEnlistmentMenu(user, replier, roomData, targetUid); // 직접 호출로 수정
-            } else {
-                replier.reply(formatError(user, "번호 오류", "6번 메뉴까지만 이용 가능합니다."));
-            }
-        } else {
-            var maxChoice = hasGov ? 7 : 6;
-            replier.reply(formatError(user, "번호 오류", "1~" + maxChoice + "번 사이를 선택하세요."));
-        }
-        return true;
-    }
-
-    /* [서브 상태 핸들러 로직군] */
-    if (state.type === 'trade_job_enlist') { _handleJobJoin(choice, user, data, replier, roomName, targetUid); return true; }
-    if (state.type === 'trade_governor_office') { _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid); return true; }
-    if (state.type === 'trade_select_cargo') { _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
-
-    if (state.type === 'trade_pirate_menu') {
-        if (choice === "1") _showRaidList(user, replier, data, roomName, targetUid);
-        else if (choice === "2") _showPirateInfo(user, replier);
-        else if (choice === "3") _processPirateRetire(user, data, replier, roomName, targetUid);
-        else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요." + NAV_BAR));
-        return true;
-    }
-
-    if (state.type === 'trade_navy_menu') {
-        if (choice === "1") _showBattleList(user, replier, roomData, targetUid);
-        else if (choice === "2") _showNavyInfo(user, replier);
-        else if (choice === "3") _processNavyRetire(user, data, replier, roomName, targetUid);
-        else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요." + NAV_BAR));
-        return true;
-    }
-
-    if (state.type === 'trade_raid_list') { _handlePillageSelect(choice, user, data, replier, roomName, targetUid); return true; }
-    if (state.type === 'trade_battle_list') { _handleCombatSelect(choice, user, data, replier, roomName, targetUid); return true; }
-    if (state.type === 'trade_escort_select') { _handleEscortHire(choice, user, data, replier, roomName, targetUid); return true; }
-    if (state.type === 'trade_escort_confirm') { _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
-
-    // 3. 통합 네비게이션: 처음으로 이동
-    if (msg === "처음으로" || msg === "🏠 처음으로") {
-        if (state.type.startsWith('help')) return _handleHelpEntry(replier, targetUid, menuWaitState);
-        if (state.type.startsWith('guide')) return _handleGuideEntry(replier, targetUid, menuWaitState);
-        if (state.type.startsWith('shop')) { delete menuWaitState[targetUid]; return _gameShopLogic("/상점", user, data, replier, roomName, targetUid); }
-        if (state.type.startsWith('trade')) { delete menuWaitState[targetUid]; return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid); }
-        if (state.type.startsWith('casino')) { delete menuWaitState[targetUid]; return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid); }
-    }
-
-    // 4. 통합 네비게이션: 뒤로가기 이동
-    if (msg === "뒤로" || msg === "↩️ 뒤로") {
-        // A. 무역 서브메뉴 -> 무역 메인
-        if (state.type.startsWith('trade_') && state.type !== 'trade_main') {
-            // [3단계 -> 2단계] 하역 설정 중이라면 출항지 선택 화면으로 복귀
-            if (state.type === 'trade_select_cargo') {
-                state.type = 'trade_depart'; 
-                state.depth = 2; 
-                state.time = Date.now();
-                _prepareVoyage(user, replier, SYSTEM_CONFIG.TRADE, data.rooms[logicRoom]);
-                return true;
-            }
-            
-            // [2단계 -> 1단계] 그 외 모든 서브메뉴(총독실, 시세 등)에서는 무역 메인으로 복귀
-            delete menuWaitState[targetUid];
-            return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
-        }
-
-        // B. 카지노 서브메뉴 -> 카지노 메인
-        if (state.type.startsWith('casino_') && state.type !== 'casino_main') {
-            return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid);
-        }
-
-        // C. 상점 상세 -> 상점 카테고리
-        if (state.type === 'shop_detail') {
-            return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
-        }
-
-        // D. 조회형 메뉴 (도움말/가이드) 계층 이동
-        if (state.type === 'help_cat') return _handleHelpEntry(replier, targetUid, menuWaitState);
-        if (state.type === 'guide_detail') return _handleGuideEntry(replier, targetUid, menuWaitState);
-        if (state.type === 'help_item') {
-            return _handleHelpCategory(replier, user, state.extra.cat, targetUid, menuWaitState, NAV_BAR);
-        }
-        if (state.type === 'help') { delete menuWaitState[targetUid]; replier.reply("📖 이용을 종료했습니다."); return true; }
-
-        // E. 그 외 최상위 메뉴에서 뒤로는 종료 처리
-        delete menuWaitState[targetUid];
-        replier.reply(formatCommand("🚪 메뉴 종료", user, "이전 화면이 없어 퇴거합니다."));
-        return true;
-    }
-
-    // 2. [명령어 통로]
-    if (msg.startsWith("/")) {
-        delete menuWaitState[targetUid];
-        return false;
-    }
-
-    var choice = msg.replace(/[^0-9]/g, "").trim();
-    var bankProcessState = data.rooms[roomName].features.states.bankProcess;
-
-    // 수정: tradeCfg 변수 선언 누락으로 인한 NATIONS 참조 오류(Cannot read property "NATIONS" from undefined) 해결
-    var tradeCfg = SYSTEM_CONFIG.TRADE;
-
-    /* [기능 1] 상점 카테고리 선택 */
-    if (state.type === 'shop_category') {
+    // B. 상점 카테고리 선택
+    else if (state.type === 'shop_category') {
         var catId = parseInt(choice);
         if (isNaN(catId) || !SHOP_CATEGORIES[catId]) {
             delete menuWaitState[targetUid];
             replier.reply(formatError(user, "번호 오류", "올바른 카테고리 번호를 선택해주세요."));
-        } 
-        // 5번(특수/복권) 카테고리 선택 시 서브 메뉴로 분기
-        else if (catId === 5) {
+        } else if (catId === 5) {
             menuWaitState[targetUid] = { type: 'shop_detail', category: '5', time: Date.now() };
-            
-            // [수정] 스피또 가격 자동 계산 (설정값 * 물가배율)
-            var spittoBase = SYSTEM_CONFIG.ECO.SPITTO.PRICE;
-            var spittoPrice = Math.floor(spittoBase * util_getEcoMultiplier(roomName));
-
-            var lotteryMenu = "원하시는 복권 번호를 입력하세요.\n\n" +
-                              "1. 로또 (추첨식: 22:00 발표)\n" +
-                              "2. 스피또 (즉석식: " + fp(spittoPrice) + "P)";
-            
-            replier.reply(formatCommand("🎫 특수/복권 상점", user, lotteryMenu, "취소: [취소] / 입력 대기: 30초"));
-        }
-
-        else if (catId === 6) {
-            var filteredItems = [];
-            for (var i = 0; i < SHOP_ITEMS.length; i++) {
-                if (SHOP_ITEMS[i].cat === 6) filteredItems.push(SHOP_ITEMS[i]);
-            }
-            var list = [];
-            for (var j = 0; j < filteredItems.length; j++) {
-                var item = filteredItems[j];
-                list.push((j + 1) + ". " + item.icon + " " + item.name + " : " + fp(getItemPrice(item, user, roomName)) + "P");
-            }
-            // 상점 구매 대기 상태로 전환
-            bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: filteredItems } };
-            delete menuWaitState[targetUid]; 
-            var shopContent = list.join("\n") + "\n\n💰 보유 포인트: " + fp(user.point) + "P";
-            replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[6], user, shopContent, "구매할 물품의 번호를 입력하세요."));
-        }
-
-        else {
-            var filteredItems = [];
-            for (var i = 0; i < SHOP_ITEMS.length; i++) {
-                if (SHOP_ITEMS[i].cat === catId) filteredItems.push(SHOP_ITEMS[i]);
-            }
-
+            var multiplier = util_getEcoMultiplier(roomName);
+            var spittoPrice = Math.floor(SYSTEM_CONFIG.ECO.SPITTO.PRICE * multiplier);
+            var lotteryMenu = "원하시는 복권 번호를 입력하세요.\n\n1. 로또 (추첨식: 22:00 발표)\n2. 스피또 (즉석식: " + fp(spittoPrice) + "P)";
+            replier.reply(formatCommand("🎫 특수/복권 상점", user, lotteryMenu, "취소: [취소]"));
+        } else {
+            var filteredItems = SHOP_ITEMS.filter(function(it) { return it.cat === catId; });
             if (filteredItems.length === 0) {
                 delete menuWaitState[targetUid];
                 replier.reply(formatSimple("🛒 상점 알림", "해당 카테고리에 물품이 없습니다.", "다른 번호를 선택하세요."));
             } else {
-                var list = [];
-                for (var j = 0; j < filteredItems.length; j++) {
-                    var item = filteredItems[j];
-                    list.push((j + 1) + ". " + item.icon + " " + item.name + " : " + fp(getItemPrice(item, user, roomName)) + "P");
-                }
+                var list = filteredItems.map(function(item, j) { return (j + 1) + ". " + item.icon + " " + item.name + " : " + fp(getItemPrice(item, user, roomName)) + "P"; });
                 bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: filteredItems } };
-                delete menuWaitState[targetUid]; // 메뉴 대기 해제 -> 상점 구매 대기 진입
-                var shopContent = list.join("\n") + "\n\n💰 보유 포인트: " + fp(user.point) + "P";
-                replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[catId], user, shopContent, "구매할 물품의 번호를 입력하세요."));
+                delete menuWaitState[targetUid];
+                replier.reply(formatCommand("🛒 " + SHOP_CATEGORIES[catId], user, list.join("\n") + "\n\n💰 보유 포인트: " + fp(user.point) + "P", "구매할 물품의 번호를 입력하세요."));
             }
         }
         return true;
     }
-return false;
-}
 
-/**
-     * [추가] 항구 투자 대상 선택 처리
-     * 기능: 시세표에서 번호 선택 시 투자 시간 검증 및 금액 입력 단계로 전환
-     */
+    // C. 항구 투자 대상 선택
     else if (state.type === 'trade_market') {
         var nations = Object.keys(tradeCfg.NATIONS);
         var idx = parseInt(choice) - 1;
-
         if (isNaN(idx) || idx < 0 || idx >= nations.length) {
             replier.reply(formatError(user, "번호 오류", "1~5번 사이의 항구를 선택하세요."));
-            return true;
+        } else if (new Date().getHours() < 7) {
+            replier.reply(formatError(user, "투자 불가 시간", "항구 투자는 07:00 ~ 23:59 사이에만 가능합니다."));
+        } else {
+            var destName = nations[idx];
+            delete menuWaitState[targetUid];
+            bankProcessState[targetUid] = { type: 'trade_invest_amount', time: Date.now(), extra: { dest: destName } };
+            replier.reply(formatCommand("💰 " + destName + " 항구 투자", user, "투자하실 금액을 입력해주세요.\n(보유 포인트: " + fp(user.point) + "P)", "취소: [취소]"));
         }
-
-        // [Gemini 요청 사항] 투자 시간 제한 체크 (07:00 ~ 23:59)
-        var h = new Date().getHours();
-        if (h < 7) {
-            replier.reply(formatError(user, "투자 불가 시간", "항구 투자는 07:00 ~ 23:59 사이에만 가능합니다.\n(현재 시각 기준 항만 폐쇄)"));
-            return true;
-        }
-
-        var destName = nations[idx];
-        var pData = (roomData.features.portData && roomData.features.portData[destName]) ? roomData.features.portData[destName] : { level: 1, totalInvest: 0, governorUid: "" };
-        
-        // 메뉴 대기 해제 후 실제 금액 입력을 위해 bankProcessState로 제어권 이관
-        delete menuWaitState[targetUid];
-        bankProcessState[targetUid] = { 
-            type: 'trade_invest_amount', 
-            time: Date.now(), 
-            extra: { dest: destName } 
-        };
-
-        var govName = "없음 (공석)";
-        if (pData.governorUid && roomData.users[pData.governorUid]) {
-            govName = roomData.users[pData.governorUid].name + " (" + fp(pData.totalInvest) + "P)";
-        }
-
-        var investBody = "📍 대상: " + destName + " (현재 Lv." + pData.level + ")\n" +
-                         "📈 현재 선호품 매입가 보너스: +" + (pData.level - 1) + "%\n" +
-                         "👤 현재 총독: " + govName + "\n\n" +
-                         "투자하실 금액을 입력해주세요.\n" +
-                         "(보유 포인트: " + fp(user.point) + "P)\n" +
-                         "━━━━━━━━━━━━━━━\n" +
-                         "💡 투자금은 국고로 귀속되며 반환되지 않습니다.\n" +
-                         "[취소] 입력 시 중단";
-
-        replier.reply(formatCommand("💰 " + destName + " 항구 투자", user, investBody));
         return true;
     }
 
-/* [기능 1-1] 상점 상세 선택 (복권 카테고리 내 번호 선택 처리) */
+    // D. 상점 상세 선택 (복권)
     else if (state.type === 'shop_detail') {
-        delete menuWaitState[targetUid]; // 상세 선택 진입 시 메뉴 대기 해제
-        
-        if (state.category === '5') { // 복권 카테고리인 경우
-            if (choice === "1") { // 로또 선택 시
-                var lottoItem = null;
-                for(var i=0; i<SHOP_ITEMS.length; i++) { 
-                    if(SHOP_ITEMS[i].effect === "lotto") { lottoItem = SHOP_ITEMS[i]; break; } 
-                }
-                // 로또는 단권 구매이므로 바로 구매 확인 단계로 이동
+        delete menuWaitState[targetUid];
+        if (state.category === '5') {
+            if (choice === "1") {
+                var lottoItem = SHOP_ITEMS.filter(function(it){ return it.effect === "lotto"; })[0];
                 bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: [lottoItem] } };
                 _handleBankStep5("1", user, data, replier, roomName, targetUid);
             } 
-            else if (choice === "2") { // 스피또 선택 시
-                var spittoItem = null;
-                for(var i=0; i<SHOP_ITEMS.length; i++) { 
-                    if(SHOP_ITEMS[i].effect === "spitto") { spittoItem = SHOP_ITEMS[i]; break; } 
-                }
-                // 스피또는 여러 개 구매가 가능하므로 수량 입력 단계로 이동
+            else if (choice === "2") {
+                var spittoItem = SHOP_ITEMS.filter(function(it){ return it.effect === "spitto"; })[0];
                 bankProcessState[targetUid] = { type: 'shop_quantity', time: Date.now(), extra: { item: spittoItem } };
                 replier.reply(formatCommand("🔢 스피또 수량 입력", user, "구매하실 [스피또 복권]의 수량을 입력해주세요.", "취소: [취소]"));
-            } 
-            else {
-                replier.reply(formatError(user, "번호 오류", "1번(로또) 또는 2번(스피또)을 선택해주세요."));
             }
         }
         return true;
     }
+
+    // E. 무역 메인 메뉴 로직
+    else if (state.type === 'trade_main') {
+        var myPorts = util_getUserGovernorPorts(targetUid, roomData);
+        var hasGov = myPorts.length > 0;
+        if (choice === "1") {
+            _showTradeMarket(user, replier, roomData, tradeCfg);
+            menuWaitState[targetUid] = { type: 'trade_market', time: Date.now(), depth: 2 };
+        } else if (choice === "2") {
+            if (user.voyage && user.voyage.active === true) { _showVoyageStatus(user, replier, data, roomName); delete menuWaitState[targetUid]; return true; }
+            _prepareVoyage(user, replier, tradeCfg, roomData);
+            menuWaitState[targetUid] = { type: 'trade_depart', time: Date.now(), depth: 2 };
+        } else if (choice === "3") {
+            _showVoyageStatus(user, replier, data, roomName);
+            delete menuWaitState[targetUid];
+        } else if (choice === "4") {
+            _manageShip(user, replier, tradeCfg);
+            menuWaitState[targetUid] = { type: 'trade_ship', time: Date.now(), depth: 2 };
+        } else if (choice === "5") {
+            _showTradeShop(user, replier, roomData, tradeCfg);
+            bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } };
+            delete menuWaitState[targetUid];
+        } else if (choice === "6") {
+            if (hasGov) {
+                _showGovernorOffice(user, replier, roomData, myPorts);
+                menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), depth: 2, myPorts: myPorts };
+            } else {
+                _showJobEnlistmentMenu(user, replier, roomData, targetUid);
+            }
+        } else if (choice === "7") {
+            if (hasGov) _showJobEnlistmentMenu(user, replier, roomData, targetUid);
+            else replier.reply(formatError(user, "번호 오류", "6번 메뉴까지만 이용 가능합니다."));
+        } else {
+            replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 선택하세요."));
+        }
+        return true;
+    }
+
+    // [F] 통합 네비게이션
+    if (msg === "처음으로" || msg === "🏠 처음으로") {
+        delete menuWaitState[targetUid];
+        if (state.type.startsWith('shop')) return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
+        if (state.type.startsWith('trade')) return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
+        if (state.type.startsWith('casino')) return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid);
+        return _handleMenuStep4("/도움말", user, data, replier, roomName, targetUid);
+    }
+    if (msg === "뒤로" || msg === "↩️ 뒤로") {
+        if (state.type.startsWith('trade_') && state.type !== 'trade_main') {
+            delete menuWaitState[targetUid];
+            return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
+        }
+        if (state.type.startsWith('casino_') && state.type !== 'casino_main') {
+            return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid);
+        }
+        delete menuWaitState[targetUid];
+        replier.reply(formatCommand("🚪 메뉴 종료", user, "도움말 및 메뉴 이용을 종료했습니다."));
+        return true;
+    }
+
+    // [G] 서브 핸들러 위임
+    if (state.type === 'trade_job_enlist') { _handleJobJoin(choice, user, data, replier, roomName, targetUid); return true; }
+    if (state.type === 'trade_governor_office') { _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid); return true; }
+    if (state.type === 'trade_select_cargo') { _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
+    if (state.type === 'trade_pirate_menu') {
+        if (choice === "1") _showRaidList(user, replier, data, roomName, targetUid);
+        else if (choice === "2") _showPirateInfo(user, replier);
+        else if (choice === "3") _processPirateRetire(user, data, replier, roomName, targetUid);
+        return true;
+    }
+    if (state.type === 'trade_navy_menu') {
+        if (choice === "1") _showBattleList(user, replier, roomData, targetUid);
+        else if (choice === "2") _showNavyInfo(user, replier);
+        else if (choice === "3") _processNavyRetire(user, data, replier, roomName, targetUid);
+        return true;
+    }
+    if (state.type === 'trade_raid_list') { _handlePillageSelect(choice, user, data, replier, roomName, targetUid); return true; }
+    if (state.type === 'trade_battle_list') { _handleCombatSelect(choice, user, data, replier, roomName, targetUid); return true; }
+    if (state.type === 'trade_escort_select') { _handleEscortHire(choice, user, data, replier, roomName, targetUid); return true; }
+    if (state.type === 'trade_escort_confirm') { _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
+
+    return false;
+}
 
 //==========섹터24==========
 

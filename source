@@ -167,7 +167,8 @@ var USER_SCHEMA = [
     { key: 'jobJoinDate', default: '', type: 'string' }, // 직업 가입일 (미활동 박탈 체크용)
     { key: 'totalPillageSuccess', default: 0, type: 'number' }, // 누적 약탈 성공 횟수
     { key: 'totalCaptureSuccess', default: 0, type: 'number' }, // 누적 토벌 성공 횟수
-    { key: 'isPillaged', default: false, type: 'boolean' } // 현재 항해 중 약탈 발생 여부 (중복 약탈 방지용)
+    { key: 'isPillaged', default: false, type: 'boolean' }, // 현재 항해 중 약탈 발생 여부 (중복 약탈 방지용)
+    { key: 'pillageCooldownEndTime', default: 0, type: 'number' } // 해적 패배 시 약탈 쿨타임 (30분)
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -16114,6 +16115,14 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
     var sailingUsers = [];
     var now = Date.now();
 
+    // [해적 전용 가드]: 해전 패배 페널티(30분) 체크
+    // 이 필드는 약탈 시도 시에만 체크되므로, 다른 경제 활동(출석, 은행 등)은 차단되지 않습니다.
+    if (user.pillageCooldownEndTime && now < user.pillageCooldownEndTime) {
+        var diffC = user.pillageCooldownEndTime - now;
+        var remainMinC = Math.ceil(diffC / (1000 * 60));
+        return replier.reply(formatError(user, "약탈 불가", "현재 해전 패배로 인해 함대 정비(쿨타임) 중입니다.\n\n⏳ 남은 시간: " + remainMinC + "분"));
+    }
+
     // 전 서버를 스캔하여 '항해 중'이면서 '아직 도착 전'인 유저 탐색
     for (var r in data.rooms) {
         var roomObj = data.rooms[r];
@@ -16302,7 +16311,7 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
 
     if (isNavyWin) {
         // 해군 승리: 해적 징역, 약탈 세션 파기
-        pirate.jailReleaseTime = Date.now() + (30 * 60 * 1000);
+        pirate.pillageCooldownEndTime = Date.now() + (30 * 60 * 1000);
         pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
         navy.fame = (navy.fame || 0) + 15;
         navy.totalCaptureSuccess = (navy.totalCaptureSuccess || 0) + 1;

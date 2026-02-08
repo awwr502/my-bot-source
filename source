@@ -5877,6 +5877,19 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
 
 //==========섹터20-2==========
 
+// 신규 명령어(/) 입력 시 전 구역의 기존 대기 세션(Wait State)을 즉시 파기 (교차 충돌 방지)
+if (msg.startsWith("/")) {
+    var sessionRooms = [data.rooms[roomName], data.rooms["내리다"]];
+    sessionRooms.forEach(function(r) {
+        if (r && r.features && r.features.states) {
+            var s = r.features.states;
+            ["menuWait", "bankProcess", "selectWait", "lottoPurchase"].forEach(function(k) {
+                if (s[k] && s[k][targetUid]) delete s[k][targetUid];
+            });
+        }
+    });
+}
+
 /* [수정] 인자 리스트에 imageDB, sender를 추가하여 내부 로직 오류를 해결합니다. */
 function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData) {
 
@@ -8382,10 +8395,19 @@ if (actualFeatures && actualFeatures.states) {
             // 모든 대기열 키(menuWait, bankProcess 등)를 전수 조사하여 동기화
             var sKeys = ["menuWait", "bankProcess", "selectWait", "lottoPurchase"];
             sKeys.forEach(function(k) {
-                if (mS[k] && mS[k][targetUid]) {
-                    currentStates[k][targetUid] = mS[k][targetUid];
-                } else if (currentStates[k] && currentStates[k][targetUid]) {
-                    mS[k][targetUid] = currentStates[k][targetUid];
+                var mainS = mS[k] ? mS[k][targetUid] : null;
+                var localS = currentStates[k] ? currentStates[k][targetUid] : null;
+
+                if (mainS && localS) {
+                    var tM = mainS.time || mainS.timestamp || 0;
+                    var tL = localS.time || localS.timestamp || 0;
+                    // 더 최신인 것만 남기고 반대편은 삭제하여 단계 꼬임 방지
+                    if (tM > tL) { delete currentStates[k][targetUid]; currentStates[k][targetUid] = mainS; }
+                    else { delete mS[k][targetUid]; mS[k][targetUid] = localS; }
+                } else if (mainS && !localS) {
+                    currentStates[k][targetUid] = mainS;
+                } else if (!mainS && localS) {
+                    mS[k][targetUid] = localS;
                 }
             });
         var activeKeys = sKeys.filter(function(k) { 
@@ -14409,17 +14431,13 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatError(user, "목적지 오류", "올바른 번호를 입력하세요."));
             return true;
         }
-        /* [개편] 즉시 출항 대신 '하역 화물 선택' 단계로 진입 */
-       var destName = nations[idx];
-        menuWaitState[targetUid] = { 
-            type: 'trade_select_cargo', 
-            time: Date.now(), 
-            depth: 3, 
-            dest: destName, 
-            selCargo: {}, 
-            selSpec: {},
-            originRoom: state.originRoom || roomName 
-        };
+        /* [개편] 단계 이동 시 타임스탬프를 갱신하여 동기화 엔진에게 최신 상태임을 알림
+        var destName = nations[idx];
+        state.type = 'trade_select_cargo';
+        state.dest = destName;
+        state.selCargo = {};
+        state.selSpec = {};
+        state.time = Date.now(); // 타임스탬프 강제 갱신
         
         // 하역 설정 화면 출력
         _showTradeCargoSelectUI(user, replier, roomData, tradeCfg, destName, {}, {});

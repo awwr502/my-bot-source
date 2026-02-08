@@ -7773,31 +7773,45 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
 
 
 
-    var NAV_BAR = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
-
-
-
-    if (Date.now() - state.time > 30000 || msg === "취소" || msg === "❎취소") {
-
+    // [수정] 네비게이션 로직을 최상단으로 배치하여 모든 숫자 로직보다 우선권을 가집니다.
+    
+    // 1. 통합 네비게이션: 처음으로 이동
+    if (msg === "처음으로" || msg === "🏠 처음으로") {
         delete menuWaitState[targetUid];
-
-        if (msg === "취소" || msg === "❎취소") {
-
-            replier.reply(formatCommand("🚫 작업 취소", user, "도움말 및 메뉴 이용을 종료했습니다."));
-
-        } else {
-
-            replier.reply(formatError(user, "선택 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
-
-        }
-
-        if (msg.startsWith("/")) return false;
-
-        return true;
-
+        if (state.type.startsWith('shop')) return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
+        if (state.type.startsWith('trade')) return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
+        if (state.type.startsWith('casino')) return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid);
+        return _handleMenuStep4("/도움말", user, data, replier, roomName, targetUid);
     }
 
+    // 2. 통합 네비게이션: 뒤로가기 이동
+    if (msg === "뒤로" || msg === "↩️ 뒤로") {
+        if (state.type === 'trade_select_cargo') {
+            state.type = 'trade_depart'; state.depth = 2; state.time = Date.now();
+            _prepareVoyage(user, replier, SYSTEM_CONFIG.TRADE, data.rooms[(ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName]);
+            return true;
+        }
+        delete menuWaitState[targetUid];
+        if (state.type.startsWith('trade_')) return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
+        if (state.type.startsWith('casino_')) return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid);
+        if (state.type === 'shop_detail') return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
+        if (state.type.startsWith('help')) { replier.reply("📖 이용을 종료했습니다."); return true; }
+        
+        replier.reply(formatCommand("🚪 메뉴 종료", user, "이용을 종료했습니다."));
+        return true;
+    }
 
+    // 3. 공통 가드 (시간초과 및 취소)
+    if (Date.now() - state.time > 30000 || msg === "취소" || msg === "❎취소") {
+        delete menuWaitState[targetUid];
+        if (msg === "취소" || msg === "❎취소") {
+            replier.reply(formatCommand("🚫 작업 취소", user, "이용을 종료했습니다."));
+        } else {
+            replier.reply(formatError(user, "선택 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
+        }
+        if (msg.startsWith("/")) return false;
+        return true;
+    }
 
     // [수정] 모든 하위 로직에서 참조할 공통 변수 선언 및 리다이렉션
 
@@ -7828,11 +7842,6 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         }
 
     }
-
-
-
-    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-
 
 
     // 3. [분기 1] 도움말 상세 조회 (help_main)
@@ -7877,13 +7886,14 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
             delete menuWaitState[targetUid];
             replier.reply(formatCommand(sel.title, user, sel.text, "다시 보려면 [/도움말]"));
         } else {
+            if (msg.startsWith("/")) return false;
             replier.reply(formatError(user, "번호 오류", "1~8번 사이의 번호를 입력해주세요."));
         }
         return true;
     }
 
-    // 2. [분기 2] 무역 메인 메뉴 입력 처리 (trade_main)
-    else if (state.type === 'trade_main') {
+    // [수정] 기존의 단독 if를 'else if'로 연결하여 논리적 충돌 방지
+    if (state.type === 'trade_main') {
         var myPorts = util_getUserGovernorPorts(targetUid, roomData);
         var hasGov = myPorts.length > 0;
         var tradeCfg = SYSTEM_CONFIG.TRADE;
@@ -7921,23 +7931,17 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         } else if (choice === "7" && hasGov) {
             _showJobEnlistmentMenu(user, replier, roomData, targetUid);
         } else {
-            var maxChoice = hasGov ? 7 : 6;
-            replier.reply(formatError(user, "번호 오류", "1~" + maxChoice + "번 사이를 선택하세요."));
+            if (msg.startsWith("/")) return false;
+            replier.reply(formatError(user, "번호 오류", "1~" + (hasGov ? 7 : 6) + "번 사이를 선택하세요."));
         }
         return true;
+    }
 
-
-    /* [서브 상태 핸들러 로직군] */
-
-    if (state.type === 'trade_job_enlist') { _handleJobJoin(choice, user, data, replier, roomName, targetUid); return true; }
-
-    if (state.type === 'trade_governor_office') { _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid); return true; }
-
-    if (state.type === 'trade_select_cargo') { _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
-
-
-
-    if (state.type === 'trade_pirate_menu') {
+    /* [서브 상태 핸들러 로직군 - 전체 else if 연결] */
+    else if (state.type === 'trade_job_enlist') { _handleJobJoin(choice, user, data, replier, roomName, targetUid); return true; }
+    else if (state.type === 'trade_governor_office') { _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid); return true; }
+    else if (state.type === 'trade_select_cargo') { _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
+    else if (state.type === 'trade_pirate_menu') {
 
         if (choice === "1") _showRaidList(user, replier, data, roomName, targetUid);
 

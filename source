@@ -16076,3 +16076,247 @@ function _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, cfg
     delete roomData.features.states.menuWait[targetUid];
     safeSaveData(data, true);
 }
+
+/* [해적] 약탈 가능한 항해 중인 유저 리스트 출력 */
+function _showRaidList(user, replier, data, roomName, targetUid) {
+    var sailingUsers = [];
+    var now = Date.now();
+
+    // 전 서버를 스캔하여 '항해 중'이면서 '약탈 면역'이 아닌 유저 탐색
+    for (var r in data.rooms) {
+        var roomObj = data.rooms[r];
+        for (var uid in roomObj.users) {
+            var u = roomObj.users[uid];
+            // 조건: 항해 중 AND 약탈당하지 않음 AND 내가 아님
+            if (u.voyage && u.voyage.active === true && u.isPillaged !== true && uid !== targetUid) {
+                sailingUsers.push({ uid: uid, data: u, roomName: r });
+            }
+        }
+    }
+
+    if (sailingUsers.length === 0) {
+        return replier.reply(formatError(user, "탐색 실패", "현재 약탈 가능한 선박이 바다에 없습니다."));
+    }
+
+    var listBody = "🔭 레이더에 포착된 무역선 목록입니다.\n\n";
+    sailingUsers.forEach(function(target, i) {
+        var v = target.data.voyage;
+        var ship = SYSTEM_CONFIG.TRADE.SHIPS[target.data.shipLevel || 1];
+        var protectedMark = v.escortUid ? "🛡️ [호위함 동행]" : "⚪ [무방비]";
+        listBody += (i + 1) + ". " + target.data.name + " (" + ship.name + ")\n" +
+                    "   📍 목적지: " + v.dest + " | " + protectedMark + "\n";
+    });
+
+    listBody += "\n" + "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+    
+    var roomData = data.rooms[roomName];
+    roomData.features.states.menuWait[targetUid] = { 
+        type: 'trade_raid_list', 
+        time: now, 
+        extra: { targets: sailingUsers } 
+    };
+
+    replier.reply(formatCommand("🏴‍☠️ 약탈 대상 물색", user, listBody, "약탈할 번호를 입력하세요."));
+}
+
+/* [해적] 약탈 대상 선택 및 습격 실행 (호위 자동 토벌 로직 포함) */
+function _handlePillageSelect(choice, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    var state = roomData.features.states.menuWait[targetUid];
+    var idx = parseInt(choice) - 1;
+
+    if (isNaN(idx) || idx < 0 || idx >= state.extra.targets.length) {
+        return replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 선택하세요."));
+    }
+
+    var target = state.extra.targets[idx];
+    var victim = target.data;
+    var vId = target.uid;
+
+    // 중복 확인 (선점 가드)
+    var mainRoom = data.rooms["내리다"];
+    if (mainRoom.features.activePillages[vId]) {
+        return replier.reply(formatError(user, "습격 실패", "이미 다른 해적이 공격 중인 선박입니다."));
+    }
+
+    // [핵심] 호위 해군이 있는지 체크
+    if (victim.voyage.escortUid) {
+        replier.reply("🛡️ [경보] 습격한 선박에 해군 호위함이 대기 중입니다!\n즉시 해상 교전(자동 토벌)이 시작됩니다!");
+        // 자동 토벌 전투 실행 (Sector 53 하단 정의)
+        _executeSeaCombat(user, vId, victim.voyage.escortUid, data, roomName, "ESCORT");
+    } else {
+        // 호위가 없을 경우 3분 타이머 약탈 세션 시작
+        mainRoom.features.activePillages[vId] = {
+            pirateUid: targetUid,
+            pirateName: user.name,
+            startTime: Date.now(),
+            room: target.roomName
+        };
+
+        var alertMsg = "🚨 [해상 긴급 타전]\n━━━━━━━━━━━━━━━\n" +
+                       "🏴‍☠️ 해적 '" + user.name + "'(이)가\n" +
+                       "📦 '" + victim.name + "'님의 선박을 습격했습니다!\n\n" +
+                       "⚠️ 약탈 완료까지: 3분\n" +
+                       "⚔️ 해군 본부는 즉시 토벌대를 파견하십시오!";
+        
+        Api.replyRoom("내리다", alertMsg);
+    }
+    
+    delete roomData.features.states.menuWait[targetUid];
+    safeSaveData(data, true);
+}
+
+/* [해군] 현재 진행 중인 약탈 목록 조회 (토벌 게시판) */
+function _showBattleList(user, replier, roomData, targetUid) {
+    var mainRoom = globalData.rooms["내리다"];
+    var pillages = mainRoom.features.activePillages || {};
+    var pKeys = Object.keys(pillages);
+
+    if (pKeys.length === 0) {
+        return replier.reply(formatSimple("⚔️ 토벌 게시판", "현재 보고된 해적 습격 사건이 없습니다.", "평화로운 바다입니다."));
+    }
+
+    var body = "🚨 현재 현상수배 중인 해적 습격 현황입니다.\n\n";
+    var currentPillages = [];
+
+    pKeys.forEach(function(vId, i) {
+        var p = pillages[vId];
+        var remainSec = Math.ceil((180000 - (Date.now() - p.startTime)) / 1000);
+        if (remainSec < 0) return;
+
+        body += (i + 1) + ". 🏴‍☠️ " + p.pirateName + " ➔ 📦 " + (globalData.rooms[p.room].users[vId].name) + "\n" +
+                "   ⏳ 남은 시간: " + remainSec + "초\n";
+        currentPillages.push({ victimUid: vId, pirateUid: p.pirateUid });
+    });
+
+    body += "\n" + "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+    
+    roomData.features.states.menuWait[targetUid] = { 
+        type: 'trade_battle_list', 
+        time: Date.now(), 
+        extra: { pillages: currentPillages } 
+    };
+
+    replier.reply(formatCommand("👮 토벌 작전 게시판", user, body, "개입할 사건 번호를 입력하세요."));
+}
+
+/* [해군] 토벌 번호 선택 및 전투 실행 */
+function _handleCombatSelect(choice, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    var state = roomData.features.states.menuWait[targetUid];
+    var idx = parseInt(choice) - 1;
+
+    if (isNaN(idx) || idx < 0 || idx >= state.extra.pillages.length) {
+        return replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 선택하세요."));
+    }
+
+    var targetPillage = state.extra.pillages[idx];
+    
+    // 전투 실행 (해군 개입 모드)
+    _executeSeaCombat(user, targetPillage.victimUid, targetUid, data, roomName, "INTERVENE");
+    
+    delete roomData.features.states.menuWait[targetUid];
+}
+
+/* [핵심 엔진] 해상전투 집행 (Navy vs Pirate) */
+function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mode) {
+    var pirate = (mode === "ESCORT") ? navyOrPirate : null;
+    var navy = (mode === "INTERVENE") ? navyOrPirate : null;
+    
+    // 전 서버에서 대상 객체 확보
+    if (!pirate) {
+        var pId = data.rooms["내리다"].features.activePillages[victimUid].pirateUid;
+        for (var r in data.rooms) { if (data.rooms[r].users[pId]) { pirate = data.rooms[r].users[pId]; break; } }
+    }
+    if (!navy) {
+        for (var r in data.rooms) { if (data.rooms[r].users[navyUid]) { navy = data.rooms[r].users[navyUid]; break; } }
+    }
+
+    if (!pirate || !navy) return;
+
+    // 1. 전투력 계산: (선박 레벨 차이 반영)
+    // 확률 = 50% + (해군선박 - 해적선박) * 15% + 난수
+    var nShip = navy.shipLevel || 1;
+    var pShip = pirate.shipLevel || 1;
+    var winProb = 50 + (nShip - pShip) * 15 + (Math.random() * 20 - 10);
+    
+    var isNavyWin = (Math.random() * 100 < winProb);
+
+    // 2. 결과 처리
+    var mainRoom = data.rooms["내리다"];
+    var resultMsg = "⚔️ [해상 교전 결과 보고]\n━━━━━━━━━━━━━━━\n" +
+                    "👮 해군: " + navy.name + " (Lv." + nShip + ")\n" +
+                    "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pShip + ")\n\n";
+
+    if (isNavyWin) {
+        // 해군 승리: 해적 징역, 약탈 세션 파기
+        pirate.jailReleaseTime = Date.now() + (30 * 60 * 1000);
+        pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
+        navy.fame = (navy.fame || 0) + 15;
+        navy.totalCaptureSuccess = (navy.totalCaptureSuccess || 0) + 1;
+        
+        // 국고 현상금 지급 (기본 3만 + 해적이 쌓은 현상금)
+        var bounty = 30000 + (pirate.currentBounty || 0);
+        util_updatePoint(navy, data.rooms["내리다"], bounty, "해적 토벌 현상금 수령: " + pirate.name, "내리다");
+        pirate.currentBounty = 0;
+
+        delete mainRoom.features.activePillages[victimUid];
+        resultMsg += "🔥 [해군 승리] 해적선이 나포되었습니다!\n\n" +
+                     "⚖️ " + pirate.name + ": 징역 30분 부과\n" +
+                     "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득";
+    } else {
+        // 해적 승리: 해군 퇴각, 약탈 세션 유지 (호위였다면 해제)
+        navy.retreatEndTime = Date.now() + (15 * 60 * 1000);
+        pirate.infamy = (pirate.infamy || 0) + 5;
+        
+        resultMsg += "💀 [해적 승리] 해군 함대가 퇴각했습니다!\n\n" +
+                     "🩹 " + navy.name + ": 15분간 정비(퇴각) 돌입\n" +
+                     "⚠️ 약탈이 계속 진행됩니다!";
+        
+        // 호위 중이었다면 호위 정보 삭제 (상선 무방비 상태 전환)
+        var victim = null;
+        for (var r in data.rooms) { if (data.rooms[r].users[victimUid]) { victim = data.rooms[r].users[victimUid]; break; } }
+        if (victim && victim.voyage) {
+            victim.voyage.escortUid = null;
+            // 호위 실패 시 세션 새로 생성 (이미 있다면 유지)
+            if (!mainRoom.features.activePillages[victimUid]) {
+                mainRoom.features.activePillages[victimUid] = { 
+                    pirateUid: pirate.uid, pirateName: pirate.name, startTime: Date.now(), room: "내리다" 
+                };
+            }
+        }
+    }
+
+    Api.replyRoom("내리다", resultMsg);
+    safeSaveData(data, true);
+}
+
+/* [시스템] 약탈 성공 정산 (스케줄러에서 3분 만료 시 호출) */
+function _processPillageSuccess(victimUid, pData, data, roomName) {
+    var victim = null;
+    var pirate = null;
+    for (var r in data.rooms) {
+        if (data.rooms[r].users[victimUid]) victim = data.rooms[r].users[victimUid];
+        if (data.rooms[r].users[pData.pirateUid]) pirate = data.rooms[r].users[pData.pirateUid];
+    }
+
+    if (!victim || !pirate) return;
+
+    // 약탈 성공 플래그 설정 (정산 시 30% 차감 트리거)
+    victim.isPillaged = true;
+    victim.voyage.pirateUid = pData.pirateUid;
+    
+    // 해적 통계 반영
+    pirate.infamy = (pirate.infamy || 0) + 10;
+    pirate.currentBounty = (pirate.currentBounty || 0) + 15000; // 현상금 누적
+    pirate.totalPillageSuccess = (pirate.totalPillageSuccess || 0) + 1;
+
+    var successMsg = "🏴‍☠️ [약탈 완료 보고]\n━━━━━━━━━━━━━━━\n" +
+                     "해적 '" + pirate.name + "'이 '" + victim.name + "'의 상선을\n" +
+                     "완벽하게 제압하고 약탈에 성공했습니다!\n\n" +
+                     "📉 피해: 정산 마진의 30% 확정 강탈\n" +
+                     "💰 누적 현상금: " + fp(pirate.currentBounty) + "P 돌파!";
+    
+    Api.replyRoom("내리다", successMsg);
+    Log.info("[Pillage] " + pirate.name + " -> " + victim.name + " 성공");
+}

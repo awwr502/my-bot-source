@@ -15798,3 +15798,210 @@ function _calcBJScore(hand) {
     while (score > 21 && aces > 0) { score -= 10; aces--; } // A를 11에서 1로 변환
     return score;
 }
+
+//==========섹터53 (신설: 해상 교전 시스템 - Part 1)==========
+
+/**
+ * [시스템 모듈] 대항해시대 해상 교전 엔진 v1.0 (Part 1: 직업 관리 & 메뉴)
+ * 기능: 해적/해군 전용 메뉴, 은퇴 처리, 상인 호위 고용 프로세스 전담
+ */
+
+/* [해적] 전용 메뉴 UI 출력 */
+function _showPirateMenu(user, replier, roomData, targetUid) {
+    if (user.job !== 'pirate') return replier.reply(formatError(user, "접근 불가", "당신은 해적이 아닙니다."));
+    
+    var menu = "🏴‍☠️ 해적 소굴 (비밀 회합소)\n" +
+               "━━━━━━━━━━━━━━━\n" +
+               "1. 🔭 약탈 대상 물색 (레이더)\n" +
+               "2. 💀 내 악명 상세 조회\n" +
+               "3. 📜 해적단 은퇴 (면죄부 구입)\n\n" +
+               "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+
+    replier.reply(formatCommand("🏴‍☠️ 해적 메뉴", user, menu, "수행할 번호를 입력하세요."));
+    // 가변 메뉴 상태 진입
+    if (!roomData.features.states.menuWait) roomData.features.states.menuWait = {};
+    roomData.features.states.menuWait[targetUid] = { type: 'trade_pirate_menu', time: Date.now(), depth: 2 };
+}
+
+/* [해군] 전용 메뉴 UI 출력 */
+function _showNavyMenu(user, replier, roomData, targetUid) {
+    if (user.job !== 'navy') return replier.reply(formatError(user, "접근 불가", "당신은 해군이 아닙니다."));
+    
+    var menu = "👮 해군 본부 (작전 상황실)\n" +
+               "━━━━━━━━━━━━━━━\n" +
+               "1. ⚔️ 토벌 작전 게시판 (현상범)\n" +
+               "2. 🛡️ 내 복무 상세 기록\n" +
+               "3. 📝 명예 전역 신청\n\n" +
+               "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+
+    replier.reply(formatCommand("👮 해군 메뉴", user, menu, "수행할 번호를 입력하세요."));
+    // 가변 메뉴 상태 진입
+    if (!roomData.features.states.menuWait) roomData.features.states.menuWait = {};
+    roomData.features.states.menuWait[targetUid] = { type: 'trade_navy_menu', time: Date.now(), depth: 2 };
+}
+
+/* [해적] 상세 정보 조회 */
+function _showPirateInfo(user, replier) {
+    var info = "💀 직급: 수습 해적\n" +
+               "🗡️ 악명: " + (user.infamy || 0) + "점\n" +
+               "💰 현재 현상금: " + fp(user.currentBounty || 0) + "P\n" +
+               "📦 누적 약탈: " + (user.totalPillageSuccess || 0) + "회 성공\n" +
+               "📅 가입일: " + (user.jobJoinDate || "알 수 없음");
+               
+    replier.reply(formatCommand("🏴‍☠️ 내 악명 정보", user, info));
+}
+
+/* [해군] 상세 정보 조회 */
+function _showNavyInfo(user, replier) {
+    var info = "🛡️ 직급: 수습 해군\n" +
+               "🎖️ 명성: " + (user.fame || 0) + "점\n" +
+               "⚔️ 누적 토벌: " + (user.totalCaptureSuccess || 0) + "회 성공\n" +
+               "📅 복무 시작일: " + (user.jobJoinDate || "알 수 없음");
+               
+    replier.reply(formatCommand("👮 내 복무 기록", user, info));
+}
+
+/* [해적] 은퇴(면죄부) 처리 */
+function _processPirateRetire(user, data, replier, roomName, targetUid) {
+    var fee = SYSTEM_CONFIG.TRADE.JOBS.PIRATE.retireFee;
+    if (user.point < fee) return replier.reply(formatError(user, "자금 부족", "면죄부 비용(" + fp(fee) + "P)이 부족합니다."));
+    
+    // 활동 중(약탈 상태)인지 체크
+    var res = util_checkUserState(user, targetUid, roomName);
+    if (!res.canAction) return replier.reply(formatError(user, "은퇴 불가", res.reason));
+
+    user.skipHealing = true;
+    util_updatePoint(user, data.rooms[roomName], -fee, "해적 은퇴 비용", roomName);
+    
+    // 직업 데이터 초기화 (현상금은 국고 귀속으로 증발 처리)
+    user.job = null;
+    user.infamy = 0;
+    user.currentBounty = 0;
+    user.jobJoinDate = "";
+    
+    replier.reply(formatCommand("🏳️ 해적 은퇴 완료", user, "면죄부를 구입하여 평범한 상인으로 돌아왔습니다.\n(" + fp(fee) + "P 차감됨)"));
+    safeSaveData(data, true);
+}
+
+/* [해군] 전역 처리 */
+function _processNavyRetire(user, data, replier, roomName, targetUid) {
+    var fee = SYSTEM_CONFIG.TRADE.JOBS.NAVY.retireFee;
+    if (user.point < fee) return replier.reply(formatError(user, "자금 부족", "전역 수수료(" + fp(fee) + "P)가 부족합니다."));
+    
+    // 활동 중(교전/퇴각 상태)인지 체크
+    var res = util_checkUserState(user, targetUid, roomName);
+    if (!res.canAction) return replier.reply(formatError(user, "전역 불가", res.reason));
+
+    user.skipHealing = true;
+    util_updatePoint(user, data.rooms[roomName], -fee, "해군 전역 비용", roomName);
+    
+    // 직업 데이터 초기화
+    user.job = null;
+    user.fame = 0;
+    user.jobJoinDate = "";
+    
+    replier.reply(formatCommand("📝 명예 전역 완료", user, "복무를 마치고 민간인 신분으로 돌아왔습니다.\n(" + fp(fee) + "P 차감됨)"));
+    safeSaveData(data, true);
+}
+
+/* [상인] 호위 해군 리스트 출력 및 고용 프로세스 시작 */
+function _handleEscortHire(choice, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    var state = roomData.features.states.menuWait[targetUid];
+    var cargoSnap = state.selCargo || {};
+    var specSnap = state.selSpec || {};
+
+    // 1. 보호세 총액 계산 (품목별 차등 세율 적용)
+    var totalTax = 0;
+    for (var g in cargoSnap) {
+        var cost = (SYSTEM_CONFIG.TRADE.GOODS_COST[g] || 10000);
+        var taxRate = (SYSTEM_CONFIG.TRADE.JOBS.ESCORT_TAX[g] || 0.05);
+        totalTax += Math.floor(cost * cargoSnap[g] * taxRate);
+    }
+    for (var s in specSnap) {
+        // 특산품은 원가 기준 8% 고정 세율 적용 (밸런스 고려)
+        var sCost = 20000; // 평균 원가 근사치
+        totalTax += Math.floor(sCost * specSnap[s] * 0.08);
+    }
+
+    // 2. 현재 활동 가능한(퇴각 중이 아닌) 해군 리스트 추출
+    var navyList = [];
+    for (var r in data.rooms) {
+        for (var uid in data.rooms[r].users) {
+            var u = data.rooms[r].users[uid];
+            if (u.job === 'navy' && uid !== targetUid) {
+                // 퇴각(정비) 중인지 체크
+                if (u.retreatEndTime && Date.now() < u.retreatEndTime) continue;
+                navyList.push({ uid: uid, name: u.name, fame: (u.fame || 0) });
+            }
+        }
+    }
+
+    // 3. 리스트 출력 또는 안내
+    if (navyList.length === 0) {
+        replier.reply(formatError(user, "고용 불가", "현재 활동 가능한 해군이 없습니다.\n단독 출항만 가능합니다."));
+        return; // 하역 화면 유지
+    }
+
+    var body = "🛡️ [해군 호위단 모집]\n" +
+               "━━━━━━━━━━━━━━━\n" +
+               "현재 고용 가능한 해군 목록입니다.\n" +
+               "(화물 원가 기준 보호세: " + fp(totalTax) + "P)\n\n";
+
+    navyList.forEach(function(n, i) {
+        body += (i + 1) + ". 👮 " + n.name + " (명성: " + n.fame + ")\n";
+    });
+
+    body += "\n0. 호위 없이 단독 출항\n" +
+            "━━━━━━━━━━━━━━━\n" +
+            "💡 [가이드]: 고용할 해군의 번호를 입력하세요.\n" +
+            "[0] 입력 시 즉시 출항합니다.";
+
+    // 세션 상태 업데이트 (호위 고용 대기)
+    state.type = 'trade_escort_confirm';
+    state.extra = { navyList: navyList, totalTax: totalTax };
+    state.time = Date.now();
+
+    replier.reply(formatCommand("🛡️ 호위 해군 선택", user, body));
+}
+
+/* [상인] 호위 해군 선택 확정 및 출항 처리 (숫자 입력 핸들러) */
+function _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, cfg) {
+    var roomData = data.rooms[roomName];
+    var state = roomData.features.states.menuWait[targetUid];
+    var choice = parseInt(msg.replace(/[^0-9]/g, ""));
+
+    if (isNaN(choice) || choice < 0 || choice > state.extra.navyList.length) {
+        return replier.reply(formatError(user, "번호 오류", "0~" + state.extra.navyList.length + "번 사이를 선택하세요."));
+    }
+
+    // 0번 선택 시 단독 출항
+    if (choice === 0) {
+        _departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec);
+        delete roomData.features.states.menuWait[targetUid];
+        return;
+    }
+
+    // 해군 선택 및 보호세 지불
+    var selectedNavy = state.extra.navyList[choice - 1];
+    var tax = state.extra.totalTax;
+
+    if (user.point < tax) {
+        return replier.reply(formatError(user, "자금 부족", "보호세(" + fp(tax) + "P)가 부족하여 고용할 수 없습니다."));
+    }
+
+    user.skipHealing = true;
+    util_updatePoint(user, roomData, -tax, "해군 호위 보호세 지불", roomName);
+
+    // 출항 시작 (호위 정보 포함)
+    _departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec, selectedNavy.uid, tax);
+    
+    // 호위 대상 해군에게 알림 전송
+    try {
+        var navyObj = findUserByUidGlobal(selectedNavy.uid);
+        if (navyObj) Api.replyRoom(navyObj.roomName, "🛡️ [호위 임무 수신]\n상인 '" + user.name + "'님이 당신을 호위함으로 고용했습니다!\n(목적지: " + state.dest + " / 보호세: " + fp(tax) + "P)");
+    } catch(e) {}
+
+    delete roomData.features.states.menuWait[targetUid];
+    safeSaveData(data, true);
+}

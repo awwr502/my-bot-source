@@ -2657,6 +2657,15 @@ function util_checkUserState(user, uid, roomName) {
     var dData = states.duelData || {};
     var aThefts = states.activeThefts || {};
 
+    var activePillages = (roomData && roomData.features) ? (roomData.features.activePillages || {}) : {};
+
+    // 0. 해군 후퇴(정비) 상태 체크 (15분 페널티)
+    if (user.retreatEndTime && now < user.retreatEndTime) {
+        var diffR = user.retreatEndTime - now;
+        var remainMinR = Math.ceil(diffR / (1000 * 60));
+        return { canAction: false, reason: "현재 해전 패배로 인해 후퇴 정비 중입니다. (" + remainMinR + "분 남음)" };
+    }
+
     // 1. 감옥(징역) 상태 체크
     if (user.jailReleaseTime && now < user.jailReleaseTime) {
         var diff = user.jailReleaseTime - now;
@@ -2680,6 +2689,17 @@ function util_checkUserState(user, uid, roomName) {
     if (aThefts[uid]) return { canAction: false, reason: "현재 도둑질의 표적이 되어 방어 중입니다." };
     for (var vKey in aThefts) {
         if (aThefts[vKey].thiefUid === uid) return { canAction: false, reason: "현재 다른 유저를 털고 있는 중입니다." };
+    }
+
+    // 5. 해상 약탈 및 교전 진행 상태 체크 (실시간 세션 감시)
+    // - 내가 약탈 대상(상인)일 때
+    if (activePillages[uid]) return { canAction: false, reason: "현재 해적에게 습격받아 교전 중입니다!" };
+    
+    // - 내가 약탈자(해적)이거나 개입한 해군일 때
+    for (var pKey in activePillages) {
+        var pEntry = activePillages[pKey];
+        if (pEntry.pirateUid === uid) return { canAction: false, reason: "현재 다른 선박을 약탈 중인 상태입니다." };
+        if (pEntry.navyUid === uid) return { canAction: false, reason: "현재 해상에서 토벌 교전 업무 수행 중입니다." };
     }
 
     return { canAction: true, reason: "" };

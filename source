@@ -16094,7 +16094,8 @@ function _showPirateMenu(user, replier, roomData, targetUid) {
                "━━━━━━━━━━━━━━━\n" +
                "1. 🔭 약탈 대상 물색 (레이더)\n" +
                "2. 💀 내 악명 상세 조회\n" +
-               "3. 📜 해적단 은퇴 (면죄부 구입)\n\n" +
+               "3. 📜 해적단 은퇴 (면죄부 구입)\n" +
+               "4. 💸 보석금 납부 (10만P / 즉시 석방)\n\n" +
                "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
     replier.reply(formatCommand("🏴‍☠️ 해적 메뉴", user, menu, "수행할 번호를 입력하세요."));
@@ -16212,6 +16213,7 @@ function _processNavyDailyWage(user, data, replier, roomName, targetUid) {
     var fameBonus = (Number(user.fame) || 0) * 100;
     var multiplier = util_getEcoMultiplier(roomName);
     var totalWage = Math.floor((baseWage + fameBonus) * multiplier);
+    totalWage = Math.min(cfg.NAVY.maxDailyWage || 100000, totalWage);
 
     // 4. 정산 집행
     user.skipHealing = true;
@@ -16539,7 +16541,7 @@ function _handlePillageSelect(choice, user, data, replier, roomName, targetUid) 
 /* [해군] 현재 진행 중인 약탈 목록 조회 (토벌 게시판) */
 function _showBattleList(user, replier, roomData, targetUid, roomName) {
     // [가드] 해군 활동 가능 상태 검증 (퇴각/징역/채굴 등)
-    var stateRes = util_checkUserState(user, targetUid, roomName);
+    var stateRes = util_checkUserState(user, targetUid, roomName, true);
     if (!stateRes.canAction) return replier.reply(formatError(user, "출동 불가", stateRes.reason));
 
     var mainRoom = globalData.rooms["내리다"];
@@ -16636,10 +16638,10 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
                     "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pShip + ")\n\n";
 
     if (isNavyWin) {
-        var piratePenaltyMs = cfg.PIRATE.jailTime || 600000; 
-        pirate.jailReleaseTime = Date.now() + piratePenaltyMs;
-        pirate.pillageCooldownEndTime = Date.now() + (10 * 60 * 1000);
-        pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
+        var piratePenaltyMs = cfg.PIRATE.jailTime || 3600000; 
+        pirate.jailReleaseTime = Date.now() + piratePenaltyMs;
+        pirate.pillageCooldownEndTime = Date.now() + piratePenaltyMs; // 약탈 쿨타임도 1시간 동일 적용
+        pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
         navy.fame = (navy.fame || 0) + 10;
         
         var bounty = 30000 + (pirate.currentBounty || 0);
@@ -16696,6 +16698,7 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
     pirate.infamy = (pirate.infamy || 0) + 10;
     pirate.currentBounty = (pirate.currentBounty || 0) + 15000; // 현상금 누적
     pirate.totalPillageSuccess = (pirate.totalPillageSuccess || 0) + 1;
+    pirate.pillageCooldownEndTime = Date.now() + (SYSTEM_CONFIG.TRADE.JOBS.PIRATE.winCooldown || 300000);
 
     var successMsg = "🏴‍☠️ [약탈 완료 보고]\n━━━━━━━━━━━━━━━\n" +
                      "해적 '" + pirate.name + "'이 '" + victim.name + "'의 상선을\n" +
@@ -16705,4 +16708,28 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
     
     Api.replyRoom("내리다", successMsg);
     Log.info("[Pillage] " + pirate.name + " -> " + victim.name + " 성공");
+}
+
+// 신설: 해적 전용 보석금 납부 로직
+function _processPirateBail(user, data, replier, roomName, targetUid) {
+    var cfg = SYSTEM_CONFIG.TRADE.JOBS.PIRATE;
+    var now = Date.now();
+    
+    if (!user.jailReleaseTime || now >= user.jailReleaseTime) {
+        return replier.reply(formatError(user, "납부 불가", "현재 징역 상태가 아닙니다."));
+    }
+
+    if (user.point < cfg.bailAmount) {
+        return replier.reply(formatError(user, "자금 부족", "보석금 " + fp(cfg.bailAmount) + "P가 부족합니다."));
+    }
+
+    user.skipHealing = true;
+    util_updatePoint(user, data.rooms[roomName], -cfg.bailAmount, "해적 보석금 석방", roomName);
+    
+    // 상태 즉시 초기화
+    user.jailReleaseTime = 0;
+    user.pillageCooldownEndTime = 0;
+    
+    replier.reply(formatCommand("🔓 즉시 석방 완료", user, "보석금 " + fp(cfg.bailAmount) + "P를 지불하고 자유의 몸이 되었습니다!\n즉시 해상 활동이 가능합니다."));
+    safeSaveData(data, true);
 }

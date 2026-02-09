@@ -1517,7 +1517,7 @@ var CMD_LIST = {
         { cmd: "/데이터이전", desc: "[구닉] > [신닉] 자산 이전", func: "_adminUserManageLogic" },
         { cmd: "/닉네임기록", desc: "[닉네임] 변경 이력 조회", func: "_adminUserManageLogic" },
         { cmd: "/메모리정화", desc: "메모리 내 오염된 네이티브 객체 강제 제거", func: "_adminUserManageLogic" },
-        { cmd: "/전체데이터세척", desc: "전 서버 유저 객체 일괄 재건축 및 오염 제거", func: "_adminUserManageLogic" },
+        { cmd: "/무손실정화", desc: "[닉네임] 부동산/무역/자산 100% 보존 정화", func: "_adminUserManageLogic" },
         { cmd: "/출석초기화", desc: "[닉네임] 오늘 기록 삭제", func: "_adminUserManageLogic" },
         { cmd: "/채굴시간복구", desc: "[닉네임] [분] 개별 복구", func: "_adminUserManageLogic" },
         { cmd: "/전체채굴복구", desc: "00시 누락분 + 오늘 채굴분 자동 합산 복구", func: "_adminUserManageLogic" },
@@ -9727,122 +9727,74 @@ function _adminLogLogic(msg, user, data, replier) {
  */
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, sender) {
 
-         if (msg === "/전체데이터세척") {
-        var roomCount = 0;
-        var userCount = 0;
+         if (msg.indexOf("/무손실정화 ") === 0) {
+    var targetNick = msg.substring(7).trim();
+    var roomData = data.rooms[roomName];
+    var found = findUserGlobal(targetNick, roomName);
 
-        // 1. 전역 상태 및 스테이징 즉시 박멸 (에러 유발지점)
-        GLOBAL_STAGING = { active: {}, cache: {} };
-        menuWaitState = {}; bankProcessState = {}; selectWaitState = {};
-        lottoPurchaseState = {}; activeThefts = {}; duelData = {};
-        miningState = {}; loanRegisterState = {}; loanContractWaitState = {};
+    if (found.length === 0) {
+        replier.reply(formatAdmin("🚫 대상 없음", "[" + targetNick + "] 유저를 찾을 수 없습니다."));
+        return true;
+    }
+    if (found.length > 1) {
+        handleUserSelection(replier, targetUid, found, "admin_purify", null, user, roomName);
+        return true;
+    }
 
-        // 2. 전 서버 루프 시작
-        for (var rName in data.rooms) {
-            var roomObj = data.rooms[rName];
-            if (!roomObj || !roomObj.users) continue;
-            roomCount++;
+    var tUser = found[0].data;
+    var tId = found[0].id;
+    var tRoom = found[0].roomName;
 
-            // 방 내부의 대기 상태값 초기화
-            if (roomObj.features && roomObj.features.states) {
-                for (var sKey in roomObj.features.states) { roomObj.features.states[sKey] = {}; }
-            }
+    try {
+        // 1. 새 도화지(유저 객체) 생성
+        var cleanUser = { uid: tId, name: tUser.name };
 
-            for (var uid in roomObj.users) {
-                var oldUser = roomObj.users[uid];
-                var newUser = { uid: uid, name: oldUser.name, lastDate: oldUser.lastDate || "" };
+        // 2. 반드시 살려야 할 핵심 필드 리스트 (여기에 적힌건 다 복사됩니다)
+        var safeKeys = [
+            'point', 'bank', 'tier', 'creditScore', 'totalAttendance', // 기본 자산
+            'landHoldings', 'landAvg', 'totalLandInvest', 'landDeedCount', // 부동산 정보 (100% 보존)
+            'tradeCount', 'shipLevel', 'cargo', 'cargoAvg', 'specialties', 'merchantShipLevel', // 무역/선박 정보 (100% 보존)
+            'inventory', 'collectedIcons', 'artifactPieces', 'totalMiningTime', // 가방/수집/광산
+            'job', 'infamy', 'fame', 'currentBounty', 'jobJoinDate', // 직업 정보
+            'totalPillageSuccess', 'totalCaptureSuccess', 'totalGambleCount', 'totalGambleWins', // 통계
+            'lastDate', 'hasSeenSyncNotice', 'boxFragments', 'boxTickets' // 시스템 플래그
+        ];
 
-                // [핵심] USER_SCHEMA에 정의된 순수 데이터만 새 객체로 복사
-                USER_SCHEMA.forEach(function(schema) {
-                    if (oldUser[schema.key] !== undefined) {
-                        // 객체나 배열은 참조를 끊기 위해 JSON 변환 (에러 시 기본값)
-                        try {
-                            var val = oldUser[schema.key];
-                            if (typeof val === 'object' && val !== null) {
-                                newUser[schema.key] = JSON.parse(JSON.stringify(val));
-                            } else {
-                                newUser[schema.key] = val;
-                            }
-                        } catch(e) { newUser[schema.key] = schema.default; }
+        // 3. 외과적 복사: 오염 가능성이 있는 lastAction 등은 제외하고 안전한 데이터만 이동
+        safeKeys.forEach(function(key) {
+            try {
+                if (tUser[key] !== undefined) {
+                    // 객체 타입(부동산/화물 등)은 참조를 끊기 위해 복제 처리
+                    if (typeof tUser[key] === 'object' && tUser[key] !== null) {
+                        cleanUser[key] = JSON.parse(JSON.stringify(tUser[key]));
                     } else {
-                        newUser[schema.key] = schema.default;
+                        cleanUser[key] = tUser[key];
                     }
-                });
-
-                // 오염된 구 객체를 버리고 새 객체로 교체
-                roomObj.users[uid] = newUser;
-                userCount++;
+                }
+            } catch (e) {
+                Log.error("⚠️ [" + key + "] 필드 복사 실패 (오염 구역): " + e);
             }
-        }
+        });
 
-        // 3. 즉시 물리 저장 및 메모리 동기화
+        // 4. 기존 유저 정보를 새것으로 교체 (오염된 lastAction 등은 자연스럽게 소멸)
+        data.rooms[tRoom].users[tId] = cleanUser;
+        data.rooms[tRoom].users[tId].skipHealing = true;
+
+        // 5. 물리 DB 즉시 확정 저장
         safeSaveData(data, true);
         if (typeof globalData !== 'undefined') globalData = data;
 
-        var resMsg = "전 서버 데이터 정화 사업이 완료되었습니다.\n\n" +
-                     "🏰 대상 구역: " + roomCount + "개 방\n" +
-                     "👥 정화 유저: " + userCount + "명 전체\n" +
-                     "🛡️ 조치: 객체 재건축 및 스테이징 락 해제\n\n" +
-                     "✅ 이제 모든 유저가 정상 작동합니다.";
+        var report = "👤 대상: " + tUser.name + "\n" +
+                     "✅ 보존: 부동산 지분, 무역 기록, 화물, 선박 Lv, 가방 일체\n" +
+                     "🧹 제거: 에러 유발 필드(lastAction, voyage 등) 정화 완료";
 
-        replier.reply(formatAdmin("🛰️ 서버 통합 데이터 세척 보고", resMsg));
-        return true;
+        replier.reply(formatAdmin("✨ 무손실 데이터 정화 완료", report + "\n\n이제 정상적으로 명령어 사용이 가능합니다."));
+
+    } catch (e) {
+        replier.reply(formatAdmin("🚫 정화 실패", "사유: " + e.message));
     }
-
-        if (msg.indexOf("/핵소독 ") === 0) {
-        var tn = msg.substring(5).trim();
-        var found = findUserGlobal(tn, roomName);
-        if (found.length === 0) { replier.reply("❌ 대상을 찾을 수 없습니다."); return true; }
-        
-        var tUser = found[0].data;
-        var tId = found[0].id;
-        var tRoom = found[0].roomName;
-
-        var removedFields = [];
-        var riskyTarget = {
-            'lastAction': '직전 작업기록',
-            'voyage': '항해/무역 정보',
-            'blackjackState': '블랙잭 게임상태',
-            'replier': '시스템 응답객체',
-            'imageDB': '프로필 데이터',
-            'lastCasinoResult': '카지노 최근기록'
-        };
-
-        // 1. 실제 데이터가 있는 필드만 골라 소각하고 리스트에 추가
-        for (var key in riskyTarget) {
-            if (tUser[key] !== undefined) {
-                delete tUser[key];
-                removedFields.push(riskyTarget[key]);
-            }
-        }
-        
-        // 2. 스테이징 캐시 강제 삭제 여부 확인
-        if (typeof GLOBAL_STAGING !== 'undefined' && GLOBAL_STAGING.active[tId]) {
-            delete GLOBAL_STAGING.active[tId];
-            delete GLOBAL_STAGING.cache[tId];
-            removedFields.push("스테이징 락(Lock)");
-        }
-
-        var resultSummary = "";
-        var isClean = (removedFields.length === 0);
-
-        if (isClean) {
-            resultSummary = "✅ 진단: 오염 의심 필드가 없는 [클린]한 상태입니다.";
-        } else {
-            resultSummary = "✨ 조치: " + removedFields.join(", ") + " 소각 완료";
-        }
-
-        tUser.skipHealing = true;
-        safeSaveData(data, true); 
-
-        var footerMsg = isClean ? "별도의 조치가 필요하지 않습니다." : "💰 포인트 등 순수 자산은 안전합니다.\n⚠️ 삭제된 활동은 다시 시작(출항/입장)해주세요.";
-
-        replier.reply(formatAdmin("☢️ 초정밀 핵소독 보고서", 
-            "👤 대상: [" + tRoom + "] " + tUser.name + "\n" +
-            resultSummary + "\n\n" +
-            footerMsg));
-        return true;
-    }
+    return true;
+}
 
         if (msg === "/메모리정화") {
         // 1. 스테이징 시스템 완전 초기화 (가장 유력한 원인)

@@ -93,31 +93,49 @@ function util_scrubNativeObject(obj) {
     }
 
     for (var key in obj) {
-        if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
-        var value = obj[key];
+        try {
+            var value = obj[key];
+            if (value === null || value === undefined) continue;
 
-        if (key === 'replier' || key === 'imageDB' || key === 'replier_raw') {
-            delete obj[key];
-            continue;
-        }
-
-        if (value && typeof value === 'object') {
-            try {
-                var strVal = value.toString();
-                if (strVal.indexOf("SessionCacheReplier") !== -1 || 
-                    strVal.indexOf("com.xfl.msgbot") !== -1 ||
-                    (value.getClass && typeof value.getClass === 'function')) {
-                    delete obj[key];
-                    continue;
-                }
-                util_scrubNativeObject(value);
-            } catch (e) {
+            // 1. 위험 키워드 즉시 삭제
+            if (key === 'replier' || key === 'imageDB' || key === 'replier_raw' || typeof value === 'function') {
                 delete obj[key];
+                continue;
             }
+
+            // 2. 자바 네이티브 객체 판별
+            var isJava = false;
+            try {
+                if (value.getClass !== undefined || 
+                    (value.constructor && value.constructor.name && value.constructor.name.indexOf("SessionCache") !== -1) ||
+                    value.toString().indexOf("com.xfl.msgbot") !== -1) {
+                    isJava = true;
+                }
+            } catch (e) { isJava = true; } // 접근 시 에러나면 오염된 객체
+
+            if (isJava) {
+                delete obj[key];
+                Log.warn("☢️ [Nuke] 오염된 객체 제거: " + key);
+                continue;
+            }
+
+            // 3. 재귀 탐색
+            if (typeof value === 'object') {
+                util_scrubNativeObject(value);
+            }
+        } catch (critical) {
+            delete obj[key];
         }
     }
 }
-this.util_scrubNativeObject = util_scrubNativeObject;
+
+// 시스템 전체를 청소하는 래퍼 함수
+function util_nukeAllCorruption() {
+    if (typeof globalData !== 'undefined') {
+        util_scrubNativeObject(globalData);
+        Log.info("🧹 [System] 전역 데이터 정밀 소독 완료");
+    }
+}
 
 /**
  * [전역 표준 규격] USER_SCHEMA v1.0
@@ -1037,7 +1055,14 @@ function getDatabase() {
         var stableFile = new java.io.File(BACKUP_DIR + "last_stable_backup.json");
         if (stableFile.exists()) {
             globalData = JSON.parse(FileStream.read(BACKUP_DIR + "last_stable_backup.json"));
-            if (globalData) globalData._isInitialized = true;
+            if (globalData) {
+                if (typeof util_scrubNativeObject === 'function') {
+                    util_scrubNativeObject(globalData);
+                    Log.warn("🛡️ [Recovery] 백업 데이터 정밀 검역 및 복구 완료");
+                }
+                globalData._isInitialized = true;
+                return globalData;
+            }
             return globalData;
         }
         return null;

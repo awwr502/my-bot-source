@@ -951,19 +951,16 @@ function getDatabase() {
                 if (!users) continue;
                 for (var uid in users) {
                     var u = users[uid];
-                    if (typeof util_scrubNativeObject === 'function') {
-    util_scrubNativeObject(u);
-} else {
-    (function deepClean(obj) {
-        for (var k in obj) {
-            if (obj[k] && typeof obj[k] === 'object') {
-                if (obj[k].getClass || (obj[k].constructor && obj[k].constructor.name === 'SessionCacheReplier')) {
-                    delete obj[k];
-                } else { deepClean(obj[k]); }
-            }
+                    (function deepScrub(obj) {
+    for (var k in obj) {
+        if (obj[k] && typeof obj[k] === 'object') {
+            if (obj[k].getClass || (obj[k].constructor && obj[k].constructor.name === 'SessionCacheReplier')) {
+                delete obj[k];
+                Log.warn("☢️ [DB_Repair] " + (u.name||uid) + "의 오염된 필드(" + k + ") 정밀 소각");
+            } else { deepScrub(obj[k]); } // 안쪽까지 파고듦
         }
-    })(u);
-}
+    }
+})(u);
                 }
             }
         }
@@ -6067,21 +6064,19 @@ user.point = Number(user.point || 0);
 
 if (user) {
     user.skipHealing = true;
-    
-    // [Safe Purge] Native 객체 감지 시 검사 없이 즉시 삭제 (try-catch 없이 직접 타입 체크)
-    for (var k in user) {
-        var val = user[k];
-        // 값이 있고, 객체인데, 자바스크립트 순수 객체가 아닌 경우(getClass 존재 등)
-        if (val && typeof val === 'object') {
-            if (val.getClass || (val.toString && val.toString().startsWith("com.xfl"))) {
-                delete user[k]; // 묻지도 따지지도 않고 삭제
+    (function deepScrub(obj) {
+        for (var k in obj) {
+            if (obj[k] && typeof obj[k] === 'object') {
+                if (obj[k].getClass || (obj[k].constructor && obj[k].constructor.name === 'SessionCacheReplier')) {
+                    delete obj[k];
+                } else { deepScrub(obj[k]); }
             }
         }
-    }
-    
-    // 안전해진 상태에서 스테이징 시도
-    util_stagingStart(user); 
+    })(user);
 }
+
+// 이제 깨끗해진 상태에서 스테이징을 시작합니다.
+util_stagingStart(user);
 
 var isProcessed = false; // 명령어 처리 확인 변수 초기화
 

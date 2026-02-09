@@ -583,8 +583,8 @@ var SYSTEM_CONFIG = {
         DIVIDEND_BONUS_RATE: 0.1,         // 초과 1지분당 가산 배율 (10%)
 
         /* [기초 경제 설정] */
-        ATTEND_MIN: 8000, // [출석 최소 지급]: 하한선 8,000P
-        ATTEND_MAX: 10000, // [출석 최대 지급]: 상한선 10,000P
+        ATTEND_MIN: 8000, // [출석 최소 지급]: 하한선 15,000P
+        ATTEND_MAX: 10000, // [출석 최대 지급]: 상한선 20,000P
         GAMBLE_MIN: 2000,  // [도박 최소 베팅]: 2,000P
         GAMBLE_MAX: 50000, // [도박 최대 베팅]: 200,000P (사행성 억제)
 
@@ -7233,6 +7233,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
     // 무역 상점(카테고리 6) 여부를 100% 식별하는 지능형 플래그
     var isTradeFlow = (function() {
         if (state.extra && state.extra.item && state.extra.item.cat === 6) return true;
+        if (state.extra && state.extra.cat === 6) return true;
         var currentItems = (state.extra && (state.extra.items || state.extra.prevItems));
         if (currentItems && currentItems.length > 0 && currentItems[0].cat === 6) return true;
         return (state.type.indexOf('trade_') !== -1 || state.type.indexOf('ship_') !== -1);
@@ -7262,6 +7263,15 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             var title = isTradeFlow ? "무역 물품 적재 센터" : (SHOP_CATEGORIES[state.extra.item.cat] || "상점");
             replier.reply(formatCommand("🛒 " + title, user, list.join("\n") + SHOP_NAV, "구매할 번호를 입력하세요."));
         } 
+
+        // 이름 입력 단계에서 '뒤로' 입력 시 무역 물품 목록으로 복귀하는 로직 삽입
+        else if (state.type === 'ship_rename_input') {
+            var tradeItems = state.extra.prevItems || SHOP_ITEMS.filter(function(it){ return it.cat === 6; });
+            bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: tradeItems } };
+            var list = tradeItems.map(function(it, i) { return (i + 1) + ". " + it.icon + " " + it.name + " : " + fp(getItemPrice(it, user, roomName)) + "P"; });
+            replier.reply(formatCommand("🛒 무역 물품 적재 센터", user, list.join("\n") + SHOP_NAV, "구매할 번호를 입력하세요."));
+        }
+
         // [특수 단계] 선박 이름 확정 -> 입력 단계로 복귀
         else if (state.type === 'ship_rename_confirm') {
             bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now(), extra: state.extra };
@@ -9631,7 +9641,16 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
 
     // 6. 선박 이름변경권 효과 처리
     if (item.effect === "ship_rename") {
-       bankProcessState[targetUid] = { type: 'ship_rename_input', time: Date.now(), extra: { price: finalPrice } };
+       var tradeItems = SHOP_ITEMS.filter(function(it){ return it.cat === 6; });
+        bankProcessState[targetUid] = { 
+            type: 'ship_rename_input', 
+            time: Date.now(), 
+            extra: { 
+                price: finalPrice, 
+                cat: 6, 
+                prevItems: tradeItems 
+            } 
+        };
         var renameBody = "새로운 선박의 이름을 입력해주세요.\n(2~8자, 띄어쓰기 인식 가능)\n\n" + "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
         replier.reply(formatCommand("📝 선박 이름 변경", user, renameBody, "취소: [취소]"));
     }

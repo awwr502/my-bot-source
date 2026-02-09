@@ -2693,7 +2693,9 @@ function util_checkUserState(user, uid, roomName) {
 
     // 2. 광산 채굴 상태 체크
     if (user.mining && user.mining.active && !isJobActivity) {
-        return { canAction: false, reason: "현재 광산에서 채굴 작업 중입니다." };
+        // 이 함수를 호출하는 상위 로직에서 광산 명령어(/광산종료 등)인지는 별도로 판단하므로, 
+        // 기본적으로 false를 반환하되 직업 활동만 예외로 둡니다.
+        return { canAction: false, isMining: true, reason: "현재 광산에서 채굴 작업 중입니다." };
     }
 
     // 3. 결투 진행 상태 체크 (방별 데이터 참조형으로 교정)
@@ -5894,17 +5896,22 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
 function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData) {
 
 // 신규 명령어(/) 입력 시 전 구역의 기존 대기 세션(Wait State)을 즉시 파기 (교차 충돌 방지)
-if (msg.startsWith("/")) {
-    var sessionRooms = [data.rooms[roomName], data.rooms["내리다"]];
-    sessionRooms.forEach(function(r) {
-        if (r && r.features && r.features.states) {
-            var s = r.features.states;
-            ["menuWait", "bankProcess", "selectWait", "lottoPurchase"].forEach(function(k) {
-                if (s[k] && s[k][targetUid]) delete s[k][targetUid];
-            });
+if (user) {
+        for (var key in user) {
+            var val = user[key];
+            if (val !== null && typeof val === 'object') {
+                // Java 객체(Replier 등)의 특징이 보이면 즉시 삭제
+                if (val.getClass !== undefined || (val.constructor && val.constructor.name === 'SessionCacheReplier')) {
+                    delete user[key];
+                    Log.error("☢️ [핵심방어] " + user.name + "의 오염된 필드(" + key + ") 강제 소각 완료");
+                }
+            }
         }
-    });
-}
+        // 광산이나 항해 데이터 내부의 오염도 체크
+        if (user.mining) delete user.mining.replier;
+        if (user.voyage) delete user.voyage.replier;
+        if (user.lastAction) delete user.lastAction.replier;
+    }
 
 /* [데이터 & 가드 통합 엔진] 1:1방 동기화 및 숫자 핸들러 프리패스 */
 // roomData가 유실된 경우를 대비한 안전 장치

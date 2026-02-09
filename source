@@ -1866,28 +1866,43 @@ function util_calculateNetWorth(user, roomData) {
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
     
-    // 1. 복사 전 런타임 소독 (지뢰 제거)
-    util_scrubNativeObject(user);
+    // 1. 복사 전 소독 실행
+    if (typeof util_scrubNativeObject === 'function') util_scrubNativeObject(user);
     
     GLOBAL_STAGING.active[user.uid] = true;
     var safeSnapshot = { uid: user.uid, name: user.name };
     
-    // 2. USER_SCHEMA를 기반으로 필드 하나씩 안전하게 수동 복사
+    // 2. USER_SCHEMA를 기반으로 필드 하나씩 안전하게 수동 복사 (Deep Copy 수동 구현)
     USER_SCHEMA.forEach(function(item) {
         var key = item.key;
         var val = user[key];
         
         if (val === undefined || val === null) {
             safeSnapshot[key] = item.default;
+        } else if (Array.isArray(val)) {
+            // 배열 복사 (인벤토리 등)
+            safeSnapshot[key] = [];
+            for (var i = 0; i < val.length; i++) {
+                if (typeof val[i] === 'object' && val[i] !== null) {
+                    // 객체 요소는 안전하게 프로퍼티만 복사
+                    var objClone = {};
+                    for (var k in val[i]) {
+                        if (typeof val[i][k] !== 'function' && String(val[i][k]).indexOf("com.xfl") === -1) {
+                            objClone[k] = val[i][k];
+                        }
+                    }
+                    safeSnapshot[key].push(objClone);
+                } else {
+                    safeSnapshot[key].push(val[i]);
+                }
+            }
         } else if (typeof val === 'object') {
-            try {
-                // 자바 객체가 섞여있을 가능성이 높은 객체/배열은 안전하게 복제 시도
-                // 여기서 에러가 나면 JSON.stringify가 범인임
-                safeSnapshot[key] = JSON.parse(JSON.stringify(val));
-            } catch(e) {
-                // [핵심 가드] 복사 중 터지면 그 필드만 비워버리고 진행 (봇 멈춤 방지)
-                safeSnapshot[key] = Array.isArray(item.default) ? [] : {};
-                Log.error("🚨 [Staging Guard] " + user.name + "의 " + key + " 필드 손상됨. 복원 보류.");
+            // 일반 객체 복사 (부동산, 화물 등)
+            safeSnapshot[key] = {};
+            for (var k in val) {
+                if (typeof val[k] !== 'function' && String(val[k]).indexOf("com.xfl") === -1) {
+                    safeSnapshot[key][k] = val[k];
+                }
             }
         } else {
             // 숫자, 문자열, 불리언은 그냥 복사
@@ -6005,6 +6020,31 @@ if (msg === "/메모리강제세척") {
         replier.reply("🧹 [메모리 세척 완료]\n오염된 전역 참조를 제거하고 파일을 다시 로드했습니다.\n이제 명령어를 입력해 보세요.");
     } catch (e) {
         replier.reply("❌ 세척 실패: " + e);
+    }
+    return;
+}
+
+if (msg === "/데이터정밀검사") {
+    try {
+        var report = ["🔍 [데이터 정밀 검사 결과]"];
+        (function scan(obj, path) {
+            for (var k in obj) {
+                var currentPath = path + "." + k;
+                var val = obj[k];
+                if (val && typeof val === 'object') {
+                    if (val.getClass !== undefined || String(val).indexOf("com.xfl") !== -1) {
+                        report.push("⚠️ 발견: " + currentPath + " (유형: " + (val.constructor ? val.constructor.name : "JavaObject") + ")");
+                    } else {
+                        scan(val, currentPath);
+                    }
+                }
+            }
+        })(user, "user");
+
+        if (report.length === 1) replier.reply("✅ [" + user.name + "]님의 데이터는 100% 순수 자바스크립트 상태입니다.");
+        else replier.reply(report.join("\n"));
+    } catch (e) {
+        replier.reply("❌ 검사 실패: " + e);
     }
     return;
 }

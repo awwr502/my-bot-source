@@ -16597,10 +16597,12 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
         var roomObj = data.rooms[r];
         for (var uid in roomObj.users) {
             var u = roomObj.users[uid];
-            // 수정: 약탈 완료된 유저(isPillaged)와 현재 공격받고 있는 유저(currentPillages[uid])를 모두 배제
-            if (u.voyage && u.voyage.active === true && u.voyage.arrival > now && 
-                u.isPillaged !== true && (!u.voyage.isPillaged) && 
-                !currentPillages[uid] && uid !== targetUid) {
+            // 수정: 약탈 목록 필터링 조건 정밀화 (성공/실패 여부와 상관없이 '시도'된 선박 제외)
+            var isSailing = (u.voyage && u.voyage.active === true && u.voyage.arrival > now);
+            var alreadyPillaged = (u.isPillaged === true || (u.voyage && u.voyage.isPillaged === true));
+            var isUnderAttack = (currentPillages && currentPillages[uid]); // 현재 공격받는 중인지 확인
+
+            if (isSailing && !alreadyPillaged && !isUnderAttack && uid !== targetUid) {
                 sailingUsers.push({ uid: uid, data: u, roomName: r });
             }
         }
@@ -16806,6 +16808,16 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
                     "👮 해군: " + navy.name + " (Lv." + nShip + ")\n" +
                     "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pShip + ")\n\n";
 
+    // 추가: 승패 판정 전, 대상 상선을 먼저 식별하고 '약탈 시도됨' 플래그를 즉시 박제
+    var victim = null;
+    for (var r in data.rooms) { if (data.rooms[r].users[victimUid]) { victim = data.rooms[r].users[victimUid]; break; } }
+    
+    if (victim) {
+        victim.isPillaged = true; 
+        if (victim.voyage) victim.voyage.isPillaged = true;
+        victim.skipHealing = true;
+    }
+
     if (isNavyWin) {
         var piratePenaltyMs = cfg.PIRATE.jailTime || 3600000; 
         pirate.jailReleaseTime = Date.now() + piratePenaltyMs;
@@ -16829,8 +16841,6 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
                      "🩹 " + navy.name + ": " + Math.floor(retreatMs/60000) + "분간 정비 돌입\n" +
                      "⚠️ 약탈이 계속 진행됩니다!";
 
-        var victim = null;
-        for (var r in data.rooms) { if (data.rooms[r].users[victimUid]) { victim = data.rooms[r].users[victimUid]; break; } }
         if (victim && victim.voyage) {
             victim.voyage.escortUid = null;
             if (!mainRoom.features.activePillages[victimUid]) {

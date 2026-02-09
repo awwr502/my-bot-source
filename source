@@ -4,6 +4,21 @@ if (typeof globalData === 'undefined' || globalData === null) {
     globalData = { rooms: {}, botActive: true, statusCheck: {} };
 }
 
+else {
+    (function memoryClean(obj) {
+        for (var key in obj) {
+            if (obj[key] && typeof obj[key] === 'object') {
+                try {
+                    if (obj[key].getClass !== undefined || 
+                        (obj[key].constructor && obj[key].constructor.name === "SessionCacheReplier")) {
+                        delete obj[key];
+                    } else { memoryClean(obj[key]); }
+                } catch (e) { delete obj[key]; }
+            } else if (typeof obj[key] === 'function') { delete obj[key]; }
+        }
+    })(globalData);
+}
+
 globalData._isInitialized = false;
 
 (function systemInitialPurge() {
@@ -1269,26 +1284,20 @@ function safeSaveData(data, isForceBackup) {
                 isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
                 if (!isAcquired) return; // 다른 스레드가 이미 작업 중이면 즉시 종료하여 병목 방지
 
-                var content = JSON.stringify(data, function(key, value) {
-                    if (value === null || value === undefined) return value;
-                    
-                    // 핵심: 가공된 데이터가 아닌 '원시 타입'이 아니면 모두 검사
-                    if (typeof value === 'object') {
-                        // 1. 자바 네이티브 객체인지 확인 (getClass 속성 여부로 판별)
-                        if (Object.prototype.toString.call(value).indexOf("Java") !== -1 || 
-                            value.getClass !== undefined || 
-                            (value.constructor && value.constructor.name === 'SessionCacheReplier')) {
-                            return undefined; // 발견 즉시 삭제
-                        }
-                        
-                        // 2. 혹시라도 문자열화했을 때 자바 경로가 포함되면 차단
-                        try {
-                            var str = String(value);
-                            if (str.indexOf("com.xfl.msgbot") !== -1) return undefined;
-                        } catch(e) { return undefined; } 
+                var scrubbed = (function deepScrub(obj) {
+                    var clone = Array.isArray(obj) ? [] : {};
+                    for (var k in obj) {
+                        var v = obj[k];
+                        if (v === null || v === undefined || typeof v === 'function') continue;
+                        if (typeof v === 'object') {
+                            if (v.getClass !== undefined || (v.constructor && v.constructor.name === 'SessionCacheReplier')) continue;
+                            clone[k] = deepScrub(v);
+                        } else { clone[k] = v; }
                     }
-                    return value;
-                });
+                    return clone;
+                })(data);
+
+                var content = JSON.stringify(scrubbed);
                 
                 var check = JSON.parse(content);
                 if (!check || !check.rooms) throw new Error("데이터 구조 불완전 (rooms 누락)");
@@ -2842,23 +2851,22 @@ function handleUserSelection(replier, targetUid, found, type, extra, user, roomN
     var roomData = data.rooms[roomName];
     if (!roomData || !roomData.features) return;
 
-    // 유저 객체 전체를 저장하되, 에러를 유발하는 네이티브 객체(replier 등)만 제거
-    found.forEach(function(f) {
-        if (f.data) {
-            if (f.data.replier) delete f.data.replier;
-            if (f.data.imageDB) delete f.data.imageDB;
-            // 혹시 모를 내부 숨겨진 함수나 네이티브 객체 전수 검사
-            for (var key in f.data) {
-                if (f.data[key] && typeof f.data[key] === 'object' && f.data[key].getClass) {
-                    delete f.data[key];
-                }
+    // 대기열에 유저 객체 전체를 저장하지 않고, 식별에 필요한 순수 JSON 데이터만 추출하여 저장
+    var safeFound = found.map(function(f) {
+        return {
+            id: f.id,
+            roomName: f.roomName,
+            data: { 
+                name: f.data.name, 
+                point: Number(f.data.point || 0),
+                bank: Number(f.data.bank || 0)
             }
-        }
+        };
     });
 
     roomData.features.states.selectWait[targetUid] = { 
         timestamp: Date.now(), 
-        results: found, // 유저 객체 전체 저장 구조 유지
+        results: safeFound, 
         type: type, 
         extra: extra 
     };
@@ -5957,23 +5965,17 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
 /* [수정] 인자 리스트에 imageDB, sender를 추가하여 내부 로직 오류를 해결합니다. */
 function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData) {
 
-// 신규 명령어(/) 입력 시 전 구역의 기존 대기 세션(Wait State)을 즉시 파기 (교차 충돌 방지)
+// 수정: 메인 로직 진입 시점에 현재 세션의 roomData와 user 객체 내 자바 객체 잔존 여부를 전수 조사하여 소각
+if (roomData) {
+    util_scrubNativeObject(roomData);
+}
+
 if (user) {
-        for (var key in user) {
-            var val = user[key];
-            if (val !== null && typeof val === 'object') {
-                // Java 객체(Replier 등)의 특징이 보이면 즉시 삭제
-                if (val.getClass !== undefined || (val.constructor && val.constructor.name === 'SessionCacheReplier')) {
-                    delete user[key];
-                    Log.error("☢️ [핵심방어] " + user.name + "의 오염된 필드(" + key + ") 강제 소각 완료");
-                }
-            }
-        }
-        // 광산이나 항해 데이터 내부의 오염도 체크
-        if (user.mining) delete user.mining.replier;
-        if (user.voyage) delete user.voyage.replier;
-        if (user.lastAction) delete user.lastAction.replier;
-    }
+    util_scrubNativeObject(user);
+    // [강제 삭제] 특정 필드 직접 지명 소각
+    var deadRefs = ['replier', 'imageDB', 'lastAction'];
+    deadRefs.forEach(function(k) { if (user[k] && user[k].getClass) delete user[k]; });
+}
 
 /* [데이터 & 가드 통합 엔진] 1:1방 동기화 및 숫자 핸들러 프리패스 */
 // roomData가 유실된 경우를 대비한 안전 장치

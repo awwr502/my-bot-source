@@ -77,6 +77,29 @@ function registerAdminCmd(cmd, desc, func) {
 }
 
 /**
+ * [v12.9] 네이티브 객체 초정밀 소각 엔진
+ * 기능: 유저 객체에 박제된 SessionCacheReplier 등 자바 객체를 강제 제거
+ */
+function util_scrubNativeObject(obj) {
+    if (!obj || typeof obj !== 'object') return;
+    for (var key in obj) {
+        if (obj[key] === null || obj[key] === undefined) continue;
+        if (typeof obj[key] === 'object') {
+            // 자바 객체 특성 감지 (getClass 존재 또는 생성자 이름 체크)
+            if (obj[key].getClass !== undefined || 
+                (obj[key].constructor && obj[key].constructor.name === 'SessionCacheReplier')) {
+                delete obj[key];
+            } else {
+                util_scrubNativeObject(obj[key]); // 재귀 탐색
+            }
+        }
+        if (typeof obj[key] === 'function') delete obj[key];
+    }
+}
+
+this.util_scrubNativeObject = util_scrubNativeObject;
+
+/**
  * [전역 표준 규격] USER_SCHEMA v1.0
  * 치유(Sector 19)와 신규가입(Sector 20-1)이 공통으로 참조하는 리스트입니다.
  * 덮어쓰기 사고를 방지하기 위해 point 등 핵심 자산의 기본값은 0으로 설정합니다.
@@ -2665,6 +2688,7 @@ function util_formatSecurityLog(header, user, room, body, action) {
 }
 
 function util_checkUserState(user, uid, roomName) {
+    if (typeof util_scrubNativeObject === 'function') util_scrubNativeObject(user);
     var now = Date.now();
     var data = getDatabase();
     var roomData = data.rooms[roomName || "내리다"];
@@ -15011,6 +15035,11 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     if (!user || !user.voyage) return; // 항해 중이 아니면 즉시 종료
     var v = user.voyage; 
 
+    if (typeof util_scrubNativeObject === 'function') {
+        util_scrubNativeObject(user);
+        util_scrubNativeObject(v);
+    }
+
     var targets = [user, v, (user.lastAction || {})];
     targets.forEach(function(obj) {
         if (!obj) return;
@@ -16612,6 +16641,10 @@ function _handleCombatSelect(choice, user, data, replier, roomName, targetUid) {
 function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mode) {
     var mainRoom = data.rooms["내리다"];
     var session = mainRoom.features.activePillages[victimUid];
+    if (typeof util_scrubNativeObject === 'function') {
+        util_scrubNativeObject(navyOrPirate);
+        if (session) util_scrubNativeObject(session);
+    }
     var cfg = SYSTEM_CONFIG.TRADE.JOBS;
 
     if (mode === "INTERVENE") {

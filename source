@@ -446,7 +446,7 @@ var SYSTEM_CONFIG = {
         JOBS: {
             PIRATE: { 
                 retireFee: 1000000, // 은퇴(면죄부) 수수료
-                jailTime: 30 * 60 * 1000, // 패배 시 징역 (10분)
+                jailTime: 10 * 60 * 1000, // 패배 시 징역 (10분)
                 pillageTime: 3 * 60 * 1000, // 약탈 소요 시간 (3분)
                 bountyBase: 30000, // 기본 시작 현상금
                 bountyInc: 15000,  // 약탈 성공당 현상금 증가액
@@ -14808,38 +14808,35 @@ function _prepareVoyage(user, replier, cfg, roomData) {
     replier.reply(formatCommand("🚢 목적지 설정", user, "[내 보관함]\n" + cargoList.join("\n") + "\n\n[출항지 선택]\n" + nStr, "국가 번호를 입력하세요."));
 }
 
-/* [서브] 🌊 항해 시작 (스냅샷 및 순풍 적용) */
+/* 🌊 항해 시작 (호위 정보 저장 및 메시지 출력 보강) */
 function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, escortUid, escortFee) {
     var roomData = data.rooms[roomName];
     user.skipHealing = true;
-    user.isPillaged = false; // 신규 항해 시 약탈 상태 초기화 (누락 방지)
+    user.isPillaged = false; 
     
     var ship = cfg.SHIPS[user.shipLevel || 1];
     var timeMin = Math.floor(60 * ship.speedMult);
     
-    // 1. 순풍 확률 판정 및 도착 시간 계산
     var isSmooth = Math.random() < 0.1;
     if (isSmooth) timeMin = Math.floor(timeMin * 0.8);
     var arrival = Date.now() + (timeMin * 60 * 1000);
     
-    // 2. 항해 데이터 패키징 (스냅샷 방식)
+    // 데이터 패키징: 호위함 UID와 수수료를 반드시 저장해야 자동 토벌이 작동함
     user.voyage = {
         active: true, 
         dest: dest, 
         arrival: arrival, 
         startTime: Date.now(),
-        // 출항 시점의 시세와 내 적재 화물을 그대로 박제하여 변조 방지
         marketSnapshot: JSON.parse(JSON.stringify(roomData.features.tradeMarket || cfg.NATIONS)), 
         ecoMultSnapshot: util_getEcoMultiplier(roomName),
         cargoSnapshot: JSON.parse(JSON.stringify(selC || {})), 
         specialtySnapshot: JSON.parse(JSON.stringify(selS || {})),
+        escortUid: escortUid || null, // 호위함 UID 저장
+        escortFee: escortFee || 0,     // 호위 수수료 저장
         isSmooth: isSmooth,
-        /* [핵심] 중복 정산 방지 및 정산 대기 플래그 초기화 */
         isProcessing: false 
     };
     
-    // 3. [중요] 즉시 물리 파일 저장 집행 (자정 리셋 및 봇 재시작 대비)
-    // 비동기 큐가 아닌 2번째 인자 true를 통해 즉시 휴대폰 저장소에 기록합니다.
     safeSaveData(data, true); 
 
     var msg = "목적지: " + dest + "\n" +
@@ -14848,109 +14845,86 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
               
     if (isSmooth) msg += "\n\n🌬️ [순풍] 기분 좋은 바람으로 시간이 20% 단축되었습니다!";
     
+    // 호위함 멘트 추가
+    if (escortUid) {
+        var navyName = "해군 호위함";
+        for (var r in data.rooms) { if (data.rooms[r].users[escortUid]) { navyName = data.rooms[r].users[escortUid].name; break; } }
+        msg += "\n🛡️ [호위함 동행]: " + navyName + " 함대가 선단을 보호합니다.";
+    }
+    
     replier.reply(formatCommand("🌊 출항 명령 하달", user, msg, "항해 중 타 활동이 가능합니다."));
 }
 
-/* [서브] 📦 항해 현황판 (예상 수익 분기 추가) */
+/* [수정] 📦 항해 현황판 (호위함 표시 추가) */
 function _showVoyageStatus(user, replier, data, roomName) {
     var msg = "";
-    
     if (!user.voyage || user.voyage.active !== true) {
-        // 항해 중이 아닐 때 메시지를 즉시 출력하도록 수정
         var emptyBody = "현재 운항 중인 선박이 없습니다.\n무역 물자를 싣고 넓은 바다로 나가보세요!\n\n" +
                         "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
-        
         replier.reply(formatCommand("📦 항해 현황", user, emptyBody, "출항 준비: [2]번 메뉴를 선택하세요."));
-        return; // 로직 종료
+        return;
     }
-        var v = user.voyage;
+    var v = user.voyage;
     var remain = (v.arrival || 0) - Date.now();
     var cfg = SYSTEM_CONFIG.TRADE;
     
-    var tRev = 0; // 정산용 세전 총매출
-    var tCost = 0; // 평단가 기반 총매입가
-    
+    var tRev = 0; var tCost = 0; 
     var currentCargoLines = [];
     var totalCargoInShip = 0;
     var shipCapacity = cfg.SHIPS[user.shipLevel || 1].capacity;
 
-    // 1. 일반 화물 예상 수익 계산 루프
     var cSnap = v.cargoSnapshot || {};
     for (var g in cSnap) {
-        var qty = Number(cSnap[g]); 
-        if (qty <= 0) continue;
-        
-        // UI 라인 추가 (요청하신 불렛 포인트 간격 적용)
-        currentCargoLines.push("     • " + g + " " + qty + "상자");
+        var qty = Number(cSnap[g]); if (qty <= 0) continue;
+        currentCargoLines.push("      • " + g + " " + qty + "상자");
         totalCargoInShip += qty;
-        
-        // 원가 및 수익률 계산
         var uCost = Number((user.cargoAvg && user.cargoAvg[g]) || cfg.GOODS_COST[g]);
         tCost += (uCost * qty);
-        var rInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.25, norm: 1.05, hate: 0.8 };
+        var rInfo = SYSTEM_CONFIG.PROFIT_RATES[g];
         var multiplier = 1.0;
-        var mSnap = v.marketSnapshot || {}; 
-        var nSnap = mSnap[v.dest] || { favorite: "", hate: "" };
-        var pByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
-
-        if (g === pByDest) multiplier = 0.5;
-        else if (g === nSnap.favorite) multiplier = rInfo.pref;
+        var nSnap = v.marketSnapshot[v.dest];
+        if (g === nSnap.favorite) multiplier = rInfo.pref;
         else if (g === nSnap.hate) multiplier = rInfo.hate;
         else multiplier = rInfo.norm;
-        
         tRev += Math.floor(uCost * multiplier * qty);
     }
 
-    // 2. 특산품 예상 수익 계산 루프 (단위: 상자)
     var sSnap = v.specialtySnapshot || {};
     for (var s in sSnap) {
-        var sQty = Number(sSnap[s]); 
-        if (sQty <= 0) continue;
-        
+        var sQty = Number(sSnap[s]); if (sQty <= 0) continue;
         currentCargoLines.push("    ⭐" + s + " " + sQty + "상자");
         totalCargoInShip += sQty;
-
         var pG = "";
         for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === s) { pG = TRADE_RELATION[n].produce; break; } }
-        var sMult = 1.0;
-        var mSnap = v.marketSnapshot || {}; 
-        var nSnap = mSnap[v.dest] || { favorite: "", hate: "" };
-        var pByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
-        
-        if (pG === pByDest) sMult = 0;
-        else if (pG === nSnap.favorite) sMult = cfg.SPECIALTY_PROFIT;
-        else if (pG === nSnap.hate) sMult = 0.5;
-        
+        var sMult = (pG === v.marketSnapshot[v.dest].favorite) ? cfg.SPECIALTY_PROFIT : 1.0;
         var sVal = (cfg.SPECIALTY_COST[pG] || 10000);
         tCost += (sVal * sQty);
         tRev += Math.floor(sVal * sQty * sMult);
     }
 
-    // 3. [수정] 신용도 및 기부왕 혜택이 적용된 실질 예상 수익 산출
-    var margin = tRev - tCost; // 순수 마진(이익금)
-    
-    // 기부왕 무역세 50% 감면 (10% -> 5%)
+    var margin = tRev - tCost;
     var taxRate = (user.title === "기부왕") ? 0.05 : 0.10;
     var taxAmount = Math.max(0, Math.floor(margin * taxRate));
-    
-    // 신용 등급별 수익 배율 적용 (90% ~ 60%)
     var crInfo = getCreditInfo(user.creditScore, roomName);
     var creditMult = util_getTradeCreditMult(crInfo.grade);
-    
-    // 최종 예상 이익 = (마진 - 세금) * 신용배율
     var estimatedNetProfit = Math.floor((margin - taxAmount) * creditMult);
-    var finalReceipt = tCost + estimatedNetProfit; // 최종 수령액 = 원금 + 조정된 이익
+    var finalReceipt = tCost + estimatedNetProfit;
 
-    var cargoDisplay = "📦 적재함: " + totalCargoInShip + " / " + shipCapacity + " 칸\n" + currentCargoLines.join("\n") + "\n\n";
+    // 호위 정보 텍스트 추가
+    var escortText = "⚪ [단독 항해 중]";
+    if (v.escortUid) {
+        var nObj = null;
+        for (var r in data.rooms) { if (data.rooms[r].users[v.escortUid]) { nObj = data.rooms[r].users[v.escortUid]; break; } }
+        escortText = "🛡️ [호위 중]: " + (nObj ? nObj.name : "해군함");
+    }
 
-    var displayBody = "현재 [" + v.dest + "]로 항해 중\n\n" +
-                      cargoDisplay +
-                      "💰 총 예상 수령액: " + fp(finalReceipt) + "P\n" +
-                      "💵 순수익(마진): " + (estimatedNetProfit >= 0 ? "+" : "") + fp(estimatedNetProfit) + "P\n" +
-                      "📉 신용 적용: " + (creditMult * 100).toFixed(0) + "% (" + crInfo.label + ")\n\n" +
-                      "🕒 남은 시간: " + (remain > 0 ? "약 " + Math.ceil(remain/60000) + "분" : "도착 완료");
+    var displayBody = "현재 [" + v.dest + "]로 항해 중\n" + escortText + "\n\n" +
+                      "📦 적재함: " + totalCargoInShip + " / " + shipCapacity + " 칸\n" + currentCargoLines.join("\n") + "\n\n" +
+                      "💰 예상 수령액: " + fp(finalReceipt) + "P\n" +
+                      "💵 예상 순이익: " + fp(estimatedNetProfit) + "P\n" +
+                      "🕒 남은 시간: " + (remain > 0 ? Math.ceil(remain/60000) + "분" : "도착 완료");
 
-    replier.reply(formatCommand("📦 항해 현황", user, displayBody, "정산은 도착 후 채팅 입력 시 자동 수행됩니다."));
+    replier.reply(formatCommand("📦 항해 현황", user, displayBody, "도착 후 채팅 입력 시 정산됩니다."));
 }
 
 /* [서브] 🛠️ 선박 관리 및 개조 */
@@ -16573,24 +16547,21 @@ function _handleCombatSelect(choice, user, data, replier, roomName, targetUid) {
 
 /* [핵심 엔진] 해상전투 집행 (Navy vs Pirate) */
 function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mode) {
-
     var mainRoom = data.rooms["내리다"];
     var session = mainRoom.features.activePillages[victimUid];
+    var cfg = SYSTEM_CONFIG.TRADE.JOBS;
 
-    // [중요] 토벌 개입(INTERVENE) 시 이미 전투가 치러졌는지 검사
     if (mode === "INTERVENE") {
         if (!session || session.isBattled === true) {
-            try { Api.replyRoom(roomName, "📡 [교전 불가]\n이미 다른 함대가 교전 중이거나 상황이 종료된 사건입니다."); } catch(e) {}
+            try { Api.replyRoom(roomName, "📡 [교전 불가] 이미 다른 함대가 교전 중입니다."); } catch(e) {}
             return;
         }
-        // 전투 시작 즉시 '전투 완료' 플래그 세움 (해군C의 개입 차단)
         session.isBattled = true; 
     }
 
     var pirate = (mode === "ESCORT") ? navyOrPirate : null;
     var navy = (mode === "INTERVENE") ? navyOrPirate : null;
     
-    // 전 서버에서 대상 객체 확보
     if (!pirate) {
         var pId = session ? session.pirateUid : null;
         if (!pId) return;
@@ -16599,34 +16570,27 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
     if (!navy) {
         for (var r in data.rooms) { if (data.rooms[r].users[navyUid]) { navy = data.rooms[r].users[navyUid]; break; } }
     }
-
     if (!pirate || !navy) return;
 
-    // 1. 전투력 계산: (선박 레벨 차이 반영)
-    // 확률 = 50% + (해군선박 - 해적선박) * 15% + 난수
     var nShip = navy.shipLevel || 1;
     var pShip = pirate.shipLevel || 1;
     var winProb = 50 + (nShip - pShip) * 15 + (Math.random() * 20 - 10);
-    
     var isNavyWin = (Math.random() * 100 < winProb);
 
-    // 2. 결과 처리
-    var mainRoom = data.rooms["내리다"];
     var resultMsg = "⚔️ [해상 교전 결과 보고]\n━━━━━━━━━━━━━━━\n" +
                     "👮 해군: " + navy.name + " (Lv." + nShip + ")\n" +
                     "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pShip + ")\n\n";
 
     if (isNavyWin) {
-        // 수정: 해적 패배 쿨타임 30분 -> 10분 단축 (600,000ms)
-        var piratePenaltyMs = SYSTEM_CONFIG.TRADE.JOBS.PIRATE.jailTime || 600000;
-        pirate.pillageCooldownEndTime = Date.now() + piratePenaltyMs;
+        // 수정: 설정 파일(Sector 1)의 jailTime을 실시간으로 읽어와서 표기 (10분 정상 표기)
+        var piratePenaltyMs = cfg.PIRATE.jailTime || 600000; 
+        pirate.jailReleaseTime = Date.now() + piratePenaltyMs;
+        pirate.pillageCooldownEndTime = Date.now() + (30 * 60 * 1000); // 약탈 쿨타임은 유지
         pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
         navy.fame = (navy.fame || 0) + 10;
-        navy.totalCaptureSuccess = (navy.totalCaptureSuccess || 0) + 1;
         
-        // 국고 현상금 지급 (기본 3만 + 해적이 쌓은 현상금)
         var bounty = 30000 + (pirate.currentBounty || 0);
-        util_updatePoint(navy, data.rooms["내리다"], bounty, "해적 토벌 현상금 수령: " + pirate.name, "내리다");
+        util_updatePoint(navy, data.rooms["내리다"], bounty, "해적 토벌 현상금 수령", "내리다");
         pirate.currentBounty = 0;
 
         delete mainRoom.features.activePillages[victimUid];
@@ -16634,16 +16598,17 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
                      "⚖️ " + pirate.name + ": 징역 " + Math.floor(piratePenaltyMs / 60000) + "분 부과\n" +
                      "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득";
     } else {
-        // 해적 승리: 해군 퇴각, 약탈 세션 유지 (호위였다면 해제)
-        var retreatMin = Math.floor(retreatMs / 60000); 
-        navy.retreatEndTime = Date.now() + retreatMs; // 상수 연동
+        var retreatMs = cfg.NAVY.retreatTime || 300000;
+        navy.retreatEndTime = Date.now() + retreatMs;
         pirate.infamy = (pirate.infamy || 0) + 5;
-        
         resultMsg += "💀 [해적 승리] 해군 함대가 퇴각했습니다!\n\n" +
-                     "🩹 " + navy.name + ": " + retreatMin + "분간 정비(퇴각) 돌입\n" +
+                     "🩹 " + navy.name + ": " + Math.floor(retreatMs/60000) + "분간 정비 돌입\n" +
                      "⚠️ 약탈이 계속 진행됩니다!";
+    }
 
-        if (mainPillageEntry) mainPillageEntry.isProcessing = false;
+    Api.replyRoom("내리다", resultMsg);
+    safeSaveData(data, true);
+}
         
         // 호위 중이었다면 호위 정보 삭제 (상선 무방비 상태 전환)
         var victim = null;

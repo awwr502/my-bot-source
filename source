@@ -43,29 +43,49 @@ function util_nukeAllCorruption() {
     }
 }
         
-        // [안전 가드]: globalData가 확실히 존재할 때만 속성에 접근
-        if (typeof globalData !== 'undefined' && globalData) {
-            if (!globalData[THREAD_REGISTRY]) globalData[THREAD_REGISTRY] = [];
-            
-            var registry = globalData[THREAD_REGISTRY];
-            for (var i = 0; i < registry.length; i++) {
-                try {
-                    if (registry[i] && !registry[i].isShutdown()) {
-                        registry[i].shutdownNow();
-                    }
-                } catch (e) { }
-            }
-        }
-        Log.info("♻️ [System] 기존 좀비 스레드 정리 완료");
+        // 수정: 누락된 함수 선언부 복구 및 깃허브 로더용 전역 데이터 정화 로직 통합
+if (typeof globalData === 'undefined' || globalData === null) {
+    globalData = { rooms: {}, botActive: true, statusCheck: {} };
+}
 
+globalData._isInitialized = false;
+
+// [엔진 재가동 및 메모리 세척 세션]
+(function() {
+    try {
+        var THREAD_REGISTRY = "msgbot_thread_pool_registry_v1";
+        
+        // 1. 기존 globalData가 존재할 때 좀비 엔진 정리 및 "강력 소독"
+        if (typeof globalData !== 'undefined' && globalData) {
+            
+            // [A] 이전 세션의 좀비 스레드 종료
+            if (globalData[THREAD_REGISTRY]) {
+                var registry = globalData[THREAD_REGISTRY];
+                for (var i = 0; i < registry.length; i++) {
+                    try {
+                        if (registry[i] && !registry[i].isShutdown()) {
+                            registry[i].shutdownNow();
+                        }
+                    } catch (e) { }
+                }
+            }
+
+            // [B] 깃허브 리로드 시 에러를 잡는 핵심 단계: 전역 메모리 소독
+            util_scrubNativeObject(globalData);
+            Log.info("🧹 [System] 좀비 엔진 정리 및 메모리 정밀 소독 완료");
+            
+        }
+
+        // 2. 새로운 엔진(스레드 풀) 가동
         var ParallelPool = java.util.concurrent.Executors.newFixedThreadPool(8);
         var LogicQueue = java.util.concurrent.Executors.newSingleThreadExecutor();
         var Executor = java.util.concurrent.Executors.newCachedThreadPool();
         var SaveExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
 
-        // 새 엔진들을 레지스트리에 등록
+        // 3. 새 엔진들을 레지스트리에 등록
         globalData[THREAD_REGISTRY] = [ParallelPool, LogicQueue, Executor, SaveExecutor];
         
+        // 4. 실행 컨텍스트에 새 엔진 할당
         this.ParallelPool = ParallelPool;
         this.LogicQueue = LogicQueue;
         this.Executor = Executor;

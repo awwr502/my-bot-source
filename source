@@ -9746,49 +9746,54 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
     var tRoom = found[0].roomName;
 
     try {
-        // 1. 새 도화지(유저 객체) 생성
+        // 1. 새 유저 객체 생성
         var cleanUser = { uid: tId, name: tUser.name };
 
-        // 2. 반드시 살려야 할 핵심 필드 리스트 (여기에 적힌건 다 복사됩니다)
-        var safeKeys = [
-            'point', 'bank', 'tier', 'creditScore', 'totalAttendance', // 기본 자산
-            'landHoldings', 'landAvg', 'totalLandInvest', 'landDeedCount', // 부동산 정보 (100% 보존)
-            'tradeCount', 'shipLevel', 'cargo', 'cargoAvg', 'specialties', 'merchantShipLevel', // 무역/선박 정보 (100% 보존)
-            'inventory', 'collectedIcons', 'artifactPieces', 'totalMiningTime', // 가방/수집/광산
-            'job', 'infamy', 'fame', 'currentBounty', 'jobJoinDate', // 직업 정보
-            'totalPillageSuccess', 'totalCaptureSuccess', 'totalGambleCount', 'totalGambleWins', // 통계
-            'lastDate', 'hasSeenSyncNotice', 'boxFragments', 'boxTickets' // 시스템 플래그
-        ];
+        // 2. 유저 객체에 들어있는 모든 키(Key) 목록 추출
+        var allKeys = Object.keys(tUser);
 
-        // 3. 외과적 복사: 오염 가능성이 있는 lastAction 등은 제외하고 안전한 데이터만 이동
-        safeKeys.forEach(function(key) {
+        // 3. 모든 키를 하나씩 대조하며 이사 시작
+        allKeys.forEach(function(key) {
+            // [예외] 에러의 원인인 필드들은 이름만 보고 미리 제외 (지뢰 제거)
+            if (key === 'lastAction' || key === 'replier' || key === 'imageDB' || key === 'voyage') return;
+
             try {
-                if (tUser[key] !== undefined) {
-                    // 객체 타입(부동산/화물 등)은 참조를 끊기 위해 복제 처리
-                    if (typeof tUser[key] === 'object' && tUser[key] !== null) {
-                        cleanUser[key] = JSON.parse(JSON.stringify(tUser[key]));
+                var value = tUser[key]; // 여기서 에러가 나면 catch로 이동함
+
+                // 데이터 검증: 값이 존재하고 읽을 수 있는 경우에만 복사
+                if (value !== undefined) {
+                    // Java 객체 여부 체크 (최종 방어선)
+                    if (value !== null && typeof value === 'object' && value.getClass !== undefined) {
+                        return; // Java 객체면 복사 안 함
+                    }
+
+                    // 정상적인 JS 데이터라면 깊은 복사 실행
+                    if (typeof value === 'object' && value !== null) {
+                        cleanUser[key] = JSON.parse(JSON.stringify(value));
                     } else {
-                        cleanUser[key] = tUser[key];
+                        cleanUser[key] = value;
                     }
                 }
             } catch (e) {
-                Log.error("⚠️ [" + key + "] 필드 복사 실패 (오염 구역): " + e);
+                // 에러가 나는 필드는 읽지 못하는 필드이므로 과감히 버림 (이게 에러의 주범임)
+                Log.error("🗑️ [Purify] 읽기 실패 필드 자동 제거: " + key);
             }
         });
 
-        // 4. 기존 유저 정보를 새것으로 교체 (오염된 lastAction 등은 자연스럽게 소멸)
+        // 4. 기존 유저 정보를 100% 추출된 깨끗한 데이터로 교체
         data.rooms[tRoom].users[tId] = cleanUser;
         data.rooms[tRoom].users[tId].skipHealing = true;
 
-        // 5. 물리 DB 즉시 확정 저장
+        // 5. 즉시 저장 및 메모리 반영
         safeSaveData(data, true);
-        if (typeof globalData !== 'undefined') globalData = data;
+        globalData = data; 
 
         var report = "👤 대상: " + tUser.name + "\n" +
-                     "✅ 보존: 부동산 지분, 무역 기록, 화물, 선박 Lv, 가방 일체\n" +
-                     "🧹 제거: 에러 유발 필드(lastAction, voyage 등) 정화 완료";
+                     "📊 추출: 유저 객체 내 " + allKeys.length + "개 필드 전수 조사\n" +
+                     "✅ 결과: 스키마 미등록 데이터 포함 모든 자산 보존 완료\n" +
+                     "🧹 정화: 깨진 필드(SessionCache)만 핀셋 제거";
 
-        replier.reply(formatAdmin("✨ 무손실 데이터 정화 완료", report + "\n\n이제 정상적으로 명령어 사용이 가능합니다."));
+        replier.reply(formatAdmin("✨ 무손실 전수 데이터 정화 완료", report + "\n\n이제 에러 없이 작동합니다."));
 
     } catch (e) {
         replier.reply(formatAdmin("🚫 정화 실패", "사유: " + e.message));

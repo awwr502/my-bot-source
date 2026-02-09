@@ -16346,22 +16346,22 @@ function _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, cfg
 function _showRaidList(user, replier, data, roomName, targetUid) {
     var sailingUsers = [];
     var now = Date.now();
+    var mainRoom = data.rooms["내리다"];
+    var currentPillages = mainRoom.features.activePillages || {};
 
-    // [해적 전용 가드]: 해전 패배 페널티(30분) 체크
-    // 이 필드는 약탈 시도 시에만 체크되므로, 다른 경제 활동(출석, 은행 등)은 차단되지 않습니다.
     if (user.pillageCooldownEndTime && now < user.pillageCooldownEndTime) {
         var diffC = user.pillageCooldownEndTime - now;
         var remainMinC = Math.ceil(diffC / (1000 * 60));
         return replier.reply(formatError(user, "약탈 불가", "현재 해전 패배로 인해 함대 정비(쿨타임) 중입니다.\n\n⏳ 남은 시간: " + remainMinC + "분"));
     }
 
-    // 전 서버를 스캔하여 '항해 중'이면서 '아직 도착 전'인 유저 탐색
     for (var r in data.rooms) {
         var roomObj = data.rooms[r];
         for (var uid in roomObj.users) {
             var u = roomObj.users[uid];
-            // 조건: 항해 활성화 AND 도착 전(남은 시간 > 0) AND 약탈 전 AND 내가 아님
-            if (u.voyage && u.voyage.active === true && u.voyage.arrival > now && u.isPillaged !== true && uid !== targetUid) {
+            // 수정: 약탈 완료된 유저(isPillaged)와 현재 공격받고 있는 유저(currentPillages[uid])를 모두 배제
+            if (u.voyage && u.voyage.active === true && u.voyage.arrival > now && 
+                u.isPillaged !== true && !currentPillages[uid] && uid !== targetUid) {
                 sailingUsers.push({ uid: uid, data: u, roomName: r });
             }
         }
@@ -16559,7 +16559,8 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
                      "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득";
     } else {
         // 해적 승리: 해군 퇴각, 약탈 세션 유지 (호위였다면 해제)
-        navy.retreatEndTime = Date.now() + (15 * 60 * 1000);
+        var retreatMs = SYSTEM_CONFIG.TRADE.JOBS.NAVY.retreatTime || 300000;
+        navy.retreatEndTime = Date.now() + retreatMs; // 상수 연동 (5분)
         pirate.infamy = (pirate.infamy || 0) + 5;
         
         resultMsg += "💀 [해적 승리] 해군 함대가 퇴각했습니다!\n\n" +

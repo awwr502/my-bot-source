@@ -5965,29 +5965,58 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
 /* [수정] 인자 리스트에 imageDB, sender를 추가하여 내부 로직 오류를 해결합니다. */
 function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData) {
 
-// [수정] 핵소독 로직을 함수 몸체 { 안쪽으로 이동하여 invalid return 에러 해결
-    if (msg === "/파일핵소독") {
-        try {
-            var path = FILE_PATH; 
-            var rawText = FileStream.read(path);
-            if (!rawText) throw new Error("파일을 읽을 수 없습니다.");
-
-            var cleanText = rawText.replace(/"[^"]+":\s*\{[^{}]*"SessionCacheReplier"[^{}]*\}/g, function(match) {
-                var keyName = match.split(":")[0];
-                return keyName + ": null";
-            });
-
-            if (rawText === cleanText) {
-                replier.reply("🔍 진단 결과: 파일 내부에 오염된 객체가 없습니다.");
-            } else {
-                FileStream.write(path, cleanText);
-                replier.reply("✅ [핵소독 완료]\n파일 내 좀비 객체 문자열을 모두 소각했습니다.\n\n⚠️ 지금 즉시 봇 스위치를 껐다 켜주세요.");
-            }
-        } catch (e) {
-            replier.reply("❌ 소독 실패: " + e);
-        }
-        return; // 이제 함수 내부이므로 정상 작동합니다.
+if (msg === "/메모리강제세척") {
+    try {
+        // 1. 메모리 상의 전역 객체 완전 초기화
+        globalData = null;
+        
+        // 2. 자바 가비지 컬렉터 강제 호출 (메모리 찌꺼기 제거)
+        java.lang.System.gc();
+        
+        // 3. 깨끗한 파일로부터 데이터 다시 로드
+        globalData = getDatabase(); 
+        
+        replier.reply("🧹 [메모리 세척 완료]\n오염된 전역 참조를 제거하고 파일을 다시 로드했습니다.\n이제 명령어를 입력해 보세요.");
+    } catch (e) {
+        replier.reply("❌ 세척 실패: " + e);
     }
+    return;
+}
+
+if (msg === "/전수조사소독") {
+    try {
+        var path = "/sdcard/msgbot/data/";
+        var dir = new java.io.File(path);
+        var files = dir.listFiles();
+        var cleanedFiles = [];
+
+        for (var i = 0; i < files.length; i++) {
+            var file = files[i];
+            if (file.getName().endsWith(".json")) {
+                var content = FileStream.read(path + file.getName());
+                // com.xfl.msgbot(리플라이어 경로)이 포함된 패턴 전체 탐색
+                var pattern = /"[^"]+":\s*\{[^{}]*"com\.xfl\.msgbot"[^{}]*\}/g;
+                var newContent = content.replace(pattern, function(match) {
+                    return match.split(":")[0] + ": null";
+                });
+
+                if (content !== newContent) {
+                    FileStream.write(path + file.getName(), newContent);
+                    cleanedFiles.push(file.getName());
+                }
+            }
+        }
+
+        if (cleanedFiles.length > 0) {
+            replier.reply("✅ [전수 소독 완료]\n오염이 발견된 파일: " + cleanedFiles.join(", ") + "\n봇을 재시작하세요.");
+        } else {
+            replier.reply("🔍 검사 결과: 모든 JSON 파일이 문자열 레벨에서 깨끗합니다.");
+        }
+    } catch (e) {
+        replier.reply("❌ 전수 조사 실패: " + e);
+    }
+    return;
+}
 
 // 수정: 메인 로직 진입 시점에 현재 세션의 roomData와 user 객체 내 자바 객체 잔존 여부를 전수 조사하여 소각
 if (roomData) {

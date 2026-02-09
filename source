@@ -85,45 +85,21 @@ function registerAdminCmd(cmd, desc, func) {
 function util_scrubNativeObject(obj) {
     if (!obj || typeof obj !== 'object') return;
     
-    if (Array.isArray(obj)) {
-        for (var i = 0; i < obj.length; i++) {
-            util_scrubNativeObject(obj[i]);
-        }
-        return;
-    }
-
     for (var key in obj) {
-        try {
-            var value = obj[key];
-            if (value === null || value === undefined) continue;
+        var val = obj[key];
+        if (!val) continue;
 
-            // 1. 위험 키워드 즉시 삭제
-            if (key === 'replier' || key === 'imageDB' || key === 'replier_raw' || typeof value === 'function') {
+        if (typeof val === 'object') {
+            // 자바 객체이거나 replier 관련 키워드면 즉시 삭제
+            if (val.getClass !== undefined || 
+                key === 'replier' || 
+                key === 'imageDB' || 
+                (val.constructor && val.constructor.name.indexOf("SessionCache") !== -1)) {
                 delete obj[key];
-                continue;
+            } else {
+                util_scrubNativeObject(val); // 재귀 탐색
             }
-
-            // 2. 자바 네이티브 객체 판별
-            var isJava = false;
-            try {
-                if (value.getClass !== undefined || 
-                    (value.constructor && value.constructor.name && value.constructor.name.indexOf("SessionCache") !== -1) ||
-                    value.toString().indexOf("com.xfl.msgbot") !== -1) {
-                    isJava = true;
-                }
-            } catch (e) { isJava = true; } // 접근 시 에러나면 오염된 객체
-
-            if (isJava) {
-                delete obj[key];
-                Log.warn("☢️ [Nuke] 오염된 객체 제거: " + key);
-                continue;
-            }
-
-            // 3. 재귀 탐색
-            if (typeof value === 'object') {
-                util_scrubNativeObject(value);
-            }
-        } catch (critical) {
+        } else if (typeof val === 'function') {
             delete obj[key];
         }
     }
@@ -1296,17 +1272,20 @@ function safeSaveData(data, isForceBackup) {
                 var content = JSON.stringify(data, function(key, value) {
                     if (value === null || value === undefined) return value;
                     
+                    // 핵심: 가공된 데이터가 아닌 '원시 타입'이 아니면 모두 검사
                     if (typeof value === 'object') {
-                        try {
-                            var strVal = value.toString();
-                            if (strVal.indexOf("SessionCacheReplier") !== -1 || 
-                                strVal.indexOf("com.xfl.msgbot") !== -1 ||
-                                (value.getClass && typeof value.getClass === 'function')) {
-                                return undefined; 
-                            }
-                        } catch (e) {
-                            return undefined;
+                        // 1. 자바 네이티브 객체인지 확인 (getClass 속성 여부로 판별)
+                        if (Object.prototype.toString.call(value).indexOf("Java") !== -1 || 
+                            value.getClass !== undefined || 
+                            (value.constructor && value.constructor.name === 'SessionCacheReplier')) {
+                            return undefined; // 발견 즉시 삭제
                         }
+                        
+                        // 2. 혹시라도 문자열화했을 때 자바 경로가 포함되면 차단
+                        try {
+                            var str = String(value);
+                            if (str.indexOf("com.xfl.msgbot") !== -1) return undefined;
+                        } catch(e) { return undefined; } 
                     }
                     return value;
                 });

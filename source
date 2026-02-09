@@ -1860,50 +1860,6 @@ function util_calculateNetWorth(user, roomData) {
 }
 
 /**
- * [v14.5] 초정밀 스테이징 엔진
- * 런타임 에러를 유발할 수 있는 모든 요소를 제거한 안전 복사 방식
- */
-function util_stagingStart(user) {
-    if (!user || !user.uid) return;
-    
-    if (typeof util_scrubNativeObject === 'function') util_scrubNativeObject(user);
-    
-    GLOBAL_STAGING.active[user.uid] = true;
-    var safeSnapshot = { uid: user.uid, name: user.name };
-    
-    USER_SCHEMA.forEach(function(item) {
-        var key = item.key;
-        var val = user[key];
-        
-        try {
-            if (val === undefined || val === null) {
-                safeSnapshot[key] = item.default;
-            } else if (typeof val === 'object') {
-                // [변경] JSON.stringify 없이 수동으로 순수 값만 복제
-                var isArr = Array.isArray(val);
-                var clone = isArr ? [] : {};
-                for (var k in val) {
-                    var innerVal = val[k];
-                    // 자바 객체나 함수는 아예 복사 대상에서 제외
-                    if (innerVal !== null && typeof innerVal !== 'function') {
-                        if (typeof innerVal !== 'object' || !innerVal.getClass) {
-                            clone[k] = innerVal;
-                        }
-                    }
-                }
-                safeSnapshot[key] = clone;
-            } else {
-                safeSnapshot[key] = val;
-            }
-        } catch(e) {
-            safeSnapshot[key] = item.default;
-        }
-    });
-
-    GLOBAL_STAGING.cache[user.uid] = safeSnapshot;
-}
-
-/**
  * [신설: 원자적 커밋] v1.0
  * 기능: 모든 로직이 에러 없이 종료되었을 때, 가상 주머니의 내용을 실제 DB에 반영합니다.
  */
@@ -5977,25 +5933,26 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
             _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData);
         }
 
-    } catch (e) {
+   } catch (e) {
+        var errorDetail = e.name + ": " + e.message + " (Line: " + e.lineNumber + ")";
+        Log.error("🚨 [런타임 에러] " + errorDetail);
+
+        // 관리자(95 남 광어)에게 에러의 원인과 줄번호를 즉시 보고
+        try {
+            if (isAdmin(sender, data, targetUid)) {
+                replier.reply("🚫 [로직 충돌 보고]\n━━━━━━━━━━━━━━━\n• 유형: " + e.name + "\n• 내용: " + e.message + "\n• 위치: Line " + e.lineNumber + "\n━━━━━━━━━━━━━━━\n⚠️ 이 메시지를 알려주세요.");
+            } else {
+                // 일반 유저에게는 기존 보안 메시지 출력
+                var safeUser = { name: cleanSender, point: 0, bank: 0 }; 
+                if (typeof formatError === 'function') {
+                    replier.reply(formatError(safeUser, "시스템 보호 작동", "일시적인 오류가 감지되어 복구되었습니다.\n다시 시도해주세요."));
+                }
+            }
+        } catch(inner) {}
+
         // [Rollback] 에러 발생 시 데이터 복구
         if (typeof util_stagingRollback === 'function' && user && user.uid) {
             util_stagingRollback(user, roomName);
-        }
-        
-        // [Log] 시스템 로그 기록
-        if (typeof util_reportError === 'function') {
-            try { util_reportError(e, roomName, cleanSender, msg); } catch(err) {}
-        }
-
-        // [Reply] 사용자 알림 (중첩 try 문법 오류 수정 완료)
-        try {
-            if (typeof replier !== 'undefined' && typeof formatError === 'function') {
-                var safeUser = { name: cleanSender, point: 0, bank: 0 }; 
-                replier.reply(formatError(safeUser, "시스템 보호 작동", "일시적인 오류가 감지되어 복구되었습니다.\n다시 시도해주세요."));
-            }
-        } catch (innerError) { 
-            Log.error("🚨 [Critical Error Handler Failed]: " + innerError); 
         }
     } finally {
         // [Lock Release] 락 해제 및 지연 시간 측정
@@ -6008,6 +5965,7 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
                     PERF_METRICS.msgPerMin++;
                 }
             }
+            // 현재 스레드가 락을 쥐고 있을 때만 해제하여 IllegalMonitorStateException 방지
             if (typeof lock !== 'undefined' && lock !== null && lock.isHeldByCurrentThread()) {
                 lock.unlock(); 
             }

@@ -7344,14 +7344,15 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             // 수량 입력 단계로 전환 시 현재 아이템 목록을 저장(뒤로가기용)
             if (["promotion", "tierGuard", "randomBox", "spitto", "trade_cargo"].indexOf(item.effect) !== -1) {
                 var itemPrice = getItemPrice(item, user, roomName); 
+                var discountTag = (user.title === "수집대마왕") ? " 🏵️수집대마왕 혜택(15%할인)" : "";
                 bankProcessState[targetUid] = { 
                     type: 'shop_quantity', 
                     time: Date.now(), 
-                    extra: { item: item, prevItems: filteredItems } // prevItems 추가
+                    extra: { item: item, prevItems: filteredItems } 
                 };
                 
                 var quantityInfo = "구매하실 [" + item.name + "]의 수량을 입력해주세요.\n\n" +
-                                   "💵 개당 가격: " + fp(itemPrice) + "P\n" +
+                                   "💵 개당 가격: " + fp(itemPrice) + "P" + discountTag + "\n" +
                                    "💰 보유 포인트: " + fp(user.point) + "P" + SHOP_NAV;
                                    
                 replier.reply(formatCommand("🔢 수량 입력", user, quantityInfo, "취소: [취소]"));
@@ -9018,7 +9019,6 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         var taxLog = "\n⚖️ 세금(" + taxInfo.ratePct + "%): -" + fp(taxInfo.taxAmount) + "P (상위 " + taxInfo.rankPct + "%)";
         var stimulusLog = (matchingBonus > 0) ? "\n🏦 [이벤트]: 1:1 매칭 장려금 +" + fp(matchingBonus) + "P" : "";
         var repayInfo = res.repayMsg ? "\n" + res.repayMsg : "";
-        var miningKingTag = (user.title === "채굴왕") ? " ✨채굴왕 혜택" : "";
         var finalGainLog = "\n💰 최종 수익: +" + fp(actualTotal) + "P" + miningKingTag;
 
         var nextMiningTime = Number(user.totalMiningTime || 0) + durationMin;
@@ -9056,18 +9056,22 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
             util_checkAndAwardTitle(user, replierStub, "도굴꾼", 2911, "🧤", "내리다 고고학 연구소", "유물 조각 10개 달성", "드디어 첫 번째 유물 칭호를 획득하셨습니다.", roomName);
         }
 
-        var artifactKingTag = (user.title === "도굴왕") ? " (⚜️도굴왕 버프)" : "";
-        // [통합 메시지 조립 시작]
-        var repayInfo = res.repayMsg ? "\n\n" + res.repayMsg : "";
+        var miningKingTag = (user.title === "채굴왕") ? " ✨채굴왕 혜택" : "";
+        var artifactKingTag = (user.title === "도굴왕") ? " ✨도굴왕 혜택" : "";
+        
+        var artifactFoundMsg = (artifactFound > 0) ? "\n\n✨ [유물 발견]" + artifactKingTag + "\n🧩 조각 획득 (+" + artifactFound + "개 / 총 " + user.artifactPieces + "개)" : "";
+        var repayInfo = res.repayMsg ? "\n" + res.repayMsg : "";
+        
         var finalOutput = "⛏️ 채굴 결과\n━━━━━━━━━━━━━━━\n" + getDisplayName(user) + "님\n\n" +
                           "⛏️ 채굴 시간: " + durationMin + "분\n" +
                           "🟫 구리 " + copperCount + "회 🗂️ 황금 " + goldCount + "회\n" +
-                          "💎 다이아 " + diaCount + "회" + artifactKingTag + "\n" +
+                          "💎 다이아 " + diaCount + "회\n" +
                           "💰 채굴 수익: +" + fp(totalEarn) + "P\n" +
-                          taxLog + 
-                          stimulusLog + 
-                          repayInfo + 
-                          finalGainLog;
+                          taxLog + stimulusLog + repayInfo + 
+                          "\n💰 최종 수익: +" + fp(actualTotal) + "P" + miningKingTag + 
+                          artifactFoundMsg + 
+                          "\n━━━━━━━━━━━━━━━\n" +
+                          "💡 [가이드]: 내 잔액: " + fP(user.point) + "P";
 
         if (artifactFound > 0) {
             // 다음 칭호 목표치 계산 로직
@@ -9079,16 +9083,6 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
             else if (pieces >= 20) targetGoal = 30;
             else if (pieces >= 10) targetGoal = 20;
             else targetGoal = 10;
-
-            finalOutput += "\n\n✨ [내리다 고고학 연구소: 유물 발견] ✨\n" +
-                           "━━━━━━━━━━━━━━━\n" +
-                           "심상치 않은 기운의 조각을 발견했습니다!\n\n" +
-                           "🧩 유물 조각 획득 (+" + artifactFound + ")\n" +
-                           "현재 보유 " + pieces + " / " + targetGoal + " 개";
-        }
-
-        // [수정]: 정산 완료 후 물리적 강제 저장을 수행하여 데이터 무결성 및 기능 락 해제 보장
-        finalOutput += "\n━━━━━━━━━━━━━━━\n💡 [가이드]: 내 잔액: " + fP(user.point) + "P";
                                           
         replier.reply(finalOutput);
         safeSaveData(data, true); // 2. 물리적 즉시 저장 실행 (복사 및 기능 차단 해결 핵심)
@@ -9276,6 +9270,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         var res = processRepayment(user, taxInfo.netIncome, targetUid, roomName);
         util_updatePoint(user, roomData, Number(res.actualGain), "스피또 당첨금", roomName);
 
+        var taxBenefitTag = (user.title === "기부왕") ? " ✨기부왕 혜택" : "";
         var body = "🧧 스피또 " + qty + "매 개봉 결과\n\n";
         if (totalPrize > 0) {
             body += "🎊 총 당첨금: " + fp(totalPrize) + "P\n";
@@ -9283,7 +9278,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
             if (results.rank2 > 0) body += "🥈 2등: " + fp(conf.PRIZES.RANK2) + "회\n";
             body += "🥉 기타 등수: " + (results.rank3 + results.rank4) + "회 당첨";
             // 3. UI 보완: 세금, 상환 내역, 최종 수익 정보 조립
-            body += "\n\n⚖️ 세금(" + taxInfo.ratePct + "%): -" + fp(taxInfo.taxAmount) + "P (상위 " + taxInfo.rankPct + "%)";
+            body += "\n⚖️ 세금(" + taxInfo.ratePct + "%): -" + fp(taxInfo.taxAmount) + "P" + taxBenefitTag;
             if (res.repayMsg) body += res.repayMsg; // 상환 메시지 삽입
             body += "\n💰 최종 수익: +" + fp(res.actualGain) + "P";
         } else {
@@ -15095,7 +15090,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var triggeredDisaster = (Math.random() < 0.25) ? ["STORM", "FIRE", "CORRO"][Math.floor(Math.random() * 3)] : null;
 
     // [수정]: '해상왕' 칭호 장착 시 모든 부정적 이벤트(재해/해적) 발생 확률 0% 고정
-    var seaKingTag = (user.title === "해상왕") ? " (🔱해상왕 가드)" : "";
+    var seaKingTag = (user.title === "해상왕") ? " (✨해상왕 혜택)" : "";
     if (user.title === "해상왕") {
         triggeredDisaster = null;
     }
@@ -15355,7 +15350,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
    var report = "📍 목적지: " + v.dest + " (" + cargoSummaryStr + ")\n\n" +
                  "💰 총 매출액: " + fp(totalRevenue) + "P\n" +
                  "🏗️ 발전도 보너스: +" + fp(pBonusTotal) + "P\n" +
-                 "📈 순수 이익: +" + fp(margin) + "P\n" +
+                 "📈 순수 이익: +" + fp(margin) + "P" + seaKingTag + "\n" +
                  (disasterLog ? disasterLog.trim() + "\n" : "") +
                  "⚖️ 무역세(" + taxPercentText + "%): -" + fp(taxAmount) + "P" + taxBenefitTag + "\n" +
                  (pillageLog ? pillageLog.trim() + "\n" : "") +

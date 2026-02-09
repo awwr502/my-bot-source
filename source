@@ -742,17 +742,21 @@ BACKUP: {
     /* 통합 카지노 시스템 상세 설정 */
     CASINO: {
         LADDER: { 
-            INTERVAL_SEC: 120,    // 2분 주기
-            PAYOUT_SINGLE: 1.9,   // 홀/짝 배당
-            PAYOUT_COMB: 4.0,     // 조합 배당
-            MIN_BET: 5000,        // 사다리 최소 배팅 (원하시는 금액으로 수정)
-            LIMIT: 500000         // 사다리 최대 배팅
+            INTERVAL_SEC: 120,
+            PAYOUT_SINGLE: 1.9,
+            PAYOUT_COMB: 4.0,
+            MIN_BET: 5000,
+            LIMIT: 500000
         },
         BACCARAT: { 
-            INTERVAL_SEC: 180,    // 3분 주기
+            INTERVAL_SEC: 180,
             PAYOUT: { PLAYER: 2.0, BANKER: 1.95, TIE: 8.0 },
-            MIN_BET: 2000,       // 바카라 최소 배팅 (원하시는 금액으로 수정)
-            LIMIT: 200000        // 바카라 최대 배팅 (20만P)
+            MIN_BET: 10000,
+            LIMIT: 1000000
+        },
+        BLACKJACK: {
+            MIN_BET: 2000,        // 블랙잭 최소 배팅 (원하시는 금액으로 수정)
+            LIMIT: 200000         // 블랙잭 최대 배팅 (원하시는 금액으로 수정)
         }
     }
 };
@@ -6752,8 +6756,9 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
 
     if (state.type === 'blackjack_bet_input') {
         var amt = parseInt(msg.replace(/,/g, ""));
-        var minB = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
-        var maxB = SYSTEM_CONFIG.ECO.GAMBLE_MAX || 50000;
+        var bjCfg = SYSTEM_CONFIG.CASINO.BLACKJACK;
+        var minB = bjCfg.MIN_BET || 2000;
+        var maxB = bjCfg.LIMIT || 50000;
 
         if (isNaN(amt) || amt < minB || amt > maxB) {
             replier.reply(formatError(user, "배팅 금액 오류", fp(minB) + "P ~ " + fp(maxB) + "P 사이를 입력하세요."));
@@ -15713,27 +15718,31 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
     }
 
     // 3-1. 블랙잭 메뉴
-    if (state.type === 'casino_main' && cleanMsg === "3") {
-        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
-            replier.reply(formatError(user, "블랙잭 폐쇄", "국가 부도 선포로 인해 딜러들이 모두 휴가 중입니다."));
-            return true;
-        }
+   if (state.type === 'casino_main' && cleanMsg === "3") {
+        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
+            replier.reply(formatError(user, "블랙잭 폐쇄", "국가 부도 선포로 인해 딜러들이 모두 휴가 중입니다."));
+            return true;
+        }
         
-        // 뱅크 프로세스 상태 초기화 확인
         if (!data.rooms[roomName].features.states.bankProcess) {
             data.rooms[roomName].features.states.bankProcess = {};
         }
 
-        // 배팅 금액 입력 상태로 전환
-        data.rooms[roomName].features.states.bankProcess[targetUid] = { type: 'blackjack_bet_input', time: Date.now() };
-        delete mState[targetUid];
-        
-        var minB = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
-        var maxB = SYSTEM_CONFIG.ECO.GAMBLE_MAX || 50000;
-        util_casinoRelayReply(replier, user, formatCommand("🕴️ 블랙잭 테이블 입장", user, "딜러가 카드를 섞고 있습니다.\n배팅하실 금액을 입력해주세요.\n\n• 최소: " + fp(minB) + "P\n• 최대: " + fp(maxB) + "P", "취소: [취소]"), roomName);
+        data.rooms[roomName].features.states.bankProcess[targetUid] = { type: 'blackjack_bet_input', time: Date.now() };
+        delete mState[targetUid];
+        
+        var bjCfg = SYSTEM_CONFIG.CASINO.BLACKJACK;
+        var minB = bjCfg.MIN_BET || 2000;
+        var maxB = bjCfg.LIMIT || 50000;
+        
+        var welcomeMsg = "딜러가 카드를 섞고 있습니다.\n배팅하실 금액을 입력해주세요.\n\n" +
+                         "• 최소: " + fp(minB) + "P\n" +
+                         "• 최대: " + fp(maxB) + "P";
+
+        util_casinoRelayReply(replier, user, formatCommand("🕴️ 블랙잭 테이블 입장", user, welcomeMsg, "취소: [취소]"), roomName);
         safeSaveData(data);
-        return true;
-    }
+        return true;
+    }
 
     // 4. 게임별 세부 기능
     if (state.type === 'casino_ladder' || state.type === 'casino_baccarat') {
@@ -16263,14 +16272,18 @@ function _handleBlackjackRetry(msg, user, data, replier, roomName, targetUid) {
 
         // 상태 전환: 메뉴 대기(retry) -> 금액 입력 대기(bet_input)
         delete mState[targetUid];
-        
-        // 섹터 22-1 등에서 처리하는 입력 대기 상태로 전환 (즉시 배팅 가능)
         data.rooms[roomName].features.states.bankProcess[targetUid] = { type: 'blackjack_bet_input', time: Date.now() };
         
-        var minB = SYSTEM_CONFIG.ECO.GAMBLE_MIN || 2000;
-        var maxB = SYSTEM_CONFIG.ECO.GAMBLE_MAX || 50000;
+        // 블랙잭 전용 상수 로드
+        var bjCfg = SYSTEM_CONFIG.CASINO.BLACKJACK;
+        var minB = bjCfg.MIN_BET || 2000;
+        var maxB = bjCfg.LIMIT || 50000;
         
-        util_casinoRelayReply(replier, user, formatCommand("🕴️ 블랙잭 재도전", user, "배팅하실 금액을 입력해주세요.\n\n• 최소: " + fp(minB) + "P\n• 최대: " + fp(maxB) + "P", "취소: [취소]"), roomName);
+        var retryMsg = "배팅하실 금액을 입력해주세요.\n\n" +
+                       "• 최소: " + fp(minB) + "P\n" +
+                       "• 최대: " + fp(maxB) + "P";
+        
+        util_casinoRelayReply(replier, user, formatCommand("🕴️ 블랙잭 재도전", user, retryMsg, "취소: [취소]"), roomName);
         return true;
     }
 

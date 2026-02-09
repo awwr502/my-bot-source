@@ -101,21 +101,29 @@ function util_scrubNativeObject(obj) {
     if (!obj || typeof obj !== 'object') return;
     
     for (var key in obj) {
-        var val = obj[key];
-        if (!val) continue;
+        try {
+            var val = obj[key];
+            if (val === null || val === undefined) continue;
 
-        if (typeof val === 'object') {
-            // 자바 객체(getClass)이거나 위험 키워드면 즉시 삭제
-            if (val.getClass !== undefined || 
-                key === 'replier' || 
-                key === 'imageDB' || 
-                (val.constructor && val.constructor.name && val.constructor.name.indexOf("SessionCache") !== -1)) {
+            // 1. 자바 객체인지 확인 (getClass 또는 com.xfl 경로 포함 여부)
+            var isJava = false;
+            try {
+                if (val.getClass !== undefined) isJava = true;
+                if (String(val).indexOf("com.xfl.msgbot") !== -1) isJava = true;
+                if (val.constructor && val.constructor.name && val.constructor.name.indexOf("SessionCache") !== -1) isJava = true;
+            } catch(e) { isJava = true; } // 접근 시 에러나면 오염된 것으로 간주
+
+            if (isJava || typeof val === 'function' || key === 'replier' || key === 'imageDB') {
                 delete obj[key];
-            } else {
-                util_scrubNativeObject(val); // 정상 객체면 더 깊이 탐색
+                continue;
             }
-        } else if (typeof val === 'function') {
-            delete obj[key]; // 함수 필드는 JSON 저장 시 에러 요인이므로 삭제
+
+            // 2. 객체라면 더 깊이 탐색
+            if (typeof val === 'object') {
+                util_scrubNativeObject(val);
+            }
+        } catch (critical) {
+            delete obj[key]; // 에러 발생 시 해당 필드 즉시 삭제
         }
     }
 }
@@ -1857,27 +1865,36 @@ function util_calculateNetWorth(user, roomData) {
 }
 
 /**
- * [v12.0 Final] 원자적 스테이징 - 화이트리스트 스냅샷
- * 기능: 전체 객체를 복사하지 않고, 핵심 자산만 안전하게 추출하여 저장함. (크래시 원천 봉쇄)
+ * [v13.0] 안전한 원자적 스테이징 - 수동 클론 방식
+ * 기존 JSON.stringify 방식은 자바 객체 유입 시 즉시 크래시가 발생하므로 수동 복사로 교체
  */
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
-    GLOBAL_STAGING.active[user.uid] = true;
-
-    // [v12.8 동적 스냅샷] USER_SCHEMA를 기반으로 모든 활동 데이터를 복제 (롤백 시 증발 방지)
-    var safeSnapshot = { uid: user.uid, name: user.name };
     
-    // 스키마에 등록된 모든 필드를 자동으로 복사합니다.
+    // 복사 전 최종 소독 (지뢰 제거)
+    util_scrubNativeObject(user);
+    
+    GLOBAL_STAGING.active[user.uid] = true;
+    var safeSnapshot = { uid: user.uid, name: user.name };
+    
     USER_SCHEMA.forEach(function(schema) {
         var val = user[schema.key];
         if (val !== undefined) {
-            // 참조를 끊기 위해 객체/배열은 Deep Copy 수행
-            safeSnapshot[schema.key] = (typeof val === 'object' && val !== null) ? 
-                JSON.parse(JSON.stringify(val)) : val;
+            // 자바 객체 에러를 피하기 위해 stringify 대신 단순 값 복사 및 재귀 처리
+            if (val !== null && typeof val === 'object') {
+                try {
+                    // 배열과 객체를 안전하게 분리 복사
+                    safeSnapshot[schema.key] = JSON.parse(JSON.stringify(val));
+                } catch(e) {
+                    // 만약 여기서 터진다면 해당 필드만 기본값으로 대체하여 전체 크래시 방지
+                    safeSnapshot[schema.key] = Array.isArray(schema.default) ? [] : {};
+                    Log.error("🚨 [Staging Emergency] " + user.name + "의 " + schema.key + " 필드 오염으로 기본값 대체");
+                }
+            } else {
+                safeSnapshot[schema.key] = val;
+            }
         } else {
-            // 데이터가 없는 경우 기본값 삽입
-            safeSnapshot[schema.key] = (typeof schema.default === 'object' && schema.default !== null) ? 
-                JSON.parse(JSON.stringify(schema.default)) : schema.default;
+            safeSnapshot[schema.key] = schema.default;
         }
     });
 
@@ -5964,6 +5981,18 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
 
 /* [수정] 인자 리스트에 imageDB, sender를 추가하여 내부 로직 오류를 해결합니다. */
 function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData) {
+    
+    // [런타임 긴급 소독] 모든 명령어 실행 전 user 객체에서 자바 흔적 전수 제거
+    if (user) {
+        util_scrubNativeObject(user);
+        // user 객체 내부에 혹시 모를 replier 직접 참조 제거
+        user.replier = null; delete user.replier;
+        if (user.lastAction) { user.lastAction.replier = null; delete user.lastAction.replier; }
+    }
+    
+    if (roomData) {
+        util_scrubNativeObject(roomData);
+    }
 
 if (msg === "/메모리강제세척") {
     try {

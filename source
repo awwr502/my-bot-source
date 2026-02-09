@@ -4,6 +4,14 @@
  * [v12.9] 네이티브 객체 초정밀 소각 엔진
  * 기능: 유저 객체에 박제된 SessionCacheReplier 등 자바 객체를 강제 제거
  */
+function util_fastClean(obj) {
+    if (!obj) return;
+    if (obj.replier) delete obj.replier;
+    if (obj.imageDB) delete obj.imageDB;
+    if (obj.lastAction && obj.lastAction.replier) delete obj.lastAction.replier;
+    if (obj.voyage && obj.voyage.replier) delete obj.voyage.replier;
+}
+
 function util_scrubNativeObject(obj) {
     if (!obj || typeof obj !== 'object') return;
     
@@ -12,7 +20,6 @@ function util_scrubNativeObject(obj) {
             var val = obj[key];
             if (val === null || val === undefined) continue;
 
-            // 1. 자바 객체인지 확인 (getClass 또는 com.xfl 경로 포함 여부)
             var isJava = false;
             try {
                 if (val.getClass !== undefined) isJava = true;
@@ -25,12 +32,11 @@ function util_scrubNativeObject(obj) {
                 continue;
             }
 
-            // 2. 객체라면 더 깊이 탐색 (재귀)
             if (typeof val === 'object') {
                 util_scrubNativeObject(val);
             }
         } catch (critical) {
-            delete obj[key]; // 접근 불가 에러 발생 시 즉시 삭제
+            delete obj[key];
         }
     }
 }
@@ -1891,38 +1897,31 @@ function util_stagingRollback(user, roomName) {
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
     
-    if (typeof util_scrubNativeObject === 'function') util_scrubNativeObject(user);
+    // 표면 세척 후 스테이징 시작
+    util_fastClean(user);
     
     GLOBAL_STAGING.active[user.uid] = true;
     var safeSnapshot = { uid: user.uid, name: user.name };
     
-    USER_SCHEMA.forEach(function(item) {
-        var key = item.key;
+    // 스키마 순회 대신 고속 필터링 복제
+    for (var key in user) {
         var val = user[key];
+        if (val === null || val === undefined || typeof val === 'function') continue;
         
-        try {
-            if (val === undefined || val === null) {
-                safeSnapshot[key] = item.default;
-            } else if (typeof val === 'object') {
-                var isArr = Array.isArray(val);
-                var clone = isArr ? [] : {};
-                for (var k in val) {
-                    var innerVal = val[k];
-                    // 자바 객체나 함수는 복사 대상에서 제외하여 엔진 충돌 차단
-                    if (innerVal !== null && typeof innerVal !== 'function') {
-                        if (typeof innerVal !== 'object' || !innerVal.getClass) {
-                            clone[k] = innerVal;
-                        }
-                    }
-                }
-                safeSnapshot[key] = clone;
-            } else {
-                safeSnapshot[key] = val;
+        // 자바 객체 여부 고속 체크
+        if (val.getClass !== undefined) continue;
+
+        if (typeof val === 'object') {
+            try {
+                // 1단계 깊이까지만 JSON 직렬화로 고속 복제
+                safeSnapshot[key] = JSON.parse(JSON.stringify(val));
+            } catch(e) { 
+                safeSnapshot[key] = Array.isArray(val) ? [] : {}; 
             }
-        } catch(e) {
-            safeSnapshot[key] = item.default;
+        } else {
+            safeSnapshot[key] = val;
         }
-    });
+    }
 
     GLOBAL_STAGING.cache[user.uid] = safeSnapshot;
 }
@@ -5984,16 +5983,17 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
 /* [수정] 인자 리스트에 imageDB, sender를 추가하여 내부 로직 오류를 해결합니다. */
 function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData) {
 
-// 수정: 메인 로직 진입 시점에 현재 세션의 roomData와 user 객체 내 자바 객체 잔존 여부를 전수 조사하여 소각
 if (roomData) {
-    util_scrubNativeObject(roomData);
+    util_fastClean(roomData);
 }
 
 if (user) {
-    util_scrubNativeObject(user);
-    // [강제 삭제] 특정 필드 직접 지명 소각
+    util_fastClean(user);
+    // [강제 삭제] 특정 필드 직접 지명 소각 (getClass 체크로 안전성 확보)
     var deadRefs = ['replier', 'imageDB', 'lastAction'];
-    deadRefs.forEach(function(k) { if (user[k] && user[k].getClass) delete user[k]; });
+    deadRefs.forEach(function(k) { 
+        if (user[k] && (typeof user[k] === 'function' || user[k].getClass)) delete user[k]; 
+    });
 }
 
 /* [데이터 & 가드 통합 엔진] 1:1방 동기화 및 숫자 핸들러 프리패스 */

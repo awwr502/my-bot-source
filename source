@@ -16123,44 +16123,36 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
         }
     }
 
-    // 2. [승률 조작] 유저별 승률 연동 (기본 45% or 조작값)
-    // 유저가 이미 버스트(21초과)라면 조작 없이 패배 확정
-    if (pScore <= 21) {
-        var targetWinRate = 45; // 기본 목표 승률 45%
+    // 2. [강력 조작 엔진] 확률 주사위를 먼저 던져 결과를 강제 결정
+    var targetWinRate = (user.isManipulated && user.gambleWinRate !== undefined) ? user.gambleWinRate : 45;
+    var isUserWin = (Math.random() * 100 < targetWinRate);
 
-        // [수정] 유저가 조작 상태라면 설정된 승률(gambleWinRate)을 우선 적용
-        if (user.isManipulated && user.gambleWinRate > 0) {
-            targetWinRate = user.gambleWinRate;
-        }
-
-        var isUserWin = (Math.random() * 100 < targetWinRate);
-
-        if (isUserWin) {
-            // [승리 시나리오]: 유저가 이겨야 함
-            // 만약 딜러가 이기거나 비기고 있다면 -> 딜러를 강제 버스트(22)시킴
-            if (dScore <= 21 && dScore >= pScore) {
-                dScore = 22; 
-            }
-        } else {
-            // [패배 시나리오]: 유저가 져야 함
-            // 만약 딜러가 터졌거나 점수가 낮다면 -> 딜러 점수를 (유저+1)로 조작
-            if (dScore > 21 || dScore < pScore) {
-                dScore = pScore + 1;
-                // 단, 21점을 넘길 순 없으므로 최대 21로 고정
-                if (dScore > 21) dScore = 21;
-            }
+    if (isUserWin) {
+        // [승리 시나리오]: 유저가 버스트면 21로 세탁, 딜러가 유저보다 높으면 딜러를 버스트시킴
+        if (pScore > 21) pScore = 21; 
+        if (dScore <= 21 && dScore >= pScore) dScore = 22;
+    } else {
+        // [패배 시나리오]: 유저가 안 터졌다면 딜러를 유저보다 무조건 1점 높게 설정 (최대 21)
+        if (pScore <= 21 && (dScore > 21 || dScore <= pScore)) {
+            dScore = Math.min(21, pScore + 1);
         }
     }
 
-    // 3. 최종 승패 판정 (조작된 dScore 기준)
+    // 3. 최종 승패 판정 (조작된 점수를 바탕으로 결과 도출)
     var resultStr = ""; 
     var resultStatus = "LOSE"; 
 
-    if (pScore > 21) { resultStr = "버스트(Bust) 패배! 💀"; resultStatus = "LOSE"; }
-    else if (dScore > 21) { resultStr = "딜러 버스트! 승리! 🎊"; resultStatus = "WIN"; }
-    else if (pScore > dScore) { resultStr = "점수 우위 승리! 🎊"; resultStatus = "WIN"; }
-    else if (pScore < dScore) { resultStr = "딜러 점수 우위 패배! 💀"; resultStatus = "LOSE"; }
-    else { resultStr = "무승부 (Push) 😐"; resultStatus = "PUSH"; }
+    if (dScore > 21 && pScore <= 21) { 
+        resultStr = "딜러 버스트! 승리! 🎊"; resultStatus = "WIN"; 
+    } else if (pScore <= 21 && pScore > dScore) { 
+        resultStr = "점수 우위 승리! 🎊"; resultStatus = "WIN"; 
+    } else if (pScore > 21) { 
+        resultStr = "버스트(Bust) 패배! 💀"; resultStatus = "LOSE"; 
+    } else if (pScore < dScore) { 
+        resultStr = "딜러 점수 우위 패배! 💀"; resultStatus = "LOSE"; 
+    } else { 
+        resultStr = "무승부 (Push) 😐"; resultStatus = "PUSH"; 
+    }
 
     // 4. 배당률 산출 (도박왕 보너스 +0.05)
     var multiplier = 0;

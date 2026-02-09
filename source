@@ -84,21 +84,39 @@ function registerAdminCmd(cmd, desc, func) {
  */
 function util_scrubNativeObject(obj) {
     if (!obj || typeof obj !== 'object') return;
+    
+    if (Array.isArray(obj)) {
+        for (var i = 0; i < obj.length; i++) {
+            util_scrubNativeObject(obj[i]);
+        }
+        return;
+    }
+
     for (var key in obj) {
-        if (obj[key] === null || obj[key] === undefined) continue;
-        if (typeof obj[key] === 'object') {
-            // 자바 객체 특성 감지 (getClass 존재 또는 생성자 이름 체크)
-            if (obj[key].getClass !== undefined || 
-                (obj[key].constructor && obj[key].constructor.name === 'SessionCacheReplier')) {
+        if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+        var value = obj[key];
+
+        if (key === 'replier' || key === 'imageDB' || key === 'replier_raw') {
+            delete obj[key];
+            continue;
+        }
+
+        if (value && typeof value === 'object') {
+            try {
+                var strVal = value.toString();
+                if (strVal.indexOf("SessionCacheReplier") !== -1 || 
+                    strVal.indexOf("com.xfl.msgbot") !== -1 ||
+                    (value.getClass && typeof value.getClass === 'function')) {
+                    delete obj[key];
+                    continue;
+                }
+                util_scrubNativeObject(value);
+            } catch (e) {
                 delete obj[key];
-            } else {
-                util_scrubNativeObject(obj[key]); // 재귀 탐색
             }
         }
-        if (typeof obj[key] === 'function') delete obj[key];
     }
 }
-
 this.util_scrubNativeObject = util_scrubNativeObject;
 
 /**
@@ -1251,14 +1269,19 @@ function safeSaveData(data, isForceBackup) {
                 if (!isAcquired) return; // 다른 스레드가 이미 작업 중이면 즉시 종료하여 병목 방지
 
                 var content = JSON.stringify(data, function(key, value) {
-                    // 1. 값이 없거나 기본 타입(숫자, 문자 등)이면 그대로 통과
-                    if (value === null || typeof value !== 'object') return value;
-
-                    // 2. 자바 네이티브 객체나 세션 리플라이어 발견 시 '제외' 처리
-                    if (value.getClass !== undefined || 
-                        (value.constructor && value.constructor.name && value.constructor.name.indexOf('SessionCache') !== -1) ||
-                        (typeof value.reply === 'function' && typeof value.getAddress === 'function')) {
-                        return undefined; 
+                    if (value === null || value === undefined) return value;
+                    
+                    if (typeof value === 'object') {
+                        try {
+                            var strVal = value.toString();
+                            if (strVal.indexOf("SessionCacheReplier") !== -1 || 
+                                strVal.indexOf("com.xfl.msgbot") !== -1 ||
+                                (value.getClass && typeof value.getClass === 'function')) {
+                                return undefined; 
+                            }
+                        } catch (e) {
+                            return undefined;
+                        }
                     }
                     return value;
                 });
@@ -5757,6 +5780,15 @@ if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
         // user 객체는 메인방의 데이터(돈, 템 등)를 참조
         user = redirectedData.users[targetUid];
     }
+}
+
+if (user) {
+    if (typeof util_scrubNativeObject === 'function') {
+        util_scrubNativeObject(user);
+    }
+    // 2차 확인 사살
+    if (user.replier) delete user.replier;
+    if (user.imageDB) delete user.imageDB;
 }
 
 // 추가: 카지노 VIP 안내 가드용 물리 방 상태 저장 (수정)

@@ -16131,34 +16131,55 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
     }
 
     // 2. [지능형 조작 엔진] 조작 활성 유저만 점수를 강제 변조
-    if (user.isManipulated && user.gambleWinRate !== undefined) {
+    if (user.isManipulated && user.gambleWinRate !== undefined && pScore <= 21) {
         var isUserWin = (Math.random() * 100 < user.gambleWinRate);
 
         if (isUserWin) {
-            // 플레이어가 버스트가 아닐 때, 딜러가 플레이어보다 점수가 높거나 같으면 버스트될 때까지 카드를 추가
-            if (pScore <= 21) {
-                while (dScore <= 21 && dScore <= pScore) {
-                    var c = Math.floor(Math.random() * 13) + 1;
-                    if (c > 10) c = 10; if (c === 1) c = 11;
-                    state.dealerHand.push(c);
-                    dScore = _calcBJScore(state.dealerHand);
+            var foundScenario = false;
+            // 최대 20회 시뮬레이션을 돌려 플레이어가 이기는 가장 자연스러운 딜러의 패를 찾음
+            for (var i = 0; i < 20; i++) {
+                var tempHand = [state.dealerHand[0], state.dealerHand[1]];
+                var tempScore = _calcBJScore(tempHand);
+                
+                // 딜러 규칙: 17점 미만이면 무조건 히트
+                while (tempScore < 17) {
+                    tempHand.push(getCard());
+                    tempScore = _calcBJScore(tempHand);
                 }
-                // 딜러가 플레이어보다 높은 점수(패배 상황)라면 한 장 더 줘서 강제 버스트 유도
-                if (dScore > pScore && dScore <= 21) {
-                    state.dealerHand.push(10);
-                    dScore = _calcBJScore(state.dealerHand);
+
+                // 플레이어가 이기는 조건 (딜러 버스트 또는 플레이어보다 낮은 점수)
+                if (tempScore > 21 || tempScore < pScore) {
+                    state.dealerHand = tempHand;
+                    dScore = tempScore;
+                    foundScenario = true;
+                    break;
                 }
             }
+            // 만약 승리 시나리오를 못 찾았다면(플레이어 점수가 너무 낮을 때 등), 
+            // 기존처럼 최소한 딜러가 규칙대로는 치게 함
         } else {
-            // 강제 패배: 플레이어가 21이하라면 딜러가 플레이어보다 높게(최대 21) 나오도록 카드를 추가
-            if (pScore < 21) {
-                while (dScore <= pScore && dScore < 21) {
-                    var c = Math.floor(Math.random() * 13) + 1;
-                    if (c > 10) c = 10; if (c === 1) c = 11;
-                    state.dealerHand.push(c);
-                    dScore = _calcBJScore(state.dealerHand);
+            // 패배 조작 시: 딜러가 이길 때까지 시뮬레이션 (최대 21점)
+            for (var j = 0; j < 20; j++) {
+                var tempHand = [state.dealerHand[0], state.dealerHand[1]];
+                var tempScore = _calcBJScore(tempHand);
+                while (tempScore < 17) {
+                    tempHand.push(getCard());
+                    tempScore = _calcBJScore(tempHand);
+                }
+                if (tempScore >= pScore && tempScore <= 21) {
+                    state.dealerHand = tempHand;
+                    dScore = tempScore;
+                    break;
                 }
             }
+        }
+    }
+
+    // 일반 모드 또는 시나리오 확정 후 딜러 드로우 (이미 정해졌다면 스킵됨)
+    if (action === "STAY" && dScore < 17) {
+        while (dScore < 17) {
+            state.dealerHand.push(getCard());
+            dScore = _calcBJScore(state.dealerHand);
         }
     }
 

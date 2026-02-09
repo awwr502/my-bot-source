@@ -1860,53 +1860,43 @@ function util_calculateNetWorth(user, roomData) {
 }
 
 /**
- * [v13.0] 안전한 원자적 스테이징 - 수동 클론 방식
- * 기존 JSON.stringify 방식은 자바 객체 유입 시 즉시 크래시가 발생하므로 수동 복사로 교체
+ * [v14.5] 초정밀 스테이징 엔진
+ * 런타임 에러를 유발할 수 있는 모든 요소를 제거한 안전 복사 방식
  */
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
     
-    // 1. 복사 전 소독 실행
     if (typeof util_scrubNativeObject === 'function') util_scrubNativeObject(user);
     
     GLOBAL_STAGING.active[user.uid] = true;
     var safeSnapshot = { uid: user.uid, name: user.name };
     
-    // 2. USER_SCHEMA를 기반으로 필드 하나씩 안전하게 수동 복사 (Deep Copy 수동 구현)
     USER_SCHEMA.forEach(function(item) {
         var key = item.key;
         var val = user[key];
         
-        if (val === undefined || val === null) {
-            safeSnapshot[key] = item.default;
-        } else if (Array.isArray(val)) {
-            // 배열 복사 (인벤토리 등)
-            safeSnapshot[key] = [];
-            for (var i = 0; i < val.length; i++) {
-                if (typeof val[i] === 'object' && val[i] !== null) {
-                    // 객체 요소는 안전하게 프로퍼티만 복사
-                    var objClone = {};
-                    for (var k in val[i]) {
-                        if (typeof val[i][k] !== 'function' && String(val[i][k]).indexOf("com.xfl") === -1) {
-                            objClone[k] = val[i][k];
+        try {
+            if (val === undefined || val === null) {
+                safeSnapshot[key] = item.default;
+            } else if (typeof val === 'object') {
+                // [변경] JSON.stringify 없이 수동으로 순수 값만 복제
+                var isArr = Array.isArray(val);
+                var clone = isArr ? [] : {};
+                for (var k in val) {
+                    var innerVal = val[k];
+                    // 자바 객체나 함수는 아예 복사 대상에서 제외
+                    if (innerVal !== null && typeof innerVal !== 'function') {
+                        if (typeof innerVal !== 'object' || !innerVal.getClass) {
+                            clone[k] = innerVal;
                         }
                     }
-                    safeSnapshot[key].push(objClone);
-                } else {
-                    safeSnapshot[key].push(val[i]);
                 }
+                safeSnapshot[key] = clone;
+            } else {
+                safeSnapshot[key] = val;
             }
-        } else if (typeof val === 'object') {
-            // 일반 객체 복사 (부동산, 화물 등)
-            safeSnapshot[key] = {};
-            for (var k in val) {
-                if (typeof val[k] !== 'function' && String(val[k]).indexOf("com.xfl") === -1) {
-                    safeSnapshot[key][k] = val[k];
-                }
-            }
-        } else {
-            // 숫자, 문자열, 불리언은 그냥 복사
-            safeSnapshot[key] = val;
+        } catch(e) {
+            safeSnapshot[key] = item.default;
         }
     });
 
@@ -1939,6 +1929,46 @@ function util_stagingRollback(user, roomName) {
     delete GLOBAL_STAGING.active[user.uid];
     delete GLOBAL_STAGING.cache[user.uid];
     Log.info("[Atomic Rollback] " + user.name + "님의 트랜잭션 실패로 복구되었습니다.");
+}
+
+// InternalError 방지를 위해 JSON.stringify를 사용하지 않는 수동 클론 엔진으로 교체
+function util_stagingStart(user) {
+    if (!user || !user.uid) return;
+    
+    if (typeof util_scrubNativeObject === 'function') util_scrubNativeObject(user);
+    
+    GLOBAL_STAGING.active[user.uid] = true;
+    var safeSnapshot = { uid: user.uid, name: user.name };
+    
+    USER_SCHEMA.forEach(function(item) {
+        var key = item.key;
+        var val = user[key];
+        
+        try {
+            if (val === undefined || val === null) {
+                safeSnapshot[key] = item.default;
+            } else if (typeof val === 'object') {
+                var isArr = Array.isArray(val);
+                var clone = isArr ? [] : {};
+                for (var k in val) {
+                    var innerVal = val[k];
+                    // 자바 객체나 함수는 복사 대상에서 제외하여 엔진 충돌 차단
+                    if (innerVal !== null && typeof innerVal !== 'function') {
+                        if (typeof innerVal !== 'object' || !innerVal.getClass) {
+                            clone[k] = innerVal;
+                        }
+                    }
+                }
+                safeSnapshot[key] = clone;
+            } else {
+                safeSnapshot[key] = val;
+            }
+        } catch(e) {
+            safeSnapshot[key] = item.default;
+        }
+    });
+
+    GLOBAL_STAGING.cache[user.uid] = safeSnapshot;
 }
 
 /**

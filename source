@@ -16515,17 +16515,22 @@ function _showBattleList(user, replier, roomData, targetUid, roomName) {
     var pillages = mainRoom.features.activePillages || {};
     var pKeys = Object.keys(pillages);
 
-    if (pKeys.length === 0) {
+    var availablePillageKeys = pKeys.filter(function(k) {
+        var p = pillages[k];
+        return p.isBattled !== true && p.isProcessing !== true;
+    });
+
+    if (availablePillageKeys.length === 0) {
         if (roomData.features.states.menuWait && roomData.features.states.menuWait[targetUid]) {
             delete roomData.features.states.menuWait[targetUid];
         }
-        return replier.reply(formatSimple("⚔️ 토벌 게시판", "현재 보고된 해적 습격 사건이 없습니다.", "평화로운 바다입니다."));
+        return replier.reply(formatSimple("⚔️ 토벌 게시판", "현재 보고된 해적 습격 사건이 없거나\n이미 모든 함대가 교전 중입니다.", "평화로운 바다입니다."));
     }
 
     var body = "🚨 현재 현상수배 중인 해적 습격 현황입니다.\n\n";
     var currentPillages = [];
 
-    pKeys.forEach(function(vId, i) {
+    availablePillageKeys.forEach(function(vId, i) {
         var p = pillages[vId];
         var remainSec = Math.ceil((180000 - (Date.now() - p.startTime)) / 1000);
         if (remainSec < 0) return;
@@ -16565,6 +16570,20 @@ function _handleCombatSelect(choice, user, data, replier, roomName, targetUid) {
 
 /* [핵심 엔진] 해상전투 집행 (Navy vs Pirate) */
 function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mode) {
+
+    var mainRoom = data.rooms["내리다"];
+    var session = mainRoom.features.activePillages[victimUid];
+
+    // [중요] 토벌 개입(INTERVENE) 시 이미 전투가 치러졌는지 검사
+    if (mode === "INTERVENE") {
+        if (!session || session.isBattled === true) {
+            try { Api.replyRoom(roomName, "📡 [교전 불가]\n이미 다른 함대가 교전 중이거나 상황이 종료된 사건입니다."); } catch(e) {}
+            return;
+        }
+        // 전투 시작 즉시 '전투 완료' 플래그 세움 (해군C의 개입 차단)
+        session.isBattled = true; 
+    }
+
     var pirate = (mode === "ESCORT") ? navyOrPirate : null;
     var navy = (mode === "INTERVENE") ? navyOrPirate : null;
     
@@ -16619,6 +16638,8 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         resultMsg += "💀 [해적 승리] 해군 함대가 퇴각했습니다!\n\n" +
                      "🩹 " + navy.name + ": " + retreatMin + "분간 정비(퇴각) 돌입\n" +
                      "⚠️ 약탈이 계속 진행됩니다!";
+
+        if (mainPillageEntry) mainPillageEntry.isProcessing = false;
         
         // 호위 중이었다면 호위 정보 삭제 (상선 무방비 상태 전환)
         var victim = null;

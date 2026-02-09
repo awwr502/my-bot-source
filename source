@@ -5,11 +5,12 @@
  * 기능: 유저 객체에 박제된 SessionCacheReplier 등 자바 객체를 강제 제거
  */
 function util_fastClean(obj) {
-    if (!obj) return;
-    if (obj.replier) delete obj.replier;
-    if (obj.imageDB) delete obj.imageDB;
-    if (obj.lastAction && obj.lastAction.replier) delete obj.lastAction.replier;
-    if (obj.voyage && obj.voyage.replier) delete obj.voyage.replier;
+    if (!obj || typeof obj !== 'object') return;
+    // 루프를 돌지 않고 박제 가능성이 높은 지점만 직접 타격
+    if (obj.replier) obj.replier = null;
+    if (obj.imageDB) obj.imageDB = null;
+    if (obj.lastAction) obj.lastAction.replier = null;
+    if (obj.voyage) obj.voyage.replier = null;
 }
 
 function util_scrubNativeObject(obj) {
@@ -1893,36 +1894,36 @@ function util_stagingRollback(user, roomName) {
     Log.info("[Atomic Rollback] " + user.name + "님의 트랜잭션 실패로 복구되었습니다.");
 }
 
-// InternalError 방지를 위해 JSON.stringify를 사용하지 않는 수동 클론 엔진으로 교체
+/**
+ * [v10.2] 극한 최적화 스테이징 엔진
+ * 기능: JSON 직렬화(Slow)를 제거하고 수동 고속 복제 적용
+ */
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
-    
-    // 표면 세척 후 스테이징 시작
-    util_fastClean(user);
     
     GLOBAL_STAGING.active[user.uid] = true;
     var safeSnapshot = { uid: user.uid, name: user.name };
     
-    // 스키마 순회 대신 고속 필터링 복제
+    // 복잡한 연산 없이 필요한 데이터만 빠르게 1:1 복제
     for (var key in user) {
         var val = user[key];
         if (val === null || val === undefined || typeof val === 'function') continue;
-        
-        // 자바 객체 여부 고속 체크
-        if (val.getClass !== undefined) continue;
+        if (key === 'chatLog' || key === 'lastAction') continue; // 무거운 로그 복제 제외
 
         if (typeof val === 'object') {
-            try {
-                // 1단계 깊이까지만 JSON 직렬화로 고속 복제
-                safeSnapshot[key] = JSON.parse(JSON.stringify(val));
-            } catch(e) { 
-                safeSnapshot[key] = Array.isArray(val) ? [] : {}; 
+            // 배열이나 객체일 경우에만 내부 순회 (1단계)
+            var clone = Array.isArray(val) ? [] : {};
+            for (var subKey in val) {
+                var subVal = val[subKey];
+                if (subVal && typeof subVal !== 'object' && typeof subVal !== 'function') {
+                    clone[subKey] = subVal;
+                }
             }
+            safeSnapshot[key] = clone;
         } else {
             safeSnapshot[key] = val;
         }
     }
-
     GLOBAL_STAGING.cache[user.uid] = safeSnapshot;
 }
 

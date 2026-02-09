@@ -7987,6 +7987,7 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         if (choice === "1") _showBattleList(user, replier, roomData, targetUid);
         else if (choice === "2") _showNavyInfo(user, replier);
         else if (choice === "3") _processNavyRetire(user, data, replier, roomName, targetUid);
+        else if (choice === "4") _processNavyDailyWage(user, data, replier, roomName, targetUid);
         else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요."));
        return true;
     }
@@ -16097,7 +16098,8 @@ function _showNavyMenu(user, replier, roomData, targetUid) {
                "━━━━━━━━━━━━━━━\n" +
                "1. ⚔️ 토벌 작전 게시판 (현상범)\n" +
                "2. 🛡️ 내 복무 상세 기록\n" +
-               "3. 📝 명예 전역 신청\n\n" +
+               "3. 📝 명예 전역 신청\n" +
+               "4. 💰 일급 수령 (매일 1회)\n\n" +
                "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
     replier.reply(formatCommand("👮 해군 메뉴", user, menu, "수행할 번호를 입력하세요."));
@@ -16169,6 +16171,50 @@ function _processNavyRetire(user, data, replier, roomName, targetUid) {
     user.jobJoinDate = "";
     
     replier.reply(formatCommand("📝 명예 전역 완료", user, "복무를 마치고 민간인 신분으로 돌아왔습니다.\n(" + fp(fee) + "P 차감됨)"));
+    safeSaveData(data, true);
+}
+
+/**
+ * [신규 추가] 해군 일급 정산 엔진
+ * 공식: (25,000 + 명성*100) * 물가배율
+ */
+function _processNavyDailyWage(user, data, replier, roomName, targetUid) {
+    var today = getSimpleDate();
+    var roomData = data.rooms[roomName];
+
+    // 1. 중복 수령 검증
+    if (user.lastNavyWageDate === today) {
+        return replier.reply(formatError(user, "수령 불가", "오늘은 이미 일급을 지급받았습니다."));
+    }
+
+    // 2. 국가 부도 가드
+    if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
+        return replier.reply(formatError(user, "지급 동결", "국가 부도 상태로 인해 군인 봉급 지급이 일시 중단되었습니다."));
+    }
+
+    // 3. 금액 계산 (기본 2.5만 + 명성 보너스) * 물가배율
+    var baseWage = 25000;
+    var fameBonus = (Number(user.fame) || 0) * 100;
+    var multiplier = util_getEcoMultiplier(roomName);
+    var totalWage = Math.floor((baseWage + fameBonus) * multiplier);
+
+    // 4. 정산 집행
+    user.skipHealing = true;
+    user.lastNavyWageDate = today;
+
+    // 상환 엔진 통과 및 포인트 지급
+    var res = processRepayment(user, totalWage, targetUid, roomName);
+    util_updatePoint(user, roomData, Number(res.actualGain), "해군 복무 일급 수령", roomName);
+
+    var resultBody = "국가 안보를 위한 헌신에 감사드립니다.\n\n" +
+                     "💵 기본급: " + fp(baseWage) + "P\n" +
+                     "🎖️ 명성수당: +" + fp(fameBonus) + "P\n" +
+                     "📈 물가보정: x" + multiplier.toFixed(2) + "\n" +
+                     "━━━━━━━━━━━━━━━\n" +
+                     "💰 최종 지급액: " + fp(totalWage) + "P\n" +
+                     (res.repayMsg || "✅ 지갑으로 즉시 입금되었습니다.");
+
+    replier.reply(formatCommand("🎖️ 해군 일급 정산 완료", user, resultBody, "내 잔액: " + fp(user.point) + "P"));
     safeSaveData(data, true);
 }
 

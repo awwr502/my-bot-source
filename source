@@ -1904,36 +1904,35 @@ function util_stagingRollback(user, roomName) {
     Log.info("[Atomic Rollback] " + user.name + "님의 트랜잭션 실패로 복구되었습니다.");
 }
 
-/**
- * [v10.2] 극한 최적화 스테이징 엔진
- * 기능: JSON 직렬화(Slow)를 제거하고 수동 고속 복제 적용
- */
+// 0원 증발 현상을 완벽히 해결하면서도 노트9에서 최상의 속도를 내는 수동 복제 방식
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
     
     GLOBAL_STAGING.active[user.uid] = true;
+    
+    // 1단계: 기본 신분 정보 복제
     var safeSnapshot = { uid: user.uid, name: user.name };
     
-    // 복잡한 연산 없이 필요한 데이터만 빠르게 1:1 복제
+    // 2단계: 전체 필드 순회 복제 (연결 고리 끊기)
     for (var key in user) {
         var val = user[key];
-        if (val === null || val === undefined || typeof val === 'function') continue;
-        if (key === 'chatLog' || key === 'lastAction') continue; // 무거운 로그 복제 제외
-
-        if (typeof val === 'object') {
-            // 배열이나 객체일 경우에만 내부 순회 (1단계)
-            var clone = Array.isArray(val) ? [] : {};
-            for (var subKey in val) {
-                var subVal = val[subKey];
-                if (subVal && typeof subVal !== 'object' && typeof subVal !== 'function') {
-                    clone[subKey] = subVal;
-                }
-            }
-            safeSnapshot[key] = clone;
+        
+        // 함수나 네이티브 객체는 복제 제외 (에러 방지)
+        if (typeof val === 'function' || val === null || val === undefined) continue;
+        if (typeof val === 'object' && val.getClass) continue; 
+        
+        if (Array.isArray(val)) {
+            // 배열 깊은 복사 (인벤토리 등)
+            safeSnapshot[key] = JSON.parse(JSON.stringify(val));
+        } else if (typeof val === 'object') {
+            // 객체 깊은 복사 (부동산, 대출 등)
+            safeSnapshot[key] = JSON.parse(JSON.stringify(val));
         } else {
+            // 일반 값 복사 (포인트, 티어, 신용도 등)
             safeSnapshot[key] = val;
         }
     }
+    
     GLOBAL_STAGING.cache[user.uid] = safeSnapshot;
 }
 

@@ -4,6 +4,8 @@ if (typeof globalData === 'undefined' || globalData === null) {
     globalData = { rooms: {}, botActive: true, statusCheck: {} };
 }
 
+globalData._isInitialized = false;
+
 (function systemInitialPurge() {
     try {
         var THREAD_REGISTRY = "msgbot_thread_pool_registry_v1";
@@ -949,17 +951,20 @@ function getDatabase() {
                 if (!users) continue;
                 for (var uid in users) {
                     var u = users[uid];
-                    // [v12.7 경량화] 팅김 방지를 위해 무거운 stringify 검사 대신 직접 속성 제거
-                    var riskyFields = ['voyage', 'lastAction', 'blackjackState', 'replier', 'imageDB'];
-                    riskyFields.forEach(function(key) {
-                        if (u[key] && typeof u[key] === 'object') {
-                            // Native 객체의 특징이 보이면 즉시 삭제 (건드리지 않고 이름표만 보고 삭제)
-                            if (u[key].getClass || (u[key].constructor && u[key].constructor.name === 'SessionCacheReplier')) {
-                                delete u[key];
-                                Log.warn("🗑️ [Safety] " + u.name + "의 불순물 필드(" + key + ") 자동 폐기");
-                            }
-                        }
-                    });
+                    if (typeof util_scrubNativeObject === 'function') {
+    util_scrubNativeObject(u);
+} else {
+    // 세척 함수 로드 전일 경우를 대비한 즉석 재귀 로직
+    (function deepClean(obj) {
+        for (var k in obj) {
+            if (obj[k] && typeof obj[k] === 'object') {
+                if (obj[k].getClass || (obj[k].constructor && obj[k].constructor.name === 'SessionCacheReplier')) {
+                    delete obj[k];
+                } else { deepClean(obj[k]); }
+            }
+        }
+    })(u);
+}
                 }
             }
         }

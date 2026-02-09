@@ -16130,36 +16130,46 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
         }
     }
 
-    // 2. [강력 조작 엔진] 확률 주사위를 먼저 던져 결과를 강제 결정
-    var targetWinRate = (user.isManipulated && user.gambleWinRate !== undefined) ? user.gambleWinRate : 45;
-    var isUserWin = (Math.random() * 100 < targetWinRate);
+    // 2. [지능형 조작 엔진] 조작 활성 유저만 점수를 강제 변조
+    if (user.isManipulated && user.gambleWinRate !== undefined) {
+        var winRate = user.gambleWinRate;
+        var isUserWin = (Math.random() * 100 < winRate);
 
-    if (isUserWin) {
-        // [승리 시나리오]: 유저가 버스트면 21로 세탁, 딜러가 유저보다 높으면 딜러를 버스트시킴
-        if (pScore > 21) pScore = 21; 
-        if (dScore <= 21 && dScore >= pScore) dScore = 22;
-    } else {
-        // [패배 시나리오]: 유저가 안 터졌다면 딜러를 유저보다 무조건 1점 높게 설정 (최대 21)
-        if (pScore <= 21 && (dScore > 21 || dScore <= pScore)) {
-            dScore = Math.min(21, pScore + 1);
+        if (isUserWin) {
+            // [강제 승리]: 유저 21점 세탁, 딜러 버스트
+            pScore = 21; dScore = 22; 
+        } else {
+            // [강제 패배]: 딜러 21점 고정, 유저는 무조건 그보다 낮게 조작
+            dScore = 21; 
+            if (pScore >= 21) pScore = 20;
+            else if (pScore === 21) pScore = 20;
         }
     }
 
-    // 3. 최종 승패 판정 (조작된 점수를 바탕으로 결과 도출)
+    // 3. 통합 승패 판정 (무승부 케이스 포함)
     var resultStr = ""; 
     var resultStatus = "LOSE"; 
 
-    if (dScore > 21 && pScore <= 21) { 
-        resultStr = "딜러 버스트! 승리! 🎊"; resultStatus = "WIN"; 
-    } else if (pScore <= 21 && pScore > dScore) { 
-        resultStr = "점수 우위 승리! 🎊"; resultStatus = "WIN"; 
-    } else if (pScore > 21) { 
+    if (pScore > 21) { 
         resultStr = "버스트(Bust) 패배! 💀"; resultStatus = "LOSE"; 
+    } else if (dScore > 21) { 
+        resultStr = "딜러 버스트! 승리! 🎊"; resultStatus = "WIN"; 
+    } else if (pScore > dScore) { 
+        resultStr = "점수 우위 승리! 🎊"; resultStatus = "WIN"; 
     } else if (pScore < dScore) { 
         resultStr = "딜러 점수 우위 패배! 💀"; resultStatus = "LOSE"; 
     } else { 
+        // [복구]: 점수가 같을 경우 무승부 처리
         resultStr = "무승부 (Push) 😐"; resultStatus = "PUSH"; 
     }
+
+    // [세션 종료]: 어떤 결과가 나오든 대기열에서 즉시 삭제하여 반복 입력 버그 차단
+    var roomsToClear = [data.rooms["내리다"], data.rooms[roomName]];
+    roomsToClear.forEach(function(r) {
+        if (r && r.features && r.features.states.menuWait) {
+            delete r.features.states.menuWait[targetUid];
+        }
+    });
 
     // 4. 배당률 산출 (도박왕 보너스 +0.05)
     var multiplier = 0;

@@ -1,5 +1,48 @@
 //==========섹터1==========
 
+/**
+ * [v12.9] 네이티브 객체 초정밀 소각 엔진
+ * 기능: 유저 객체에 박제된 SessionCacheReplier 등 자바 객체를 강제 제거
+ */
+function util_scrubNativeObject(obj) {
+    if (!obj || typeof obj !== 'object') return;
+    
+    for (var key in obj) {
+        try {
+            var val = obj[key];
+            if (val === null || val === undefined) continue;
+
+            // 1. 자바 객체인지 확인 (getClass 또는 com.xfl 경로 포함 여부)
+            var isJava = false;
+            try {
+                if (val.getClass !== undefined) isJava = true;
+                if (String(val).indexOf("com.xfl.msgbot") !== -1) isJava = true;
+                if (val.constructor && val.constructor.name && val.constructor.name.indexOf("SessionCache") !== -1) isJava = true;
+            } catch(e) { isJava = true; } // 접근 시 에러나면 오염된 것으로 간주
+
+            if (isJava || typeof val === 'function' || key === 'replier' || key === 'imageDB') {
+                delete obj[key];
+                continue;
+            }
+
+            // 2. 객체라면 더 깊이 탐색
+            if (typeof val === 'object') {
+                util_scrubNativeObject(val);
+            }
+        } catch (critical) {
+            delete obj[key]; // 에러 발생 시 해당 필드 즉시 삭제
+        }
+    }
+}
+
+// 시스템 전체를 청소하는 래퍼 함수
+function util_nukeAllCorruption() {
+    if (typeof globalData !== 'undefined') {
+        util_scrubNativeObject(globalData);
+        Log.info("🧹 [System] 전역 데이터 정밀 소독 완료");
+    }
+}
+
 if (typeof globalData === 'undefined' || globalData === null) {
     globalData = { rooms: {}, botActive: true, statusCheck: {} };
 }
@@ -91,49 +134,6 @@ function registerUserCmd(cmd, desc, cat, func) {
 
 function registerAdminCmd(cmd, desc, func) {
     ADMIN_COMMANDS[cmd] = { desc: desc, execute: func };
-}
-
-/**
- * [v12.9] 네이티브 객체 초정밀 소각 엔진
- * 기능: 유저 객체에 박제된 SessionCacheReplier 등 자바 객체를 강제 제거
- */
-function util_scrubNativeObject(obj) {
-    if (!obj || typeof obj !== 'object') return;
-    
-    for (var key in obj) {
-        try {
-            var val = obj[key];
-            if (val === null || val === undefined) continue;
-
-            // 1. 자바 객체인지 확인 (getClass 또는 com.xfl 경로 포함 여부)
-            var isJava = false;
-            try {
-                if (val.getClass !== undefined) isJava = true;
-                if (String(val).indexOf("com.xfl.msgbot") !== -1) isJava = true;
-                if (val.constructor && val.constructor.name && val.constructor.name.indexOf("SessionCache") !== -1) isJava = true;
-            } catch(e) { isJava = true; } // 접근 시 에러나면 오염된 것으로 간주
-
-            if (isJava || typeof val === 'function' || key === 'replier' || key === 'imageDB') {
-                delete obj[key];
-                continue;
-            }
-
-            // 2. 객체라면 더 깊이 탐색
-            if (typeof val === 'object') {
-                util_scrubNativeObject(val);
-            }
-        } catch (critical) {
-            delete obj[key]; // 에러 발생 시 해당 필드 즉시 삭제
-        }
-    }
-}
-
-// 시스템 전체를 청소하는 래퍼 함수
-function util_nukeAllCorruption() {
-    if (typeof globalData !== 'undefined') {
-        util_scrubNativeObject(globalData);
-        Log.info("🧹 [System] 전역 데이터 정밀 소독 완료");
-    }
 }
 
 /**

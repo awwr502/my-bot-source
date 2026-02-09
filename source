@@ -1871,30 +1871,32 @@ function util_calculateNetWorth(user, roomData) {
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
     
-    // 복사 전 최종 소독 (지뢰 제거)
+    // 1. 복사 전 런타임 소독 (지뢰 제거)
     util_scrubNativeObject(user);
     
     GLOBAL_STAGING.active[user.uid] = true;
     var safeSnapshot = { uid: user.uid, name: user.name };
     
-    USER_SCHEMA.forEach(function(schema) {
-        var val = user[schema.key];
-        if (val !== undefined) {
-            // 자바 객체 에러를 피하기 위해 stringify 대신 단순 값 복사 및 재귀 처리
-            if (val !== null && typeof val === 'object') {
-                try {
-                    // 배열과 객체를 안전하게 분리 복사
-                    safeSnapshot[schema.key] = JSON.parse(JSON.stringify(val));
-                } catch(e) {
-                    // 만약 여기서 터진다면 해당 필드만 기본값으로 대체하여 전체 크래시 방지
-                    safeSnapshot[schema.key] = Array.isArray(schema.default) ? [] : {};
-                    Log.error("🚨 [Staging Emergency] " + user.name + "의 " + schema.key + " 필드 오염으로 기본값 대체");
-                }
-            } else {
-                safeSnapshot[schema.key] = val;
+    // 2. USER_SCHEMA를 기반으로 필드 하나씩 안전하게 수동 복사
+    USER_SCHEMA.forEach(function(item) {
+        var key = item.key;
+        var val = user[key];
+        
+        if (val === undefined || val === null) {
+            safeSnapshot[key] = item.default;
+        } else if (typeof val === 'object') {
+            try {
+                // 자바 객체가 섞여있을 가능성이 높은 객체/배열은 안전하게 복제 시도
+                // 여기서 에러가 나면 JSON.stringify가 범인임
+                safeSnapshot[key] = JSON.parse(JSON.stringify(val));
+            } catch(e) {
+                // [핵심 가드] 복사 중 터지면 그 필드만 비워버리고 진행 (봇 멈춤 방지)
+                safeSnapshot[key] = Array.isArray(item.default) ? [] : {};
+                Log.error("🚨 [Staging Guard] " + user.name + "의 " + key + " 필드 손상됨. 복원 보류.");
             }
         } else {
-            safeSnapshot[schema.key] = schema.default;
+            // 숫자, 문자열, 불리언은 그냥 복사
+            safeSnapshot[key] = val;
         }
     });
 

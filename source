@@ -168,7 +168,8 @@ var USER_SCHEMA = [
     { key: 'totalPillageSuccess', default: 0, type: 'number' }, // 누적 약탈 성공 횟수
     { key: 'totalCaptureSuccess', default: 0, type: 'number' }, // 누적 토벌 성공 횟수
     { key: 'isPillaged', default: false, type: 'boolean' }, // 현재 항해 중 약탈 발생 여부 (중복 약탈 방지용)
-    { key: 'pillageCooldownEndTime', default: 0, type: 'number' } // 해적 패배 시 약탈 쿨타임 (30분)
+    { key: 'pillageCooldownEndTime', default: 0, type: 'number' }, // 해적 패배 시 약탈 쿨타임 (30분)
+    { key: 'merchantShipLevel', default: 1, type: 'number' }
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -416,8 +417,15 @@ var SYSTEM_CONFIG = {
 
         SHIPS: {
             1: { name: "카라벨", capacity: 10, speedMult: 1.0, upgradeCost: 0 },
-            2: { name: "프리깃", capacity: 25, speedMult: 0.75, upgradeCost: 1000000 },
-            3: { name: "갤리온", capacity: 40, speedMult: 0.5, upgradeCost: 2000000 }
+            2: { name: "프리깃", capacity: 25, speedMult: 0.75, upgradeCost: 1000000 },
+            3: { name: "갤리온", capacity: 40, speedMult: 0.5, upgradeCost: 2000000 },
+            4: { name: "헤비 프리깃", capacity: 40, speedMult: 0.45, upgradeCost: 1000000 },
+            5: { name: "베네치안 갤리어스", capacity: 40, speedMult: 0.42, upgradeCost: 1000000 },
+            6: { name: "슈퍼 프리깃", capacity: 40, speedMult: 0.40, upgradeCost: 1000000 },
+            7: { name: "철갑선", capacity: 40, speedMult: 0.38, upgradeCost: 1000000 },
+            8: { name: "1등 전열함", capacity: 40, speedMult: 0.35, upgradeCost: 1000000 },
+            9: { name: "솔레유 로얄", capacity: 40, speedMult: 0.32, upgradeCost: 1000000 },
+            10: { name: "산 펠리페", capacity: 40, speedMult: 0.30, upgradeCost: 1000000 }
         },
         EVENTS: {
             PROB: 0.25,             // 무역 정산 시 이벤트 발생 총 확률 (25%)
@@ -14935,8 +14943,15 @@ function _manageShip(user, replier, cfg) {
     var cur = cfg.SHIPS[user.shipLevel || 1];
     var next = cfg.SHIPS[(user.shipLevel || 1) + 1];
     var body = "등급: " + cur.name + " (Lv." + (user.shipLevel || 1) + ")\n적재량: " + cur.capacity + "칸\n━━━━━━━━━━━━━━━\n";
-    if (next) body += "[다음 단계 개조]\n• 대상: " + next.name + "\n• 적재: " + next.capacity + "칸\n• 비용: " + fp(next.upgradeCost) + "P\n\n(개조 시 1번 입력)";
-    else body += "🎉 이미 최고 등급 선박(갤리온)을 보유 중입니다.";
+    if (next) {
+        if (user.job === null && (user.shipLevel || 1) >= 3) {
+            body += "⚠️ [개조 한계]\n상인 신분으로는 3단계(갤리온)가 한계입니다.\n추가 개조는 해군/해적 전직 후 가능합니다.";
+        } else {
+            body += "[다음 단계 개조]\n• 대상: " + next.name + "\n• 적재: " + next.capacity + "칸\n• 비용: " + fp(next.upgradeCost) + "P\n\n(개조 시 1번 입력)";
+        }
+    } else {
+        body += "🎉 이미 최고등급 단계 함선을 보유 중입니다.";
+    }
 
     body += "\n\n💰 보유 포인트: " + fp(user.point) + "P\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
     replier.reply(formatCommand("🛠️ 선박 관리소", user, body, "개조하려면 1번을 입력하세요."));
@@ -14945,7 +14960,14 @@ function _manageShip(user, replier, cfg) {
 /* [서브] 실제 선박 업그레이드 */
 function _processShipUpgrade(user, data, replier, roomName, cfg) {
     var next = cfg.SHIPS[(user.shipLevel || 1) + 1];
-    if (!next || user.point < next.upgradeCost) return replier.reply(formatError(user, "개조 불가", "비용 부족 또는 최고 등급입니다."));
+    var nextLevel = (user.shipLevel || 1) + 1;
+    if (nextLevel > 3 && user.job === null) {
+        return replier.reply(formatError(user, "개조 제한", "4단계 이상의 전투함은 해군/해적 전용입니다.\n조합 사무소에서 전직 후 다시 오세요."));
+    }
+
+    if (!next || Number(user.point) < Number(next.upgradeCost)) {
+        return replier.reply(formatError(user, "개조 불가", "비용이 부족하거나 이미 최고 등급입니다."));
+    }
     
     user.skipHealing = true;
     util_updatePoint(user, data.rooms[roomName], -next.upgradeCost, "선박 개조 비용", roomName);
@@ -16124,6 +16146,7 @@ function _processPirateRetire(user, data, replier, roomName, targetUid) {
     util_updatePoint(user, data.rooms[roomName], -fee, "해적 은퇴 비용", roomName);
     
     // 직업 데이터 초기화 (현상금은 국고 귀속으로 증발 처리)
+    user.shipLevel = Number(user.merchantShipLevel || 1);
     user.job = null;
     user.infamy = 0;
     user.currentBounty = 0;
@@ -16146,6 +16169,7 @@ function _processNavyRetire(user, data, replier, roomName, targetUid) {
     util_updatePoint(user, data.rooms[roomName], -fee, "해군 전역 비용", roomName);
     
     // 직업 데이터 초기화
+    user.shipLevel = Number(user.merchantShipLevel || 1);
     user.job = null;
     user.fame = 0;
     user.jobJoinDate = "";
@@ -16211,8 +16235,9 @@ function _showJobEnlistmentMenu(user, replier, roomData, targetUid) {
     var body = "📍 장소: 해상 조합 사무소\n\n" +
                "⚠️ [가입 전 필수 주의사항]\n" +
                "1. 직업 보유 시 상인 행동(출항/적재)이 전면 금지됩니다.\n" +
-               "2. 가입 즉시 보유 중인 '총독' 권한이 박탈됩니다.\n\n" +
-               "위 조건을 숙지하신 후 전직을 결정해 주세요.\n\n" +
+               "2. 가입 즉시 보유 중인 '총독' 권한이 박탈됩니다.\n" +
+               "3. 전직 시 선박이 전투용 1단계로 재설정됩니다. (은퇴 시 복구)\n\n" +
+               "위 조건을 숙지하신 후 전직을 결정해 주세요.\n" +
                "1. 🏴‍☠️ 해적 (약탈과 자유)\n" +
                "2. 👮 해군 (토벌과 명예)\n\n" +
                "↩️ 뒤로 / ❎취소";
@@ -16232,18 +16257,23 @@ function _handleJobJoin(choice, user, data, replier, roomName, targetUid) {
         }
     }
 
-    if (choice === "1") {
-        user.job = 'pirate';
-        user.infamy = 0;
-        user.currentBounty = 0;
-        user.jobJoinDate = getSimpleDate();
-        replier.reply(formatCommand("🏴‍☠️ 해적단 가입 완료", user, "이제 당신은 자유로운 영혼, 해적입니다!\n바다 위의 무역선들을 습격하여 악명을 떨치세요."));
-    } else if (choice === "2") {
-        user.job = 'navy';
-        user.fame = 0;
-        user.jobJoinDate = getSimpleDate();
-        replier.reply(formatCommand("👮 해군 임관 완료", user, "내리다 해군의 일원이 되신 것을 환영합니다!\n해적을 토벌하고 상인들을 보호하여 명예를 쌓으세요."));
-    } else {
+    if (choice === "1" || choice === "2") {
+        user.merchantShipLevel = Number(user.shipLevel || 1); // 상인 시절 레벨 백업
+        user.shipLevel = 1; // 전투용 1단계 카라벨로 리셋
+        
+        if (choice === "1") {
+            user.job = 'pirate';
+            user.infamy = 0;
+            user.currentBounty = 0;
+            user.jobJoinDate = getSimpleDate();
+            replier.reply(formatCommand("🏴‍☠️ 해적단 가입 완료", user, "이제 당신은 자유로운 영혼, 해적입니다!\n바다 위의 무역선들을 습격하여 악명을 떨치세요.\n\n🚢 알림: 전투용 1단계 함선 수령 완료"));
+        } else if (choice === "2") {
+            user.job = 'navy';
+            user.fame = 0;
+            user.jobJoinDate = getSimpleDate();
+            replier.reply(formatCommand("👮 해군 임관 완료", user, "내리다 해군의 일원이 되신 것을 환영합니다!\n해적을 토벌하고 상인들을 보호하여 명예를 쌓으세요.\n\n🚢 알림: 해군 공용 1단계 함선 수령 완료"));
+        }
+    } else {
         return replier.reply(formatError(user, "번호 오류", "1번(해적) 또는 2번(해군)을 선택하세요."));
     }
     delete roomData.features.states.menuWait[targetUid];
@@ -16587,7 +16617,7 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
 
     var nShip = navy.shipLevel || 1;
     var pShip = pirate.shipLevel || 1;
-    var winProb = 50 + (nShip - pShip) * 15 + (Math.random() * 20 - 10);
+    var winProb = 50 + (nShip - pShip) * 2 + (Math.random() * 20 - 10);
     var isNavyWin = (Math.random() * 100 < winProb);
 
     var resultMsg = "⚔️ [해상 교전 결과 보고]\n━━━━━━━━━━━━━━━\n" +

@@ -1518,6 +1518,7 @@ var CMD_LIST = {
         { cmd: "/닉네임기록", desc: "[닉네임] 변경 이력 조회", func: "_adminUserManageLogic" },
         { cmd: "/메모리정화", desc: "메모리 내 오염된 네이티브 객체 강제 제거", func: "_adminUserManageLogic" },
         { cmd: "/시스템완전정화", desc: "DB 내 오염 객체 문자열 치환 및 엔진 리부트", func: "_adminUserManageLogic" },
+        { cmd: "/백업파일정화", desc: "자바객체 오염 클리닝", func: "_adminUserManageLogic" },
         { cmd: "/출석초기화", desc: "[닉네임] 오늘 기록 삭제", func: "_adminUserManageLogic" },
         { cmd: "/채굴시간복구", desc: "[닉네임] [분] 개별 복구", func: "_adminUserManageLogic" },
         { cmd: "/전체채굴복구", desc: "00시 누락분 + 오늘 채굴분 자동 합산 복구", func: "_adminUserManageLogic" },
@@ -9726,6 +9727,53 @@ function _adminLogLogic(msg, user, data, replier) {
  * 수정 사항: [Gemini 요청 사항] 오류 지급 칭호 박탈을 위한 /칭호회수 명령어 추가
  */
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, sender) {
+
+       if (msg === "/백업파일정화") {
+    try {
+        var backupPath = BACKUP_DIR + "last_stable_backup.json";
+        var bFile = new java.io.File(backupPath);
+        if (!bFile.exists()) return replier.reply(formatAdmin("🚫 정화 실패", "백업 파일이 존재하지 않습니다."));
+
+        // 1. 백업 파일을 문자열로 읽어옴
+        var rawText = FileStream.read(backupPath);
+        
+        // 2. 정규식으로 SessionCacheReplier 패턴 탐색 및 null 치환
+        var searchPattern = /"[^"]+":\s*\{[^{}]*"SessionCacheReplier"[^{}]*\}/g;
+        var cleanText = rawText.replace(searchPattern, function(match) {
+            var keyName = match.split(":")[0];
+            Log.info("🧹 [Backup Purge] 백업 내 오염 필드 발견: " + keyName);
+            return keyName + ": null"; 
+        });
+
+        if (rawText === cleanText) {
+            replier.reply(formatAdmin("🔍 진단 결과", "백업 파일 내에서도 오염 객체 패턴이 발견되지 않았습니다.\n모든 파일이 텍스트 레벨에서는 깨끗합니다."));
+            return true;
+        }
+
+        // 3. 수술된 내용을 백업 파일에 저장
+        FileStream.write(backupPath, cleanText);
+        
+        // 4. [핵심] 수술된 깨끗한 데이터를 메인 파일(attendance.json)에도 즉시 덮어씌움
+        FileStream.write(FILE_PATH, cleanText);
+        
+        // 5. 메모리 강제 초기화 및 재로드
+        globalData = null;
+        java.lang.System.gc();
+        globalData = getDatabase();
+
+        var successMsg = "✨ 백업 파일 및 메인 DB 통합 정화 완료!\n\n" +
+                         "1️⃣ 백업 파일 내 오염 문자열 제거 완료\n" +
+                         "2️⃣ 메인 DB(attendance.json) 강제 동기화 완료\n" +
+                         "3️⃣ 엔진 리부트 및 청정 데이터 로드 성공";
+
+        replier.reply(formatAdmin("✅ 백업 정화 성공", successMsg));
+
+    } catch (e) {
+        replier.reply(formatAdmin("🚫 정화 실패", "사유: " + e.message));
+        Log.error("Backup Purge Error: " + e);
+    }
+    return true;
+}
 
         if (msg === "/시스템완전정화") {
     try {

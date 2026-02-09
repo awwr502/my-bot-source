@@ -6231,33 +6231,32 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
     var selectWaitState = roomData.features.states.selectWait;
     if (!selectWaitState[targetUid]) return false;
 
-    // 1. 시간 초과 체크 (30초)
+    // [보안] 자바 객체 오염 방지용 고속 소각
+    if (typeof util_fastClean === 'function') util_fastClean(user);
+
     if (Date.now() - selectWaitState[targetUid].timestamp > 30000 || msg === "취소") {
         delete selectWaitState[targetUid];
-        if (msg === "취소") {
-            replier.reply(formatCommand("🚫 선택 취소", user, "작업이 취소되었습니다."));
-        } else {
-            replier.reply(formatError(user, "선택 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
-        }
+        if (msg === "취소") replier.reply(formatCommand("🚫 선택 취소", user, "작업이 취소되었습니다."));
         return true;
     }
 
-    // 3. 숫자 선택 및 로직 실행
     var choice = parseInt(msg.replace(/[^0-9]/g, ""));
     if (!isNaN(choice) && choice >= 1 && choice <= selectWaitState[targetUid].results.length) {
         var state = selectWaitState[targetUid];
-        var selected = state.results[choice - 1]; // 선택된 검색 결과 (roomName 정보 포함)
+        var selected = state.results[choice - 1]; 
         var type = state.type;
         var extra = state.extra;
-        var targetUser = selected.data;
         
-        // [원격 관제 핵심] 유저가 실제로 상주하는 방의 데이터를 타겟팅
-        var targetRoom = selected.roomName || roomName; 
+        // [핵심 교정]: 복사본이 아닌 유저가 실제 속한 방의 실시간 데이터를 직접 참조
+        var targetRoom = selected.roomName || "내리다";
         var targetRoomData = data.rooms[targetRoom];
+        var targetUser = targetRoomData.users[selected.id]; 
         
-        delete selectWaitState[targetUid]; // 선택 완료 시 세션 삭제
+        if (!targetUser) return true;
+        if (typeof util_fastClean === 'function') util_fastClean(targetUser);
+        
+        delete selectWaitState[targetUid];
 
-        // 추가: /조작 명령어 중복 유저 선택 시 처리 로직 (수정/추가)
         if (type === "admin_mani_select") {
             var mode = extra.mode;
             if (mode === "ON") {
@@ -6266,7 +6265,7 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
                 targetUser.fishLuck = SYSTEM_CONFIG.MANIPULATION.DEFAULT_FISH;
                 targetUser.horseWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_RACING;
                 targetUser.spittoWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_SPITTO;
-                targetUser.skipHealing = true;
+                targetUser.skipHealing = true; // 보안 엔진 롤백 방지
                 replier.reply(formatAdmin("🎯 조작 가동", "[" + targetRoom + "] " + targetUser.name + "님의 조작을 [기본값]으로 활성화했습니다."));
             } else if (mode === "OFF") {
                 targetUser.isManipulated = false;
@@ -6280,7 +6279,7 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
                              "3. 🏇 경마 보정: " + (targetUser.horseWinRate || 0) + "%\n" +
                              "4. 🧧 스피또 보정: " + (targetUser.spittoWinRate || 0) + "%\n" +
                              "5. ❌ 조작 전체 해제\n\n" +
-                             "💡 수정할 번호를 입력하거나 [취소] 하세요.";
+                             "💡 수정할 번호를 입력하세요.";
                 
                 var currentMenuWait = data.rooms[roomName].features.states.menuWait;
                 currentMenuWait[targetUid] = { 
@@ -6290,25 +6289,8 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
                 };
                 replier.reply(formatAdmin("🎯 조작 설정 센터", status));
             }
-        }
-
-        // [추가] 조작 설정/해제 중복 유저 선택 시 실제 데이터 반영부
-           if (type === "admin_manipulate_on") {
-            targetUser.isManipulated = true;
-            var maniCfg = SYSTEM_CONFIG.MANIPULATION;
-            var gRate = (extra && extra.gambleRate) ? extra.gambleRate : maniCfg.DEFAULT_GAMBLE;
-            var fLuck = (extra && extra.fishLuck) ? extra.fishLuck : maniCfg.DEFAULT_FISH;
-            targetUser.gambleWinRate = Math.min(maniCfg.MAX_RATE, Math.max(maniCfg.MIN_RATE, gRate));
-            targetUser.fishLuck = Math.min(maniCfg.MAX_RATE, Math.max(maniCfg.MIN_RATE, fLuck));
-            targetUser.skipHealing = true;
-            replier.reply(formatAdmin("🎯 조작 활성화", "대상: [" + targetRoom + "] " + targetUser.name + "\n🎲 홀짝 승률: " + targetUser.gambleWinRate + "%\n🎣 낚시 보정: " + targetUser.fishLuck + "%"));
-        }
-        else if (type === "admin_manipulate_off") {
-            targetUser.isManipulated = false;
-            targetUser.gambleWinRate = 0;
-            targetUser.fishLuck = 0;
-            targetUser.skipHealing = true;
-            replier.reply(formatAdmin("🎯 조작 해제", "대상: [" + targetRoom + "] " + targetUser.name + "\n모든 확률이 정상으로 돌아왔습니다."));
+            safeSaveData(data, true); // 변경 사항 즉시 파일에 박제
+            return true;
         }
         else if (type === "stock_buy" || type === "stock_sell") {
             var landName = selected; 

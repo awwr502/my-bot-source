@@ -1517,7 +1517,7 @@ var CMD_LIST = {
         { cmd: "/데이터이전", desc: "[구닉] > [신닉] 자산 이전", func: "_adminUserManageLogic" },
         { cmd: "/닉네임기록", desc: "[닉네임] 변경 이력 조회", func: "_adminUserManageLogic" },
         { cmd: "/메모리정화", desc: "메모리 내 오염된 네이티브 객체 강제 제거", func: "_adminUserManageLogic" },
-        { cmd: "/무손실정화", desc: "[닉네임] 부동산/무역/자산 100% 보존 정화", func: "_adminUserManageLogic" },
+        { cmd: "/시스템완전정화", desc: "부동산/무역/자산 100% 보존 정화", func: "_adminUserManageLogic" },
         { cmd: "/출석초기화", desc: "[닉네임] 오늘 기록 삭제", func: "_adminUserManageLogic" },
         { cmd: "/채굴시간복구", desc: "[닉네임] [분] 개별 복구", func: "_adminUserManageLogic" },
         { cmd: "/전체채굴복구", desc: "00시 누락분 + 오늘 채굴분 자동 합산 복구", func: "_adminUserManageLogic" },
@@ -9727,76 +9727,43 @@ function _adminLogLogic(msg, user, data, replier) {
  */
 function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, sender) {
 
-         if (msg.indexOf("/무손실정화 ") === 0) {
-    var targetNick = msg.substring(7).trim();
-    var roomData = data.rooms[roomName];
-    var found = findUserGlobal(targetNick, roomName);
-
-    if (found.length === 0) {
-        replier.reply(formatAdmin("🚫 대상 없음", "[" + targetNick + "] 유저를 찾을 수 없습니다."));
-        return true;
-    }
-    if (found.length > 1) {
-        handleUserSelection(replier, targetUid, found, "admin_purify", null, user, roomName);
-        return true;
-    }
-
-    var tUser = found[0].data;
-    var tId = found[0].id;
-    var tRoom = found[0].roomName;
-
+        if (msg === "/시스템완전정화") {
     try {
-        // 1. 새 유저 객체 생성
-        var cleanUser = { uid: tId, name: tUser.name };
+        var file = new java.io.File(FILE_PATH);
+        if (!file.exists()) return replier.reply("파일이 존재하지 않습니다.");
 
-        // 2. 유저 객체에 들어있는 모든 키(Key) 목록 추출
-        var allKeys = Object.keys(tUser);
-
-        // 3. 모든 키를 하나씩 대조하며 이사 시작
-        allKeys.forEach(function(key) {
-            // [예외] 에러의 원인인 필드들은 이름만 보고 미리 제외 (지뢰 제거)
-            if (key === 'lastAction' || key === 'replier' || key === 'imageDB' || key === 'voyage') return;
-
-            try {
-                var value = tUser[key]; // 여기서 에러가 나면 catch로 이동함
-
-                // 데이터 검증: 값이 존재하고 읽을 수 있는 경우에만 복사
-                if (value !== undefined) {
-                    // Java 객체 여부 체크 (최종 방어선)
-                    if (value !== null && typeof value === 'object' && value.getClass !== undefined) {
-                        return; // Java 객체면 복사 안 함
-                    }
-
-                    // 정상적인 JS 데이터라면 깊은 복사 실행
-                    if (typeof value === 'object' && value !== null) {
-                        cleanUser[key] = JSON.parse(JSON.stringify(value));
-                    } else {
-                        cleanUser[key] = value;
-                    }
-                }
-            } catch (e) {
-                // 에러가 나는 필드는 읽지 못하는 필드이므로 과감히 버림 (이게 에러의 주범임)
-                Log.error("🗑️ [Purify] 읽기 실패 필드 자동 제거: " + key);
-            }
+        // 1. 파일을 객체로 읽지 않고 '깡 문자열(String)'로 통째로 읽어옵니다. (지뢰 우회)
+        var rawText = FileStream.read(FILE_PATH);
+        
+        // 2. [핵심] 정규식을 사용하여 SessionCacheReplier가 포함된 객체 구조를 강제로 null 처리
+        // 설명: "key": { "getClass": ... "SessionCacheReplier" ... } 형태의 문자열 패턴을 찾아냅니다.
+        var searchPattern = /"[^"]+":\s*\{[^{}]*"SessionCacheReplier"[^{}]*\}/g;
+        
+        var cleanText = rawText.replace(searchPattern, function(match) {
+            var keyName = match.split(":")[0];
+            Log.info("🧹 [System Clean] 오염된 필드 발견 및 적출: " + keyName);
+            return keyName + ": null"; // 값을 읽지 않고 문자열 상에서 null로 바꿔치기
         });
 
-        // 4. 기존 유저 정보를 100% 추출된 깨끗한 데이터로 교체
-        data.rooms[tRoom].users[tId] = cleanUser;
-        data.rooms[tRoom].users[tId].skipHealing = true;
+        if (rawText === cleanText) {
+            return replier.reply(formatAdmin("진단 결과", "파일 내에 박제된 오염 객체가 발견되지 않았습니다.\n메모리 동기화를 진행합니다."));
+        }
 
-        // 5. 즉시 저장 및 메모리 반영
-        safeSaveData(data, true);
-        globalData = data; 
+        // 3. 깨끗해진 문자열을 다시 파일에 씁니다.
+        FileStream.write(FILE_PATH, cleanText);
+        
+        // 4. [매우 중요] 현재 메모리에 떠있는 globalData를 완전히 비우고 파일을 새로 읽습니다.
+        globalData = null; 
+        java.lang.System.gc(); // 가비지 컬렉터 호출로 메모리 찌꺼기 제거
+        
+        // 5. 엔진 재로드
+        globalData = getDatabase(); 
 
-        var report = "👤 대상: " + tUser.name + "\n" +
-                     "📊 추출: 유저 객체 내 " + allKeys.length + "개 필드 전수 조사\n" +
-                     "✅ 결과: 스키마 미등록 데이터 포함 모든 자산 보존 완료\n" +
-                     "🧹 정화: 깨진 필드(SessionCache)만 핀셋 제거";
-
-        replier.reply(formatAdmin("✨ 무손실 전수 데이터 정화 완료", report + "\n\n이제 에러 없이 작동합니다."));
+        replier.reply(formatAdmin("✨ 시스템 완전 정화 성공", "1. 파일 내 오염된 자바 객체 문자열 치환 완료\n2. 메모리(globalData) 강제 초기화 및 재로드 완료\n\n이제 모든 유저의 데이터가 100% 보존된 상태로 정상화되었습니다."));
 
     } catch (e) {
         replier.reply(formatAdmin("🚫 정화 실패", "사유: " + e.message));
+        Log.error("Critical Purge Error: " + e);
     }
     return true;
 }

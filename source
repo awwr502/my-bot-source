@@ -3779,27 +3779,36 @@ function runScheduler() {
         Log.error("타이머 종료 중 오류: " + e);
     }
     
+   var isFirstTick = true; 
+
     var newTimer = setInterval(function() {
         try {
             var data = getDatabase(); 
             if (!data) return;
 
-            // [베릭방 전용]: 스케줄러 지연(부정맥) 감지
-            if (globalData.statusCheck && globalData.statusCheck.mainLoop) {
-                var delay = Date.now() - globalData.statusCheck.mainLoop;
-                if (delay > 15000) { // 15초 이상 지연 시
-                    var perfBody = "⚠️ 내용: 스케줄러 루프 심각한 지연 발생\n" +
-                                   "⏱️ 지연 시간: " + (delay/1000).toFixed(1) + "초";
-                    
-                    var perfMsg = util_formatSecurityLog(
-                        "🚨 [PERF: 시스템 지연 감지]", 
-                        "SCHEDULER_MAIN", 
-                        "베릭방", 
-                        perfBody, 
-                        "엔진 과부하 점검 및 메모리 최적화 권고"
-                    );
-                    
-                    Api.replyRoom("베릭방", perfMsg);
+            // 추가: 리로드 직후 첫 번째 루프에서는 지연 체크를 하지 않고 시간만 최신화
+            if (isFirstTick) {
+                if (!data.statusCheck) data.statusCheck = {};
+                data.statusCheck.mainLoop = Date.now();
+                isFirstTick = false;
+            } else {
+                // [베릭방 전용]: 스케줄러 지연(부정맥) 감지 - 첫 번째 실행이 아닐 때만 작동
+                if (data.statusCheck && data.statusCheck.mainLoop) {
+                    var delay = Date.now() - data.statusCheck.mainLoop;
+                    if (delay > 15000) { // 15초 이상 지연 시
+                        var perfBody = "⚠️ 내용: 스케줄러 루프 심각한 지연 발생\n" +
+                                       "⏱️ 지연 시간: " + (delay/1000).toFixed(1) + "초";
+                        
+                        var perfMsg = util_formatSecurityLog(
+                            "🚨 [PERF: 시스템 지연 감지]", 
+                            "SCHEDULER_MAIN", 
+                            "베릭방", 
+                            perfBody, 
+                            "엔진 과부하 점검 및 메모리 최적화 권고"
+                        );
+                        
+                        Api.replyRoom("베릭방", perfMsg);
+                    }
                 }
             }
 

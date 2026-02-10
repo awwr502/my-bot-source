@@ -5140,6 +5140,35 @@ function _runSector17Logic(data, ctx) {
                     }
                 }
 
+        /* [v11.6] 1인 1건물 원칙 강제 집행 엔진 (중복 보유 시 최고 가치 외 환급) */
+                var myLandNames = Object.keys(u.landHoldings || {});
+                if (myLandNames.length > 1) {
+                    var landInfoList = [];
+                    myLandNames.forEach(function(ln) {
+                        var marketData = data.landmarkMarket[ln];
+                        var price = marketData ? marketData.price : 200000; 
+                        landInfoList.push({ name: ln, qty: Number(u.landHoldings[ln]), price: price });
+                    });
+
+                    // 지분 가치(수량 * 현재가)가 가장 높은 것을 0번에 유지
+                    landInfoList.sort(function(a, b) { return (b.qty * b.price) - (a.qty * a.price); });
+
+                    // 최고 가치 1개 외 나머지 건물은 강제 환급 및 데이터 삭제
+                    for (var k = 1; k < landInfoList.length; k++) {
+                        var target = landInfoList[k];
+                        var refund = Math.floor(target.qty * target.price);
+
+                        delete u.landHoldings[target.name];
+                        if (u.landAvg) delete u.landAvg[target.name];
+
+                        util_updatePoint(u, roomObj, refund, "중복 투자 강제 환급: " + target.name, rName);
+
+                        var purgeMsg = "🚨 [부동산 정화] " + u.name + "님의 [" + target.name + "] 지분 " + target.qty + "개가 1인 1건물 원칙에 따라 강제 환급되었습니다. (+" + fp(refund) + "P)";
+                        if (rName === ctx.targetRoom) Api.replyRoom(rName, purgeMsg);
+                    }
+                    u.skipHealing = true;
+                }
+
                 u.dailyLoanCount = 0; 
                 u.dailyGambleCount = 0;
                 u.dailyPromotionAttempts = 1; 
@@ -13810,6 +13839,16 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
         if (matched.length > 1) { handleStockSelection(replier, targetUid, matched, "stock_buy", count, user, roomName); return true; }
         
         var sName = matched[0];
+
+        var myLandKeys = Object.keys(user.landHoldings || {});
+        if (myLandKeys.length > 0 && myLandKeys.indexOf(sName) === -1) {
+            var currentLand = myLandKeys[0];
+            replier.reply(formatError(user, "투자 제한", "이미 [" + currentLand + "]의 지분을 보유하고 있습니다.\n\n" +
+                "💡 우리 서버는 '1인 1건물' 투자 원칙을 준수합니다.\n" +
+                "다른 건물에 투자하려면 기존 지분을 모두 매각하세요."));
+            return true;
+        }
+
         var landmark = data.landmarkMarket[sName];
         if (isNaN(count) || count <= 0) { replier.reply(formatError(user, "수량 오류", "매입하실 지분 수량을 정확히 입력하세요.")); return true; }
         

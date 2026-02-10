@@ -8571,6 +8571,9 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         }
     }
 
+// 모든 명령어 실행 전, 해상 활동(무역/약탈) 정산 알림이 있는지 체크 (로직 본체는 섹터 51에 위치)
+if (typeof util_notifySeaReward === 'function') util_notifySeaReward(user, replier);
+
 // 현재 채팅 중인 물리적인 방의 데이터 (1:1 방 그 자체)
 var physicalRoom = data.rooms[roomName];
 var actualFeatures = physicalRoom ? physicalRoom.features : null;
@@ -15547,10 +15550,9 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             
             if (pillageLoss > 0) {
                 finalNetProfit -= pillageLoss;
-                util_updatePoint(pirateObj, data.rooms["내리다"], pillageLoss, "해상 약탈 성공 수익: " + user.name, "내리다");
+                pirateObj.claimableReward = (Number(pirateObj.claimableReward) || 0) + pillageLoss;
+                pirateObj.hasNotifiedReward = false; // 알림 플래그 초기화 (다음 채팅 시 알림 발생)
                 pillageLog = "\n🏴‍☠️ [약탈 피해]: 수익의 " + (pRate * 100).toFixed(1) + "%(-" + fp(pillageLoss) + "P)가 해적에게 강탈됨";
-                
-                // 해적의 현상금 즉시 정산 (국고 귀속)
                 pirateObj.currentBounty = 0; 
             }
         }
@@ -15561,12 +15563,10 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         var navyObj = null;
         for (var r in data.rooms) { if (data.rooms[r].users[v.escortUid]) { navyObj = data.rooms[r].users[v.escortUid]; break; } }
         if (navyObj) {
-            util_updatePoint(navyObj, data.rooms["내리다"], v.escortFee, "해상 호위 업무 정산: " + user.name, "내리다");
-            navyObj.fame = (navyObj.fame || 0) + 5; // 호위 성공 시 명성 +5 부여
-            escortLog = "🛡️ 호위 비용: -" + fp(v.escortFee) + "P (" + navyObj.name + " 완료)";
-        } else {
-            // 해군 객체를 찾지 못하더라도 비용 정보는 표시
-            escortLog = "🛡️ 호위 비용: -" + fp(v.escortFee) + "P (해군 정산 완료)";
+            navyObj.claimableReward = (Number(navyObj.claimableReward) || 0) + v.escortFee;
+            navyObj.hasNotifiedReward = false; 
+            navyObj.fame = (navyObj.fame || 0) + 5; 
+            escortLog = "🛡️ 호위 비용: -" + fp(v.escortFee) + "P (" + navyObj.name + " 정산 대기)";
         }
     }
 
@@ -15639,6 +15639,22 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     Api.replyRoom("내리다", resultMsg);
     
     safeSaveData(data, true);
+}
+
+// 해상 활동 정산 알림 함수 (섹터 24의 핸들러에서 호출됨)
+/**
+ * [v14.0] 해상 활동 미수령 정산금 반응형 알림 엔진
+ */
+function util_notifySeaReward(user, replier) {
+    if (!user || Number(user.claimableReward || 0) <= 0 || user.hasNotifiedReward === true) return;
+
+    var rewardTitle = (user.job === 'pirate') ? "🏴‍☠️ 나소 약탈금 입고 알림" : "👮 해군 본부 정산 대기 알림";
+    var rewardMsg = "현재 정산되지 않은 수익금이 누적되어 있습니다.\n\n" +
+                     "💰 누적 금액: " + fp(user.claimableReward) + "P\n" +
+                     "📍 수령처: [/무역] ➔ 조합 사무소/본부 ➔ 정산/일급 메뉴";
+    
+    replier.reply(formatCommand(rewardTitle, user, rewardMsg));
+    user.hasNotifiedReward = true; // 첫 채팅 시 1회만 알림
 }
 
 //==========섹터52==========

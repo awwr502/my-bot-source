@@ -62,10 +62,8 @@ globalData._isInitialized = false;
     try {
         var THREAD_REGISTRY = "msgbot_thread_pool_registry_v1";
         
-        // 1. 기존 globalData가 존재할 때 좀비 엔진 정리 및 "강력 소독"
         if (typeof globalData !== 'undefined' && globalData) {
-            
-            // [A] 이전 세션의 좀비 스레드 종료
+            // [A] 좀비 스레드 종료
             if (globalData[THREAD_REGISTRY]) {
                 var registry = globalData[THREAD_REGISTRY];
                 for (var i = 0; i < registry.length; i++) {
@@ -77,14 +75,21 @@ globalData._isInitialized = false;
                 }
             }
 
-            // [B] 깃허브 리로드 시 에러를 잡는 핵심 단계: 전역 메모리 소독
-            util_scrubNativeObject(globalData);
+            // [B] 정밀 소독 제거 및 직접 타격으로 교체 (속도 개선 핵심)
+            // 전역 데이터를 다 뒤지지 않고, replier가 박제될 만한 객체만 직접 비웁니다.
+            if (globalData.rooms) {
+                for (var r in globalData.rooms) {
+                    if (globalData.rooms[r].features) {
+                        util_fastClean(globalData.rooms[r].features);
+                    }
+                }
+            }
+
             if (globalData.statusCheck) {
                 globalData.statusCheck = {}; 
                 Log.info("💓 [System] 스케줄러 심장박동 기록을 초기화했습니다.");
             }
-            Log.info("🧹 [System] 좀비 엔진 정리 및 메모리 정밀 소독 완료");
-            
+            Log.info("🧹 [System] 엔진 정리 및 메모리 고속 스캔 완료");
         }
 
         // 2. 새로운 엔진(스레드 풀) 가동
@@ -990,26 +995,6 @@ function getDatabase() {
             var content = FileStream.read(FILE_PATH);
             if (!content) throw new Error("Empty File");
             initialData = JSON.parse(content);
-        }
-
-        if (initialData.rooms) {
-            for (var r in initialData.rooms) {
-                var users = initialData.rooms[r].users;
-                if (!users) continue;
-                for (var uid in users) {
-                    var u = users[uid];
-                    (function deepScrub(obj) {
-    for (var k in obj) {
-        if (obj[k] && typeof obj[k] === 'object') {
-            if (obj[k].getClass || (obj[k].constructor && obj[k].constructor.name === 'SessionCacheReplier')) {
-                delete obj[k];
-                Log.warn("☢️ [DB_Repair] " + (u.name||uid) + "의 오염된 필드(" + k + ") 정밀 소각");
-            } else { deepScrub(obj[k]); } // 안쪽까지 파고듦
-        }
-    }
-})(u);
-                }
-            }
         }
 
         recoverFromJournal(initialData);

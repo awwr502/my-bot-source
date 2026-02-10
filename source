@@ -7214,7 +7214,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
     if (!bankProcessState || !bankProcessState[targetUid]) return false;
 
     var state = bankProcessState[targetUid];
-    var types = ['shop_buy', 'shop_quantity', 'ship_rename_input', 'ship_rename_confirm', 'trade_invest_amount', 'trade_cargo_done'];
+    var types = ['shop_buy', 'shop_quantity', 'ship_rename_input', 'ship_rename_confirm', 'trade_invest_amount', 'trade_invest_confirm', 'trade_cargo_done'];
     if (types.indexOf(state.type) === -1) return false;
 
     if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
@@ -7353,8 +7353,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
 
     /**
-     * [추가] 항구 투자 금액 처리 및 총독 판정 로직
-     * 기능: 입력된 금액만큼 투자를 집행하고 발전도와 총독 권한을 갱신함
+     * [기능] 항구 투자 금액 처리 (시간 및 중복 총독 검증)
      */
     if (state.type === 'trade_invest_amount') {
         var amt = parseInt(msg.replace(/,/g, ""));
@@ -7366,7 +7365,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 1. 투자 가능 시간 검증 (07:00 ~ 23:59)
+        // [복구] 투자 가능 시간 검증 (07:00 ~ 23:59)
         var h = new Date().getHours();
         if (h < cfg.OPEN_HOUR) {
             delete bankProcessState[targetUid];
@@ -7379,61 +7378,50 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 정산 시작 - 세션 파기
-        delete bankProcessState[targetUid];
-
-        var pData = roomData.features.portData[dest];
-        var oldGovUid = pData.governorUid;
-        var oldLevel = pData.level;
-
-        // 2. 포인트 차감 및 국고 귀속 (게이트웨이 준수)
-        util_updatePoint(user, roomData, -amt, "항구 투자: " + dest, roomName);
-
-        // 3. 투자 데이터 업데이트
-        if (!pData.userInvests) pData.userInvests = {};
-        pData.userInvests[targetUid] = (pData.userInvests[targetUid] || 0) + amt;
-        pData.totalInvest += amt;
-
-        // 4. 발전 레벨 계산 (100만P당 1레벨 상승, 최대 10레벨)
-        var nextLevel = Math.min(cfg.MAX_LEVEL, Math.floor(pData.totalInvest / cfg.LEVEL_UP_STEP) + 1);
-        pData.level = nextLevel;
-
-        // [수정] 1인 1국가 총독 제한 판정 및 메시지 처리
+        // 기존 총독 보유 현황 확인
         var myGovernedPorts = util_getUserGovernorPorts(targetUid, roomData);
-        var isAlreadyGovernorElsewhere = myGovernedPorts.length > 0 && myGovernedPorts.indexOf(dest) === -1;
-        var govBlockedReason = "";
 
-        var isGovChanged = false;
-        var currentMaxInvest = (oldGovUid && pData.userInvests[oldGovUid]) ? pData.userInvests[oldGovUid] : 0;
+        // [경고 가드]: 이미 타국 총독인 경우 선택지로 분기
+        if (myGovernedPorts.length > 0 && myGovernedPorts.indexOf(dest) === -1) {
+            bankProcessState[targetUid] = {
+                type: 'trade_invest_confirm',
+                time: Date.now(),
+                extra: { dest: dest, amount: amt, oldPorts: myGovernedPorts }
+            };
 
-        if (pData.userInvests[targetUid] > currentMaxInvest) {
-            if (isAlreadyGovernorElsewhere) {
-                // 이미 타국 총독이면 투자만 반영하고 임명은 거부
-                isGovChanged = false;
-                govBlockedReason = "\n\n⚠️ [임명 보류]\n이미 '" + myGovernedPorts[0] + "'의 총독직을 수행 중입니다.\n중복 통치는 불가능하여 투자만 반영되었습니다.";
-            } else {
-                pData.governorUid = targetUid;
-                if (oldGovUid !== targetUid) isGovChanged = true;
-            }
+            var warnMsg = "⚠️ [총독 직위 이전 경고]\n" +
+                          "━━━━━━━━━━━━━━━\n" +
+                          "현재 의원님은 [" + myGovernedPorts.join(", ") + "]의 총독입니다.\n\n" +
+                          "자치령이 아닌 '" + dest + "' 항구에 투자를 진행할 경우,\n" +
+                          "현재 투자가 완료되면 기존 총독도시는 초기화 됩니다.\n\n" +
+                          "계속하시겠습니까?\n\n" +
+                          "1. 투자 진행 (기존 지위 포기)\n" +
+                          "2. 투자 취소 (현상 유지)";
+
+            replier.reply(formatCommand("🏗️ 투자 확인", user, warnMsg, "번호를 입력하세요."));
+            return true;
         }
 
-        // 6. 결과 메시지 구성
-        var resMsg = dest + " 항구에 " + fp(amt) + "P를 투자했습니다!\n\n" +
-                     "📊 " + dest + " 발전도: Lv." + oldLevel + " ➔ Lv." + nextLevel + "\n" +
-                     "✨ 선호품 매입 보너스: +" + (nextLevel - 1) + "% 상승!";
+        // 총독이 아니거나 본인 도시라면 즉시 최종 처리
+        _finalizeHarborInvestment(user, data, replier, roomName, targetUid, dest, amt, myGovernedPorts);
+        return true;
+    }
 
-        if (isGovChanged) {
-            var oldGovName = (oldGovUid && roomData.users[oldGovUid]) ? "'" + roomData.users[oldGovUid].name + "'님" : "공석";
-            resMsg += "\n\n🎊 [작위 변동]\n" + user.name + "님이 " + oldGovName + "을 밀어내고\n" +
-                      dest + "의 새로운 [총독]으로 임명되었습니다!";
+    /**
+     * [신규] 투자 확정 선택지 처리 핸들러
+     */
+    if (state.type === 'trade_invest_confirm') {
+        var choice = msg.trim();
+        var info = state.extra;
+
+        if (choice === "1") {
+            _finalizeHarborInvestment(user, data, replier, roomName, targetUid, info.dest, info.amount, info.oldPorts);
+        } else if (choice === "2" || choice === "취소") {
+            delete bankProcessState[targetUid];
+            replier.reply(formatCommand("🚫 투자 취소", user, "기존 총독 직위를 유지하기 위해 투자를 중단했습니다."));
+        } else {
+            replier.reply(formatError(user, "번호 오류", "1번(진행) 또는 2번(취소)을 선택하세요."));
         }
-        
-        resMsg += govBlockedReason;
-
-        replier.reply(formatCommand("🏗️ 항구 투자 완료", user, resMsg, "내 잔액: " + fp(user.point) + "P"));
-        
-        user.skipHealing = true;
-        safeSaveData(data, true);
         return true;
     }
 
@@ -7578,6 +7566,61 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
     return false;
+}
+
+// 추가: 섹터 22-5 최하단(함수 외부)에 투자 정산 엔진 배치
+/**
+ * [시스템] 항구 투자 및 총독지 초기화 최종 처리 엔진
+ */
+function _finalizeHarborInvestment(user, data, replier, roomName, targetUid, dest, amt, oldPorts) {
+    var roomData = data.rooms[roomName];
+    var pData = roomData.features.portData[dest];
+    var cfg = SYSTEM_CONFIG.TRADE.INVEST;
+    var oldGovUid = pData.governorUid;
+    var oldLevel = pData.level;
+    var bankProcessState = roomData.features.states.bankProcess;
+
+    if (bankProcessState && bankProcessState[targetUid]) delete bankProcessState[targetUid];
+
+    // 1. 포인트 게이트웨이 정산
+    util_updatePoint(user, roomData, -amt, "항구 투자: " + dest, roomName);
+
+    // 2. 투자액 및 레벨 반영
+    if (!pData.userInvests) pData.userInvests = {};
+    pData.userInvests[targetUid] = (pData.userInvests[targetUid] || 0) + amt;
+    pData.totalInvest += amt;
+    pData.level = Math.min(cfg.MAX_LEVEL, Math.floor(pData.totalInvest / cfg.LEVEL_UP_STEP) + 1);
+
+    // 3. [핵심] 총독 교체 및 기존 도시 초기화 (후순위 우선)
+    var isGovChanged = false;
+    var govReason = "";
+    var currentMaxInvest = (oldGovUid && pData.userInvests[oldGovUid]) ? pData.userInvests[oldGovUid] : 0;
+
+    if (pData.userInvests[targetUid] > currentMaxInvest) {
+        if (oldPorts && oldPorts.length > 0) {
+            oldPorts.forEach(function(pName) {
+                if (roomData.features.portData[pName]) {
+                    roomData.features.portData[pName].governorUid = ""; 
+                }
+            });
+            govReason = "\n\n✨ [직위 이전]\n기존 항구의 총독직을 사임하고\n새로운 자치령 '" + dest + "'의 총독으로 부임했습니다!";
+        }
+        pData.governorUid = targetUid;
+        if (oldGovUid !== targetUid) isGovChanged = true;
+    }
+
+    var resMsg = dest + " 항구에 " + fp(amt) + "P를 투자했습니다!\n\n" +
+                 "📊 " + dest + " 발전도: Lv." + oldLevel + " ➔ Lv." + pData.level + "\n" +
+                 "📈 선호품 매입 보너스: +" + (pData.level - 1) + "%" + govReason;
+
+    if (isGovChanged && govReason === "") {
+        var oldName = (oldGovUid && roomData.users[oldGovUid]) ? roomData.users[oldGovUid].name : "공석";
+        resMsg += "\n\n🎊 [작위 수여]\n" + user.name + "님이 " + oldName + "을 밀어내고\n" + dest + "의 새로운 [총독]이 되었습니다!";
+    }
+
+    replier.reply(formatCommand("🏗️ 항구 투자 완료", user, resMsg, "내 잔액: " + fp(user.point) + "P"));
+    user.skipHealing = true;
+    safeSaveData(data, true);
 }
 
 //==========섹터23-1==========

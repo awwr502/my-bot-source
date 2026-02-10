@@ -8180,6 +8180,7 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     /* [서브 상태 핸들러 로직군 - 전체 else if 연결] */
     else if (state.type === 'trade_job_enlist') { _handleJobJoin(choice, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_governor_office') { _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid); return true; }
+    else if (state.type === 'trade_job_settlement') { _handleJobSettlement(msg, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_select_cargo') { _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
     else if (state.type === 'trade_pirate_menu') {
         if (choice === "1") _showRaidList(user, replier, data, roomName, targetUid);
@@ -16445,7 +16446,7 @@ function _showPirateMenu(user, replier, roomData, targetUid) {
     var menu = "1. 🔭 약탈 대상 물색 (레이더)\n" +
                "2. 💀 내 악명 상세 조회\n" +
                "3. 📜 해적단 은퇴 (면죄부 구입)\n" +
-               "4. 💰 나소 (해적 도시 정산)\n" +
+               "4. 💰 나소 정산소 (약탈금/보조금)\n" +
                "5. 📝 선박 이름변경권 : " + fp(price) + "P";
 
     var now = Date.now();
@@ -16474,7 +16475,7 @@ function _showNavyMenu(user, replier, roomData, targetUid) {
     var menu = "1. ⚔️ 토벌 작전 게시판 (현상범)\n" +
                "2. 🛡️ 내 복무 상세 기록\n" +
                "3. 📝 명예 전역 신청\n" +
-               "4. 💰 일급 수령 (매일 1회)\n" +
+               "4. 💰 본부 정산실 (토벌/호송/일급)\n" +
                "5. 📝 선박 이름변경권 : " + fp(price) + "P\n\n" +
                "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
@@ -16491,40 +16492,8 @@ function _showNavyMenu(user, replier, roomData, targetUid) {
  * 공식: (25,000 + 악명*100) * 물가배율 (최대 10만P)
  */
 function _processPirateDailyWage(user, data, replier, roomName, targetUid) {
-    var today = getSimpleDate();
-    var roomData = data.rooms[roomName];
-
-    if (user.lastPirateWageDate === today) {
-        return replier.reply(formatError(user, "정산 불가", "오늘은 이미 나소에서 정산을 마쳤습니다."));
-    }
-
-    if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
-        return replier.reply(formatError(user, "정산 불가", "국가 부도 상태로 인해 해적 도시의 장물 거래가 동결되었습니다."));
-    }
-
-    var baseWage = 25000;
-    var infamyBonus = (Number(user.infamy) || 0) * 100;
-    var multiplier = util_getEcoMultiplier(roomName);
-    var totalWage = Math.floor((baseWage + infamyBonus) * multiplier);
-    totalWage = Math.min(100000, totalWage);
-
-    user.skipHealing = true;
-    user.lastPirateWageDate = today;
-
-    var res = processRepayment(user, totalWage, targetUid, roomName);
-    util_updatePoint(user, roomData, Number(res.actualGain), "해적 도시 '나소' 장물 정산", roomName);
-
-    var resultBody = "나소 해적도시에서 위험수당이 지급되었습니.\n\n" +
-                     "💵 기본급: " + fp(baseWage) + "P\n" +
-                     "🗡️ 악명수당: +" + fp(infamyBonus) + "P\n" +
-                     "📈 물가보정: x" + multiplier.toFixed(2) + "\n\n" +
-                     "💰 최종 지급액: " + fp(totalWage) + "P\n" +
-                     (res.repayMsg || "✅ 지갑으로 즉시 입금되었습니다.");
-
-    if (roomData.features.states.menuWait) delete roomData.features.states.menuWait[targetUid];
-
-    replier.reply(formatCommand("💰 나소 해적 도시 정산", user, resultBody, "내 잔액: " + fp(user.point) + "P"));
-    safeSaveData(data, true);
+    // 기존의 복잡한 계산식과 util_updatePoint 로직을 삭제하고 이 한 줄만 남깁니다.
+    _showJobSettlementOffice(user, replier, roomName, targetUid);
 }
 
 /* [해적] 상세 정보 조회 */
@@ -16600,50 +16569,8 @@ function _processNavyRetire(user, data, replier, roomName, targetUid) {
  * 공식: (25,000 + 명성*100) * 물가배율
  */
 function _processNavyDailyWage(user, data, replier, roomName, targetUid) {
-    var today = getSimpleDate();
-    var roomData = data.rooms[roomName];
-
-    var cfg = SYSTEM_CONFIG.TRADE;
-
-    // 1. 중복 수령 검증
-    if (user.lastNavyWageDate === today) {
-        return replier.reply(formatError(user, "수령 불가", "오늘은 이미 일급을 지급받았습니다."));
-    }
-
-    // 2. 국가 부도 가드
-    if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
-        return replier.reply(formatError(user, "지급 동결", "국가 부도 상태로 인해 군인 봉급 지급이 일시 중단되었습니다."));
-    }
-
-    // 3. 금액 계산 (기본 2.5만 + 명성 보너스) * 물가배율
-    var baseWage = 25000;
-    var fameBonus = (Number(user.fame) || 0) * 100;
-    var multiplier = util_getEcoMultiplier(roomName);
-    var totalWage = Math.floor((baseWage + fameBonus) * multiplier);
-    totalWage = Math.min(cfg.JOBS.NAVY.maxDailyWage || 100000, totalWage);
-
-    // 4. 정산 집행
-    user.skipHealing = true;
-    user.lastNavyWageDate = today;
-
-    // 상환 엔진 통과 및 포인트 지급
-    var res = processRepayment(user, totalWage, targetUid, roomName);
-    util_updatePoint(user, roomData, Number(res.actualGain), "해군 복무 일급 수령", roomName);
-
-    var resultBody = "국가 안보를 위한 헌신에 감사드립니다.\n\n" +
-                     "💵 기본급: " + fp(baseWage) + "P\n" +
-                     "🎖️ 명성수당: +" + fp(fameBonus) + "P\n" +
-                     "📈 물가보정: x" + multiplier.toFixed(2) + "\n\n" + // 구분선 대신 줄바꿈 적용
-                     "💰 최종 지급액: " + fp(totalWage) + "P\n" +
-                     (res.repayMsg || "✅ 지갑으로 즉시 입금되었습니다.");
-
-    // 정산 완료와 동시에 해당 유저의 모든 메뉴 대기 상태를 삭제하여 응답대기 종료
-    if (roomData.features && roomData.features.states && roomData.features.states.menuWait) {
-        delete roomData.features.states.menuWait[targetUid];
-    }
-
-    replier.reply(formatCommand("🎖️ 해군 일급 정산 완료", user, resultBody, "내 잔액: " + fp(user.point) + "P"));
-    safeSaveData(data, true);
+    // 기존의 복잡한 계산식과 util_updatePoint 로직을 삭제하고 이 한 줄만 남깁니다.
+    _showJobSettlementOffice(user, replier, roomName, targetUid);
 }
 
 // 추가: 전직을 관리하는 '조합 사무소' UI와 '전직 처리' 핸들러 구현
@@ -17103,7 +17030,8 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         navy.fame = (navy.fame || 0) + 10;
         
         var bounty = 30000 + (pirate.currentBounty || 0);
-        util_updatePoint(navy, data.rooms["내리다"], bounty, "해적 토벌 현상금 수령", "내리다");
+        navy.claimableReward = (Number(navy.claimableReward) || 0) + bounty;
+        navy.hasNotifiedReward = false;
         pirate.currentBounty = 0;
 
         delete mainRoom.features.activePillages[victimUid];
@@ -17134,6 +17062,95 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
 
     Api.replyRoom("내리다", resultMsg);
     safeSaveData(data, true);
+}
+
+function _showJobSettlementOffice(user, replier, roomName, targetUid) {
+    var today = getSimpleDate();
+    var multiplier = util_getEcoMultiplier(roomName);
+    var isPirate = (user.job === 'pirate');
+    
+    // 1. 일급 계산 (미수령 시에만 표시)
+    var dailyWage = 0;
+    var wageBreakdown = "";
+    var isWageAvailable = (isPirate ? user.lastPirateWageDate : user.lastNavyWageDate) !== today;
+
+    if (isWageAvailable) {
+        var base = 25000;
+        var bonus = isPirate ? (Number(user.infamy || 0) * 100) : (Number(user.fame || 0) * 100);
+        dailyWage = Math.floor((base + bonus) * multiplier);
+        dailyWage = Math.min(100000, dailyWage);
+        
+        wageBreakdown = "  - 기본급: " + fp(base) + "P\n" +
+                        "  - " + (isPirate ? "악명" : "명성") + "수당: +" + fp(bonus) + "P\n" +
+                        "  - 물가보정: x" + multiplier.toFixed(2) + "\n" +
+                        "  ➔ 일급 합계: " + fp(dailyWage) + "P\n";
+    }
+
+    // 2. 누적 보상금 (토벌/약탈/호송)
+    var accumulated = Number(user.claimableReward || 0);
+    var totalAvailable = dailyWage + accumulated;
+
+    var body = (isPirate ? "🏴‍☠️ 나소 장물 정산소" : "👮 해군 본부 회계실") + "\n\n" +
+               "[💰 정산 가능 내역]\n" +
+               (isWageAvailable ? "💵 금일 기본 일급:\n" + wageBreakdown : "✅ 금일 일급 수령 완료\n") +
+               "\n📦 미수령 활동 보상: " + fp(accumulated) + "P\n" +
+               "(토벌/약탈/호송 수익 포함)\n" +
+               "━━━━━━━━━━━━━━━\n" +
+               "💰 총 수령 가능액: " + fp(totalAvailable) + "P\n\n" +
+               "💬 [수령 방법]\n" +
+               "• 부분 수령: [금액] 입력\n" +
+               "• 일괄 수령: [전부] 입력\n\n" +
+               "↩️ 뒤로 / ❎취소";
+
+    replier.reply(formatCommand("🏦 직업 자산 정산소", user, body));
+    
+    var mState = globalData.rooms[roomName].features.states.menuWait;
+    mState[targetUid] = { 
+        type: 'trade_job_settlement', 
+        time: Date.now(), 
+        extra: { wage: dailyWage, rewards: accumulated, total: totalAvailable, isWageAvailable: isWageAvailable } 
+    };
+}
+
+// [추가] 직업 정산 입력 처리 핸들러 (전부/부분 수령)
+function _handleJobSettlement(msg, user, data, replier, roomName, targetUid) {
+    var state = data.rooms[roomName].features.states.menuWait[targetUid];
+    if (!state) return false;
+
+    var totalAvailable = Number(state.extra.total);
+    var withdrawAmt = (msg === "전부") ? totalAvailable : parseInt(msg.replace(/[^0-9]/g, ""));
+
+    if (isNaN(withdrawAmt) || withdrawAmt <= 0) return false;
+    if (withdrawAmt > totalAvailable) {
+        replier.reply(formatError(user, "수령 불가", "최대 " + fp(totalAvailable) + "P까지만 수령 가능합니다."));
+        return true;
+    }
+
+    var today = getSimpleDate();
+    var isPirate = (user.job === 'pirate');
+    
+    // 일급 처리: 인출액이 오늘치 일급보다 많으면 일급 수령 완료 처리
+    if (state.extra.isWageAvailable && withdrawAmt >= state.extra.wage) {
+        if (isPirate) user.lastPirateWageDate = today;
+        else user.lastNavyWageDate = today;
+    }
+
+    // 보상금 주머니 차감
+    user.claimableReward = Math.max(0, totalAvailable - withdrawAmt - (state.extra.isWageAvailable && withdrawAmt < state.extra.wage ? state.extra.wage : 0));
+
+    user.skipHealing = true;
+    var res = processRepayment(user, withdrawAmt, targetUid, roomName);
+    util_updatePoint(user, data.rooms["내리다"], Number(res.actualGain), "직업 활동 자산 정산", "내리다");
+
+    var resBody = "직업 활동 수익 정산이 완료되었습니다.\n\n" +
+                  "💰 수령 금액: +" + fp(withdrawAmt) + "P\n" +
+                  "🏛️ 남은 미수령액: " + fp(user.claimableReward) + "P\n" +
+                  (res.repayMsg || "✅ 지갑으로 즉시 입금되었습니다.");
+
+    delete data.rooms[roomName].features.states.menuWait[targetUid];
+    replier.reply(formatCommand("✅ 정산 완료", user, resBody, "내 잔액: " + fp(user.point) + "P"));
+    safeSaveData(data, true);
+    return true;
 }
 
 /* [시스템] 약탈 성공 정산 (스케줄러에서 3분 만료 시 호출) */

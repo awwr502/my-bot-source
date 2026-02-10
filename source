@@ -4740,9 +4740,33 @@ function _runSector16Logic(data, ctx) {
                 if (isWin) {
                     var mult = (bet.pick.length > 1) ? 4.0 : 1.9;
                     if (u.title === "도박왕") mult += 0.05; // 칭호 효과 연동
+
+                    // [정부 정책 연동] 카지노 배당률 조정 (예: 카지노 자본 유입 정책)
+                    var pol = util_getActivePolicy(mainRoomData);
+                    if (pol.casinoPayoutAdj) mult += pol.casinoPayoutAdj;
                     
                     // 후정산 방식: 승리 시 '수익금'만 추가 지급 (유저는 원금을 이미 보유 중)
                     var winNetProfit = Math.floor(bet.amount * (mult - 1));
+
+                    // [정부 정책 연동] 카지노 당첨 수익에 대한 각종 세금 및 삭감 적용
+                    if (winNetProfit > 0) {
+                        // 1. 카지노 전용 치안 유지세 (예: 해상 안전 보장법 - 10% 징수)
+                        if (pol.casinoTax) {
+                            var cTax = Math.floor(winNetProfit * pol.casinoTax);
+                            winNetProfit -= cTax;
+                            util_updateReserve(mainRoomData, cTax, "의회 카지노 치안유지세 징수", ctx.targetRoom);
+                        }
+                        // 2. 범용 수익 환수 (예: 복지 국가 건설안 - 10% 환수)
+                        if (pol.allProfitTax) {
+                            var wTax = Math.floor(winNetProfit * pol.allProfitTax);
+                            winNetProfit -= wTax;
+                            util_updateReserve(mainRoomData, wTax, "의회 복지 기금 징수", ctx.targetRoom);
+                        }
+                        // 3. 인플레이션 억제 (예: 모든 수익 20% 일괄 삭감)
+                        if (pol.globalRewardMult) {
+                            winNetProfit = Math.floor(winNetProfit * pol.globalRewardMult);
+                        }
+                    }
                     
                     if (util_isBankSolvent(ctx.targetRoom, winNetProfit)) {
                         u.skipHealing = true; // 고액 당첨 시 롤백 방지
@@ -4830,9 +4854,30 @@ function _runSector16Logic(data, ctx) {
                if (bBet.pick === resTag) {
                     var bMult = (resTag === "T") ? 8.0 : (resTag === "P" ? 2.0 : 1.95);
                     if (bu.title === "도박왕") bMult += 0.05;
+
+                    // [정부 정책 연동] 바카라 배당률 조정
+                    var pol = util_getActivePolicy(mainRoomData);
+                    if (pol.casinoPayoutAdj) bMult += pol.casinoPayoutAdj;
                     
                     // 후정산 방식: 승리 시 '수익금'만 추가 지급
                     var bNetProfit = Math.floor(bBet.amount * (bMult - 1));
+
+                    // [정부 정책 연동] 바카라 수익 삭감 및 세금 적용
+                    if (bNetProfit > 0) {
+                        if (pol.casinoTax) {
+                            var bcTax = Math.floor(bNetProfit * pol.casinoTax);
+                            bNetProfit -= bcTax;
+                            util_updateReserve(mainRoomData, bcTax, "의회 카지노 치안유지세 징수", ctx.targetRoom);
+                        }
+                        if (pol.allProfitTax) {
+                            var bwTax = Math.floor(bNetProfit * pol.allProfitTax);
+                            bNetProfit -= bwTax;
+                            util_updateReserve(mainRoomData, bwTax, "의회 복지 기금 징수", ctx.targetRoom);
+                        }
+                        if (pol.globalRewardMult) {
+                            bNetProfit = Math.floor(bNetProfit * pol.globalRewardMult);
+                        }
+                    }
                     
                     if (util_isBankSolvent(ctx.targetRoom, bNetProfit)) {
                         bu.skipHealing = true;

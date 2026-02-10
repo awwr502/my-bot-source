@@ -15123,20 +15123,30 @@ function _showVoyageStatus(user, replier, data, roomName) {
     var totalCargoInShip = 0;
     var shipCapacity = cfg.SHIPS[user.shipLevel || 1].capacity;
 
+    var nSnap = v.marketSnapshot[v.dest];
+    var pInfo = (data.rooms[roomName].features.portData && data.rooms[roomName].features.portData[v.dest]) ? data.rooms[roomName].features.portData[v.dest] : { level: 1 };
+    var portLevelBonus = Number((pInfo.level - 1) * (cfg.INVEST.BONUS_PER_LEVEL || 0.01));
+
     var cSnap = v.cargoSnapshot || {};
     for (var g in cSnap) {
         var qty = Number(cSnap[g]); if (qty <= 0) continue;
         currentCargoLines.push("      • " + g + " " + qty + "상자");
         totalCargoInShip += qty;
-        var uCost = Number((user.cargoAvg && user.cargoAvg[g]) || cfg.GOODS_COST[g]);
-        tCost += (uCost * qty);
-        var rInfo = SYSTEM_CONFIG.PROFIT_RATES[g];
-        var multiplier = 1.0;
-        var nSnap = v.marketSnapshot[v.dest];
-        if (g === nSnap.favorite) multiplier = rInfo.pref;
-        else if (g === nSnap.hate) multiplier = rInfo.hate;
-        else multiplier = rInfo.norm;
-        tRev += Math.floor(uCost * multiplier * qty);
+        var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[g]) || cfg.GOODS_COST[g]);
+        var itemCost = myPurchasePrice * qty;
+        tCost += itemCost;
+
+        var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.15, norm: 1.05, hate: 0.8 };
+        var mult = 1.0;
+        if (g === nSnap.favorite) {
+            var baseEarn = Math.floor(myPurchasePrice * rateInfo.pref * qty);
+            var baseMargin = baseEarn - itemCost;
+            var bonusAmt = baseMargin > 0 ? Math.floor(baseMargin * portLevelBonus) : 0;
+            mult = itemCost > 0 ? ((baseEarn + bonusAmt) / itemCost) : rateInfo.pref;
+        } else if (g === nSnap.hate) mult = rateInfo.hate;
+        else mult = rateInfo.norm;
+        
+        tRev += Math.floor(myPurchasePrice * mult * qty);
     }
 
     var sSnap = v.specialtySnapshot || {};
@@ -15146,18 +15156,26 @@ function _showVoyageStatus(user, replier, data, roomName) {
         totalCargoInShip += sQty;
         var pG = "";
         for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === s) { pG = TRADE_RELATION[n].produce; break; } }
-        var sMult = (pG === v.marketSnapshot[v.dest].favorite) ? cfg.SPECIALTY_PROFIT : 1.0;
-        var sVal = (cfg.SPECIALTY_COST[pG] || 10000);
-        tCost += (sVal * sQty);
-        tRev += Math.floor(sVal * sQty * sMult);
+        var sBase = cfg.SPECIALTY_COST[pG] || 10000;
+        var sMult = (pG === nSnap.favorite) ? cfg.SPECIALTY_PROFIT : (pG === nSnap.hate ? 0.5 : 1.0);
+        tCost += (sBase * sQty);
+        tRev += Math.floor(sBase * sQty * sMult);
     }
 
     var margin = tRev - tCost;
+    var shipEff = (user.shipLevel === 1) ? 4.2 : (user.shipLevel === 2 ? 1.9 : 1.15);
+    margin = Math.floor(margin * shipEff);
+
     var taxRate = (user.title === "기부왕") ? 0.05 : 0.10;
-    var taxAmount = Math.max(0, Math.floor(margin * taxRate));
+    var taxAmt = margin > 0 ? Math.floor(margin * taxRate) : 0;
+    var afterTaxMargin = margin - taxAmt;
+
+    if (v.escortFee) afterTaxMargin -= v.escortFee;
+    if (margin > 0) afterTaxMargin -= Math.floor(margin * 0.01); 
+
     var crInfo = getCreditInfo(user.creditScore, roomName);
     var creditMult = util_getTradeCreditMult(crInfo.grade);
-    var estimatedNetProfit = Math.floor((margin - taxAmount) * creditMult);
+    var estimatedNetProfit = Math.floor(afterTaxMargin * creditMult);
     var finalReceipt = tCost + estimatedNetProfit;
 
     // 호위 정보 텍스트 추가

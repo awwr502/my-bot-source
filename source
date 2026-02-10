@@ -6084,10 +6084,28 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
     }
 }
 
-// 1. 핵심 로직 함수 호출 (모든 인자 누락 없이 전달)
-        if (user) {
-            _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData);
-        }
+// [전체 중계 엔진] 모든 봇의 응답(reply)을 가로채 중계방으로 자동 복제 전송
+var relayReplier = {
+    reply: function(content) {
+        // 1. 실제 메시지 발신 (유저에게 전송)
+        replier.reply(content); 
+        
+        // 2. 중계방 복제 전송
+        try {
+            // 중계방이 설정되어 있고, 현재 발신 장소가 중계방이 아닐 때만 실행
+            if (typeof CASINO_RELAY_ROOM !== 'undefined' && realRoom !== CASINO_RELAY_ROOM) {
+                var relayHeader = "🤖 [전체중계] To. " + cleanSender + " (" + realRoom + ")\n";
+                var relayBody = "━━━━━━━━━━━━━━━\n" + content;
+                Api.replyRoom(CASINO_RELAY_ROOM, relayHeader + relayBody);
+            }
+        } catch(e) { Log.error("Global Relay Error: " + e); }
+    }
+};
+
+// 1. 핵심 로직 함수 호출 (원본 replier 대신 가로채기가 완료된 relayReplier를 전달)
+if (user) {
+    _processMainLogic(msg, user, data, relayReplier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData);
+}
 
    } catch (e) {
         var errorDetail = e.name + ": " + e.message + " (Line: " + e.lineNumber + ")";
@@ -15982,13 +16000,9 @@ function util_notifySeaReward(user, replier) {
  */
 function util_casinoRelayReply(replier, user, content, roomName) {
     if (!content) return;
-    // 1. 실제 유저에게 전송
-    replier.reply(content);
-    // 2. 중계방으로 실시간 복제
-    try {
-        var relayMsg = "🤖 [중계-응답] To. " + user.name + " (" + roomName + ")\n" + "━━━━━━━━━━━━━━━\n" + content;
-        Api.replyRoom(CASINO_RELAY_ROOM, relayMsg);
-    } catch(e) { Log.error("Output Relay Error: " + e); }
+    // 이제 replier 객체 자체가 이미 중계 기능을 포함한 relayReplier이므로 
+    // 그냥 reply만 호출하면 자동으로 중계방까지 전송됩니다.
+    replier.reply(content); 
 }
 
 /* [메인] 카지노 로직 진입점 */

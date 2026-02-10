@@ -8679,27 +8679,23 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     var inState = checkSession(localSt) || checkSession(mainSt) || (user && user.blackjackState);
 
     /* [무역 정산 엔진] '내리다' 방에서 도착 완료 시 어떤 채팅이든 즉시 정산 */
-if (realRoom.indexOf("내리다") !== -1 && user && user.voyage && user.voyage.active === true) {
+if (realRoom === "내리다" && user && user.voyage && user.voyage.active === true) {
     var v = user.voyage;
+    // 도착 시간이 경과했다면 즉시 정산 함수 호출
     if (Date.now() >= (v.arrival || 0)) {
         try {
             if (typeof _processTradeArrival === 'function') {
-                // 잠금이 걸려있어도 리로드 직후라면 강제로 한 번 시도할 수 있도록 처리
                 _processTradeArrival(user, data, replier, "내리다", targetUid);
-                
-                // 정산 시퀀스 진입 성공 시 메시지 처리 프로세스 종료 (중복 방지)
-                if (user.voyage && user.voyage.active === false) return; 
+                // 정산이 완료되어 active가 false가 되었다면 로직 종료 (중복 방지)
+                if (user.voyage.active === false) return;
             }
         } catch (e) {
-            Log.error("🚨 정산 실행 오류: " + e);
-            if (user.voyage) user.voyage.isProcessing = false;
+            Log.error("🚨 무역 정산 트리거 에러: " + e);
         }
     }
 }
-    // 직업 활동(약탈/토벌) 미수령 보상 알림 (정산 대상이 아닐 때만 노출)
-    if (typeof util_notifySeaReward === 'function') {
-        util_notifySeaReward(user, replier);
-    }
+
+if (typeof util_notifySeaReward === 'function') util_notifySeaReward(user, replier);
     
     // 1:1 대화방(!isGroupRoom)이면서 허용된 명령어나 세션 중이 아니면 즉시 차단
    if (!isGroupRoom && !isAllowedCmd && !inState) {
@@ -15479,15 +15475,18 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         }
     });
 
-   // 1. [잠금 복구]: 5분 이상 멈춰있다면 강제로 풀고 정산 시도
+  // 1. [논리 모순 해결]: 잠금 상태를 먼저 '확인'한 후 '잠금'을 걸어야 함
     if (v.isProcessing === true) {
-        if (Date.now() - (v.arrival || 0) > 300000) v.isProcessing = false;
-        else return;
+        // 5분 이상 잠겨있는 경우에만 강제 해제 후 진행
+        if (Date.now() - (v.arrival || 0) > 300000) {
+            v.isProcessing = false; 
+        } else {
+            return; // 실제 처리 중일 수 있으므로 종료
+        }
     }
-    v.isProcessing = true; 
+    v.isProcessing = true; // 여기서 비로소 문을 잠금
 
-    // 2. [데이터 복구]: 구버전 데이터 호환 (Undefined 에러 방지 핵심)
-    // 스냅샷이 없으면 현재 시세와 가방 데이터를 주입하여 정산이 가능하게 만듭니다.
+    // 2. [데이터 무결성 보전]: 구버전 데이터 호환 (Undefined 에러 방지)
     var mainRoom = data.rooms["내리다"];
     if (!v.marketSnapshot) v.marketSnapshot = (mainRoom && mainRoom.features.tradeMarket) ? mainRoom.features.tradeMarket : SYSTEM_CONFIG.TRADE.NATIONS;
     if (!v.cargoSnapshot) v.cargoSnapshot = user.cargo || {};

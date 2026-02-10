@@ -1587,6 +1587,7 @@ var CMD_LIST = {
         { cmd: "/조작", desc: "[닉네임] [홀짝%] [낚시%]", func: "_adminUserManageLogic", hidden: true },
         { cmd: "/배당복구", desc: "로그 기반 배당금 소급 합산", func: "_adminEconomyLogic", hidden: true },
         { cmd: "/배당초기화", desc: "[항목] 배당 주머니 강제 리셋", func: "_adminEconomyLogic", hidden: true },
+        { cmd: "/로그원격복구", desc: "[HH:mm] [URL] 특정 시점 이후 로그 선별 복구", func: "_adminEconomyLogic" },
         { cmd: "/보안테스트", desc: "[1-3] 보안 엔진 4단계 스트레스 테스트", func: "_adminEconomyLogic" },
         { cmd: "/전체부동산", desc: "전 구역 유저들의 부동산 보유 현황 총괄 조회", func: "_adminEconomyLogic" },
         { cmd: "/부동산회수", desc: "[닉네임] [건물명] [수량|전부] 지분 강제 몰수", func: "_adminEconomyLogic" },
@@ -11080,6 +11081,57 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
 // [핵심] 1:1방 또는 베릭방에서 실행 시에도 실제 은행 데이터가 있는 "내리다" 방을 참조하도록 고정
     var logicZone = (roomName === "베릭방" || ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var roomData = data.rooms[logicZone];
+
+    
+     /* * [v13.8] 지능형 원격 로그 수혈 (Time-Filter Edition)
+     * 사용법: /로그원격복구 [오늘시작시간(HH:mm)] [파일URL]
+     * 예시: /로그원격복구 10:30 https://cdn.discord...
+     */
+    if (msg.indexOf("/로그원격복구 ") === 0) {
+        var ps = msg.split(" ");
+        if (ps.length < 3) return replier.reply(formatAdmin("오류", "사용법: /로그원격복구 [시작시간(HH:mm)] [URL]"));
+
+        var timeStr = ps[1]; // "10:30"
+        var fileUrl = ps[2]; // "http..."
+        
+        // 입력받은 시간을 타임스탬프로 변환
+        var now = new Date();
+        var tParts = timeStr.split(":");
+        var startTs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), parseInt(tParts[0]), parseInt(tParts[1])).getTime();
+
+        replier.reply("📡 [" + timeStr + "] 이후의 데이터만 선별 복구를 시작합니다...");
+
+        Executor.execute(new java.lang.Runnable({
+            run: function() {
+                try {
+                    var tempPath = BASE_DIR + "recovery/REMOTE_LOG_" + Date.now() + ".txt";
+                    var conn = new java.net.URL(fileUrl).openConnection();
+                    var is = conn.getInputStream();
+                    var fos = new java.io.FileOutputStream(tempPath);
+                    var buffer = java.lang.reflect.Array.newInstance(java.lang.Byte.TYPE, 4096);
+                    var len;
+                    while ((len = is.read(buffer)) > 0) { fos.write(buffer, 0, len); }
+                    fos.close(); is.close();
+
+                    var recoveryFile = new java.io.File(tempPath);
+                    // _processLogFile에 시작 시간(startTs)을 전달하여 필터링
+                    var recoveredCount = _processLogFile(recoveryFile, data, startTs);
+                    
+                    if (recoveredCount > 0) {
+                        safeSaveData(data, true);
+                        recoveryFile.delete();
+                        Api.replyRoom(roomName, formatAdmin("✅ 선별 복구 완료", "분석 결과: " + recoveredCount + "건의 새로운 거래가 병합되었습니다.\n(기준 시간: " + timeStr + " 이후)"));
+                    } else {
+                        recoveryFile.delete();
+                        Api.replyRoom(roomName, formatAdmin("❓ 결과 없음", "해당 시간 이후에 발생한 거래가 파일 내에 없습니다."));
+                    }
+                } catch (e) {
+                    Api.replyRoom(roomName, formatAdmin("🚫 원격 복구 실패", "오류: " + e.message));
+                }
+            }
+        }));
+        return true;
+    }
 
     /* [테스트] 자정 리셋 로직 강제 실행 */
     if (msg === "/자정테스트") {

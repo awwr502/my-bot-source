@@ -15474,18 +15474,19 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         }
     });
 
-  // 1. [잠금 확인]: 이미 처리 중인지 '먼저' 검사 (순서 교정)
+  // 1. [잠금 통합 관리]: 1분 이상 잠겨있으면 유령 잠금으로 판단하여 해제 후 다시 시도
     if (v.isProcessing === true) {
-        // 도착 완료 시점으로부터 5분이 지났다면 유령 잠금으로 판단하고 해제
-        if (Date.now() - (v.arrival || 0) > 300000) {
+        if (Date.now() - (v.arrival || 0) > 60000) {
             v.isProcessing = false; 
+            Log.warn("🔓 [Trade] " + user.name + "의 정산 잠금을 강제 해제했습니다.");
         } else {
-            return; // 아직 5분이 안 지났다면 실제 처리 중일 수 있으므로 종료
+            return; // 1분 이내 중복 실행 차단 (도배 방지)
         }
     }
     
-    // 2. [잠금 실행]: 확인이 끝난 후 비로소 문을 잠급니다.
-    v.isProcessing = true; 
+    v.isProcessing = true; // 2. [잠금 실행]: 정산 프로세스 점유
+
+    try {
 
     // 3. [데이터 복구]: 스냅샷 누락 시 현재 데이터로 긴급 수혈 (안정성 강화)
     var mainRoom = data.rooms["내리다"];
@@ -15891,11 +15892,16 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     safeSaveData(data, true);
 
-    } catch (e) { // [MODIFIED] 에러 발생 시 처리
-        v.isProcessing = false; // 문을 열어주어 다음 채팅 때 다시 정산하게 함
-        Log.error("Trade Settlement Error: " + e);
+    } catch (e) { 
+        // 4. [에러 복구]: 로직 중간에 에러가 발생해도 잠금을 풀어야 다음 채팅 때 다시 정산 시도 가능
+        v.isProcessing = false; 
+        Log.error("🚨 [Trade Error] " + user.name + " 정산 실패: " + e + " (Line: " + e.lineNumber + ")");
+        try { replier.reply("🚫 [무역 정산 오류]\n로직 충돌로 정산이 중단되었습니다.\n잠시 후 다시 채팅을 입력해주세요."); } catch(err) {}
+    } finally {
+        // 5. [최종 해제]: 성공하든 실패하든 함수가 끝나면 무조건 잠금을 해제하여 먹통 방지
+        v.isProcessing = false; 
     }
-}
+} // _processTradeArrival 함수 마감
 
 // 해상 활동 정산 알림 함수 (섹터 24의 핸들러에서 호출됨)
 /**

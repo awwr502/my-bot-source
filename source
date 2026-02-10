@@ -5141,7 +5141,7 @@ function _runSector17Logic(data, ctx) {
                 }
 
         /* [v11.6] 1인 1건물 원칙 강제 집행 엔진 (중복 보유 시 최고 가치 외 환급) */
-                var myLandNames = Object.keys(u.landHoldings || {});
+               var myLandNames = Object.keys(u.landHoldings || {});
                 if (myLandNames.length > 1) {
                     var landInfoList = [];
                     myLandNames.forEach(function(ln) {
@@ -5153,17 +5153,24 @@ function _runSector17Logic(data, ctx) {
                     // 지분 가치(수량 * 현재가)가 가장 높은 것을 0번에 유지
                     landInfoList.sort(function(a, b) { return (b.qty * b.price) - (a.qty * a.price); });
 
-                    // 최고 가치 1개 외 나머지 건물은 강제 환급 및 데이터 삭제
+                    // 최고 가치 1개 외 나머지 건물은 강제 환급 및 소유권 박탈
                     for (var k = 1; k < landInfoList.length; k++) {
                         var target = landInfoList[k];
                         var refund = Math.floor(target.qty * target.price);
 
+                        // 1. 유저 보유 데이터에서 삭제
                         delete u.landHoldings[target.name];
                         if (u.landAvg) delete u.landAvg[target.name];
 
+                        // 2. 시장 데이터에서 해당 유저가 소유주인 경우 공석(null) 처리
+                        if (data.landmarkMarket[target.name] && data.landmarkMarket[target.name].owner === u.name) {
+                            data.landmarkMarket[target.name].owner = null;
+                            data.landmarkMarket[target.name].ownerId = null; // ID 식별자 사용 시 함께 초기화
+                        }
+
                         util_updatePoint(u, roomObj, refund, "중복 투자 강제 환급: " + target.name, rName);
 
-                        var purgeMsg = "🚨 [부동산 정화] " + u.name + "님의 [" + target.name + "] 지분 " + target.qty + "개가 1인 1건물 원칙에 따라 강제 환급되었습니다. (+" + fp(refund) + "P)";
+                        var purgeMsg = "🚨 [부동산 정화] " + u.name + "님의 [" + target.name + "] 지분 " + target.qty + "개가 1인 1건물 원칙에 따라 강제 환급 및 공석 처리되었습니다. (+" + fp(refund) + "P)";
                         if (rName === ctx.targetRoom) Api.replyRoom(rName, purgeMsg);
                     }
                     u.skipHealing = true;

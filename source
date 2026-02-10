@@ -9221,6 +9221,10 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
         var pol = util_getActivePolicy(roomData);
         var multiplier = util_getEcoMultiplier(roomName) * (pol.mineMult || 1.0);
 
+        // [정부 정책 연동] 신규 정책 변수 반영 (인플레이션 억제 및 근로 삭감 정책)
+        if (pol.globalRewardMult) multiplier *= pol.globalRewardMult; // 인플레이션 억제 (x0.8)
+        if (pol.workMult) multiplier *= pol.workMult;                 // 근로 수익 감소 (x0.75)
+
         var hasDebt = (user.loan && Number(user.loan.debt) > 0);
         if (!hasDebt && roomData.loanContracts) {
             for (var cid in roomData.loanContracts) {
@@ -9244,24 +9248,29 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
             // [도굴왕] 발견 확률 20% 상승 (상대적 상승)
             var luck = (user.title === "도굴왕") ? 1.2 : 1.0;
             
-            if (rand < (conf.DIA_PROB * luck)) { 
+            // [정부 정책 연동] 희귀 광물 발견 배율 및 유물 확률 배율 적용
+            var rareMult = pol.rareMineMult || 1.0;     // 지하 경제 활성화법 (x2.0)
+            var artifMult = pol.artifactMult || 1.0;    // 골동품 발굴 장려령 (x3.0)
+            
+            if (rand < (conf.DIA_PROB * luck * rareMult)) { 
                 diaCount++; 
                 totalEarn += (minIncome * conf.DIA_MULT); 
             } 
-            else if (rand < ((conf.DIA_PROB + conf.GOLD_PROB) * luck)) { 
+            else if (rand < ((conf.DIA_PROB + conf.GOLD_PROB) * luck * rareMult)) { 
                 goldCount++; 
                 totalEarn += (minIncome * conf.GOLD_MULT); 
             } 
-            else if (rand < ((conf.DIA_PROB + conf.GOLD_PROB + conf.COPPER_PROB) * luck)) { 
+            else if (rand < ((conf.DIA_PROB + conf.GOLD_PROB + conf.COPPER_PROB) * luck * rareMult)) { 
                 copperCount++; 
                 totalEarn += (minIncome * conf.COPPER_MULT); 
             }
             else { 
-                // 4. 일반 돌덩이 판정 (나머지 91.5%)
+                // 4. 일반 돌덩이 판정 (나머지)
                 totalEarn += minIncome; 
             }
 
-            if (Math.random() < (conf.ARTIFACT_CHANCE || 0.0005)) {
+            // 유물 발견 확률에 정책 배율 적용
+            if (Math.random() < (conf.ARTIFACT_CHANCE * artifMult)) {
                 artifactFound++;
             }
         }
@@ -15167,6 +15176,11 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     
     var ship = cfg.SHIPS[user.shipLevel || 1];
     var timeMin = Math.floor(60 * ship.speedMult);
+
+    var pol = util_getActivePolicy(roomData);
+    if (pol.tradeSpeedMult) {
+        timeMin = Math.floor(timeMin * pol.tradeSpeedMult);
+    }
     
     var isSmooth = Math.random() < 0.1;
     if (isSmooth) timeMin = Math.floor(timeMin * 0.8);
@@ -15489,7 +15503,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                 // 상단에서 선언된 itemCost를 안전하게 사용합니다.
                 var baseEarn = Math.floor(myPurchasePrice * rateInfo.pref * count);
                 var baseMargin = baseEarn - itemCost;
-                var bonusAmt = baseMargin > 0 ? Math.floor(baseMargin * portLevelBonus) : 0;
+                var bonusAmt = baseMargin > 0 ? Math.floor(baseMargin * portLevelBonus * (pol.tradeBonusMult || 1.0)) : 0;
                 
                 pBonusTotal += bonusAmt;
                 // 0 나누기 방지를 위해 itemCost가 0보다 클 때만 배율 계산
@@ -15607,13 +15621,9 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var taxBenefitTag = (user.title === "기부왕") ? " ✨기부왕 혜택" : "";
     var afterTaxMargin = margin - taxAmount;
 
-    var pol = util_getActivePolicy(roomData); // 현재 시행 중인 정책 로드
-    var baseDisasterProb = cfg.EVENTS.PROB || 0.40; // 상수의 기본 확률 (25%)
-    
-    // 정책에 disasterProbMult(재해배율) 설정이 있다면 곱하고, 없으면 1.0 적용
+    var baseDisasterProb = cfg.EVENTS.PROB || 0.40; 
     var finalDisasterProb = baseDisasterProb * (pol.disasterProbMult || 1.0);
     
-    // 최종 판정 (해상왕은 위에서 이미 null 처리됨)
     var triggeredDisaster = (Math.random() < finalDisasterProb) ? ["STORM", "FIRE", "CORRO"][Math.floor(Math.random() * 3)] : null;
     
     // 해상왕 칭호 재검증 (보안 차원)
@@ -15644,6 +15654,30 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var crInfo = getCreditInfo(user.creditScore, roomName);
     var creditMult = util_getTradeCreditMult(crInfo.grade);
     var finalNetProfit = Math.floor(afterTaxMargin * creditMult); 
+
+    // [정부 정책 연동] 의회 가결 안건에 따른 추가 세금 및 수익 조정
+    if (finalNetProfit > 0) {
+        // 1. 무역 전용 소득세 (예: 강태공의 축제령 - 순이익 15% 차감)
+        if (pol.tradeIncomeTax) {
+            var specialTax = Math.floor(finalNetProfit * pol.tradeIncomeTax);
+            finalNetProfit -= specialTax;
+            util_updateReserve(economyRoomData, specialTax, "의회 무역 특별세 징수", economyRoomName);
+        }
+        // 2. 범용 수익 환수 (예: 복지 국가 건설안 - 수익 10% 환수)
+        if (pol.allProfitTax) {
+            var welfareTax = Math.floor(finalNetProfit * pol.allProfitTax);
+            finalNetProfit -= welfareTax;
+            util_updateReserve(economyRoomData, welfareTax, "의회 복지 기금 징수", economyRoomName);
+        }
+        // 3. 인플레이션 억제 (예: 모든 수익 20% 일괄 삭감)
+        if (pol.globalRewardMult) {
+            finalNetProfit = Math.floor(finalNetProfit * pol.globalRewardMult);
+        }
+        // 4. 근로 수익 감소 (예: 골동품 발굴 장려령 - 근로 수익 25% 감소)
+        if (pol.workMult) {
+            finalNetProfit = Math.floor(finalNetProfit * pol.workMult);
+        }
+    }
 
     var creditLoss = afterTaxMargin - finalNetProfit; // 신용 등급에 따른 수익 차감액 계산
 

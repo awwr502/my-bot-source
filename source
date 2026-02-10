@@ -8686,21 +8686,23 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         return; 
     }
 
-    // [v14.7 무역 정산 통합 트리거] 
-// 항해 시간이 종료되었다면 다른 어떤 로직보다 최우선으로 정산 엔진을 가동합니다.
-if (user.voyage && user.voyage.active === true) {
-    var now = Date.now();
-    var arrivalTime = Number(user.voyage.arrival || 0);
-    
-    // 도착 시간이 지났고, 현재 정산 중이 아닐 때 실행
-    if (now >= arrivalTime && user.voyage.isProcessing !== true) {
-        // 정산 엔진(Sector 51) 호출
-        _processTradeArrival(user, data, replier, roomName, targetUid);
-        
-        // 정산이 완료된 채팅에서는 더 이상의 명령어 로직(도배방지 등)이 실행되지 않도록 강제 종료
-        return; 
+    // 무역 도착 정산: 단체방("내리다")에서만 트리거되도록 수정하여 1:1 방 무역 정산 오작동 방지
+    if (isGroupRoom && user && user.voyage && user.voyage.active === true) {
+        var v = user.voyage;
+        if (Date.now() >= (v.arrival || 0) && v.isProcessing !== true) {
+            try {
+                if (typeof _processTradeArrival === 'function') {
+                    _processTradeArrival(user, data, replier, roomName, targetUid);
+                }
+            } catch (settleError) {
+                Log.error("🚨 [Critical] 정산 엔진 충돌 유저: " + user.name + " | 사유: " + settleError);
+                v.isProcessing = false; // 에러 시 잠금 해제하여 재시도 가능하게 함
+            }
+        }
     }
-}
+
+// 모든 명령어 실행 전, 해상 활동(무역/약탈) 정산 알림이 있는지 체크 (로직 본체는 섹터 51에 위치)
+if (typeof util_notifySeaReward === 'function') util_notifySeaReward(user, replier);
 
 // 현재 채팅 중인 물리적인 방의 데이터 (1:1 방 그 자체)
 var physicalRoom = data.rooms[roomName];
@@ -8759,6 +8761,7 @@ if (actualFeatures && actualFeatures.states) {
 
     // [확정] 모든 동기화 및 청소가 완료된 상태를 활성 세션으로 정의
     var activeSession = currentStates.menuWait[targetUid] || currentStates.bankProcess[targetUid] || currentStates.selectWait[targetUid];
+
 
 // 추가: 모든 숫자/메뉴 핸들러가 작동하기 전, 네비게이션 키워드를 최상단에서 가로챔 (수정/추가)
    var NAV_KEYWORDS = ["뒤로", "↩️ 뒤로", "처음으로", "🏠 처음으로", "취소", "❎취소"];
@@ -16841,35 +16844,36 @@ function _handleEscortHire(choice, user, data, replier, roomName, targetUid) {
     // 호위 보호세를 매출 기준이 아닌 순이익(estMargin)의 5%로 변경 (최소 1,000P 보장)
     var totalTax = Math.max(1000, Math.floor(estMargin * (tradeCfg.JOBS.ESCORT_FEE_RATE || 0.05)));
 
-    // [1단계] 현재 호위 임무 중인 해군 UID 수집 (시간 미도착자만 'Busy' 판정)
-    // 상인이 정산을 안 받았더라도 도착 시간만 지났다면 해방시켜주는 핵심 로직입니다.
+    // 현재 호위 임무 중인 해군 UID 수집 (1:1 매칭 보장)
     var busyNavies = [];
     var now = Date.now();
     for (var rName in data.rooms) {
         var rObj = data.rooms[rName];
         for (var uId in rObj.users) {
             var v = rObj.users[uId].voyage;
-            // 항해 중이고, 호위 해군이 등록되어 있으며, 아직 도착 전(now < arrival)인 경우만 Busy 명단에 추가
-            if (v && v.active === true && v.escortUid && now < Number(v.arrival || 0)) {
-                busyNavies.push(v.escortUid);
+            // 항해가 활성 상태(active)여도, 도착 후 10분이 지났다면 '유령 호위'로 간주하여 목록에서 제외합니다.
+            if (v && v.active === true && v.escortUid) {
+                var isGhostVoyage = (now - (v.arrival || 0) > 600000); // 10분(600,000ms) 여유 가드
+                
+                // 아직 도착 전이고, 유령 상태가 아닐 때만 'Busy' 목록에 추가
+                if (now < v.arrival && !isGhostVoyage) {
+                    busyNavies.push(v.escortUid);
+                }
             }
         }
     }
 
-    // [2단계] 최종 고용 가능한 해군 리스트 추출 (1:1 매칭 필터링)
+    // 2. 현재 활동 가능한(퇴각 중이 아니며, 항해 타이머가 끝난) 해군 리스트 추출
     var navyList = [];
     for (var r in data.rooms) {
         for (var uid in data.rooms[r].users) {
             var u = data.rooms[r].users[uid];
-            // 해군 신분이면서 본인이 아니고,
             if (u.job === 'navy' && uid !== targetUid) {
-                // [검증 1] 현재 퇴각/정비 중인지 확인
+                // 퇴각(정비) 중인지 체크
                 if (u.retreatEndTime && Date.now() < u.retreatEndTime) continue;
+                // [신규] 이미 호위 중인 해군은 목록에서 제외
+                if (busyNavies.indexOf(uid) !== -1) continue;
                 
-                // [검증 2] 1단계에서 만든 busyNavies(현재 호송 중) 명단에 있는지 확인
-                if (busyNavies.indexOf(uid) !== -1) continue; 
-                
-                // 위 검증을 모두 통과한 해군만 리스트에 추가
                 navyList.push({ uid: uid, name: u.name, shipLevel: (u.shipLevel || 1) });
             }
         }

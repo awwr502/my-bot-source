@@ -8678,24 +8678,22 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     // 현재 세션 상태 통합 판정 (무역 관련 voyage 조건 제거하여 1:1 방 간섭 차단)
     var inState = checkSession(localSt) || checkSession(mainSt) || (user && user.blackjackState);
 
-    /* [무역 정산 엔진] '내리다' 방에서 도착 완료 시 어떤 채팅이든 즉시 정산 */
+if (typeof util_notifySeaReward === 'function') util_notifySeaReward(user, replier);
+
+    // '내리다' 방에서 도착 완료 상태인 상인이 채팅을 치면 정산 집행
 if (realRoom === "내리다" && user && user.voyage && user.voyage.active === true) {
     var v = user.voyage;
-    // 도착 시간이 경과했다면 즉시 정산 함수 호출
+    // 현재 시간이 도착 예정 시간보다 크거나 같으면(도착 완료)
     if (Date.now() >= (v.arrival || 0)) {
         try {
             if (typeof _processTradeArrival === 'function') {
                 _processTradeArrival(user, data, replier, "내리다", targetUid);
-                // 정산이 완료되어 active가 false가 되었다면 로직 종료 (중복 방지)
-                if (user.voyage.active === false) return;
             }
         } catch (e) {
-            Log.error("🚨 무역 정산 트리거 에러: " + e);
+            Log.error("🚨 정산 트리거 치명적 오류: " + e);
+            if (user.voyage) user.voyage.isProcessing = false; // 에러 시 잠금 해제
         }
     }
-}
-
-if (typeof util_notifySeaReward === 'function') util_notifySeaReward(user, replier);
     
     // 1:1 대화방(!isGroupRoom)이면서 허용된 명령어나 세션 중이 아니면 즉시 차단
    if (!isGroupRoom && !isAllowedCmd && !inState) {
@@ -15475,18 +15473,20 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         }
     });
 
-  // 1. [논리 모순 해결]: 잠금 상태를 먼저 '확인'한 후 '잠금'을 걸어야 함
+  // 1. [잠금 확인]: 이미 처리 중인지 '먼저' 검사 (순서 교정)
     if (v.isProcessing === true) {
-        // 5분 이상 잠겨있는 경우에만 강제 해제 후 진행
+        // 도착 완료 시점으로부터 5분이 지났다면 유령 잠금으로 판단하고 해제
         if (Date.now() - (v.arrival || 0) > 300000) {
             v.isProcessing = false; 
         } else {
-            return; // 실제 처리 중일 수 있으므로 종료
+            return; // 아직 5분이 안 지났다면 실제 처리 중일 수 있으므로 종료
         }
     }
-    v.isProcessing = true; // 여기서 비로소 문을 잠금
+    
+    // 2. [잠금 실행]: 확인이 끝난 후 비로소 문을 잠급니다.
+    v.isProcessing = true; 
 
-    // 2. [데이터 무결성 보전]: 구버전 데이터 호환 (Undefined 에러 방지)
+    // 3. [데이터 복구]: 스냅샷 누락 시 현재 데이터로 긴급 수혈 (안정성 강화)
     var mainRoom = data.rooms["내리다"];
     if (!v.marketSnapshot) v.marketSnapshot = (mainRoom && mainRoom.features.tradeMarket) ? mainRoom.features.tradeMarket : SYSTEM_CONFIG.TRADE.NATIONS;
     if (!v.cargoSnapshot) v.cargoSnapshot = user.cargo || {};

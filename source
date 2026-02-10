@@ -8678,25 +8678,29 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     // 현재 세션 상태 통합 판정 (무역 관련 voyage 조건 제거하여 1:1 방 간섭 차단)
     var inState = checkSession(localSt) || checkSession(mainSt) || (user && user.blackjackState);
 
-    // 1. 무역 정산 트리거: 오직 '내리다' 방에서 채팅을 칠 때만 작동하도록 제한
-    // 2. 도착 완료 상태라면 메시지 종류와 관계없이 즉시 정산을 실행
+    // [무역 정산 엔진] 최우선 순위: '내리다' 방에서 도착 완료 시 즉시 정산 집행
     if (realRoom === "내리다" && user && user.voyage && user.voyage.active === true) {
         var v = user.voyage;
-        // 도착 시간이 현재 시간보다 과거(도착 완료)인 경우
-        if (Date.now() >= (v.arrival || 0)) {
-            // 중복 실행 방지를 위해 정산 처리 중(isProcessing)이 아닐 때만 호출
-            if (v.isProcessing !== true) {
-                try {
-                    if (typeof _processTradeArrival === 'function') {
-                        // 명시적으로 "내리다" 방으로 정산 결과가 출력되도록 인자 전달
-                        _processTradeArrival(user, data, replier, "내리다", targetUid);
-                    }
-                } catch (settleError) {
-                    Log.error("🚨 [Critical] 정산 엔진 충돌 유저: " + user.name + " | 사유: " + settleError);
-                    v.isProcessing = false; // 에러 발생 시 잠금 해제하여 다음 채팅 때 재시도 가능하게 함
+        // 도착 시간이 지났고 현재 다른 정산이 돌아가고 있지 않을 때
+        if (Date.now() >= (v.arrival || 0) && v.isProcessing !== true) {
+            try {
+                if (typeof _processTradeArrival === 'function') {
+                    // "내리다" 방으로 결과가 출력되도록 명시적 호출
+                    _processTradeArrival(user, data, replier, "내리다", targetUid);
+                    // 정산이 수행되었다면 하단 알림 로직 등을 건너뛰고 종료 (중복 메시지 방지)
+                    util_stagingCommit(user, data.rooms[roomName]);
+                    return; 
                 }
+            } catch (settleError) {
+                Log.error("🚨 [Critical] 정산 엔진 충돌: " + settleError);
+                v.isProcessing = false;
             }
         }
+    }
+
+    // 직업 활동(약탈/토벌) 미수령 보상 알림 (정산 대상이 아닐 때만 노출)
+    if (typeof util_notifySeaReward === 'function') {
+        util_notifySeaReward(user, replier);
     }
     
     // 1:1 대화방(!isGroupRoom)이면서 허용된 명령어나 세션 중이 아니면 즉시 차단

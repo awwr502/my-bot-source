@@ -2522,12 +2522,18 @@ function getItemPrice(item, user, roomName) {
     var multiplier = util_getEcoMultiplier(logicRoom);
     var giniCorr = util_getGiniCorrection(user, logicRoom);
 
+    // [정부 정책 연동] 현재 시행 중인 정책 로드
+    var data = getDatabase();
+    var pol = util_getActivePolicy(data.rooms[logicRoom]);
+
     // 기초가(Base) 설정: 무역 물품일 경우 섹터 1의 상수를 우선 참조
     var rawPrice = Number(item.price);
     if (item.effect === "trade_cargo" && item.value) {
         var tradeCfg = SYSTEM_CONFIG.TRADE;
         rawPrice = (tradeCfg.GOODS_COST && tradeCfg.GOODS_COST[item.value]) ? tradeCfg.GOODS_COST[item.value] : rawPrice;
     }
+
+    var basePrice = Math.floor(rawPrice * multiplier * giniCorr.tax * (pol.shopPriceMult || 1.0));
 
     // 최종 기본가 산출: (원가 * 물가배율 * 지니누진세)
     var basePrice = Math.floor(rawPrice * multiplier * giniCorr.tax);
@@ -2572,8 +2578,12 @@ function checkEconomicStimulus(user, roomName, isManual) {
         var giniCorr = util_getGiniCorrection(user, roomName);
         var gap = targetLine - myNetWorth;
         var emergencyMult = util_getEmergencyMultiplier(roomName);
+
+        // [정부 정책 연동] 인플레이션 억제 정책(globalRewardMult) 로드
+        var pol = util_getActivePolicy(roomData);
+
         // 지능형 보상 부스트(giniCorr.reward)를 적용하여 서민 자산 복구 가속
-        var baseGive = Math.floor(10000 * multiplier * emergencyMult * giniCorr.reward);
+        var baseGive = Math.floor(10000 * multiplier * emergencyMult * giniCorr.reward * (pol.globalRewardMult || 1.0));
         var giveAmount = Math.min(baseGive, gap); 
 
         // [신규] 신용불량자 페널티: 민생지원금 20% 삭감
@@ -14447,7 +14457,11 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
                 if (luckFactor >= 0.9) fishRand = Math.max(fishRand, 0.985);
             }
 
-            if (fishRand < conf.ARTIFACT_CHANCE) {
+            var pol = util_getActivePolicy(roomData); // 현재 시행 중인 의회 정책 로드
+            var artifMult = pol.artifactMult || 1.0;  // 골동품 발굴 장려령 (x3.0)
+
+        // 유물 발견 확률에 정책 배율 적용
+        if (fishRand < (conf.ARTIFACT_CHANCE * artifMult)) {
                 user.artifactPieces = Number(user.artifactPieces || 0) + 1;
                 util_setData(user, 'artifactPieces', user.artifactPieces, "낚시 중 유물 발견", roomName);
                 
@@ -14498,6 +14512,10 @@ function _gameActivityLogic(msg, user, data, replier, roomName, targetUid) {
                 }
 
                 var reward = Math.floor(Math.random() * (selectedFish.max - selectedFish.min + 1)) + selectedFish.min;
+
+                // [정부 정책 연동] 물고기 판매가 및 인플레이션 억제 배율 적용
+                if (pol.fishMult) reward = Math.floor(reward * pol.fishMult);       // 강태공의 축제령 (x1.5)
+                if (pol.globalRewardMult) reward = Math.floor(reward * pol.globalRewardMult); // 인플레이션 억제 (x0.8)
 
                 // [낚시왕] 칭호 효과: 물고기 판매 보상 20% 증가
                 if (user.title === "낚시왕") reward = Math.floor(reward * 1.2);

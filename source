@@ -3912,7 +3912,9 @@ function runScheduler() {
 
             // 2. 일일 초기화 (섹터 17)
             try {
-                if (typeof _runSector17Logic === 'function') _runSector17Logic(data, ctx);
+                if (currentHour === 0 && currentMin === 0 && typeof _runSector17Logic === 'function') {
+                    _runSector17Logic(data, ctx);
+                }
             } catch (e) {
                 Log.error("Sector 17 Logic Crash: " + e);
             }
@@ -4894,10 +4896,11 @@ runScheduler();
  */
 function _runSector17Logic(data, ctx) {
 
-    // [수정] 중복 실행 방지 가드: 로직 진입 직후에 바로 날짜를 갱신하여 무한 반복 차단
     if (data.lastDailyReset === ctx.today) return;
+    
+    // [보안] 로직 시작 즉시 날짜 갱신하여 1초 내 중복 실행 방지
     data.lastDailyReset = ctx.today;
-    if (typeof safeSaveData === 'function') safeSaveData(data); // 즉시 물리 저장
+    Log.info("📅 [System] " + ctx.today + " 일일 데이터 초기화 및 경제 정산을 시작합니다.");
 
     // [부동산] 과열 상태 및 일일 변동 데이터 초기화
     if (data.landmarkMarket) {
@@ -15511,26 +15514,27 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var escortLog = "";
 
     // [1] 유저 해적 약탈 정산 (마진 기반: 상인 원금 보호)
-    if (v.isPillaged === true && v.pirateUid) {
+    if ((user.isPillaged === true || v.isPillaged === true) && v.pirateUid) {
         var pirateObj = null;
-        for (var r in data.rooms) { if (data.rooms[r].users[v.pirateUid]) { pirateObj = data.rooms[r].users[v.pirateUid]; break; } }
-        
-        if (pirateObj) {
-            var pMin = cfg.JOBS.PIRATE.pillageRateMin || 0.3;
-            var pMax = cfg.JOBS.PIRATE.pillageRateMax || 0.5;
-            var pLevel = pirateObj.shipLevel || 1;
-            
-            // 레벨 1(30%) ~ 레벨 10(50%) 선형 보간 계산식
-            var pRate = pMin + (pMax - pMin) * (pLevel - 1) / 9;
-            
-            var pillageLoss = finalNetProfit > 0 ? Math.floor(finalNetProfit * pRate) : 0;
-            
-            if (pillageLoss > 0) {
-                finalNetProfit -= pillageLoss;
-                util_updatePoint(pirateObj, data.rooms["내리다"], pillageLoss, "해상 약탈 성공 수익: " + user.name, "내리다");
-                pillageLog = "\n🏴‍☠️ [약탈 피해]: 수익의 " + (pRate * 100).toFixed(1) + "%(-" + fp(pillageLoss) + "P)가 해적에게 강탈됨";
-            }
-        }
+        for (var r in data.rooms) { if (data.rooms[r].users[v.pirateUid]) { pirateObj = data.rooms[r].users[v.pirateUid]; break; } }
+        
+        if (pirateObj) {
+            var pMin = cfg.PIRATE.pillageRateMin || 0.3;
+            var pMax = cfg.PIRATE.pillageRateMax || 0.5;
+            var pLevel = pirateObj.shipLevel || 1;
+            var pRate = pMin + (pMax - pMin) * (pLevel - 1) / 9;
+            
+            var pillageLoss = finalNetProfit > 0 ? Math.floor(finalNetProfit * pRate) : 0;
+            
+            if (pillageLoss > 0) {
+                finalNetProfit -= pillageLoss;
+                util_updatePoint(pirateObj, data.rooms["내리다"], pillageLoss, "해상 약탈 성공 수익: " + user.name, "내리다");
+                pillageLog = "\n🏴‍☠️ [약탈 피해]: 수익의 " + (pRate * 100).toFixed(1) + "%(-" + fp(pillageLoss) + "P)가 해적에게 강탈됨";
+                
+                // 해적의 현상금 즉시 정산 (국고 귀속)
+                pirateObj.currentBounty = 0; 
+            }
+        }
     }
 
     // [2] 해군 호위세 최종 지급 (목적지 무사 도착 시)

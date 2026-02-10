@@ -1643,11 +1643,7 @@ function util_getActivePolicy(roomData) {
     };
 }
 
-/**
- * [신설] 입력 대기열 자동 만료 엔진 (Auto-Timeout Guard)
- * 기능: 30초간 응답 없는 유저를 탐지하여 즉시 알림을 발송하고 대기 상태를 해제합니다.
- * (이 함수는 섹터 16-1의 스케줄러 루프에서 호출됩니다.)
- */
+// [Sector 7] util_autoClearTimeouts: 미러링된 세션의 중복 알림 차단 로직 적용
 function util_autoClearTimeouts(data) {
     var now = Date.now();
     for (var rName in data.rooms) {
@@ -1662,19 +1658,21 @@ function util_autoClearTimeouts(data) {
             if (!q) return;
             for (var uid in q) {
                 var entry = q[uid];
-                // 각 대기열별 시간 필드값 참조 (time 또는 timestamp)
                 var startTime = entry.time || entry.timestamp || 0;
                 
                 if (startTime > 0 && (now - startTime > 30000)) {
                     var u = roomObj.users[uid];
                     if (u) {
                         try {
-                            var targetRoom = entry.originRoom || rName; 
-                            Api.replyRoom(targetRoom, formatError(u, "입력 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
+                            // 수정: 세션이 시작된 실제 방(originRoom)과 현재 검사 중인 방(rName)이 일치할 때만 알림 전송
+                            // originRoom이 없는 구버전 데이터나 단체방 세션은 rName에서 발송
+                            if (!entry.originRoom || entry.originRoom === rName) {
+                                Api.replyRoom(rName, formatError(u, "입력 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
+                            }
                         } catch(e) {}
                     }
-                    delete q[uid]; // 대기 상태 즉시 파기
-                    safeSaveData(data); // 상태 변경 실시간 저장
+                    delete q[uid]; 
+                    safeSaveData(data);
                 }
             }
         });
@@ -2936,6 +2934,7 @@ function handleUserSelection(replier, targetUid, found, type, extra, user, roomN
         results: safeFound, 
         type: type, 
         extra: extra 
+        originRoom: roomName
     };
     
     var list = [];

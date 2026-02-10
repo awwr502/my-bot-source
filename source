@@ -5632,11 +5632,11 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
 
                         // [중계 시스템] 유저 입력 실시간 탈취
                         // 유저가 카지노 감시 모드일 때, 해당 유저가 치는 모든 채팅을 중계방에 전송
-                        if (user && user.casinoAuditStartTime > 0 && roomName !== CASINO_RELAY_ROOM) {
-                            try {
-                                var relayInput = "👤 [중계-입력] " + user.name + " (" + roomName + ")\n" + "💬 " + msg;
-                                Api.replyRoom(CASINO_RELAY_ROOM, relayInput);
-                            } catch(e) { Log.error("Input Relay Error: " + e); }
+                        if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && realRoom !== CASINO_RELAY_ROOM) {
+                        try {
+                        var relayInput = "👤 [1:1입력] " + cleanSender + "\n💬 " + msg;
+                        Api.replyRoom(CASINO_RELAY_ROOM, relayInput);
+                        } catch(e) { Log.error("Input Relay Error: " + e); }
                         }
 
                         /* [핵심 가드] 이제 식별된 targetUid로 관리자 여부를 정확히 판별합니다. */
@@ -6084,23 +6084,24 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
     }
 }
 
-// [전체 중계 엔진] 모든 봇의 응답(reply)을 가로채 중계방으로 자동 복제 전송
-var relayReplier = {
+// 1. 기존 replier 기능을 가로채서 1:1 방의 답변만 중계방으로 복제하는 도구 생성
+var customReplier = {
     reply: function(content) {
-        // 1. 실제 메시지 발신 (유저에게 전송)
-        replier.reply(content); 
+        replier.reply(content); // 원래 유저에게 대답 (1:1 방)
         
-        // 2. 중계방 복제 전송
-        try {
-            // 중계방이 설정되어 있고, 현재 발신 장소가 중계방이 아닐 때만 실행
-            if (typeof CASINO_RELAY_ROOM !== 'undefined' && 
-                realRoom !== CASINO_RELAY_ROOM && 
-                realRoom !== "베릭방") { 
-                
-                var relayHeader = "🤖 [전체중계] To. " + cleanSender + " (" + realRoom + ")\n";
-                var relayBody = "━━━━━━━━━━━━━━━\n" + content;
-                Api.replyRoom(CASINO_RELAY_ROOM, relayHeader + relayBody);
-            }
+        // 1:1 방일 때만 중계방에 복사본 전송 (베릭방/내리다 방은 리스트에 있으므로 제외됨)
+        if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && realRoom !== CASINO_RELAY_ROOM) {
+            try {
+                Api.replyRoom(CASINO_RELAY_ROOM, "🤖 [1:1출력] To. " + cleanSender + "\n" + content);
+            } catch(e) { Log.error("Relay Output Error: " + e); }
+        }
+    }
+};
+
+// 2. 핵심 로직 함수 호출 (원본 replier 대신 가로채기 도구인 customReplier를 전달)
+if (user) {
+    _processMainLogic(msg, user, data, customReplier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData);
+}
         } catch(e) { Log.error("Global Relay Error: " + e); }
     }
 };
@@ -16002,8 +16003,6 @@ function util_notifySeaReward(user, replier) {
  */
 function util_casinoRelayReply(replier, user, content, roomName) {
     if (!content) return;
-    // 이제 replier 객체 자체가 이미 중계 기능을 포함한 relayReplier이므로 
-    // 그냥 reply만 호출하면 자동으로 중계방까지 전송됩니다.
     replier.reply(content); 
 }
 

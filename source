@@ -3936,26 +3936,34 @@ function runScheduler() {
 
    // 3. 자가 부활 워치독 가동 (1분 주기 감시)
     var newDog = setInterval(function() {
-        // [수정] currentInstance -> MY_INSTANCE_ID로 변경하여 ReferenceError 해결
-        if (typeof MY_INSTANCE_ID === 'undefined' || MY_INSTANCE_ID !== SCRIPT_INSTANCE_ID) {
-            clearInterval(newDog);
-            return;
-        }
-
         try {
+            // [정교화] 섹터 1의 MY_INSTANCE_ID를 표준으로 사용
+            // 시스템에 저장된 현재 활성 ID(CURRENT_ACTIVE_ID)를 가져와 비교합니다.
+            var activeId = java.lang.System.getProperty("CURRENT_ACTIVE_ID");
+
+            // 내 ID가 정의되지 않았거나, 시스템의 활성 ID와 내가 다르면 (중복 실행 상태) 즉시 종료
+            if (typeof MY_INSTANCE_ID === 'undefined' || activeId !== MY_INSTANCE_ID) {
+                clearInterval(newDog);
+                return;
+            }
+
             var data = getDatabase();
             if (!data || !data.statusCheck || !data.statusCheck.mainLoop) return;
 
             var lastHeartbeat = data.statusCheck.mainLoop;
             var diff = Date.now() - lastHeartbeat;
 
-            // 지연 임계치를 2분에서 3분(180000ms)으로 상향하여 리로드 부하 대응
+            // 지연 임계치 3분(180,000ms) 체크
             if (diff > 180000) { 
                 Log.error("🚨 [Watchdog] 엔진 정지 감지! 시스템을 강제 재점화합니다.");
-                try { Api.replyRoom("베릭방", "🛡️ [시스템 자가 복구]\n스케줄러 정지가 감지되어 엔진을 강제 재가동했습니다."); } catch(e) {}
+                try { 
+                    Api.replyRoom("베릭방", "🛡️ [시스템 자가 복구]\n스케줄러 정지가 감지되어 엔진을 강제 재가동했습니다."); 
+                } catch(e) {}
                 runScheduler(); 
             }
-        } catch (e) { Log.error("Watchdog Error: " + e); }
+        } catch (e) { 
+            Log.error("Watchdog Runtime Error: " + e); 
+        }
     }, 60000); 
 
     java.lang.System.setProperty(WATCHDOG_KEY, String(newDog));

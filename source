@@ -2768,39 +2768,51 @@ function util_checkUserState(user, uid, roomName, isJobActivity) {
 
     var activePillages = (roomData && roomData.features) ? (roomData.features.activePillages || {}) : {};
 
-    // 0. 해군 후퇴(정비) 상태 체크 (15분 페널티)
-    if (user.retreatEndTime && now < user.retreatEndTime) {
-        var diffR = user.retreatEndTime - now;
-        var remainMinR = Math.ceil(diffR / (1000 * 60));
-        return { canAction: false, reason: "현재 해전 패배로 인해 후퇴 정비 중입니다. (" + remainMinR + "분 남음)" };
+    // 1. 해상 활동(무역/약탈/토벌) 검증 시
+    if (isJobActivity === true) {
+        // [해군] 후퇴/정비 상태 체크 (15분 페널티)
+        if (user.retreatEndTime && now < user.retreatEndTime) {
+            var diffR = user.retreatEndTime - now;
+            var remainMinR = Math.ceil(diffR / (1000 * 60));
+            return { canAction: false, reason: "현재 해전 패배로 인해 후퇴 정비 중입니다. (" + remainMinR + "분 남음)" };
+        }
+        // [해적] 약탈 쿨타임/해상 징역 체크
+        if (user.pillageCooldownEndTime && now < user.pillageCooldownEndTime) {
+            var diffP = user.pillageCooldownEndTime - now;
+            var remainMinP = Math.ceil(diffP / (1000 * 60));
+            return { canAction: false, reason: "현재 함대 재정비(해상 징역) 중입니다. (" + remainMinP + "분 남음)" };
+        }
+    } 
+
+    // 2. 일반 활동(도박/은행/광산 등) 검증 시
+    else {
+        // [도둑질] 징역 상태 체크
+        if (user.jailReleaseTime && now < user.jailReleaseTime) {
+            var diff = user.jailReleaseTime - now;
+            var remainMin = Math.ceil(diff / (1000 * 60));
+            var timeStr = remainMin >= 60 ? Math.ceil(remainMin / 60) + "시간" : remainMin + "분";
+            return { canAction: false, reason: "현재 도둑질 죄로 징역 중입니다. (" + timeStr + " 남음)" };
+        }
     }
 
-    // 1. 감옥(징역) 상태 체크
-    if (user.jailReleaseTime && now < user.jailReleaseTime) {
-        var diff = user.jailReleaseTime - now;
-        var remainMin = Math.ceil(diff / (1000 * 60));
-        var timeStr = remainMin >= 60 ? Math.ceil(remainMin / 60) + "시간" : remainMin + "분";
-        return { canAction: false, reason: "현재 징역 중입니다. (" + timeStr + " 남음)" };
-    }
-
-    // 2. 광산 채굴 상태 체크 (정의된 isJobActivity를 정상 참조)
+    // 3. 광산 채굴 상태 체크 (정의된 isJobActivity를 정상 참조)
     if (user.mining && user.mining.active && !isJobActivity) {
         return { canAction: false, isMining: true, reason: "현재 광산에서 채굴 작업 중입니다." };
     }
 
-    // 3. 결투 진행 상태 체크 (방별 데이터 참조형으로 교정)
+    // 4. 결투 진행 상태 체크 (방별 데이터 참조형으로 교정)
     if (dData[uid]) return { canAction: false, reason: "현재 결투 신청을 받은 상태입니다." };
     for (var dKey in dData) {
         if (dData[dKey].challengerUid === uid) return { canAction: false, reason: "현재 타인에게 결투를 신청한 상태입니다." };
     }
 
-    // 4. 도둑질 진행 상태 체크 (방별 데이터 참조형으로 교정)
+    // 5. 도둑질 진행 상태 체크 (방별 데이터 참조형으로 교정)
     if (aThefts[uid]) return { canAction: false, reason: "현재 도둑질의 표적이 되어 방어 중입니다." };
     for (var vKey in aThefts) {
         if (aThefts[vKey].thiefUid === uid) return { canAction: false, reason: "현재 다른 유저를 털고 있는 중입니다." };
     }
 
-    // 5. 해상 약탈 및 교전 진행 상태 체크 (실시간 세션 감시)
+    // 6. 해상 약탈 및 교전 진행 상태 체크 (실시간 세션 감시)
     // - 내가 약탈 대상(상인)일 때
     if (activePillages[uid]) return { canAction: false, reason: "현재 해적에게 습격받아 교전 중입니다!" };
     
@@ -16774,25 +16786,9 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
     var mainRoom = data.rooms["내리다"];
     var currentPillages = mainRoom.features.activePillages || {};
 
-    // 해적 활동(약탈 목록 조회) 시 채굴 상태 허용(true)
+    / 1. 통합 상태 가드 호출 (isJobActivity: true 전달하여 해상 전용 징역만 필터링)
     var stateRes = util_checkUserState(user, targetUid, roomName, true);
     if (!stateRes.canAction) return replier.reply(formatError(user, "탐색 불가", stateRes.reason));
-
-    if (user.pillageCooldownEndTime && now < user.pillageCooldownEndTime) {
-        var diffC = user.pillageCooldownEndTime - now;
-        var remainMinC = Math.ceil(diffC / (1000 * 60));
-        
-        // 징역 여부로 승패 판별
-        var isDefeat = (user.jailReleaseTime && now < user.jailReleaseTime);
-        
-        // 상단 박스 내부 내용 (사유 + 남은시간)
-        var contentMsg = "약탈 불가\n\n⏳ 남은 시간: " + remainMinC + "분";
-        
-        // 하단 가이드 문구 (승리/패배 상태 알림)
-        var guideMsg = isDefeat ? "현재 해전 패배로 인해 함대 정비(징역) 중입니다." : "약탈 성공 후 함대를 재정비 중입니다.";
-
-        return replier.reply(formatError(user, contentMsg, guideMsg));
-    }
 
     for (var r in data.rooms) {
         var roomObj = data.rooms[r];

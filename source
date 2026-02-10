@@ -8677,6 +8677,27 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
 
     // 현재 세션 상태 통합 판정 (무역 관련 voyage 조건 제거하여 1:1 방 간섭 차단)
     var inState = checkSession(localSt) || checkSession(mainSt) || (user && user.blackjackState);
+
+    // 1. 무역 정산 트리거: 오직 '내리다' 방에서 채팅을 칠 때만 작동하도록 제한
+    // 2. 도착 완료 상태라면 메시지 종류와 관계없이 즉시 정산을 실행
+    if (realRoom === "내리다" && user && user.voyage && user.voyage.active === true) {
+        var v = user.voyage;
+        // 도착 시간이 현재 시간보다 과거(도착 완료)인 경우
+        if (Date.now() >= (v.arrival || 0)) {
+            // 중복 실행 방지를 위해 정산 처리 중(isProcessing)이 아닐 때만 호출
+            if (v.isProcessing !== true) {
+                try {
+                    if (typeof _processTradeArrival === 'function') {
+                        // 명시적으로 "내리다" 방으로 정산 결과가 출력되도록 인자 전달
+                        _processTradeArrival(user, data, replier, "내리다", targetUid);
+                    }
+                } catch (settleError) {
+                    Log.error("🚨 [Critical] 정산 엔진 충돌 유저: " + user.name + " | 사유: " + settleError);
+                    v.isProcessing = false; // 에러 발생 시 잠금 해제하여 다음 채팅 때 재시도 가능하게 함
+                }
+            }
+        }
+    }
     
     // 1:1 대화방(!isGroupRoom)이면서 허용된 명령어나 세션 중이 아니면 즉시 차단
    if (!isGroupRoom && !isAllowedCmd && !inState) {
@@ -8690,21 +8711,6 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
             replier.reply(formatError(user, "접근 제한 명령어", infoBody));
         }
         return; 
-    }
-
-    // 무역 도착 정산: 단체방("내리다")에서만 트리거되도록 수정하여 1:1 방 무역 정산 오작동 방지
-    if (isGroupRoom && user && user.voyage && user.voyage.active === true) {
-        var v = user.voyage;
-        if (Date.now() >= (v.arrival || 0) && v.isProcessing !== true) {
-            try {
-                if (typeof _processTradeArrival === 'function') {
-                    _processTradeArrival(user, data, replier, roomName, targetUid);
-                }
-            } catch (settleError) {
-                Log.error("🚨 [Critical] 정산 엔진 충돌 유저: " + user.name + " | 사유: " + settleError);
-                v.isProcessing = false; // 에러 시 잠금 해제하여 재시도 가능하게 함
-            }
-        }
     }
 
 // 모든 명령어 실행 전, 해상 활동(무역/약탈) 정산 알림이 있는지 체크 (로직 본체는 섹터 51에 위치)
@@ -16857,12 +16863,10 @@ function _handleEscortHire(choice, user, data, replier, roomName, targetUid) {
         var rObj = data.rooms[rName];
         for (var uId in rObj.users) {
             var v = rObj.users[uId].voyage;
-            // 항해가 활성 상태(active)여도, 도착 후 10분이 지났다면 '유령 호위'로 간주하여 목록에서 제외합니다.
+            // 해군 가용 상태 판정: 상인이 정산 버튼을 누르지 않았더라도(active === true),
+            // 항해 완료 시간(arrival)이 지났다면 해당 해군은 'Busy' 목록에서 제외 (즉시 고용 가능)
             if (v && v.active === true && v.escortUid) {
-                var isGhostVoyage = (now - (v.arrival || 0) > 600000); // 10분(600,000ms) 여유 가드
-                
-                // 아직 도착 전이고, 유령 상태가 아닐 때만 'Busy' 목록에 추가
-                if (now < v.arrival && !isGhostVoyage) {
+                if (now < (v.arrival || 0)) {
                     busyNavies.push(v.escortUid);
                 }
             }

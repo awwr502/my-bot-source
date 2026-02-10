@@ -15456,25 +15456,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         util_scrubNativeObject(v);
     }
 
-    var targets = [user, v, (user.lastAction || {})];
-    targets.forEach(function(obj) {
-        if (!obj) return;
-        // 1. 흔한 이름들 직접 삭제
-        var keys = ['replier', 'imageDB', 'replier_raw'];
-        keys.forEach(function(k) { if (obj[k]) delete obj[k]; });
-        
-        // 2. 객체 내부 전수 조사 (실제 자바 객체 판별)
-        for (var key in obj) {
-            if (obj[key] !== null && typeof obj[key] === 'object') {
-                if (obj[key].getClass !== undefined || (obj[key].constructor && obj[key].constructor.name === 'SessionCacheReplier')) {
-                    delete obj[key];
-                    Log.warn("🗑️ [Trade Clean] 정산 중 불순물 제거: " + key);
-                }
-            }
-        }
-    });
-
-  // 1. [잠금 통합 관리]: 1분 이상 잠겨있으면 유령 잠금으로 판단하여 해제 후 다시 시도
+    // 1. [잠금 통합 관리]: 1분 이상 잠겨있으면 유령 잠금으로 판단하여 해제 후 진행
     if (v.isProcessing === true) {
         if (Date.now() - (v.arrival || 0) > 60000) {
             v.isProcessing = false; 
@@ -15486,63 +15468,46 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     
     v.isProcessing = true; // 2. [잠금 실행]: 정산 프로세스 점유
 
-    try {
+    try { // 3. [보호막 시작]: 여기서 try를 열어 아래의 모든 복구 및 정산 로직을 감쌉니다.
 
-    // 3. [데이터 복구]: 스냅샷 누락 시 현재 데이터로 긴급 수혈 (안정성 강화)
-    var mainRoom = data.rooms["내리다"];
-    if (!v.marketSnapshot) v.marketSnapshot = (mainRoom && mainRoom.features.tradeMarket) ? mainRoom.features.tradeMarket : SYSTEM_CONFIG.TRADE.NATIONS;
-    if (!v.cargoSnapshot) v.cargoSnapshot = user.cargo || {};
-    if (!v.specialtySnapshot) v.specialtySnapshot = user.specialties || {};
-    if (!v.ecoMultSnapshot) v.ecoMultSnapshot = util_getEcoMultiplier("내리다");
+        // 4. 불필요한 객체 참조 즉시 제거 (메모리 정화)
+        if (user.replier) delete user.replier;
+        if (user.imageDB) delete user.imageDB;
+        if (v.replier) delete v.replier;
+        if (user.lastAction && user.lastAction.replier) delete user.lastAction.replier;
 
-    var cfg = SYSTEM_CONFIG.TRADE;
-    
-    // 1. 현재 방 데이터 복구 (하단 로직용)
-    var roomData = data.rooms[roomName]; 
-    
-    // 2. 실제 자산이 연동될 경제 구역 설정 (1:1방 연동용)
-    var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-    var economyRoomData = data.rooms[economyRoomName];
+        // 5. [데이터 복구]: 스냅샷 누락 시 현재 데이터로 긴급 수혈 (안정성 강화)
+        var mainRoom = data.rooms["내리다"];
+        if (!v.marketSnapshot) v.marketSnapshot = (mainRoom && mainRoom.features.tradeMarket) ? mainRoom.features.tradeMarket : SYSTEM_CONFIG.TRADE.NATIONS;
+        if (!v.cargoSnapshot) v.cargoSnapshot = user.cargo || {};
+        if (!v.specialtySnapshot) v.specialtySnapshot = user.specialties || {};
+        if (!v.ecoMultSnapshot) v.ecoMultSnapshot = util_getEcoMultiplier("내리다");
 
-    // [중요] 기존 하단 코드들과의 호환성을 위해 변수를 다시 매핑함
-    // 이 줄이 있어야 하단에서 roomData.bankReserve 등을 찾을 때 에러가 안 납니다.
-    if (!roomData) roomData = economyRoomData;
-
-    // [MODIFIED] 정산 로직이 5분 이상 잠겨있다면 강제 해제 (세션 굳음 방지)
-    if (v.isProcessing === true) {
-        if (Date.now() - (v.arrival || 0) > 300000) v.isProcessing = false;
-        else return;
-    }
-
-    v.isProcessing = true; // 진입과 동시에 문을 잠급니다.
-
-    try {
-
-    if (user.replier) delete user.replier;
-    if (user.imageDB) delete user.imageDB;
-    if (v.replier) delete v.replier;
-    if (user.lastAction && user.lastAction.replier) delete user.lastAction.replier;
-
-    // 1. [핵심] 정산 시 부도 가드 (메인 구역 기준으로 잔액 체크)
-    if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(economyRoomName)) {
-        // 부도 상태일 때는 정산 잠금을 해제하여 부도 해제 시 다음 채팅에서 자동 정산되게 함
-        v.isProcessing = false; 
-
-        if (v.isAlerted === true) return; // 알림은 한 번만 출력
-        v.isAlerted = true; 
+        var cfg = SYSTEM_CONFIG.TRADE;
         
-        var bankMsg = "무역선이 항구에 도착했으나, [" + economyRoomName + "] 구역의 부도 상태로 인해\n" +
-                      "정산금을 지급할 재원이 부족합니다.\n\n" +
-                      "📦 상태: 화물 보존 및 입항 대기\n" +
-                      "💰 조치: 국고 복구 후 채팅 입력 시 자동 정산";
-        
-        Api.replyRoom("내리다", formatCommand("⚓ 입항 대기 (지불 정지)", user, bankMsg, "해제 기준: 국고 50% 복구"));
-        safeSaveData(data, false);
-        return;
-    }
+        // 6. 현재 방 데이터 복구 및 경제 구역 설정 (1:1방 연동용)
+        var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+        var economyRoomData = data.rooms[economyRoomName];
+        var roomData = data.rooms[roomName] || economyRoomData; 
 
-    // 3. 정산 프로세스 상태 초기화
-    v.isAlerted = false;
+        // 7. [핵심] 정산 시 부도 가드 (메인 구역 기준으로 잔액 체크)
+        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(economyRoomName)) {
+            v.isProcessing = false; // 부도 시 잠금 해제하여 다음 기회 부여
+            if (v.isAlerted === true) return; 
+            v.isAlerted = true; 
+            
+            var bankMsg = "무역선이 항구에 도착했으나, [" + economyRoomName + "] 구역의 부도 상태로 인해\n" +
+                          "정산금을 지급할 재원이 부족합니다.\n\n" +
+                          "📦 상태: 화물 보존 및 입항 대기\n" +
+                          "💰 조치: 국고 복구 후 채팅 입력 시 자동 정산";
+            
+            Api.replyRoom("내리다", formatCommand("⚓ 입항 대기 (지불 정지)", user, bankMsg, "해제 기준: 국고 50% 복구"));
+            safeSaveData(data, false);
+            return;
+        }
+
+        // 8. 정산 프로세스 상태 초기화
+        v.isAlerted = false;
 
    // [보안] 실시간 가방이 아닌, 출항 시 박제했던 스냅샷을 정산 대상으로 설정
     // 1. [Snapshot] 출항 시점의 고정 데이터들을 정산 대상으로 설정 (휘발성/롤백 방지)

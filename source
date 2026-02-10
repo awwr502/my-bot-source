@@ -8142,7 +8142,7 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         if (choice === "1") _showRaidList(user, replier, data, roomName, targetUid);
         else if (choice === "2") _showPirateInfo(user, replier);
         else if (choice === "3") _processPirateRetire(user, data, replier, roomName, targetUid);
-        else if (choice === "4") _processPirateBail(user, data, replier, roomName, targetUid);
+        else if (choice === "4") _processPirateDailyWage(user, data, replier, roomName, targetUid); // 해적 도시 정산
         else if (choice === "5") {
             var item = SHOP_ITEMS.filter(function(it){ return it.id === 106; })[0];
             var price = getItemPrice(item, user, logicRoom);
@@ -8155,6 +8155,7 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
                 replier.reply(formatCommand("📝 선박 이름 변경", user, renameBody, "취소: [취소]"));
             }
         }
+        else if (choice === "6") _processPirateBail(user, data, replier, roomName, targetUid); // 보석금 납부
         else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요."));
         return true;
     }
@@ -16358,9 +16359,14 @@ function _showPirateMenu(user, replier, roomData, targetUid) {
     var menu = "1. 🔭 약탈 대상 물색 (레이더)\n" +
                "2. 💀 내 악명 상세 조회\n" +
                "3. 📜 해적단 은퇴 (면죄부 구입)\n" +
-               "4. 💸 보석금 납부 (10만P / 즉시 석방)\n" +
-               "5. 📝 선박 이름변경권 : " + fp(price) + "P\n\n" +
-               "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+               "4. 💰 나소 (해적 도시 정산)\n" +
+               "5. 📝 선박 이름변경권 : " + fp(price) + "P";
+
+    if (user.jailReleaseTime && Date.now() < user.jailReleaseTime) {
+        menu += "\n6. 💸 보석금 납부 (10만P / 즉시 석방)";
+    }
+
+    menu += "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
     var title = "🏴‍☠️ 나소(해적도시)\n" + getDisplayName(user);
     replier.reply(formatCommand(title, null, menu, "수행할 번호를 입력하세요."));
@@ -16387,6 +16393,48 @@ function _showNavyMenu(user, replier, roomData, targetUid) {
     
     if (!roomData.features.states.menuWait) roomData.features.states.menuWait = {};
     roomData.features.states.menuWait[targetUid] = { type: 'trade_navy_menu', time: Date.now(), depth: 2 };
+}
+
+// 추가: 해적 전용 일급(나소 정산) 로직 신설
+/**
+ * [해적] 해적 도시 '나소' 약탈품 정산 (일급)
+ * 공식: (25,000 + 악명*100) * 물가배율 (최대 10만P)
+ */
+function _processPirateDailyWage(user, data, replier, roomName, targetUid) {
+    var today = getSimpleDate();
+    var roomData = data.rooms[roomName];
+
+    if (user.lastPirateWageDate === today) {
+        return replier.reply(formatError(user, "정산 불가", "오늘은 이미 나소에서 정산을 마쳤습니다."));
+    }
+
+    if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
+        return replier.reply(formatError(user, "정산 불가", "국가 부도 상태로 인해 해적 도시의 장물 거래가 동결되었습니다."));
+    }
+
+    var baseWage = 25000;
+    var infamyBonus = (Number(user.infamy) || 0) * 100;
+    var multiplier = util_getEcoMultiplier(roomName);
+    var totalWage = Math.floor((baseWage + infamyBonus) * multiplier);
+    totalWage = Math.min(100000, totalWage);
+
+    user.skipHealing = true;
+    user.lastPirateWageDate = today;
+
+    var res = processRepayment(user, totalWage, targetUid, roomName);
+    util_updatePoint(user, roomData, Number(res.actualGain), "해적 도시 '나소' 장물 정산", roomName);
+
+    var resultBody = "나소 해적도시에서 위험수당이 지급되었습니.\n\n" +
+                     "💵 기본급: " + fp(baseWage) + "P\n" +
+                     "🗡️ 악명수당: +" + fp(infamyBonus) + "P\n" +
+                     "📈 물가보정: x" + multiplier.toFixed(2) + "\n\n" +
+                     "💰 최종 지급액: " + fp(totalWage) + "P\n" +
+                     (res.repayMsg || "✅ 지갑으로 즉시 입금되었습니다.");
+
+    if (roomData.features.states.menuWait) delete roomData.features.states.menuWait[targetUid];
+
+    replier.reply(formatCommand("💰 나소 해적 도시 정산)", user, resultBody, "내 잔액: " + fp(user.point) + "P"));
+    safeSaveData(data, true);
 }
 
 /* [해적] 상세 정보 조회 */

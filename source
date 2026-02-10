@@ -16532,67 +16532,53 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
     else if (pScore < dScore) { resultStr = "딜러 점수 우위 패배! 💀"; resultStatus = "LOSE"; }
     else { resultStr = "무승부 (Push) 😐"; resultStatus = "PUSH"; }
 
+    // [3] 통합 정산 및 결과 메시지 조립 (중복 호출 제거)
     var multiplier = (resultStatus === "WIN") ? (user.title === "도박왕" ? 1.95 : 1.90) : (resultStatus === "PUSH" ? 1.0 : 0);
     var prize = Math.floor(state.bet * multiplier);
-
-    if (resultStatus === "WIN") {
-        var netProfit = prize - state.bet;
-        var tax = Math.floor(state.bet * 0.1);
-        var res = processRepayment(user, netProfit, targetUid, roomName);
-        util_updatePoint(user, roomData, Number(res.actualGain), "블랙잭 승리 수익", roomName);
-        util_updateReserve(roomData, tax, "블랙잭 이용세 징수", roomName);
-        user.totalGambleWins = (user.totalGambleWins || 0) + 1;
-    } else if (resultStatus === "LOSE") {
-        util_updatePoint(user, roomData, -state.bet, "블랙잭 패배 차감", roomName);
-    }
-
-    // 3. [세션 전환 핵심] 차기 핸들러 연결
-    user.blackjackState = null; // 현재 판 정보 초기화 (장부 마감)
-    roomData.features.states.menuWait[targetUid] = { type: 'blackjack_retry', time: Date.now() }; // '한번더' 대기 상태 진입
-
-    var prize = Math.floor(state.bet * multiplier);
-    var finalMsg = "🤖 딜러 패: [ " + state.dealerHand.join(", ") + " ] (" + dScore + "점)\n" +
-                   "👤 나의 패: [ " + state.playerHand.join(", ") + " ] (" + pScore + "점)\n\n" +
-                   "📢 결과: " + resultStr;
-
-   // [수정] solvency 체크 시 1:1방 이름(roomName) 대신 국고가 실재하는 economyRoom 변수를 참조하도록 변경
+    var resultInfoMsg = "";
     var economyRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
 
     if (resultStatus === "WIN") {
-        // [후정산] 승리 시: 원금 제외 '수익금'만 추가 지급
-        var netProfit = prize - state.bet; 
+        var netProfit = prize - state.bet;
+        // 국고 지불 능력 선제 검증
         if (!util_isBankSolvent(economyRoom, netProfit)) {
             replier.reply(formatError(user, "은행 지불 불능", "국고 부족으로 상금을 지급할 수 없습니다."));
+            user.blackjackState = null;
             return;
         }
         var taxAmount = Math.floor(state.bet * 0.1);
         var res = processRepayment(user, netProfit, targetUid, roomName);
+        
+        // 게이트웨이 통과 (단 1회만 호출)
         util_updatePoint(user, roomData, Number(res.actualGain), "블랙잭 승리 수익", roomName);
         util_updateReserve(roomData, taxAmount, "블랙잭 이용세 징수", roomName);
-
-        finalMsg += "\n💰 수익: +" + fp(netProfit) + "P (배당 적용)";
-        finalMsg += "\n⚖️ 세금(10%): -" + fp(taxAmount) + "P";
-        if (res.repayMsg) finalMsg += res.repayMsg;
         
+        resultInfoMsg = "\n💰 수익: +" + fp(netProfit) + "P\n⚖️ 세금(10%): -" + fp(taxAmount) + "P" + (res.repayMsg || "");
+        user.totalGambleWins = (user.totalGambleWins || 0) + 1;
+        
+        // 당일 기록 업데이트
         var nowStr = new Date().getHours() + ":" + ("0" + new Date().getMinutes()).slice(-2);
         if (!user.dailyBlackjackWins) user.dailyBlackjackWins = [];
         user.dailyBlackjackWins.unshift({ round: "BJ", res: "승리", profit: netProfit, time: nowStr });
     } 
     else if (resultStatus === "LOSE") {
-        // [후정산] 패배 시: 배팅 원금을 여기서 차감
         util_updatePoint(user, roomData, -state.bet, "블랙잭 패배 차감", roomName);
-        finalMsg += "\n💀 손실: -" + fp(state.bet) + "P (배팅금 차감)";
+        resultInfoMsg = "\n💀 손실: -" + fp(state.bet) + "P (배팅금 차감)";
     }
-    else if (resultStatus === "PUSH") {
-        // [후정산] 무승부 시: 선차감이 없었으므로 아무 작업도 하지 않음
-        finalMsg += "\n⚖️ 결과: 배팅금이 보존되었습니다.";
+    else {
+        resultInfoMsg = "\n⚖️ 결과: 배팅금이 보존되었습니다.";
     }
 
-    util_casinoRelayReply(replier, user, formatCommand("🏁 블랙잭 결과 Report", user, finalMsg + "\n\n🔁한번더 ❎그만", "내 잔액: " + fp(user.point) + "P"), roomName);
-    
+    // [4] 상태 정리 및 최종 출력
+    user.totalGambleCount = (user.totalGambleCount || 0) + 1;
     user.blackjackState = null;
     roomData.features.states.menuWait[targetUid] = { type: 'blackjack_retry', time: Date.now() };
-    
+
+    var finalMsg = "🤖 딜러 패: [ " + state.dealerHand.join(", ") + " ] (" + dScore + "점)\n" +
+                   "👤 나의 패: [ " + state.playerHand.join(", ") + " ] (" + pScore + "점)\n\n" +
+                   "📢 결과: " + resultStr + resultInfoMsg;
+
+    util_casinoRelayReply(replier, user, formatCommand("🏁 블랙잭 결과 Report", user, finalMsg + "\n\n🔁한번더 ❎그만", "내 잔액: " + fp(user.point) + "P"), roomName);
     safeSaveData(data);
 }
 

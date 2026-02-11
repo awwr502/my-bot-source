@@ -17220,10 +17220,13 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
         var aiDests = ["포르투", "코콜라", "나폴리", "베라크루스", "킴벌리"];
         var needed = 4 - sailingUsers.length;
         
-        for (var i = 0; i < needed; i++) {
+       for (var i = 0; i < needed; i++) {
             var randName = aiNames[Math.floor(Math.random() * aiNames.length)] + " " + (Math.floor(Math.random() * 90) + 10);
             var randDest = aiDests[Math.floor(Math.random() * aiDests.length)];
-            var randLevel = Math.floor(Math.random() * 3) + 2; // AI는 보통 Lv.2~5 함선
+            var randLevel = Math.floor(Math.random() * 3) + 2; 
+
+            // [핵심] 호위 동행 확률 50% 설정
+            var hasAIescort = Math.random() < 0.5; 
 
             sailingUsers.push({
                 uid: "AI_BOT_" + i,
@@ -17234,7 +17237,8 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
                     voyage: {
                         dest: randDest,
                         arrival: now + ((Math.floor(Math.random() * 20) + 10) * 60000),
-                        escortUid: "AI_NAVY_ELITE" // AI 상인은 항상 가상의 엘리트 해군이 호위
+                        // 50% 확률에 따라 엘리트 해군 또는 null 할당
+                        escortUid: hasAIescort ? "AI_NAVY_ELITE" : null 
                     }
                 },
                 roomName: "내리다"
@@ -17297,18 +17301,30 @@ function _handlePillageSelect(choice, user, data, replier, roomName, targetUid) 
     var vId = target.uid;
 
     if (target.isAI) {
-        replier.reply("🛡️ [경보]\n습격한 '" + victim.name + "'은(는) AI 상단입니다!\n호위 중인 'AI 해군' 함대와 즉시 교전이 시작됩니다!");
+        // [핵심] 호위함 존재 여부에 따른 분기 처리 (확률 50% 반영 결과 체크)
+        if (victim.voyage && victim.voyage.escortUid) {
+            replier.reply("🛡️ [경보]\n습격한 '" + victim.name + "'은(는) AI 상단입니다!\n호위 중인 'AI 해군' 함대와 즉시 교전이 시작됩니다!");
+            
+            // 호위함이 있는 경우 기존처럼 교전 로직(AI_COMBAT) 수행
+            _executeSeaCombat(user, vId, "AI_NAVY_ELITE", data, roomName, "AI_COMBAT");
+        } else {
+            // 호위함이 없는 경우 즉시 약탈 성공 처리
+            replier.reply("📦 [습격 성공]\n습격한 '" + victim.name + "'은(는) 호위함이 없는 무방비 상태였습니다!\n즉시 화물을 약탈하고 자취를 감춥니다.");
+            
+            if (typeof _processPillageSuccess === 'function') {
+                // 즉시 정산 함수 호출
+                _processPillageSuccess(vId, { pirateUid: targetUid, victimName: victim.name }, data, roomName);
+            }
+        }
         
-        // AI 상인의 경우 전용 전투 모드(AI_COMBAT)로 실행
-        _executeSeaCombat(user, vId, "AI_NAVY_ELITE", data, roomName, "AI_COMBAT");
+        // AI 처리 후 세션 종료 및 저장
         delete roomData.features.states.menuWait[targetUid];
+        safeSaveData(data, true);
         return;
     }
 
     // 선택 시점에 대상 유저의 최신 데이터를 다시 확인하여 이미 털린 유저인지 2차 검증
     if (victim.isPillaged === true || (victim.voyage && victim.voyage.isPillaged === true)) {
-        return replier.reply(formatError(user, "습격 실패", "이미 다른 해적에게 약탈당한 선박입니다."));
-    }
 
     // 중복 확인 (선점 가드)
     var mainRoom = data.rooms["내리다"];

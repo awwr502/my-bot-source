@@ -1590,7 +1590,10 @@ function util_getActivePolicy(roomData) {
     };
 }
 
-// [Sector 7] util_autoClearTimeouts: 미러링된 세션의 중복 알림 차단 로직 적용
+/**
+ * [v14.4 교정] 타임아웃 알림 중복 및 방 이탈 발송 방지 엔진
+ * 기능: 세션 만료 시 실제 세션이 시작된 방(originRoom)으로만 알림을 보냅니다.
+ */
 function util_autoClearTimeouts(data) {
     var now = Date.now();
     for (var rName in data.rooms) {
@@ -1611,15 +1614,19 @@ function util_autoClearTimeouts(data) {
                     var u = roomObj.users[uid];
                     if (u) {
                         try {
-                            // 수정: 세션이 시작된 실제 방(originRoom)과 현재 검사 중인 방(rName)이 일치할 때만 알림 전송
-                            // originRoom이 없는 구버전 데이터나 단체방 세션은 rName에서 발송
-                            if (!entry.originRoom || entry.originRoom === rName) {
+                            // [핵심 교정]: 세션에 기록된 originRoom이 현재 순회 중인 rName과 일치할 때만 메시지 발송
+                            // 만약 '내리다' 방에 복사된 세션(originRoom: "1:1방")이라면, rName이 "내리다"일 때는 메시지를 보내지 않음.
+                            var actualOrigin = entry.originRoom || rName;
+                            
+                            if (rName === actualOrigin) {
                                 Api.replyRoom(rName, formatError(u, "입력 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
                             }
-                        } catch(e) {}
+                        } catch(e) {
+                            Log.error("Timeout Notify Error: " + e);
+                        }
                     }
+                    // 메시지 발송 여부와 상관없이 데이터는 양쪽 방(1:1, 내리다)에서 각각 삭제하여 정리
                     delete q[uid]; 
-                    safeSaveData(data);
                 }
             }
         });

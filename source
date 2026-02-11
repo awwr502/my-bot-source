@@ -5539,70 +5539,61 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
                         var data = getDatabase(); 
                         if (!data) return;
 
-                        var cacheKey = "GLOBAL_" + cleanSender;
+                       // 1. 캐시 우선 확인
+            targetUid = globalData.nameToIdCache[cacheKey];
+            var isSynced = false;
 
-
-                        // 1. 식별자 초기화
-                        var targetUid = null;
-                        var isSynced = false;
-
-                        // 2. [강력 동기화] 1:1 방일 경우 "내리다" 방의 UID로 강제 전환 및 유령 데이터 제거
-                        if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-                            var targetSearchName = cleanSender.replace(/\s/g, ""); // 공백 제거된 발신자 이름
-                            for (var r in data.rooms) {
-                                var rObj = data.rooms[r];
-                                for (var mId in rObj.users) {
-                                    if (rObj.users[mId].name.replace(/\s/g, "") === targetSearchName) {
-                                        targetUid = mId;
-                                        user = rObj.users[mId];
-                                        roomName = r; // 유저가 실제로 속한 방(예: 내리다)의 데이터를 참조하도록 방 이름도 스왑
-                                        isSynced = true;
-                                        break;
-                                    }
-                                }
-                                if (isSynced) break;
-                            }
-                         }
-
-                        // 3. 동기화 대상이 아닐 때만 기존 캐시 참조
-                        if (!isSynced) targetUid = globalData.nameToIdCache[cacheKey];
-
-                        // 4. [핵심 교정] 동기화 성공 시 1:1방 전용 UID 생성을 방지하기 위해 정밀 루프 건너뜀
-                        var needsSearch = !targetUid || (targetUid && !isSynced && (!data.rooms[roomName] || !data.rooms[roomName].users[targetUid]));
-
-                        if (needsSearch) {
-                            var hashMatchId = null;
-                            var currentImgHash = null;
-                            try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
-
-                            for (var id in (data.rooms[roomName] ? data.rooms[roomName].users : {})) {
-                                var u = data.rooms[roomName].users[id];
-                                if (u.name === cleanSender) { targetUid = id; break; }
-                                if (currentImgHash && u.imageHash === currentImgHash) { hashMatchId = id; }
-                            }
-
-                            /* [보정] 1:1방 숫자 핸들러 작동을 위한 선제적 UID 동기화 */
-                        if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-                            var bridge = data.rooms["내리다"];
-                            if (bridge && bridge.users) {
-                                for (var bUid in bridge.users) {
-                                    if (bridge.users[bUid].name.trim() === cleanSender.trim()) {
-                                        targetUid = bUid; 
-                                        break;
-                                    }
-                                }
+            // 2. 캐시에 없을 경우에만 식별 로직 가동
+            if (!targetUid) {
+                // 2-1. 1:1방 동기화 로직 (기존 유지)
+                if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
+                    var targetSearchName = cleanSender.replace(/\s/g, "");
+                    for (var r in data.rooms) {
+                        var rObj = data.rooms[r];
+                        for (var mId in rObj.users) {
+                            if (rObj.users[mId].name.replace(/\s/g, "") === targetSearchName) {
+                                targetUid = mId;
+                                user = rObj.users[mId];
+                                roomName = r;
+                                isSynced = true;
+                                break;
                             }
                         }
+                        if (isSynced) break;
+                    }
+                }
 
-                            // [AIS] 닉네임 변경 감지 시 즉시 이름 업데이트 및 동기화
-                            if (!targetUid && hashMatchId) {
-                                targetUid = hashMatchId;
-                                var u = data.rooms[roomName].users[targetUid];
-                                if (typeof util_syncIdentityGlobal === 'function') util_syncIdentityGlobal(targetUid, u.name, cleanSender);
-                                u.name = cleanSender;
-                                globalData.nameToIdCache[cacheKey] = targetUid;
-                            }
+                // 2-2. 동기화로 못 찾았을 경우 DB 전체 검색 (기본 로직)
+                if (!targetUid) {
+                    var hashMatchId = null;
+                    var currentImgHash = null;
+                    try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
+
+                    for (var id in (data.rooms[roomName] ? data.rooms[roomName].users : {})) {
+                        var u = data.rooms[roomName].users[id];
+                        if (u.name === cleanSender) { 
+                            targetUid = id; 
+                            break; 
                         }
+                        if (currentImgHash && u.imageHash === currentImgHash) { 
+                            hashMatchId = id; 
+                        }
+                    }
+
+                    // 사진으로 매칭된 경우 ID 할당 및 닉네임 동기화
+                    if (!targetUid && hashMatchId) {
+                        targetUid = hashMatchId;
+                        var u = data.rooms[roomName].users[targetUid];
+                        if (typeof util_syncIdentityGlobal === 'function') util_syncIdentityGlobal(targetUid, u.name, cleanSender);
+                        u.name = cleanSender;
+                    }
+                }
+
+                // [핵심 패치] 식별 경로(동기화 or 검색)와 상관없이 성공 시 즉시 캐시에 등록
+                if (targetUid) {
+                    globalData.nameToIdCache[cacheKey] = targetUid;
+                }
+            }
 
                         // 추가: 유저가 식별된 직후, 객체에 붙은 모든 불순물(Replier 등)을 강제 제거
                 if (targetUid && data.rooms[roomName].users[targetUid]) {

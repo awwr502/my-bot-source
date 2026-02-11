@@ -15953,34 +15953,37 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         }
     }
 
-   // [2] 해군 호위세 정산 및 지역 해군 균등 분배 (토벌 방식 적용)
+   // [2] 해군 호위세 정산 및 지역 해군 차등 분배 (선박 레벨 기반)
     if (v.escortFee && v.escortFee > 0) {
         // A. 상인의 최종 수익에서 호위비 실제 차감
         finalNetProfit = Math.max(0, finalNetProfit - v.escortFee);
 
-        // B. 현재 방(roomName)에 있는 활동 가능한 해군 유저 탐색 (본인 제외)
+        // B. 현재 방(roomName)에 있는 활동 가능한 해군 유저 탐색
         var localNavies = [];
+        var totalNavyLevels = 0;
         var currentRoomObj = data.rooms[roomName];
         if (currentRoomObj && currentRoomObj.users) {
             for (var uId in currentRoomObj.users) {
                 var u = currentRoomObj.users[uId];
                 if (u.job === 'navy' && uId !== targetUid) {
                     localNavies.push(u);
+                    totalNavyLevels += (u.shipLevel || 1);
                 }
             }
         }
 
         if (localNavies.length > 0) {
-            // C. 해당 구역 해군들에게 균등 분배 (정산 대기 주머니로 입금)
-            var perNavyReward = Math.floor(v.escortFee / localNavies.length);
+            // C. 해당 구역 해군들에게 선박 레벨 비중에 따라 차등 분배
             localNavies.forEach(function(n) {
+                var weight = (n.shipLevel || 1) / totalNavyLevels;
+                var perNavyReward = Math.floor(v.escortFee * weight);
                 n.claimableReward = (Number(n.claimableReward) || 0) + perNavyReward;
                 n.hasNotifiedReward = false; // 수령 알림 트리거
-                n.fame = (n.fame || 0) + 2;   // 호위 공로 명성 소폭 상승
+                n.fame = (n.fame || 0) + 2;   // 호위 공로 명성 상승
             });
-            escortLog = "\n🛡️ 호위 비용: -" + fp(v.escortFee) + "P (" + localNavies.length + "명 균등 분배)";
+            escortLog = "\n🛡️ 호위 비용: -" + fp(v.escortFee) + "P (" + localNavies.length + "명 레벨 차등 분배)";
         } else {
-            // D. 방에 해군 유저가 없는 경우 국고(중앙은행)로 귀속
+            // D. 방에 해군 유저가 없는 경우 국고 귀속
             util_updateReserve(economyRoomData, v.escortFee, "AI 호위 수수료 국고 환수", economyRoomName);
             escortLog = "\n🛡️ 호위 비용: -" + fp(v.escortFee) + "P (국고 귀속)";
         }

@@ -17102,28 +17102,52 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
     var mainRoom = data.rooms["내리다"];
     var currentPillages = mainRoom.features.activePillages || {};
 
-    // 1. 통합 상태 가드 호출 (주석 기호 // 수정 완료 및 isJobActivity: true 전달)
     var stateRes = util_checkUserState(user, targetUid, roomName, true);
     if (!stateRes.canAction) return replier.reply(formatError(user, "탐색 불가", stateRes.reason));
 
+    // 1. 실제 유저 탐색 (기존 로직)
     for (var r in data.rooms) {
         var roomObj = data.rooms[r];
         for (var uid in roomObj.users) {
             var u = roomObj.users[uid];
-            // 수정: 약탈 목록 필터링 조건 정밀화 (성공/실패 여부와 상관없이 '시도'된 선박 제외)
             var isSailing = (u.voyage && u.voyage.active === true);
             var hasEnoughTime = isSailing && (u.voyage.arrival - now >= 180000);
             var alreadyPillaged = (u.isPillaged === true || (u.voyage && u.voyage.isPillaged === true));
             var isUnderAttack = (currentPillages && currentPillages[uid]); 
 
             if (hasEnoughTime && !alreadyPillaged && !isUnderAttack && uid !== targetUid) {
-                sailingUsers.push({ uid: uid, data: u, roomName: r });
+                sailingUsers.push({ uid: uid, data: u, roomName: r, isAI: false });
             }
         }
     }
 
-    if (sailingUsers.length === 0) {
-        return replier.reply(formatError(user, "탐색 실패", "현재 약탈 가능한 선박이 바다에 없습니다."));
+    // 유저 상인이 3명 미만일 경우 부족한 만큼 AI 상인(유령 상단) 생성
+    if (sailingUsers.length < 5) {
+        var aiNames = ["동방무역선", "서방연합함대", "떠돌이 상인 잭", "제국 운송선", "황금도시 상단", "북해 무역협회"];
+        var aiDests = ["포르투", "코콜라", "나폴리", "베라크루스", "킴벌리"];
+        var needed = 4 - sailingUsers.length;
+        
+        for (var i = 0; i < needed; i++) {
+            var randName = aiNames[Math.floor(Math.random() * aiNames.length)] + " " + (Math.floor(Math.random() * 90) + 10);
+            var randDest = aiDests[Math.floor(Math.random() * aiDests.length)];
+            var randLevel = Math.floor(Math.random() * 4) + 1; // Lv.1~5
+            var randTime = (Math.floor(Math.random() * 20) + 10) * 60000; // 10~30분
+
+            sailingUsers.push({
+                uid: "AI_BOT_" + i,
+                isAI: true,
+                data: {
+                    name: "🚢 " + randName,
+                    shipLevel: randLevel,
+                    voyage: {
+                        dest: randDest,
+                        arrival: now + randTime,
+                        escortUid: (Math.random() < 0.2) ? "NAVY_BOT" : null // 20% 확률로 가상 호위
+                    }
+                },
+                roomName: "내리다"
+            });
+        }
     }
 
     // [정렬]: 남은 시간이 많이 남은 순(도착 시간이 늦은 순)으로 내림차순 정렬

@@ -1619,10 +1619,16 @@ function util_autoClearTimeouts(data) {
                         u = data.rooms["내리다"].users[uid];
                     }
 
-                    if (u) {
+                   if (u) {
                         try {
-                            // 핵심: rName(현재 루프 중인 방)이 아니라 actualOrigin(최초 발생지)으로 쏨
-                            Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
+                            // 1. 세션에 박힌 originRoom이 "내리다"가 아닐 때만 발송 (1:1 방 우선 순위)
+                            // 2. 만약 originRoom이 "내리다"인데 유저가 1:1방 연동 유저라면 발송 차단
+                            if (actualOrigin !== "내리다") {
+                                Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
+                            } else {
+                                // 단체방 세션인 경우에만 단체방으로 발송
+                                Api.replyRoom("내리다", formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
+                            }
                         } catch(e) { Log.error("Timeout Notify Error: " + e); }
                     }
                     
@@ -2867,15 +2873,17 @@ function findUserGlobal(name, roomName) {
         var room = data.rooms[rName];
         if (!room || !room.users) continue;
 
-        for (var id in room.users) {
+       for (var id in room.users) {
             var u = room.users[id];
             if (u.name === searchName || u.name.indexOf(searchName) !== -1) {
-                res.push({ id: id, data: u, roomName: rName });
+                // 핵심: 데이터는 "내리다" 방에 있어도, 1:1방 연동 유저라면 표시 이름을 유저 닉네임(방이름)으로 치환
+                var displayRoom = rName;
+                if (rName === "내리다" && u.hasSeenSyncNotice) {
+                    displayRoom = u.name + " (1:1)";
+                }
+                res.push({ id: id, data: u, roomName: displayRoom });
             }
         }
-    }
-    return res;
-}
 
 /* 중복 유저 선택 핸들러 함수 (전역 대응형) */
 function handleUserSelection(replier, targetUid, found, type, extra, user, roomName) {
@@ -8754,29 +8762,30 @@ if (is1to1) {
     var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
     var inState = false;
 
-   // 1. [세션 낙인 및 양방향 동기화]
-    // 1:1 방의 입력이 '내리다' 방의 세션 데이터를 즉시 참조할 수 있도록 미러링
+   // 1. [세션 고향 보존 및 양방향 미러링]
+    // 1:1 방의 입력이 '내리다' 방의 데이터 서랍을 빌려 쓰더라도, '메시지를 보낼 주소'는 반드시 실제 1:1방으로 고정
     var localSt = (data.rooms[roomName] && data.rooms[roomName].features) ? data.rooms[roomName].features.states : null;
     var mainSt = (data.rooms[MAIN_NAME] && data.rooms[MAIN_NAME].features) ? data.rooms[MAIN_NAME].features.states : null;
 
     if (is1to1 && localSt && mainSt) {
         var sKeys = ["menuWait", "selectWait", "bankProcess", "lottoPurchase"];
         sKeys.forEach(function(key) {
-            var pS = localSt[key][targetUid]; // 1:1 방 세션
-            var mS = mainSt[key][targetUid]; // 메인 방 세션
+            var pS = localSt[key][targetUid]; // 1:1 방 세션 (실제 유저가 있는 곳)
+            var mS = mainSt[key][targetUid]; // 메인 방 세션 (데이터가 저장되는 곳)
 
             if (pS && !mS) { 
-                // 1:1방에서 세션이 시작됨 -> '내리다' 방으로 복제하며 낙인 찍기
-                if (!pS.originRoom) pS.originRoom = roomName; 
+                // 1:1방에서 세션 시작 -> 메인방 서랍에 복사하되, 주소는 1:1방(roomName)으로 박제
+                pS.originRoom = roomName; 
                 mainSt[key][targetUid] = pS;
             } else if (!pS && mS) { 
-                // 메인방에서 세션이 시작됨 -> 1:1방으로 가져오며 낙인 찍기
-                if (!mS.originRoom) mS.originRoom = MAIN_NAME;
+                // 메인방에만 데이터가 있는 경우(리로드 등) -> 1:1방으로 가져옴
+                // 단, 이때 originRoom이 "내리다"라면 1:1방으로 강제 교정 (방 이름 가스라이팅 방지)
+                if (!mS.originRoom || mS.originRoom === MAIN_NAME) mS.originRoom = roomName;
                 localSt[key][targetUid] = mS;
             } else if (pS && mS) {
-                // 양쪽에 다 있다면 '발생지' 정보가 있는 쪽을 우선시하여 동기화
-                if (pS.originRoom && !mS.originRoom) mS.originRoom = pS.originRoom;
-                if (mS.originRoom && !pS.originRoom) pS.originRoom = mS.originRoom;
+                // 양쪽에 다 있을 경우, 무조건 "내리다"가 아닌 실제 방(roomName)을 주인으로 선언
+                pS.originRoom = roomName;
+                mS.originRoom = roomName;
             }
         });
     }

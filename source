@@ -1591,8 +1591,8 @@ function util_getActivePolicy(roomData) {
 }
 
 /**
- * [v14.4 교정] 타임아웃 알림 중복 및 방 이탈 발송 방지 엔진
- * 기능: 세션 만료 시 실제 세션이 시작된 방(originRoom)으로만 알림을 보냅니다.
+ * [v14.7] 타임아웃 알림 단일화 엔진 (Ghost Notify Killer)
+ * 기능: 세션 만료 시 데이터는 모든 방에서 지우되, 알림은 '최초 발생지' 딱 한 곳에서만 보냄.
  */
 function util_autoClearTimeouts(data) {
     var now = Date.now();
@@ -1612,16 +1612,17 @@ function util_autoClearTimeouts(data) {
                 
                 if (startTime > 0 && (now - startTime > 30000)) {
                     var u = roomObj.users[uid];
-                    if (u) {
+                    // [핵심 로직]: 세션에 기록된 originRoom이 현재 방(rName)과 다르면 절대 말하지 않음
+                    // originRoom이 아예 없는 비정상 세션은 단체방 출력을 막기 위해 무시 처리
+                    var actualOrigin = entry.originRoom;
+                    
+                    if (actualOrigin === rName && u) {
                         try {
-                            // [수정 핵심]: 세션 생성 시 저장된 originRoom과 현재 루프 중인 방 이름이 다르면 메시지 안 보냄
-                            // 미러링된 복사본 세션들이 각 방에서 동시에 메시지를 쏘는 것을 원천 차단합니다.
-                            var actualOrigin = entry.originRoom || rName;
-                            if (rName === actualOrigin) {
-                                Api.replyRoom(rName, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
-                            }
+                            Api.replyRoom(rName, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
                         } catch(e) { Log.error("Timeout Notify Error: " + e); }
                     }
+                    
+                    // 데이터는 모든 방(복사본 포함)에서 깨끗이 삭제
                     delete q[uid]; 
                 }
             }

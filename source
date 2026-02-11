@@ -2868,9 +2868,9 @@ function findUserGlobal(name, roomName) {
        for (var id in room.users) {
             var u = room.users[id];
             if (u.name === searchName || u.name.indexOf(searchName) !== -1) {
-                // 핵심: 데이터는 "내리다" 방에 있어도, 1:1방 연동 유저라면 표시 이름을 유저 닉네임(방이름)으로 치환
+                // 데이터는 "내리다" 방에 있어도, 1:1방 연동 유저라면 표시 이름을 유저 닉네임으로 치환
                 var displayRoom = rName;
-                if (rName === "내리다" && u.hasSeenSyncNotice) {
+                if (rName === "내리다" && (u.hasSeenSyncNotice || u.is1to1Sync === true)) {
                     displayRoom = u.name + " (1:1)";
                 }
                 res.push({ id: id, data: u, roomName: displayRoom });
@@ -8754,7 +8754,7 @@ if (is1to1) {
     var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
     var inState = false;
 
-   // 1. [세션 고향 보존 및 양방향 미러링]
+  // 1. [세션 고향 보존 및 양방향 미러링]
     // 1:1 방의 입력이 '내리다' 방의 데이터 서랍을 빌려 쓰더라도, '메시지를 보낼 주소'는 반드시 실제 1:1방으로 고정
     var localSt = (data.rooms[roomName] && data.rooms[roomName].features) ? data.rooms[roomName].features.states : null;
     var mainSt = (data.rooms[MAIN_NAME] && data.rooms[MAIN_NAME].features) ? data.rooms[MAIN_NAME].features.states : null;
@@ -8762,27 +8762,27 @@ if (is1to1) {
     if (is1to1 && localSt && mainSt) {
         var sKeys = ["menuWait", "selectWait", "bankProcess", "lottoPurchase"];
         sKeys.forEach(function(key) {
-            var pS = localSt[key][targetUid]; // 1:1 방 세션 (실제 유저가 있는 곳)
-            var mS = mainSt[key][targetUid]; // 메인 방 세션 (데이터가 저장되는 곳)
+            var pS = localSt[key][targetUid]; // 1:1 방 세션
+            var mS = mainSt[key][targetUid]; // 메인 방 세션
 
             if (pS && !mS) { 
                 // 1:1방에서 세션 시작 -> 메인방 서랍에 복사하되, 주소는 1:1방(roomName)으로 박제
-                pS.originRoom = roomName; 
+                if (!pS.originRoom) pS.originRoom = roomName; 
                 mainSt[key][targetUid] = pS;
             } else if (!pS && mS) { 
-                // 메인방에만 데이터가 있는 경우(리로드 등) -> 1:1방으로 가져옴
-                // 단, 이때 originRoom이 "내리다"라면 1:1방으로 강제 교정 (방 이름 가스라이팅 방지)
+                // 메인방(내리다) 서랍에만 세션이 있는 경우 1:1방으로 가져옴
+                // 이때 originRoom이 "내리다"로 꼬여있다면 강제로 1:1방(roomName)으로 교정
                 if (!mS.originRoom || mS.originRoom === MAIN_NAME) mS.originRoom = roomName;
                 localSt[key][targetUid] = mS;
             } else if (pS && mS) {
-                // 양쪽에 다 있을 경우, 무조건 "내리다"가 아닌 실제 방(roomName)을 주인으로 선언
+                // 양쪽에 다 있을 경우, 무조건 실제 방(roomName)을 주인으로 선언
                 pS.originRoom = roomName;
                 mS.originRoom = roomName;
             }
         });
     }
 
-    // 2. [세션 판정 엔진] - 한글 핸들러 통과를 위해 상태 존재 여부를 체크합니다.
+    // 2. [세션 판정 엔진]
     var checkSession = function(st) {
         if (!st) return null;
         var sKeys = ["menuWait", "bankProcess", "selectWait", "lottoPurchase"];

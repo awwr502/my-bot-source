@@ -16039,11 +16039,30 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     for (var s in specialtyToSell) { if (Number(specialtyToSell[s]) > 0) cargoDisplayList.push(s + "x" + specialtyToSell[s]); }
     var cargoSummaryStr = cargoDisplayList.join(", ");
 
-    // 9. 리포트 본문 조립 (중복 닉네임 제거, 헤더 제거 및 줄바꿈 교정)
-   var report = "📍 목적지: " + v.dest + " (" + cargoSummaryStr + ")\n\n" +
+   // 1. 순수익 합계 계산 (선박효율이 적용된 마진 + 항구 발전도 보너스)
+    var totalNetMargin = efficientMargin + pBonusTotal; 
+
+    // 2. 세금 및 기타 차감액 재계산 (이제 모든 세금은 '합계'를 기준으로 징수)
+    taxAmount = totalNetMargin > 0 ? Math.floor(totalNetMargin * autoTaxRate) : 0;
+    var afterTaxMargin = totalNetMargin - taxAmount;
+
+    // 관세 및 호위비 차감 (순수익 합계에서 차감)
+    if (govTag && govInfo && govInfo.governorUid !== targetUid) {
+        var tariff = totalNetMargin > 0 ? Math.floor(totalNetMargin * 0.01) : 0;
+        afterTaxMargin -= tariff;
+    }
+    if (v.escortFee) afterTaxMargin -= v.escortFee;
+    
+    // 3. 최종 실지급 순이익 및 총 수령액(원금+순이익) 확정
+    var finalNetProfit = Math.floor(afterTaxMargin * creditMult); 
+    var totalPayout = totalCost + finalNetProfit;
+
+    // 4. 리포트 본문 조립 (가독성을 위해 순수익 합계 강조)
+    var report = "📍 목적지: " + v.dest + " (" + cargoSummaryStr + ")\n\n" +
                  "💰 총 매출액: " + fp(totalRevenue) + "P\n" +
+                 "📈 순수 이익: +" + fp(efficientMargin) + "P\n" + 
                  "🏗️ 발전도 보너스: +" + fp(pBonusTotal) + "P\n" +
-                 "📈 순수 이익: +" + fp(margin) + "P" + seaKingTag + "\n" +
+                 "💵 순수익 합계: " + fp(totalNetMargin) + "P" + seaKingTag + "\n" +
                  (disasterLog ? disasterLog.trim() + "\n" : "") +
                  "⚖️ 무역세(" + taxPercentText + "%): -" + fp(taxAmount) + "P" + taxBenefitTag + "\n" +
                  (pillageLog ? pillageLog.trim() + "\n" : "") +
@@ -16054,9 +16073,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                  "(신용 " + crInfo.label + " " + (creditMult * 100).toFixed(0) + "%지급)\n" +
                  (specialtyFound ? "\n" + specialtyFound.trim() : "");
 
-    // 결과 메시지 전송
+    // 5. 결과 메시지 전송 (내리다 방 고정)
     var resultMsg = formatCommand("🌊 [항해 일지: 무역 보고]", user, report, "누적 무역 " + user.tradeCount + "회 / 잔액 " + fp(user.point) + "P");
-// 수정: 무역 보고 알림 대상을 '내리다' 방으로 강제 고정
     Api.replyRoom("내리다", resultMsg);
     
     v.active = false; 
@@ -17796,13 +17814,16 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
 
         var margin = (tRev - tCost);
         var shipEff = (victim.shipLevel === 1) ? 4.2 : (victim.shipLevel === 2 ? 1.9 : 1.15);
-        var finalMargin = Math.floor(margin * shipEff);
+        
+        // [수정] 순수익 합계(마진*효율 + 보너스)를 약탈 기준점으로 설정
+        var pInfo = (data.rooms[roomName].features.portData && data.rooms[roomName].features.portData[v.dest]) ? data.rooms[roomName].features.portData[v.dest] : { level: 1 };
+        var pBonus = Math.floor(Math.floor(margin * shipEff) * ((pInfo.level - 1) * 0.01));
+        var totalNetMargin = Math.floor(margin * shipEff) + pBonus;
 
-        var pMin = cfg.JOBS.PIRATE.pillageRateMin || 0.3;
-        var pMax = cfg.JOBS.PIRATE.pillageRateMax || 0.5;
         pRate = pMin + (pMax - pMin) * (Number(pirate.shipLevel || 1) - 1) / 9;
         
-        pillageAmount = finalMargin > 0 ? Math.floor(finalMargin * pRate) : 0;
+        // [30% 약탈 적용] 순수익 합계 기준으로 계산
+        pillageAmount = totalNetMargin > 0 ? Math.floor(totalNetMargin * pRate) : 0;
 
         victim.isPillaged = true;
         v.isPillaged = true;

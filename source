@@ -66,60 +66,48 @@ if (typeof globalData === 'undefined' || globalData === null) {
 globalData._isInitialized = false;
 
 /**
- * [v13.5] 엔진 초기화 및 좀비 스레드 강제 소각 (Anti-Heat Engine)
- * 기능: 리로드 시 기존 스케줄러와 스레드를 완전히 제거한 후 새 엔진을 가동하여 발열을 잡습니다.
+ * [v13.9] 하이브리드 좀비 소각 엔진 (Ultra-Clean Boot)
+ * 기능: 이전 세션의 스레드를 물리적으로 파괴하고, 현재 인스턴스를 유일한 활성 상태로 등록합니다.
  */
 (function() {
     try {
-        var THREAD_REGISTRY = "msgbot_thread_pool_registry_v1";
-        
-        // 1. [소각] 기존에 돌아가던 모든 자바 스레드 풀 강제 셧다운
-        if (typeof globalData !== 'undefined' && globalData[THREAD_REGISTRY]) {
-            var oldRegistry = globalData[THREAD_REGISTRY];
-            for (var i = 0; i < oldRegistry.length; i++) {
+        var REG = "msgbot_thread_pool_registry_v1";
+        var ACT_ID = "CURRENT_ACTIVE_ID";
+
+        // 1. [타격] 이전 봇이 쓰던 모든 자바 스레드 자원을 '강제로' 파괴
+        if (typeof globalData !== 'undefined' && globalData[REG]) {
+            var oldPools = globalData[REG];
+            for (var i = 0; i < oldPools.length; i++) {
                 try {
-                    if (oldRegistry[i] && !oldRegistry[i].isShutdown()) {
-                        oldRegistry[i].shutdownNow(); // 대기 작업까지 즉시 중단
+                    if (oldPools[i]) {
+                        oldPools[i].shutdownNow(); // 하던 일 멈추고 즉시 소각
+                        java.lang.Thread.sleep(10); // 소각 시간 확보
                     }
                 } catch (e) {}
             }
-            Log.info("🧹 [System] 이전 세션 좀비 스레드 소각 완료");
+            Log.info("🗑️ [System] 이전 인스턴스 좀비 스레드 강제 소각 완료");
         }
 
-        // 2. [제거] 기존 스케줄러 및 워치독 타이머 물리적 제거
-        var oldSched = java.lang.System.getProperty(SCHEDULER_KEY);
-        var oldWatch = java.lang.System.getProperty(WATCHDOG_KEY);
-        if (oldSched) clearInterval(parseInt(oldSched));
-        if (oldWatch) clearInterval(parseInt(oldWatch));
-        
-        java.lang.System.clearProperty(SCHEDULER_KEY);
-        java.lang.System.clearProperty(WATCHDOG_KEY);
+        // 2. [갱신] 현재 실행된 이 봇을 '유일한 주인'으로 시스템 프로퍼티에 등록
+        java.lang.System.setProperty(ACT_ID, MY_INSTANCE_ID);
 
-        // 3. [최적화] 메모리 고속 세척
-        if (globalData && globalData.rooms) {
-            for (var r in globalData.rooms) {
-                if (globalData.rooms[r].features) {
-                    util_fastClean(globalData.rooms[r].features);
-                }
-            }
-        }
-        if (globalData.statusCheck) globalData.statusCheck = {}; 
-
-        // 4. [가동] 새로운 엔진 가동 (발열 억제를 위해 스레드 수 4개로 최적화)
+        // 3. [최적화] 스레드 개수 최적화 (4개) 및 엔진 재생성
         var ParallelPool = java.util.concurrent.Executors.newFixedThreadPool(4); 
         var LogicQueue = java.util.concurrent.Executors.newSingleThreadExecutor();
         var Executor = java.util.concurrent.Executors.newCachedThreadPool();
         var SaveExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
 
-        // 5. [등록] 새 엔진을 전역 레지스트리에 등록 및 글로벌 스코프 바인딩
-        globalData[THREAD_REGISTRY] = [ParallelPool, LogicQueue, Executor, SaveExecutor];
+        globalData[REG] = [ParallelPool, LogicQueue, Executor, SaveExecutor];
         
         this.ParallelPool = ParallelPool;
         this.LogicQueue = LogicQueue;
         this.Executor = Executor;
         this.SaveExecutor = SaveExecutor;
 
-        Log.info("♻️ [System] Anti-Heat 엔진 재가동 완료 (ID: " + MY_INSTANCE_ID + ")");
+        Log.info("♻️ [System] Clean-Engine 가동 성공 (ID: " + MY_INSTANCE_ID + ")");
+        
+        // 4. [수거] 안쓰는 메모리 즉시 OS에 반환 요청 (발열 감소 핵심)
+        java.lang.System.gc(); 
 
     } catch (e) {
         Log.error("🚨 [System] 엔진 재설정 결함: " + e);

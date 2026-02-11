@@ -17112,16 +17112,24 @@ function _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, cfg
     util_updatePoint(user, roomData, -tax, "해군 호위 보호세 지불", roomName);
 
     // 출항 시작 (호위 정보 포함)
-    __departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec, selectedNavy.uid, tax);
+    _departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec, selectedNavy.uid, tax);
     
     if (!selectedNavy.isAI) {
         try {
-            var navyObj = findUserByUidGlobal(selectedNavy.uid);
-            if (navyObj) Api.replyRoom(navyObj.roomName, "🛡️ [호위 임무 수신]\n상인 '" + user.name + "'님이 당신을 호위함으로 고용했습니다!");
-        } catch(e) {}
+            var navyTarget = null;
+            // 전 서버 방을 뒤져서 해당 해군 유저와 방 이름을 찾음
+            for (var rN in data.rooms) {
+                if (data.rooms[rN].users && data.rooms[rN].users[selectedNavy.uid]) {
+                    navyTarget = { data: data.rooms[rN].users[selectedNavy.uid], roomName: rN };
+                    break;
+                }
+            }
+            if (navyTarget) {
+                Api.replyRoom(navyTarget.roomName, "🛡️ [호위 임무 수신]\n상인 '" + user.name + "'님이 당신을 호위함으로 고용했습니다!");
+            }
+        } catch(e) { Log.error("Navy Notify Error: " + e); }
     } else {
-        // [반영] AI 함대 전용 고용 대사
-        replier.reply("🤖 [AI 함대 통신]\n\"중앙 정부의 명에 따라 귀하의 선단을 보호하겠습니다. 항로를 유지하십시오.\"");
+        replier.reply("🤖 [AI 함대 통신]\n\"중앙 정부의 명에 따라 귀하의 선단을 보호하겠습니다.\"");
     }
 
     delete roomData.features.states.menuWait[targetUid];
@@ -17369,7 +17377,10 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         session.isBattled = true; 
     }
 
+   // [교정] navyUid 가드 및 AI 해군/전투 판별 (고용된 AI 또는 AI 상단 호위병 통합 인식)
+    var isAINavy = (navyUid && typeof navyUid === 'string' && (navyUid.indexOf("AI_NAVY_") === 0 || navyUid.indexOf("AI_BOT_") === 0));
     var isAICombat = (mode === "AI_COMBAT");
+
     var pirate = (mode === "ESCORT" || isAICombat) ? navyOrPirate : null;
     var navy = (mode === "INTERVENE") ? navyOrPirate : null;
     
@@ -17379,18 +17390,17 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
             if (!pId) return;
             for (var r in data.rooms) { if (data.rooms[r].users[pId]) { pirate = data.rooms[r].users[pId]; break; } }
         }
-        if (!navy) {
+        if (!navy && !isAINavy) {
             for (var r in data.rooms) { if (data.rooms[r].users[navyUid]) { navy = data.rooms[r].users[navyUid]; break; } }
         }
     }
 
-    if (!pirate || (!isAICombat && !navy)) return;
+    if (!pirate || (!isAICombat && !navy && !isAINavy)) return;
 
-    var nShip = isAICombat ? 5 : (navy.shipLevel || 1); // AI 해군은 Lv.5 고정급 성능
+    var nShip = isAINavy ? 5 : (navy ? (navy.shipLevel || 1) : 1);
     var pShip = pirate.shipLevel || 1;
     
-    // 승률 설정: AI 전투 시 해군 52%, 그 외 유저간 전투는 기존 공식 유지
-   var isAINavy = (navyUid && navyUid.indexOf("AI_NAVY_") === 0);
+    // [승률] AI가 개입된 모든 전투(고용 AI 포함)는 해군 승률 52%로 강제 고정
     var winChance = (isAINavy || isAICombat) ? 52 : (50 + (nShip - pShip) * 4);
     var isNavyWin = (Math.random() * 100 < winChance);
 
@@ -17399,15 +17409,15 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
                     "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pShip + ")\n\n";
 
     if (isNavyWin) {
-        var piratePenaltyMs = cfg.PIRATE.jailTime || 3600000; 
-        pirate.pillageCooldownEndTime = Date.now() + piratePenaltyMs; 
+        var piratePenaltyMs = cfg.PIRATE.jailTime || 3600000;
+        pirate.pillageCooldownEndTime = Date.now() + piratePenaltyMs;
         pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
         
-        var baseReward = Math.floor(cfg.PIRATE.bountyBase * 0.3); 
-        var bounty = baseReward + (pirate.currentBounty || 0);
+        var baseReward = Math.floor(cfg.PIRATE.bountyBase * 0.3);
+        var bounty = baseReward + (Number(pirate.currentBounty) || 0);
         pirate.currentBounty = 0;
 
-        // [반영] AI 해군(고용된 AI 또는 AI 상단 호위) 승리 시: 해당 방 유저 해군들에게 균등 분배
+        // [분배] 고용된 AI 해군 승리 시에도 현재 방의 유저 해군들에게 현상금 균등 분배
         if (isAINavy || isAICombat) {
             var localNavies = [];
             var targetRoomObj = data.rooms[roomName];
@@ -17424,16 +17434,16 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
                     n.claimableReward = (Number(n.claimableReward) || 0) + div; 
                     n.hasNotifiedReward = false;
                 });
-                resultMsg += "🎊 [AI 해군 승보] 현상금 " + fp(bounty) + "P를 전량 확보했습니다!\n" +
-                             "💰 이 방의 해군 " + localNavies.length + "명에게 각 " + fp(div) + "P씩 적립되었습니다.\n\n";
+                resultMsg += "🎊 [AI 해군 승보] 현상금 " + fp(bounty) + "P를 확보했습니다!\n" +
+                             "💰 이 방의 해군 " + localNavies.length + "명에게 각 " + fp(div) + "P씩 분배 적립되었습니다.\n\n";
             }
         } else {
-            // 일반 유저 해군 승리 로직 (기존 유지)
             navy.fame = (navy.fame || 0) + 10;
             navy.claimableReward = (Number(navy.claimableReward) || 0) + bounty;
             navy.hasNotifiedReward = false;
             navy.totalCaptureSuccess = (navy.totalCaptureSuccess || 0) + 1;
             util_checkNavyTitle(navy, null, "내리다");
+            resultMsg += "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득\n";
         }
 
         if (!isAICombat && victim && victim.voyage) {

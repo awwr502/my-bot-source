@@ -8714,22 +8714,29 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     var is1to1 = (ALLOWED_ROOMS.indexOf(realRoom) === -1);
     var logicRoom = is1to1 ? MAIN_NAME : roomName; 
 
-    // 수정: 1:1 대화방 세션을 메인 방으로 강제 복사하여 모든 숫자 핸들러가 인식하도록 동기화 (수정)
-   if (is1to1) {
-        var pRoom = data.rooms[roomName]; // 실제 유저가 있는 1:1방
-        var mRoom = data.rooms[MAIN_NAME]; // 데이터가 저장된 내리다방
-        if (pRoom && pRoom.features && mRoom && mRoom.features) {
-            var sKeys = ["menuWait", "selectWait", "bankProcess", "lottoPurchase"];
-            sKeys.forEach(function(key) {
-                // [양방향 동기화]: 메인방에만 생긴 블랙잭 세션을 1:1방으로 즉시 가져와야 한글 핸들러가 인식함
-                var pS = pRoom.features.states[key][targetUid];
-                var mS = mRoom.features.states[key][targetUid];
+    // [v14.7] 세션 양방향 동기화 및 발생지 보호 로직
+if (is1to1) {
+    var pRoom = data.rooms[roomName]; // 1:1방
+    var mRoom = data.rooms[MAIN_NAME]; // 메인방
+    if (pRoom && pRoom.features && mRoom && mRoom.features) {
+        var sKeys = ["menuWait", "selectWait", "bankProcess", "lottoPurchase"];
+        sKeys.forEach(function(key) {
+            var pS = pRoom.features.states[key][targetUid];
+            var mS = mRoom.features.states[key][targetUid];
 
-                if (pS && !mS) mRoom.features.states[key][targetUid] = pS;
-                else if (!pS && mS) pRoom.features.states[key][targetUid] = mS;
-            });
-        }
+            // 1:1방 세션을 메인방으로 복사할 때 발생지(originRoom)가 없으면 현재 1:1방으로 박제
+            if (pS && !mS) {
+                if (!pS.originRoom) pS.originRoom = roomName;
+                mRoom.features.states[key][targetUid] = pS;
+            } 
+            // 메인방 세션을 1:1방으로 가져올 때 발생지가 없으면 메인방으로 박제
+            else if (!pS && mS) {
+                if (!mS.originRoom) mS.originRoom = MAIN_NAME;
+                pRoom.features.states[key][targetUid] = mS;
+            }
+        });
     }
+}
 
     var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
 

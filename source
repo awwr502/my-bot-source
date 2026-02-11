@@ -8746,51 +8746,53 @@ if (is1to1) {
     var localSt = (data.rooms[roomName] && data.rooms[roomName].features) ? data.rooms[roomName].features.states : null;
     var mainSt = (data.rooms[MAIN_NAME] && data.rooms[MAIN_NAME].features) ? data.rooms[MAIN_NAME].features.states : null;
 
+   // 1. [양방향 동기화 및 발생지 박제] - 한글 핸들러가 인식할 수 있도록 데이터를 먼저 맞춤
+    if (is1to1 && localSt && mainSt) {
+        var sKeys = ["menuWait", "selectWait", "bankProcess", "lottoPurchase"];
+        sKeys.forEach(function(key) {
+            var pS = localSt[key][targetUid];
+            var mS = mainSt[key][targetUid];
+
+            if (pS && !mS) { // 1:1방에만 세션이 있다면 메인방으로 복사 (발생지 기록)
+                if (!pS.originRoom) pS.originRoom = roomName;
+                mainSt[key][targetUid] = pS;
+            } else if (!pS && mS) { // 메인방에만 있다면 1:1방으로 가져옴
+                if (!mS.originRoom) mS.originRoom = MAIN_NAME;
+                localSt[key][targetUid] = mS;
+            }
+        });
+    }
+
     /**
-     * [v14.6] 지능형 세션 격리 엔진 (Room-Lock Validation)
-     * 기능: 세션 발생지(originRoom)와 현재 채팅방이 일치할 때만 활성 상태로 인정함.
+     * 2. [세션 판정 엔진] - 한글 핸들러 통과를 위해 데이터 존재 여부만 체크
      */
     var checkSession = function(st) {
-        if (!st) return false;
+        if (!st) return null;
         var sKeys = ["menuWait", "bankProcess", "selectWait", "lottoPurchase"];
         for (var i = 0; i < sKeys.length; i++) {
-            var key = sKeys[i];
-            var entry = (st[key] && st[key][targetUid]) ? st[key][targetUid] : null;
-            if (entry) {
-                // [핵심]: 세션의 발생지와 현재 방 대조 (없으면 현재 방 성격에 따라 기본값 부여)
-                var actualOrigin = entry.originRoom || (is1to1 ? roomName : MAIN_NAME);
-                if (actualOrigin === roomName) return entry; 
-            }
+            var entry = st[sKeys[i]] ? st[sKeys[i]][targetUid] : null;
+            if (entry) return entry; // 데이터가 있으면 일단 세션 중으로 인정 (한글 입력 허용)
         }
-        return false;
+        return null;
     };
 
-    // [격리 가드] "내리다" 방은 모든 기능 통과, 1:1 방은 지정된 명령어와 해당 방의 세션만 허용
     var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
-    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자") || msg.startsWith("/도움말"));
+    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자") || msg.startsWith("/도움말") || msg.startsWith("/가이드"));
 
-    // 현재 방에서 시작된 세션이 있는지 최종 판정
+    // 현재 유저가 어떤 세션(카지노, 블랙잭 등)에 발을 담그고 있는지 확인
     var activeSession = checkSession(localSt) || checkSession(mainSt);
-    var inState = !!activeSession || (user && user.blackjackState && (roomName === (user.blackjackState.originRoom || roomName)));
+    var inState = !!activeSession || (user && user.blackjackState);
 
     if (typeof util_notifySeaReward === 'function') util_notifySeaReward(user, replier);
 
-    // '내리다' 방에서 도착 완료 상태인 상인이 채팅을 치면 정산 집행 (타 방 간섭 차단)
+    // 3. [무역 정산 격리] - 단체방에서만 정산 실행
     if (realRoom === MAIN_NAME && user && user.voyage && user.voyage.active === true) {
-        var v = user.voyage;
-        if (Date.now() >= (v.arrival || 0)) {
-            try {
-                if (typeof _processTradeArrival === 'function') {
-                    _processTradeArrival(user, data, replier, MAIN_NAME, targetUid);
-                }
-            } catch (e) {
-                Log.error("🚨 정산 트리거 치명적 오류: " + e);
-                if (user.voyage) user.voyage.isProcessing = false;
-            }
+        if (Date.now() >= (user.voyage.arrival || 0)) {
+            try { if (typeof _processTradeArrival === 'function') _processTradeArrival(user, data, replier, MAIN_NAME, targetUid); } catch (e) {}
         }
     }
     
-    // 1:1 대화방(!isGroupRoom) 가드 로직: 명령어 형태일 때만 접근 제한 안내 출력
+    // 4. [1:1 보안 가드] - 세션 중(inState)이라면 한글 입력을 막지 않음
     if (!isGroupRoom && !isAllowedCmd && !inState) {
         if (msg.startsWith("/")) {
             var infoBody = "현재 계신 곳은 [보안 구역]입니다.\n\n" +

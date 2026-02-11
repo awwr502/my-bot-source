@@ -1591,8 +1591,8 @@ function util_getActivePolicy(roomData) {
 }
 
 /**
- * [v14.7] 타임아웃 알림 단일화 엔진 (Ghost Notify Killer)
- * 기능: 세션 만료 시 데이터는 모든 방에서 지우되, 알림은 '최초 발생지' 딱 한 곳에서만 보냄.
+ * [v14.8] 세션 만료 및 알림 정밀 제어 엔진
+ * 기능: 모든 방의 세션을 삭제하되, 알림은 실제 유저가 있던 방으로만 단 1회 발송
  */
 function util_autoClearTimeouts(data) {
     var now = Date.now();
@@ -1610,19 +1610,19 @@ function util_autoClearTimeouts(data) {
                 var entry = q[uid];
                 var startTime = entry.time || entry.timestamp || 0;
                 
+                // 30초 초과 시 만료 처리
                 if (startTime > 0 && (now - startTime > 30000)) {
                     var u = roomObj.users[uid];
-                    // [핵심 로직]: 세션에 기록된 originRoom이 현재 방(rName)과 다르면 절대 말하지 않음
-                    // originRoom이 아예 없는 비정상 세션은 단체방 출력을 막기 위해 무시 처리
                     var actualOrigin = entry.originRoom;
                     
+                    // 핵심 가드: 현재 루프의 방(rName)이 세션의 고향(originRoom)과 같을 때만 알림 송출
                     if (actualOrigin === rName && u) {
                         try {
                             Api.replyRoom(rName, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
                         } catch(e) { Log.error("Timeout Notify Error: " + e); }
                     }
                     
-                    // 데이터는 모든 방(복사본 포함)에서 깨끗이 삭제
+                    // 알림 여부와 상관없이 모든 방의 해당 세션 데이터는 파기 (좀비 방지)
                     delete q[uid]; 
                 }
             }
@@ -8743,35 +8743,34 @@ if (is1to1) {
     var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
     var inState = false;
 
+    // 1. [양방향 동기화 및 발생지 고정]
+    // 1:1 방의 입력이 '내리다' 방의 세션 데이터를 즉시 참조할 수 있도록 미러링하여 한글 핸들러 오작동 해결
     var localSt = (data.rooms[roomName] && data.rooms[roomName].features) ? data.rooms[roomName].features.states : null;
     var mainSt = (data.rooms[MAIN_NAME] && data.rooms[MAIN_NAME].features) ? data.rooms[MAIN_NAME].features.states : null;
 
-   // 1. [양방향 동기화 및 발생지 박제] - 한글 핸들러가 인식할 수 있도록 데이터를 먼저 맞춤
     if (is1to1 && localSt && mainSt) {
         var sKeys = ["menuWait", "selectWait", "bankProcess", "lottoPurchase"];
         sKeys.forEach(function(key) {
-            var pS = localSt[key][targetUid];
-            var mS = mainSt[key][targetUid];
+            var pS = localSt[key][targetUid]; // 1:1 방 세션
+            var mS = mainSt[key][targetUid]; // 메인 방 세션
 
-            if (pS && !mS) { // 1:1방에만 세션이 있다면 메인방으로 복사 (발생지 기록)
-                if (!pS.originRoom) pS.originRoom = roomName;
+            if (pS && !mS) { 
+                if (!pS.originRoom) pS.originRoom = roomName; // 발생지 기록
                 mainSt[key][targetUid] = pS;
-            } else if (!pS && mS) { // 메인방에만 있다면 1:1방으로 가져옴
+            } else if (!pS && mS) { 
                 if (!mS.originRoom) mS.originRoom = MAIN_NAME;
                 localSt[key][targetUid] = mS;
             }
         });
     }
 
-    /**
-     * 2. [세션 판정 엔진] - 한글 핸들러 통과를 위해 데이터 존재 여부만 체크
-     */
+    // 2. [세션 판정 엔진] - 한글 핸들러 통과를 위해 상태 존재 여부를 체크합니다.
     var checkSession = function(st) {
         if (!st) return null;
         var sKeys = ["menuWait", "bankProcess", "selectWait", "lottoPurchase"];
         for (var i = 0; i < sKeys.length; i++) {
             var entry = st[sKeys[i]] ? st[sKeys[i]][targetUid] : null;
-            if (entry) return entry; // 데이터가 있으면 일단 세션 중으로 인정 (한글 입력 허용)
+            if (entry) return entry;
         }
         return null;
     };
@@ -8779,20 +8778,20 @@ if (is1to1) {
     var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
     var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자") || msg.startsWith("/도움말") || msg.startsWith("/가이드"));
 
-    // 현재 유저가 어떤 세션(카지노, 블랙잭 등)에 발을 담그고 있는지 확인
     var activeSession = checkSession(localSt) || checkSession(mainSt);
     var inState = !!activeSession || (user && user.blackjackState);
 
+    // [보존] 해상 활동 알림 (누락 방지)
     if (typeof util_notifySeaReward === 'function') util_notifySeaReward(user, replier);
 
-    // 3. [무역 정산 격리] - 단체방에서만 정산 실행
+    // [보존] 무역 정산 격리 - 단체방에서만 정산 실행 (누락 방지)
     if (realRoom === MAIN_NAME && user && user.voyage && user.voyage.active === true) {
         if (Date.now() >= (user.voyage.arrival || 0)) {
             try { if (typeof _processTradeArrival === 'function') _processTradeArrival(user, data, replier, MAIN_NAME, targetUid); } catch (e) {}
         }
     }
-    
-    // 4. [1:1 보안 가드] - 세션 중(inState)이라면 한글 입력을 막지 않음
+
+    // 3. [1:1 보안 가드] - 세션 중(inState)이라면 한글/숫자 입력을 차단하지 않고 통과시킴
     if (!isGroupRoom && !isAllowedCmd && !inState) {
         if (msg.startsWith("/")) {
             var infoBody = "현재 계신 곳은 [보안 구역]입니다.\n\n" +

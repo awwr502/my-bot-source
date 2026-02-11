@@ -8738,51 +8738,57 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     var localSt = (data.rooms[roomName] && data.rooms[roomName].features) ? data.rooms[roomName].features.states : null;
     var mainSt = (data.rooms[MAIN_NAME] && data.rooms[MAIN_NAME].features) ? data.rooms[MAIN_NAME].features.states : null;
 
+    /**
+     * [v14.6] 지능형 세션 격리 엔진 (Room-Lock Validation)
+     * 기능: 세션 발생지(originRoom)와 현재 채팅방이 일치할 때만 활성 상태로 인정함.
+     */
     var checkSession = function(st) {
         if (!st) return false;
-        // 하위 객체가 아예 없을 경우 빈 객체({})를 참조하게 하여 에러를 원천 차단합니다.
-        var mw = st.menuWait || {};
-        var bp = st.bankProcess || {};
-        var sw = st.selectWait || {};
-        
-        // targetUid가 없거나 객체에 해당 키가 없어도 undefined를 반환하므로 안전합니다.
-        return (mw[targetUid] || bp[targetUid] || sw[targetUid]);
-      };
-
-// [격리 가드] "내리다" 방은 모든 기능 통과, 1:1 방은 지정된 3종 명령어와 핸들러만 허용
-    var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
-    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
-
-    // 현재 세션 상태 통합 판정 (무역 관련 voyage 조건 제거하여 1:1 방 간섭 차단)
-    var inState = checkSession(localSt) || checkSession(mainSt) || (user && user.blackjackState);
-
-if (typeof util_notifySeaReward === 'function') util_notifySeaReward(user, replier);
-
-    // '내리다' 방에서 도착 완료 상태인 상인이 채팅을 치면 정산 집행
-if (realRoom === "내리다" && user && user.voyage && user.voyage.active === true) {
-    var v = user.voyage;
-    // 현재 시간이 도착 예정 시간보다 크거나 같으면(도착 완료)
-    if (Date.now() >= (v.arrival || 0)) {
-        try {
-            if (typeof _processTradeArrival === 'function') {
-                _processTradeArrival(user, data, replier, "내리다", targetUid);
+        var sKeys = ["menuWait", "bankProcess", "selectWait", "lottoPurchase"];
+        for (var i = 0; i < sKeys.length; i++) {
+            var key = sKeys[i];
+            var entry = (st[key] && st[key][targetUid]) ? st[key][targetUid] : null;
+            if (entry) {
+                // [핵심]: 세션의 발생지와 현재 방 대조 (없으면 현재 방 성격에 따라 기본값 부여)
+                var actualOrigin = entry.originRoom || (is1to1 ? roomName : MAIN_NAME);
+                if (actualOrigin === roomName) return entry; 
             }
-        } catch (e) {
-            Log.error("🚨 정산 트리거 치명적 오류: " + e);
-            if (user.voyage) user.voyage.isProcessing = false; // 에러 시 잠금 해제
+        }
+        return false;
+    };
+
+    // [격리 가드] "내리다" 방은 모든 기능 통과, 1:1 방은 지정된 명령어와 해당 방의 세션만 허용
+    var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
+    var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자") || msg.startsWith("/도움말"));
+
+    // 현재 방에서 시작된 세션이 있는지 최종 판정
+    var activeSession = checkSession(localSt) || checkSession(mainSt);
+    var inState = !!activeSession || (user && user.blackjackState && (roomName === (user.blackjackState.originRoom || roomName)));
+
+    if (typeof util_notifySeaReward === 'function') util_notifySeaReward(user, replier);
+
+    // '내리다' 방에서 도착 완료 상태인 상인이 채팅을 치면 정산 집행 (타 방 간섭 차단)
+    if (realRoom === MAIN_NAME && user && user.voyage && user.voyage.active === true) {
+        var v = user.voyage;
+        if (Date.now() >= (v.arrival || 0)) {
+            try {
+                if (typeof _processTradeArrival === 'function') {
+                    _processTradeArrival(user, data, replier, MAIN_NAME, targetUid);
+                }
+            } catch (e) {
+                Log.error("🚨 정산 트리거 치명적 오류: " + e);
+                if (user.voyage) user.voyage.isProcessing = false;
+            }
         }
     }
-}
     
-    // 1:1 대화방(!isGroupRoom)이면서 허용된 명령어나 세션 중이 아니면 즉시 차단
-   if (!isGroupRoom && !isAllowedCmd && !inState) {
-        // 일반 대화가 아닌 명령어를 입력했을 때만 안내 (스팸 방지)
+    // 1:1 대화방(!isGroupRoom) 가드 로직: 명령어 형태일 때만 접근 제한 안내 출력
+    if (!isGroupRoom && !isAllowedCmd && !inState) {
         if (msg.startsWith("/")) {
             var infoBody = "현재 계신 곳은 [보안 구역]입니다.\n\n" +
                            "✅ 이용 가능: 카지노, 은행, 내정보, 도움말\n" +
                            "🚫 이용 불가: 위 명령어를 제외한 모든 명령어\n\n" +
                            "💡 단체방 전용 기능은 '내리다' 방을 이용해 주세요.";
-            
             replier.reply(formatError(user, "접근 제한 명령어", infoBody));
         }
         return; 
@@ -16088,14 +16094,17 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
     if (!data.rooms[roomName].features.states) data.rooms[roomName].features.states = { menuWait: {} };
     var mState = data.rooms[roomName].features.states.menuWait;
 
-    // [핵심 가드] 단체방 입장 제한
+    // [v14.6 교정] 단체방 입장 제한 가드 (명령어 입력 시에만 반응)
     if (user.isGroupChatTemp === true) {
-        var inviteBody = "중앙 카지노는 VIP 고객님의 보안과\n" +
-                         "쾌적한 환경을 위해 오직 [1:1 대화]를\n" +
-                         "통해서만 게임을 제한하고 있습니다.\n" +
-                         "https://open.kakao.com/me/nerida";
-        replier.reply(formatCommand("📨 VIP 전용 안내", user, inviteBody, "봇의 오픈프로필 1:1 채팅방에서 만나요!"));
-        return true;
+        // 일반 채팅 중 세션 오인으로 인한 자동 출력을 막기 위해 조건을 '/카지노' 명령어로 한정합니다.
+        if (msg.startsWith("/카지노")) {
+            var inviteBody = "중앙 카지노는 VIP 고객님의 보안과\n" +
+                             "쾌적한 환경을 위해 오직 [1:1 대화]를\n" +
+                             "통해서만 게임을 제한하고 있습니다.\n" +
+                             "https://open.kakao.com/me/nerida";
+            replier.reply(formatCommand("📨 VIP 전용 안내", user, inviteBody, "봇의 오픈프로필 1:1 채팅방에서 만나요!"));
+        }
+        return true; 
     }
 
     // 1. 명령어 처리: /카지노
@@ -16114,13 +16123,11 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 1) 세션 갱신 및 입장 알림 (3분 미사용 시 또는 최초 입장 시 1회 발송)
         if (nowTs - (user.lastBotUseTime || 0) > 180000 || !user.casinoAuditStartTime) {
             user.casinoAuditStartTime = nowTs;
             user.casinoAuditStartAssets = Number(user.point || 0) + Number(user.bank || 0);
             user.casinoAuditAlertHistory = [];
             
-            // 베릭방 입장 알림 발송 (3분에 1번)
             var entryLog = "🔔 [카지노 입장 알림]\n" +
                            "━━━━━━━━━━━━━━━\n" +
                            "👤 유저: " + user.name + "\n" +
@@ -16132,9 +16139,9 @@ function _gameCasinoLogic(msg, user, data, replier, roomName, targetUid) {
             try { Api.replyRoom("베릭방", entryLog); } catch(e) { Log.error("Entry Alert Fail: " + e); }
         }
 
-        // 마지막 활동 시간 갱신 및 메뉴 상태 설정
         user.lastBotUseTime = nowTs; 
-        mState[targetUid] = { type: 'casino_main', time: nowTs };
+        // [핵심 패치]: originRoom을 기록하여 타 방 간섭 및 타임아웃 오작동 방지
+        mState[targetUid] = { type: 'casino_main', time: nowTs, originRoom: roomName };
 
         var body = "현재 입장 가능한 게임룸입니다.\n\n" +
                    "1. 🌓 사다리 (2분 주기 / 1.90~4.0배)\n" +

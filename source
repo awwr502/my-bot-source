@@ -15462,9 +15462,17 @@ function _showVoyageStatus(user, replier, data, roomName) {
         tRev += Math.floor(sBase * sQty * sMult);
     }
 
-    var margin = tRev - tCost;
+    // 1. 기초 마진에 선박 효율을 먼저 곱하여 '세전 기대 수익'을 확정합니다.
     var shipEff = (user.shipLevel === 1) ? 4.2 : (user.shipLevel === 2 ? 1.9 : 1.15);
-    margin = Math.floor(margin * shipEff);
+    var baseMarginWithEff = Math.floor((tRev - tCost) * shipEff);
+
+    // 2. 항구 발전 레벨을 참조하여 보너스 금액을 산출합니다. (레벨당 1%)
+    var pInfo = (data.rooms[roomName].features.portData && data.rooms[roomName].features.portData[v.dest]) ? data.rooms[roomName].features.portData[v.dest] : { level: 1 };
+    var portLevelRate = Number((pInfo.level - 1) * 0.01);
+    var bonusAmt = baseMarginWithEff > 0 ? Math.floor(baseMarginWithEff * portLevelRate) : 0;
+
+    // 3. 최종 마진 = (기초 수익 * 효율) + 발전도 보너스
+    var margin = baseMarginWithEff + bonusAmt;
 
     var taxRate = (user.title === "기부왕") ? 0.05 : 0.10;
     var taxAmt = margin > 0 ? Math.floor(margin * taxRate) : 0;
@@ -15750,17 +15758,24 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     }
 
     // 5. [핵심] 순수익(마진) 기반 차등 정산 로직
-    var margin = totalRevenue - totalCost; // 순수 마진(이익금) 산출
+    var baseMargin = totalRevenue - totalCost; // 순수 마진(이익금) 산출
 
-    // [추가] 선박 체급별 수익 구간 강제 밸런싱 엔진 (수정형)
-    // 목적: 10칸(10~15만) / 25칸(16~20만) / 40칸(20~25만) 수익 구간 보장
+    // [선박 체급별 수익 구간 강제 밸런싱 엔진]
     var shipEfficiency = 1.0;
-    if (user.shipLevel === 1) shipEfficiency = 4.2; // 10칸선: 적은 물량 대비 초고효율 보너스
-    else if (user.shipLevel === 2) shipEfficiency = 1.9; // 25칸선: 중위권 안정화 보너스
-    else shipEfficiency = 1.15; // 40칸선: 대량 적재에 따른 적정 효율 보너스
+    if (user.shipLevel === 1) shipEfficiency = 4.2; 
+    else if (user.shipLevel === 2) shipEfficiency = 1.9; 
+    else shipEfficiency = 1.15; 
 
-    // 위에서 계산된 기초 마진에 선박 효율을 곱해 '세전 순수익(A)' 확정
-    margin = Math.floor(margin * shipEfficiency);
+    // 1단계: 선박 효율이 적용된 '기초 수익' 확정
+    var efficientMargin = Math.floor(baseMargin * shipEfficiency);
+
+    // 2단계: 효율이 적용된 금액을 기준으로 발전도 보너스 산출 (정확히 레벨-1 %)
+    var pInfo = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : { level: 1 };
+    var portLevelRate = Number((pInfo.level - 1) * 0.01);
+    pBonusTotal = efficientMargin > 0 ? Math.floor(efficientMargin * portLevelRate) : 0;
+
+    // 3단계: 최종 세전 마진 = (기초 수익 + 발전도 보너스)
+    var margin = efficientMargin + pBonusTotal;
     
     // [재해] 해적 약탈 (마진이 있을 때만 마진에서 10% 차감)
     if (triggeredDisaster === "PIRACY" && margin > 0) {

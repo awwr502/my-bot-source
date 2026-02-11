@@ -1,10 +1,10 @@
 //==========섹터1==========
 
 /**
- * [v13.0] 시스템 전역 고유 식별 키 (Global Identity Keys)
- * 기능: 스케줄러와 워치독의 중복 실행을 방지하기 위한 시스템 고유 프로퍼티 키
+ * [v14.3] 시스템 전역 자원 선언부
+ * 기능: 모든 섹터에서 접근 가능하도록 스레드 풀을 전역 스코프에 선언합니다.
  */
-var ParallelPool, LogicQueue, Executor, SaveExecutor; // 스레드 변수를 전역으로 명시적 선언
+var ParallelPool, LogicQueue, Executor, SaveExecutor; 
 
 var SCHEDULER_KEY = "kakaobot_scheduler_v5";
 var WATCHDOG_KEY = "kakaobot_watchdog_v1";
@@ -12,11 +12,10 @@ var MY_INSTANCE_ID = java.lang.System.identityHashCode(this) + "";
 
 /**
  * [v12.9] 네이티브 객체 초정밀 소각 엔진
- * 기능: 유저 객체에 박제된 SessionCacheReplier 등 자바 객체를 강제 제거
+ * 기능: 유저 객체에 박제된 SessionCacheReplier 등 자바 객체를 강제 제거하여 크래시 방지
  */
 function util_fastClean(obj) {
     if (!obj || typeof obj !== 'object') return;
-    // 루프를 돌지 않고 박제 가능성이 높은 지점만 직접 타격
     if (obj.replier) obj.replier = null;
     if (obj.imageDB) obj.imageDB = null;
     if (obj.lastAction) obj.lastAction.replier = null;
@@ -25,95 +24,83 @@ function util_fastClean(obj) {
 
 function util_scrubNativeObject(obj) {
     if (!obj || typeof obj !== 'object') return;
-    
     for (var key in obj) {
         try {
             var val = obj[key];
             if (val === null || val === undefined) continue;
-
             var isJava = false;
             try {
                 if (val.getClass !== undefined) isJava = true;
                 if (String(val).indexOf("com.xfl.msgbot") !== -1) isJava = true;
                 if (val.constructor && val.constructor.name && val.constructor.name.indexOf("SessionCache") !== -1) isJava = true;
             } catch(e) { isJava = true; } 
-
             if (isJava || typeof val === 'function' || key === 'replier' || key === 'imageDB') {
                 delete obj[key];
                 continue;
             }
-
-            if (typeof val === 'object') {
-                util_scrubNativeObject(val);
-            }
-        } catch (critical) {
-            delete obj[key];
-        }
+            if (typeof val === 'object') util_scrubNativeObject(val);
+        } catch (critical) { delete obj[key]; }
     }
 }
 
-// 시스템 전체를 청소하는 래퍼 함수
 function util_nukeAllCorruption() {
     if (typeof globalData !== 'undefined' && globalData !== null) {
         util_scrubNativeObject(globalData);
         Log.info("🧹 [System] 전역 데이터 정밀 소독 완료");
     }
 }
-        
-        // 수정: 누락된 함수 선언부 복구 및 깃허브 로더용 전역 데이터 정화 로직 통합
+
 if (typeof globalData === 'undefined' || globalData === null) {
     globalData = { rooms: {}, botActive: true, statusCheck: {} };
 }
-
 globalData._isInitialized = false;
 
 /**
- * [v14.0] 하이퍼-클린 부트 엔진 (Ultra-Low Power)
- * 기능: 스레드 풀 누수를 원천 차단하고 단일 인스턴스 보장을 강화하여 발열을 억제합니다.
+ * [v14.3] 하이퍼-클린 부트 엔진 (Power-Saving Edition)
+ * 기능: 스레드 개수를 2개로 압축하여 발열을 잡고, 전역 변수 참조 오류를 해결합니다.
  */
 (function() {
     try {
         var REG = "msgbot_thread_pool_registry_v1";
         var ACT_ID = "CURRENT_ACTIVE_ID";
 
-        // 1. [철저 소각] 이전 스케줄러 및 스레드 풀 강제 정지
+        // 1. [소각] 이전 인스턴스의 좀비 자원 물리적 파괴
         if (typeof globalData !== 'undefined' && globalData[REG]) {
             var oldPools = globalData[REG];
             for (var i = 0; i < oldPools.length; i++) {
-                try {
-                    if (oldPools[i]) {
-                        oldPools[i].shutdownNow(); 
-                    }
-                } catch (e) {}
+                try { if (oldPools[i]) oldPools[i].shutdownNow(); } catch (e) {}
             }
-            Log.info("🗑️ [System] 이전 인스턴스 자원 물리적 소각 완료");
+            Log.info("🗑️ [System] 이전 인스턴스 좀비 자원 소각 완료");
         }
 
-        // 2. [중복 타이머 제거] 기존 스케줄러 키 기반 강제 종료
+        // 2. [중복 타이머 제거]
         var oldST = java.lang.System.getProperty(SCHEDULER_KEY);
         if (oldST) { clearInterval(parseInt(oldST)); java.lang.System.clearProperty(SCHEDULER_KEY); }
         var oldWD = java.lang.System.getProperty(WATCHDOG_KEY);
         if (oldWD) { clearInterval(parseInt(oldWD)); java.lang.System.clearProperty(WATCHDOG_KEY); }
 
-        // 3. [최적화] 스레드 개수를 기기 성능(노트9)에 맞춰 2개로 압축 (발열 감소 핵심)
-        ParallelPool = java.util.concurrent.Executors.newFixedThreadPool(4); // 4개에서 2개로 압축 (발열 억제)
+        // 3. [최적화] 엔진 생성 및 전역 변수 할당 (var 제거)
+        // ParallelPool: 메시지 처리용 (노트9 발열 억제를 위해 2개로 고정)
+        ParallelPool = java.util.concurrent.Executors.newFixedThreadPool(2); 
         LogicQueue = java.util.concurrent.Executors.newSingleThreadExecutor();
+        // Executor: 디스코드 백업 및 외부 통신용 (복구 완료)
         Executor = java.util.concurrent.Executors.newCachedThreadPool();
         SaveExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
 
+        java.lang.System.setProperty(ACT_ID, MY_INSTANCE_ID);
         globalData[REG] = [ParallelPool, LogicQueue, Executor, SaveExecutor];
         
-        // globalScope(this)에도 등록하여 로더와의 호환성 유지
+        // globalScope(this) 동기화 - 로더가 이 변수들을 찾을 수 있게 함
         this.ParallelPool = ParallelPool;
         this.LogicQueue = LogicQueue;
         this.Executor = Executor;
         this.SaveExecutor = SaveExecutor;
 
-        Log.info("♻️ [System] 엔진 최적화 가동 (ID: " + MY_INSTANCE_ID + ")");
+        Log.info("♻️ [System] v14.3 최적화 엔진 점화 성공 (ID: " + MY_INSTANCE_ID + ")");
         java.lang.System.gc(); 
 
     } catch (e) {
-        Log.error("🚨 [System] 엔진 리부트 결함: " + e);
+        Log.error("🚨 [System] 엔진 리부트 치명적 결함: " + e);
     }
 })();
 

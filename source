@@ -5637,14 +5637,20 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
                             return; 
                         }
 
-                        if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
-                        var roomData = data.rooms[roomName];
-                        
-                        if (!roomData.features) {
-                            if (typeof ROOM_FEATURE_TEMPLATE === 'function') {
-                                roomData.features = ROOM_FEATURE_TEMPLATE();
-                            }
-                        }
+                        // 1. 실제 메시지가 발생한 '물리적인 방'의 객체와 features를 먼저 생성 (1:1방 세션 인식용)
+                    if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
+                    if (!data.rooms[roomName].features) {
+                        data.rooms[roomName].features = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
+                    }
+
+                    // 2. 이후 논리적 데이터 처리를 위한 roomData 리다이렉트 수행 (포인트/유저 정보는 '내리다' 참조)
+                    var roomData = (roomName === "베릭방" || ALLOWED_ROOMS.indexOf(roomName) === -1) 
+                                   ? data.rooms["내리다"] 
+                                   : (data.rooms[roomName] || { users: {} });
+
+                   if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+                        var mainUsers = (data.rooms["내리다"] && data.rooms["내리다"].users) ? data.rooms["내리다"].users : {};
+                        var cleanTarget = cleanSender.replace(/\s/g, "");
 
                 // [2번] 실시간 하이프(채팅량) 기록
                 roomData.features.msgCount = (roomData.features.msgCount || 0) + 1;
@@ -16653,6 +16659,7 @@ function _handleBlackjackRetry(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
     var mState = roomData.features.states.menuWait;
     var state = mState[targetUid];
+    var input = msg.trim(); // 입력값 트리밍 추가
 
     // 1. 시간 초과 체크 (30초)
     if (Date.now() - state.time > 30000) {
@@ -16662,14 +16669,14 @@ function _handleBlackjackRetry(msg, user, data, replier, roomName, targetUid) {
     }
 
     // 2. 종료 (그만/취소)
-    if (msg === "그만" || msg === "취소" || msg === "❎") {
+    if (input === "그만" || input === "취소" || input === "❎") {
         delete mState[targetUid];
         util_casinoRelayReply(replier, user, formatCommand("🚫 블랙잭 종료", user, "테이블에서 일어났습니다."), roomName);
         return true;
     }
 
     // 3. 재도전 (한번더/리트)
-    if (msg === "한번더" || msg === "한번 더" || msg === "리트" || msg === "🔁") {
+    if (input === "한번더" || input === "한번 더" || input === "리트" || input === "🔁") {
         // [부도 가드] 재확인
         if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
             delete mState[targetUid];

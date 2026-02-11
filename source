@@ -17225,10 +17225,10 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
             var u = roomObj.users[uid];
             var isSailing = (u.voyage && u.voyage.active === true);
             var hasEnoughTime = isSailing && (u.voyage.arrival - now >= 180000);
-            var alreadyPillaged = (u.isPillaged === true || (u.voyage && u.voyage.isPillaged === true));
+            var alreadyTargeted = (u.isPillaged === true || (u.voyage && u.voyage.isPillaged === true));
             var isUnderAttack = (currentPillages && currentPillages[uid]); 
 
-            if (hasEnoughTime && !alreadyPillaged && !isUnderAttack && uid !== targetUid) {
+            if (hasEnoughTime && !alreadyTargeted && !isUnderAttack && uid !== targetUid) {
                 sailingUsers.push({ uid: uid, data: u, roomName: r, isAI: false });
             }
         }
@@ -17525,24 +17525,30 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         pirate.currentBounty = Number(cfg.PIRATE.bountyBase);
 
         // [분배] 고용된 AI 해군 승리 시에도 현재 방의 유저 해군들에게 현상금 균등 분배
-        if (isAINavy || isAICombat) {
+       if (isAINavy || isAICombat) {
             var localNavies = [];
+            var totalNavyLevels = 0;
             var targetRoomObj = data.rooms[roomName];
+            
             if (targetRoomObj && targetRoomObj.users) {
                 for (var uId in targetRoomObj.users) {
                     var u = targetRoomObj.users[uId];
-                    if (u.job === 'navy') localNavies.push(u);
+                    if (u.job === 'navy') {
+                        localNavies.push(u);
+                        totalNavyLevels += (u.shipLevel || 1);
+                    }
                 }
             }
 
             if (localNavies.length > 0) {
-                var div = Math.floor(bounty / localNavies.length);
                 localNavies.forEach(function(n) { 
-                    n.claimableReward = (Number(n.claimableReward) || 0) + div; 
+                    var weight = (n.shipLevel || 1) / totalNavyLevels;
+                    var myShare = Math.floor(bounty * weight);
+                    n.claimableReward = (Number(n.claimableReward) || 0) + myShare; 
                     n.hasNotifiedReward = false;
                 });
                 resultMsg += "🎊 [AI 해군 승보] 현상금 " + fp(bounty) + "P를 확보했습니다!\n" +
-                             "💰 이 방의 해군 " + localNavies.length + "명에게 각 " + fp(div) + "P씩 분배 적립되었습니다.\n\n";
+                             "💰 지분 배분: 함선 체급(Lv)에 비례하여 정산소로 입고되었습니다.\n\n";
             }
         } else {
             navy.fame = (navy.fame || 0) + 10;
@@ -17554,9 +17560,11 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         }
 
         if (!isAICombat && victim && victim.voyage) {
-            victim.voyage.escortUid = null;
+            victim.voyage.escortUid = null; // 해군은 즉시 자유 신분 (고용 가능)
             victim.voyage.escortFee = 0;
-            resultMsg += "🛡️ [임무 완료]: 해적을 격퇴하여 호위 임무가 성공적으로 종료되었습니다!\n";
+            victim.isPillaged = true; // [상인 보호] 한번 시도된 선박은 약탈 가능 목록에서 제외
+            if (victim.voyage) victim.voyage.isPillaged = true;
+            resultMsg += "🛡️ [임무 완료]: 해적을 격퇴했습니다. 해당 상선은 보호 프로토콜에 따라 더 이상 습격받지 않습니다.\n";
         }
 
         if (session) delete mainRoom.features.activePillages[victimUid];
@@ -17728,22 +17736,13 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
 
     // 2. 정산 로직 분기
     if (isAI) {
-        // [AI 정산]: 실제 화물 대신 현재 물가 기반 가상 마진 생성 (15만~45만P 범위)
+        // [수정] AI 상단 약탈액 밸런스 조정: 유저 평균 순수익 마진의 약 30% 수준
         var ecoMult = util_getEcoMultiplier("내리다");
-        var virtualMargin = (Math.floor(Math.random() * 300001) + 150000) * ecoMult;
+        var virtualMargin = (Math.floor(Math.random() * 100001) + 150000) * ecoMult; // 15만~25만P 기준
+        pRate = 0.3; // 30% 고정 약탈
         
-        // [반영] AI 상단 약탈 시 국고 차감 없이 신규 통화로 포인트 생성
-        var ecoMult = util_getEcoMultiplier("내리다");
-        var virtualMargin = (Math.floor(Math.random() * 300001) + 150000) * ecoMult;
-        
-        var pMin = cfg.JOBS.PIRATE.pillageRateMin || 0.3;
-        var pMax = cfg.JOBS.PIRATE.pillageRateMax || 0.5;
-        pRate = pMin + (pMax - pMin) * (Number(pirate.shipLevel || 1) - 1) / 9;
-        
-        pillageAmount = Math.floor(virtualMargin * 2.0 * pRate);
-        
-        // roomData 인자에 null을 전달하여 국고(bankReserve) 변동을 차단함 (Sector 11 로직 연동)
-        util_updatePoint(pirate, null, pillageAmount, "AI 상단 약탈 수익(신규 통화)", "내리다");
+        pillageAmount = Math.floor(virtualMargin * pRate);
+        // [삭제] util_updatePoint 제거 (정산소로만 입고되도록 변경)
     } else {
         // [유저 정산]: 기존 소스코드의 정밀 스냅샷 기반 계산 유지
         var v = victim.voyage;

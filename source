@@ -1614,18 +1614,17 @@ function util_autoClearTimeouts(data) {
                     var u = roomObj.users[uid];
                     if (u) {
                         try {
-                            // [핵심 교정]: 세션에 기록된 originRoom이 현재 순회 중인 rName과 일치할 때만 메시지 발송
-                            // 만약 '내리다' 방에 복사된 세션(originRoom: "1:1방")이라면, rName이 "내리다"일 때는 메시지를 보내지 않음.
+                            // [수정]: 세션에 저장된 originRoom이 현재 순회 중인 방 이름(rName)과 일치할 때만 알림 전송
                             var actualOrigin = entry.originRoom || rName;
                             
                             if (rName === actualOrigin) {
-                                Api.replyRoom(rName, formatError(u, "입력 시간 초과", "30초 이내에 번호를 선택하지 않아 메뉴가 닫혔습니다."));
+                                Api.replyRoom(rName, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
                             }
                         } catch(e) {
                             Log.error("Timeout Notify Error: " + e);
                         }
                     }
-                    // 메시지 발송 여부와 상관없이 데이터는 양쪽 방(1:1, 내리다)에서 각각 삭제하여 정리
+                    // 메시지 발송 여부와 상관없이 양쪽 방의 데이터는 모두 삭제하여 정리
                     delete q[uid]; 
                 }
             }
@@ -8718,18 +8717,23 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     var logicRoom = is1to1 ? MAIN_NAME : roomName; 
 
     // 수정: 1:1 대화방 세션을 메인 방으로 강제 복사하여 모든 숫자 핸들러가 인식하도록 동기화 (수정)
-    if (is1to1) {
-        var pRoom = data.rooms[roomName];
-        var mRoom = data.rooms[MAIN_NAME];
-        if (pRoom && pRoom.features && mRoom && mRoom.features) {
-            var sKeys = ["menuWait", "selectWait", "bankProcess", "lottoPurchase"];
-            sKeys.forEach(function(key) {
-                if (pRoom.features.states[key] && pRoom.features.states[key][targetUid]) {
-                    mRoom.features.states[key][targetUid] = pRoom.features.states[key][targetUid];
-                }
-            });
-        }
+   if (is1to1) {
+    var pRoom = data.rooms[roomName];
+    var mRoom = data.rooms[MAIN_NAME];
+    if (pRoom && pRoom.features && mRoom && mRoom.features) {
+        var sKeys = ["menuWait", "selectWait", "bankProcess", "lottoPurchase"];
+        sKeys.forEach(function(key) {
+            // 1:1방에 세션이 있다면 메인방으로 복사 (핸들러용)
+            if (pRoom.features.states[key] && pRoom.features.states[key][targetUid]) {
+                mRoom.features.states[key][targetUid] = pRoom.features.states[key][targetUid];
+            } 
+            // 반대로 메인방에만 세션이 생겼다면 1:1방으로 가져옴 (한글 입력 인식용)
+            else if (mRoom.features.states[key] && mRoom.features.states[key][targetUid]) {
+                pRoom.features.states[key][targetUid] = mRoom.features.states[key][targetUid];
+            }
+        });
     }
+}
     var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
 
     var isAllowedCmd = (msg.startsWith("/카지노") || msg.startsWith("/내정보") || msg.startsWith("/은행") || msg.startsWith("/연동진단") || msg.startsWith("/방목록") || msg.startsWith("/관리자"));
@@ -16667,7 +16671,11 @@ function _finishBlackjack(user, data, replier, roomName, targetUid, action) {
     // [4] 상태 정리 및 최종 출력
     user.totalGambleCount = (user.totalGambleCount || 0) + 1;
     user.blackjackState = null;
-    roomData.features.states.menuWait[targetUid] = { type: 'blackjack_retry', time: Date.now() };
+    roomData.features.states.menuWait[targetUid] = { 
+        type: 'blackjack_retry', 
+        time: Date.now(),
+        originRoom: roomName 
+    };
 
     var finalMsg = "🤖 딜러 패: [ " + state.dealerHand.join(", ") + " ] (" + dScore + "점)\n" +
                    "👤 나의 패: [ " + state.playerHand.join(", ") + " ] (" + pScore + "점)\n\n" +

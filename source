@@ -2528,8 +2528,8 @@ function checkEconomicStimulus(user, roomName, isManual) {
     var roomData = data.rooms[roomName];
     var myNetWorth = util_calculateNetWorth(user, roomData);
 
-    // 지급 기준선: 평균 순자산의 40% 미만
-    var targetLine = Math.floor(avgAsset * 0.4);
+    // 1. 지급 기준선: 평균 순자산의 70% 미만으로 완화 (기존 40%)
+    var targetLine = Math.floor(avgAsset * 0.7);
     
     if (myNetWorth < targetLine) {
         var multiplier = util_getEcoMultiplier(roomName);
@@ -2537,12 +2537,17 @@ function checkEconomicStimulus(user, roomName, isManual) {
         var gap = targetLine - myNetWorth;
         var emergencyMult = util_getEmergencyMultiplier(roomName);
 
-        // [정부 정책 연동] 인플레이션 억제 정책(globalRewardMult) 로드
+        // [정부 정책 연동] 인플레이션 억제 정책 로드
         var pol = util_getActivePolicy(roomData);
 
-        // 지능형 보상 부스트(giniCorr.reward)를 적용하여 서민 자산 복구 가속
-        var baseGive = Math.floor(10000 * multiplier * emergencyMult * giniCorr.reward * (pol.globalRewardMult || 1.0));
-        var giveAmount = Math.min(baseGive, gap); 
+        // 2. 지원금액: 평균 순자산의 10%를 기본 지급액으로 설정 (기존 10,000P 고정)
+        var baseRewardAmount = Math.floor(avgAsset * 0.1);
+        
+        // 각종 경제 승수(물가, 긴급상황, 지니계수, 정부정책)를 적용하여 최종 금액 산출
+        var baseGive = Math.floor(baseRewardAmount * multiplier * emergencyMult * giniCorr.reward * (pol.globalRewardMult || 1.0));
+        
+        // 기준선(70%)을 초과하여 지급되지 않도록 보정
+        var giveAmount = Math.min(baseGive, gap);
 
         // [신규] 신용불량자 페널티: 민생지원금 20% 삭감
         if (Number(user.creditScore || 600) < 500) {
@@ -16891,7 +16896,8 @@ function _handleJobJoin(choice, user, data, replier, roomName, targetUid) {
         if (choice === "1") {
             user.job = 'pirate';
             user.infamy = 0;
-            user.currentBounty = 0;
+            var pirateCfg = SYSTEM_CONFIG.TRADE.JOBS.PIRATE;
+            user.currentBounty = Number(pirateCfg.bountyBase || 50000);
             user.jobJoinDate = getSimpleDate();
             replier.reply(formatCommand("🏴‍☠️ 해적단 가입 완료", user, "이제 당신은 자유로운 영혼, 해적입니다!\n바다 위의 무역선들을 습격하여 악명을 떨치세요.\n\n🚢 알림: 전투용 1단계 함선 수령 완료"));
         } else if (choice === "2") {
@@ -17501,7 +17507,8 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
     
     pirate.claimableReward = (Number(pirate.claimableReward) || 0) + pillageAmount;
     pirate.infamy = (pirate.infamy || 0) + 10;
-    pirate.currentBounty = (pirate.currentBounty || 0) + 15000;
+    var pirateCfg = SYSTEM_CONFIG.TRADE.JOBS.PIRATE;
+    pirate.currentBounty = (Number(pirate.currentBounty) || 0) + (pirateCfg.bountyInc || 15000);
     pirate.totalPillageSuccess = (pirate.totalPillageSuccess || 0) + 1;
     util_checkPirateTitle(pirate, null, "내리다");
     pirate.pillageCooldownEndTime = Date.now() + (cfg.JOBS.PIRATE.winCooldown || 300000);

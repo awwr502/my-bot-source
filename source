@@ -17121,17 +17121,16 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
         }
     }
 
-    // 유저 상인이 3명 미만일 경우 부족한 만큼 AI 상인(유령 상단) 생성
+    // 유저 상인이 5명 미만일 경우 부족한 만큼 AI 상인(유령 상단) 생성
     if (sailingUsers.length < 5) {
-        var aiNames = ["동방무역선", "서방연합함대", "떠돌이 상인 잭", "제국 운송선", "황금도시 상단", "북해 무역협회"];
+        var aiNames = ["동방무역선", "서방연합함대", "제국 운송선", "황금도시 상단", "북해 무역협회"];
         var aiDests = ["포르투", "코콜라", "나폴리", "베라크루스", "킴벌리"];
         var needed = 4 - sailingUsers.length;
         
         for (var i = 0; i < needed; i++) {
             var randName = aiNames[Math.floor(Math.random() * aiNames.length)] + " " + (Math.floor(Math.random() * 90) + 10);
             var randDest = aiDests[Math.floor(Math.random() * aiDests.length)];
-            var randLevel = Math.floor(Math.random() * 4) + 1; // Lv.1~5
-            var randTime = (Math.floor(Math.random() * 20) + 10) * 60000; // 10~30분
+            var randLevel = Math.floor(Math.random() * 3) + 2; // AI는 보통 Lv.2~5 함선
 
             sailingUsers.push({
                 uid: "AI_BOT_" + i,
@@ -17141,8 +17140,8 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
                     shipLevel: randLevel,
                     voyage: {
                         dest: randDest,
-                        arrival: now + randTime,
-                        escortUid: (Math.random() < 0.2) ? "NAVY_BOT" : null // 20% 확률로 가상 호위
+                        arrival: now + ((Math.floor(Math.random() * 20) + 10) * 60000),
+                        escortUid: "AI_NAVY_ELITE" // AI 상인은 항상 가상의 엘리트 해군이 호위
                     }
                 },
                 roomName: "내리다"
@@ -17200,6 +17199,15 @@ function _handlePillageSelect(choice, user, data, replier, roomName, targetUid) 
     var target = state.extra.targets[idx];
     var victim = target.data;
     var vId = target.uid;
+
+    if (target.isAI) {
+        replier.reply("🛡️ [경보]\n습격한 '" + victim.name + "'은(는) AI 상단입니다!\n호위 중인 'AI 해군' 함대와 즉시 교전이 시작됩니다!");
+        
+        // AI 상인의 경우 전용 전투 모드(AI_COMBAT)로 실행
+        _executeSeaCombat(user, vId, "AI_NAVY_ELITE", data, roomName, "AI_COMBAT");
+        delete roomData.features.states.menuWait[targetUid];
+        return;
+    }
 
     // 선택 시점에 대상 유저의 최신 데이터를 다시 확인하여 이미 털린 유저인지 2차 검증
     if (victim.isPillaged === true || (victim.voyage && victim.voyage.isPillaged === true)) {
@@ -17328,88 +17336,130 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         session.isBattled = true; 
     }
 
-    var pirate = (mode === "ESCORT") ? navyOrPirate : null;
+    var isAICombat = (mode === "AI_COMBAT");
+    var pirate = (mode === "ESCORT" || isAICombat) ? navyOrPirate : null;
     var navy = (mode === "INTERVENE") ? navyOrPirate : null;
     
-    if (!pirate) {
-        var pId = session ? session.pirateUid : null;
-        if (!pId) return;
-        for (var r in data.rooms) { if (data.rooms[r].users[pId]) { pirate = data.rooms[r].users[pId]; break; } }
+    if (!isAICombat) {
+        if (!pirate) {
+            var pId = session ? session.pirateUid : null;
+            if (!pId) return;
+            for (var r in data.rooms) { if (data.rooms[r].users[pId]) { pirate = data.rooms[r].users[pId]; break; } }
+        }
+        if (!navy) {
+            for (var r in data.rooms) { if (data.rooms[r].users[navyUid]) { navy = data.rooms[r].users[navyUid]; break; } }
+        }
     }
-    if (!navy) {
-        for (var r in data.rooms) { if (data.rooms[r].users[navyUid]) { navy = data.rooms[r].users[navyUid]; break; } }
-    }
-    if (!pirate || !navy) return;
 
-    var nShip = navy.shipLevel || 1;
+    if (!pirate || (!isAICombat && !navy)) return;
+
+    var nShip = isAICombat ? 5 : (navy.shipLevel || 1); // AI 해군은 Lv.5 고정급 성능
     var pShip = pirate.shipLevel || 1;
-    var winProb = 50 + (nShip - pShip) * 4 + (Math.random() * 20 - 10);
-    var isNavyWin = (Math.random() * 100 < winProb);
+    
+    // 승률 설정: AI 전투 시 해군 52%, 그 외 유저간 전투는 기존 공식 유지
+    var isNavyWin = isAICombat ? (Math.random() < 0.52) : (Math.random() * 100 < (50 + (nShip - pShip) * 4 + (Math.random() * 20 - 10)));
 
     var resultMsg = "⚔️ [해상 교전 결과 보고]\n━━━━━━━━━━━━━━━\n" +
-                    "👮 해군: " + navy.name + " (Lv." + nShip + ")\n" +
+                    "👮 해군: " + (isAICombat ? "AI 엘리트 해군" : navy.name) + " (Lv." + nShip + ")\n" + 
                     "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pShip + ")\n\n";
 
-    // 추가: 승패 판정 전, 대상 상선을 먼저 식별하고 '약탈 시도됨' 플래그를 즉시 박제
-    var victim = null;
-    for (var r in data.rooms) { if (data.rooms[r].users[victimUid]) { victim = data.rooms[r].users[victimUid]; break; } }
-    
-    if (victim) {
-        victim.isPillaged = true; 
-        if (victim.voyage) victim.voyage.isPillaged = true;
-        victim.skipHealing = true;
+    // 유저 상선 대상일 때만 '약탈 시도됨' 박제 (AI 상인은 별도 데이터가 없으므로 제외)
+    if (!isAICombat) {
+        var victim = null;
+        for (var r in data.rooms) { if (data.rooms[r].users[victimUid]) { victim = data.rooms[r].users[victimUid]; break; } }
+        if (victim) {
+            victim.isPillaged = true; 
+            if (victim.voyage) victim.voyage.isPillaged = true;
+            victim.skipHealing = true;
+        }
     }
 
     if (isNavyWin) {
         var piratePenaltyMs = cfg.PIRATE.jailTime || 3600000; 
         pirate.pillageCooldownEndTime = Date.now() + piratePenaltyMs; 
         pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
-        navy.fame = (navy.fame || 0) + 10;
         
         var baseReward = Math.floor(cfg.PIRATE.bountyBase * 0.3); 
         var bounty = baseReward + (pirate.currentBounty || 0);
-        if (navy.title === "제해왕") {
-            var bonusBounty = Math.floor(bounty * 0.2);
-            bounty += bonusBounty;
-            resultMsg += "✨ [제해왕 효과]: 현상금 +20% 보너스 (+" + fp(bonusBounty) + "P)\n";
-        }
-        navy.claimableReward = (Number(navy.claimableReward) || 0) + bounty;
-        navy.hasNotifiedReward = false;
         pirate.currentBounty = 0;
 
-        navy.totalCaptureSuccess = (navy.totalCaptureSuccess || 0) + 1;
+        if (isAICombat) {
+            // AI 해군 승리 시: 전 서버 유저 해군에게 균등 분배
+            var allNavies = [];
+            for (var r in data.rooms) {
+                for (var uId in data.rooms[r].users) {
+                    var u = data.rooms[r].users[uId];
+                    if (u.job === 'navy') allNavies.push(u);
+                }
+            }
+            if (allNavies.length > 0) {
+                var div = Math.floor(bounty / allNavies.length);
+                allNavies.forEach(function(n) { util_updatePoint(n, mainRoom, div, "해군본부: AI 승전 배당금", "내리다"); });
+                resultMsg += "🎊 [해군본부 승전보]\nAI 함대가 해적을 소탕하여 현상금 " + fp(bounty) + "P를 확보했습니다!\n" +
+                             "💰 모든 해군 대원(" + allNavies.length + "명)에게 " + fp(div) + "P씩 즉시 배당되었습니다.\n\n";
+            }
+        } else {
+            // 일반 유저 해군 승리 시
+            navy.fame = (navy.fame || 0) + 10;
+            if (navy.title === "제해왕") {
+                var bonusBounty = Math.floor(bounty * 0.2);
+                bounty += bonusBounty;
+                resultMsg += "✨ [제해왕 효과]: 현상금 +20% 보너스 (+" + fp(bonusBounty) + "P)\n";
+            }
+            navy.claimableReward = (Number(navy.claimableReward) || 0) + bounty;
+            navy.hasNotifiedReward = false;
+            navy.totalCaptureSuccess = (navy.totalCaptureSuccess || 0) + 1;
+            util_checkNavyTitle(navy, null, "내리다");
+        }
 
-        // [효율 개선]: 호위에 성공하여 해적을 격퇴했다면, 해군의 임무를 즉시 종료하여 자유 몸으로 만듭니다.
-        if (victim && victim.voyage) {
+        if (!isAICombat && victim && victim.voyage) {
             victim.voyage.escortUid = null;
             victim.voyage.escortFee = 0;
             resultMsg += "🛡️ [임무 완료]: 해적을 격퇴하여 호위 임무가 성공적으로 종료되었습니다!\n";
         }
 
-        util_checkNavyTitle(navy, null, "내리다");
-
-        delete mainRoom.features.activePillages[victimUid];
+        if (session) delete mainRoom.features.activePillages[victimUid];
         resultMsg += "🔥 [해군 승리] 해적선이 나포되었습니다!\n\n" +
                      "⚓ " + pirate.name + ": 약탈 금지 " + Math.floor(piratePenaltyMs / 60000) + "분 부과\n" +
-                     "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득";
+                     (isAICombat ? "" : "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득");
     } else {
-        var retreatMs = cfg.NAVY.retreatTime || 300000;
-        navy.retreatEndTime = Date.now() + retreatMs;
-        pirate.infamy = (pirate.infamy || 0) + 5;
-        var fameLoss = (mode === "INTERVENE") ? 20 : 10;
-        navy.fame = Math.max(0, (navy.fame || 0) - fameLoss);
+        // 해적 승리 (해군 패배) 로직
+        if (isAICombat) {
+            // AI 상인 상대로 해적이 승리했을 때: 시뮬레이션 보상 지급
+            var ecoMult = util_getEcoMultiplier("내리다");
+            var virtualMargin = (Math.floor(Math.random() * 150000) + 50000) * ecoMult;
+            var pMin = cfg.PIRATE.pillageRateMin || 0.3;
+            var pMax = cfg.PIRATE.pillageRateMax || 0.5;
+            var pRate = pMin + (pMax - pMin) * (pShip - 1) / 9;
+            var pillageAmt = Math.floor(virtualMargin * pRate);
+            
+            pirate.claimableReward = (Number(pirate.claimableReward) || 0) + pillageAmt;
+            pirate.hasNotifiedReward = false;
+            pirate.infamy = (pirate.infamy || 0) + 10;
+            pirate.currentBounty = (Number(pirate.currentBounty) || 0) + 15000;
+            pirate.totalPillageSuccess = (pirate.totalPillageSuccess || 0) + 1;
+            pirate.pillageCooldownEndTime = Date.now() + 300000;
+            util_checkPirateTitle(pirate, null, "내리다");
 
-        resultMsg += "💀 [해적 승리] 해군 함대가 퇴각했습니다!\n\n" +
-                     "📉 " + navy.name + ": 명성 -" + fameLoss + "점 하락\n" +
-                     "🩹 " + navy.name + ": " + Math.floor(retreatMs/60000) + "분간 정비 돌입\n";
-                     "⚠️ 약탈이 계속 진행됩니다!";
+            resultMsg += "🏴‍☠️ [AI 상단 약탈 성공]\n해적 '" + pirate.name + "'이 유령 상단을 완벽히 제압했습니다!\n" +
+                         "💰 이번 약탈 수익: +" + fp(pillageAmt) + "P (정산 대기)\n" +
+                         "📈 적용 약탈률: " + (pRate * 100).toFixed(1) + "%";
+        } else {
+            // 유저 해군 상대로 해적이 승리했을 때
+            var retreatMs = cfg.NAVY.retreatTime || 300000;
+            navy.retreatEndTime = Date.now() + retreatMs;
+            pirate.infamy = (pirate.infamy || 0) + 5;
+            var fameLoss = (mode === "INTERVENE") ? 20 : 10;
+            navy.fame = Math.max(0, (navy.fame || 0) - fameLoss);
 
-        if (victim && victim.voyage) {
-            victim.voyage.escortUid = null;
-            if (!mainRoom.features.activePillages[victimUid]) {
-                mainRoom.features.activePillages[victimUid] = { 
-                    pirateUid: pirate.uid, pirateName: pirate.name, startTime: Date.now(), room: "내리다" 
-                };
+            resultMsg += "💀 [해적 승리] 해군 함대가 퇴각했습니다!\n\n" +
+                         "📉 " + navy.name + ": 명성 -" + fameLoss + "점 하락\n" +
+                         "🩹 " + navy.name + ": " + Math.floor(retreatMs/60000) + "분간 정비 돌입\n" +
+                         "⚠️ 약탈이 계속 진행됩니다!";
+
+            if (victim && victim.voyage) {
+                victim.voyage.escortUid = null;
+                if (session) session.isBattled = false;
             }
         }
     }

@@ -1591,8 +1591,8 @@ function util_getActivePolicy(roomData) {
 }
 
 /**
- * [v14.9] 탄환 추적형 세션 청소 엔진
- * 기능: 어느 방에서 세션을 발견하든, 메시지는 무조건 유저가 입력하던 방(originRoom)으로 전송합니다.
+ * [v15.0] 탄환 추적형 세션 청소 엔진 (구문 무결성 검증 완료)
+ * 기능: 어느 방에서 세션을 발견하든, 알림은 유저가 실제 대화 중인 방(originRoom)으로만 보냅니다.
  */
 function util_autoClearTimeouts(data) {
     var now = Date.now();
@@ -1611,35 +1611,27 @@ function util_autoClearTimeouts(data) {
                 var startTime = entry.time || entry.timestamp || 0;
                 
                 if (startTime > 0 && (now - startTime > 30000)) {
-                    // 1. 실제 메시지를 보낼 방을 결정 (낙인이 없으면 현재 방을 기본값으로)
                     var actualOrigin = entry.originRoom || rName;
                     var u = null;
-                    // 유저 객체는 데이터 무결성을 위해 '내리다' 방에서 참조
                     if (data.rooms["내리다"] && data.rooms["내리다"].users[uid]) {
                         u = data.rooms["내리다"].users[uid];
                     }
 
-                   if (u) {
+                    if (u) {
                         try {
-                            // 1. 세션에 박힌 originRoom이 "내리다"가 아닐 때만 발송 (1:1 방 우선 순위)
-                            // 2. 만약 originRoom이 "내리다"인데 유저가 1:1방 연동 유저라면 발송 차단
+                            // 핵심: originRoom이 "내리다"가 아니거나, 1:1방 세션인 경우 해당 방으로만 발송
                             if (actualOrigin !== "내리다") {
                                 Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
                             } else {
-                                // 단체방 세션인 경우에만 단체방으로 발송
+                                // 순수 단체방 세션일 때만 단체방 발송
                                 Api.replyRoom("내리다", formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
                             }
                         } catch(e) { Log.error("Timeout Notify Error: " + e); }
                     }
                     
-                    // 2. [동기화 파괴] '내리다' 방과 '1:1 방' 양쪽의 세션을 모두 삭제하여 중복 알림 방지
-                    if (data.rooms["내리다"] && data.rooms["내리다"].features.states[qKey]) {
-                        delete data.rooms["내리다"].features.states[qKey][uid];
-                    }
-                    if (data.rooms[actualOrigin] && data.rooms[actualOrigin].features.states[qKey]) {
-                        delete data.rooms[actualOrigin].features.states[qKey][uid];
-                    }
-                    // 현재 루프 중인 방에서도 삭제
+                    // [중요] 동기화된 모든 방의 세션을 즉시 파기 (중복 방지)
+                    if (data.rooms["내리다"].features.states[qKey]) delete data.rooms["내리다"].features.states[qKey][uid];
+                    if (data.rooms[actualOrigin] && data.rooms[actualOrigin].features.states[qKey]) delete data.rooms[actualOrigin].features.states[qKey][uid];
                     delete q[uid]; 
                 }
             }

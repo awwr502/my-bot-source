@@ -1882,50 +1882,27 @@ function util_stagingRollback(user, roomName) {
 }
 
 /**
- * [v15.5] 고속 재귀 복제 엔진 (단점 제로)
- * JSON 방식을 버리고 엔진 레벨의 루프 복사를 수행하여 참조 오염을 막고 속도를 회복합니다.
+ * [v15.5] 고속 재귀 복제 엔진 (최종 수정본)
+ * 기능: 무거운 JSON 변환을 제거하여 핑 지연을 해결하고, 중복 구문을 제거하여 문법 오류를 수정했습니다.
  */
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
+    
     GLOBAL_STAGING.active[user.uid] = true;
 
+    // 내부 재귀 복사 함수 (참조 오염 방지 및 고속 처리)
     var deepCopy = function(obj) {
         if (obj === null || typeof obj !== 'object') return obj;
         if (obj.getClass !== undefined) return null; // 자바 객체 복제 차단
         var clone = Array.isArray(obj) ? [] : {};
         for (var key in obj) {
-            clone[key] = deepCopy(obj[key]); // 재귀적 참조 단절
+            clone[key] = deepCopy(obj[key]); 
         }
         return clone;
     };
 
+    // 가상 주머니(Cache)에 복제본 저장
     GLOBAL_STAGING.cache[user.uid] = deepCopy(user);
-}
-    
-    // 1단계: 기본 신분 정보 복제
-    var safeSnapshot = { uid: user.uid, name: user.name };
-    
-    // 2단계: 전체 필드 순회 복제 (연결 고리 끊기)
-    for (var key in user) {
-        var val = user[key];
-        
-        // 함수나 네이티브 객체는 복제 제외 (에러 방지)
-        if (typeof val === 'function' || val === null || val === undefined) continue;
-        if (typeof val === 'object' && val.getClass) continue; 
-        
-        if (Array.isArray(val)) {
-            // 배열 깊은 복사 (인벤토리 등)
-            safeSnapshot[key] = JSON.parse(JSON.stringify(val));
-        } else if (typeof val === 'object') {
-            // 객체 깊은 복사 (부동산, 대출 등)
-            safeSnapshot[key] = JSON.parse(JSON.stringify(val));
-        } else {
-            // 일반 값 복사 (포인트, 티어, 신용도 등)
-            safeSnapshot[key] = val;
-        }
-    }
-    
-    GLOBAL_STAGING.cache[user.uid] = safeSnapshot;
 }
 
 /**

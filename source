@@ -15418,21 +15418,31 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     }
     
     var ship = cfg.SHIPS[user.shipLevel || 1];
-   var timeMin = Math.floor(60 * ship.speedMult);
-   var baseArrivalMs = timeMin * 60 * 1000;
-   // 초 단위 누적 강화 수치를 밀리초로 변환하여 가감 (enhTime이 마이너스여야 단축)
-   var arrival = Date.now() + baseArrivalMs + ((user.enhTime || 0) * 1000);
+    
+    // [v15.9.3] 초 단위 정밀 계산 엔진 도입
+    var baseTimeSec = (60 * ship.speedMult) * 60; // 기본 항해 시간 (초)
+    var enhSec = Number(user.enhTime || 0);       // 초월 강화 보정 (초)
+    
+    // 1단계: 기본 시간 + 강화 보정 합산
+    var totalSec = baseTimeSec + enhSec;
 
+    // 2단계: 정부 정책 배율 적용
     var pol = util_getActivePolicy(roomData);
     if (pol.tradeSpeedMult) {
-        timeMin = Math.floor(timeMin * pol.tradeSpeedMult);
+        totalSec *= pol.tradeSpeedMult;
     }
     
+    // 3단계: 순풍(Tailwind) 확률 판정 및 적용
     var isSmooth = Math.random() < 0.1;
-    if (isSmooth) timeMin = Math.floor(timeMin * 0.8);
-    var arrival = Date.now() + (timeMin * 60 * 1000);
+    if (isSmooth) {
+        totalSec *= 0.8; // 20% 단축
+    }
     
-    // 데이터 패키징: 호위함 UID와 수수료를 반드시 저장해야 자동 토벌이 작동함
+    // 4단계: 최종 시간 확정 (최소 1분 보장)
+    var finalTimeMin = Math.max(1, Math.floor(totalSec / 60));
+    var arrival = Date.now() + (totalSec * 1000);
+    
+    // 데이터 패키징 (v.arrival에 최종 계산된 값 저장)
     user.voyage = {
         active: true, 
         dest: dest, 
@@ -15442,8 +15452,8 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
         ecoMultSnapshot: util_getEcoMultiplier(roomName),
         cargoSnapshot: JSON.parse(JSON.stringify(selC || {})), 
         specialtySnapshot: JSON.parse(JSON.stringify(selS || {})),
-        escortUid: escortUid || null, // 호위함 정보 저장
-        escortFee: escortFee || 0,     // 호위 수수료 저장
+        escortUid: escortUid || null,
+        escortFee: escortFee || 0,
         isSmooth: isSmooth,
         isProcessing: false 
     };
@@ -15451,7 +15461,7 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     safeSaveData(data, true); 
 
     var msg = "목적지: " + dest + "\n" +
-              "소요 시간: 약 " + timeMin + "분\n" +
+              "소요 시간: 약 " + finalTimeMin + "분\n" +
               "도착 예정: " + new Date(arrival).toLocaleTimeString();
               
     if (isSmooth) msg += "\n\n🌬️ [순풍] 기분 좋은 바람으로 시간이 20% 단축되었습니다!";

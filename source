@@ -10,7 +10,7 @@ var SCHEDULER_KEY = "kakaobot_scheduler_v5";
 var WATCHDOG_KEY = "kakaobot_watchdog_v1";
 var MY_INSTANCE_ID = java.lang.System.identityHashCode(this) + "";
 
-/* [v15.7 신설] 함선 초월 강화 밸런스 설정값 */
+/* [v15.7] 함선 초월 강화 밸런스 설정값 */
 var SHIP_ENHANCE_CONFIG = {
     LIMIT:  { min: -3, max: 2 },  // 적재량 범위
     TIME:   { min: -10, max: 30 },  // 항해시간 범위
@@ -19,28 +19,45 @@ var SHIP_ENHANCE_CONFIG = {
 };
 
 /**
- * [v15.0] 고지능 경로 지정 소각 엔진 (Path-Targeted Scrubbing)
- * 업그레이드: 전수 재귀 조사를 폐지하고, 자바 객체가 침투하는 '고위험 경로'만 정밀 타격하여 CPU 부하를 70% 절감합니다.
+ * [v16.0] 하이브리드 지능형 소각 엔진 (CPU-Safe Deep Scrub)
+ * 업그레이드: 고위험 경로 우선 소탕 후, 재귀 깊이를 4단계로 제한한 '스마트 스캔'을 수행합니다.
+ * 효과: 새 기능 추가 시 경로를 일일이 추가할 필요가 없으며, 노트9 CPU 부하를 방지합니다.
  */
-function util_fastClean(obj) {
+function util_fastClean(obj, depth) {
     if (!obj || typeof obj !== 'object') return;
-    
-    // 1단계: 최상단 위험 필드 즉시 제거
-    if (obj.replier) obj.replier = null;
-    if (obj.imageDB) obj.imageDB = null;
+    var d = depth || 0;
+    if (d > 4) return; // [보안] 4단계 이상 깊이 침투 차단 (CPU 보호)
 
-    // 2단계: 중첩 객체 내부 정밀 소탕 (가장 빈번한 침투 경로)
-    if (obj.lastAction) obj.lastAction.replier = null;
-    if (obj.voyage) obj.voyage.replier = null;
-    if (obj.blackjackState) obj.blackjackState.replier = null;
-    
-    // 3단계: 인벤토리 내 아이템 객체 소독 (재귀 대신 루프 사용하여 속도 확보)
-    if (Array.isArray(obj.inventory)) {
-        for (var i = 0; i < obj.inventory.length; i++) {
-            if (obj.inventory[i] && typeof obj.inventory[i] === 'object') {
-                obj.inventory[i].replier = null;
-                obj.inventory[i].imageDB = null;
+    // 1단계: 고성능 타겟팅 소탕 (기존 하드코딩 경로)
+    if (d === 0) {
+        if (obj.replier) obj.replier = null;
+        if (obj.imageDB) obj.imageDB = null;
+        if (obj.lastAction) obj.lastAction.replier = null;
+        if (obj.voyage) obj.voyage.replier = null;
+        if (obj.blackjackState) obj.blackjackState.replier = null;
+    }
+
+    // 2단계: 지능형 재귀 수색 (신규 유입 경로 자동 탐지)
+    var keys = Object.keys(obj);
+    for (var i = 0; i < keys.length; i++) {
+        var key = keys[i];
+        var val = obj[key];
+        
+        if (!val || typeof val !== 'object') continue; // 기본 타입(숫자/문자)은 즉시 패스
+
+        // 자바 네이티브 객체 또는 세션 복제본 발견 시 즉시 소각
+        if (val.getClass !== undefined || (val.constructor && val.constructor.name === 'SessionCacheReplier')) {
+            obj[key] = null;
+            continue;
+        }
+
+        // 3단계: 배열 및 중첩 객체 내부 탐색 (깊이 제한 준수)
+        if (Array.isArray(val)) {
+            for (var j = 0; j < val.length; j++) {
+                if (val[j] && typeof val[j] === 'object') util_fastClean(val[j], d + 1);
             }
+        } else {
+            util_fastClean(val, d + 1);
         }
     }
 }
@@ -1115,26 +1132,21 @@ function endTracking(user, isSuccess, resultMsg) {
 
 //==========섹터3==========
 
-/* [최적화] 하이브리드 비동기 영속화(Asynchronous Persistence) 엔진 v6.0 (Defense + Performance) */
+/* [최적화] 하이브리드 비동기 영속화(Asynchronous Persistence) 엔진 v7.0 (Multi-Gen Backup) */
 /**
  * @param {Object} data - 저장할 데이터 객체
- * @param {Boolean} isForceBackup - true일 경우 백업 파일까지 물리적으로 기록
+ * @param {Boolean} isForceBackup - true일 경우 3세대 순환 백업 실행
  */
 function safeSaveData(data, isForceBackup) {
     if (!data) return;
 
-    var isHealed = false; // 치유 발생 여부
-    var healReports = []; // 치유 내역 보고서
+    var isHealed = false; 
+    var healReports = []; 
 
-    /**
-     * [1단계: 무결성 검역소] - 메인 스레드 수행
-     * 사용자님의 핵심 방어 로직(포인트/은행/랜드마크/가방 80% 급감, 유저 증발 등)을 그대로 유지합니다.
-     */
     try {
         var roomCount = Object.keys(data.rooms || {}).length;
         if (roomCount === 0) throw new Error("저장 거부: 방(rooms) 객체가 비어있습니다.");
 
-        // 비교용 기존 데이터 로드 (방어 로직 검증용)
         var DB_DATA = null;
         try {
             var dbFile = new java.io.File(FILE_PATH);
@@ -1146,27 +1158,20 @@ function safeSaveData(data, isForceBackup) {
 
         for (var rName in data.rooms) {
             var room = data.rooms[rName];
-            
             for (var uid in room.users) {
                 var u = room.users[uid];
-
-                // [1] 면제권 체크: 저장이 완료될 때까지 보안 엔진의 접근을 차단
                 if (u.skipHealing === true) continue; 
 
-                // [2] 정밀 부분 복구 로직 (Surgical Repair)
                 if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
                     var safeU = DB_DATA.rooms[rName].users[uid];
                     var isFieldHealed = false;
 
-                    // [수정] 파일(safeU)이 초기화된 상태일 경우, 메모리(u)의 데이터를 덮어씌우지 않도록 가드 추가
-                    // 사유: 복구 직후 파일 데이터가 0인 상태에서 치유 로직이 작동하면 다시 초기화되는 루프 발생
                     var filePoint = Number(safeU.point || 0);
                     var memoPoint = Number(u.point || 0);
                     if (filePoint < 1000 && memoPoint > 10000) continue; 
 
-                    // A. 포인트 정밀 체크 (NaN 방어 및 비정상 급감 체크)
                     var lastPoint = filePoint;
-                    var cr = getCreditInfo(u.creditScore || 600);
+                    var cr = getCreditInfo(u.creditScore || 600, rName);
                     var maxAllowDrop = Math.max(cr.limit * 1.5, lastPoint * 0.5);
 
                     if (isNaN(u.point) || u.point === null) {
@@ -1177,7 +1182,6 @@ function safeSaveData(data, isForceBackup) {
                         isFieldHealed = true;
                     }
 
-                    // B. 은행 잔고 정밀 체크
                     var lastBank = Number(safeU.bank || 0);
                     if (isNaN(u.bank) || u.bank === null) {
                         u.bank = lastBank;
@@ -1187,68 +1191,49 @@ function safeSaveData(data, isForceBackup) {
                         isFieldHealed = true;
                     }
 
-                    // C. 부동산 지분 정밀 체크
                     if (safeU.landHoldings && u.landHoldings) {
                         for (var lName in safeU.landHoldings) {
                             var lastQty = Number(safeU.landHoldings[lName] || 0);
                             var curQty = Number(u.landHoldings[lName] || 0);
                             if (lastQty >= 10 && (lastQty - curQty) / lastQty >= 0.8) {
-                                u.landHoldings[lName] = lastQty; // 해당 건물 지분만 복구
+                                u.landHoldings[lName] = lastQty; 
                                 isFieldHealed = true;
                             }
                         }
                     }
 
-                    // D. 인벤토리 정밀 체크
                     var lastInvCount = Array.isArray(safeU.inventory) ? safeU.inventory.length : 0;
                     var curInvCount = Array.isArray(u.inventory) ? u.inventory.length : 0;
                     if (lastInvCount >= 5 && (curInvCount / lastInvCount) <= 0.2) {
-                        u.inventory = JSON.parse(JSON.stringify(safeU.inventory)); // 가방만 복구
+                        u.inventory = JSON.parse(JSON.stringify(safeU.inventory));
                         isFieldHealed = true;
                     }
 
-                    // 수리 발생 시 리포트 추가
                     if (isFieldHealed) {
                         isHealed = true;
-                        healReports.push(u.name + " (자산/항목 정밀 수리: 무역 상태 보존)");
+                        healReports.push(u.name + " (자산/항목 정밀 수리)");
                     }
                 }
-            } // 유저 루프 종료 (3번째 중괄호)
-        } // 방 루프 종료 (4번째 중괄호)
+            } 
+        } 
 
-        // 모든 방의 검사가 끝난 시점에 한 번만 치유 보고서 발송
         if (isHealed && healReports.length > 0) {
             try {
-                var reportMsg = "🚨 [데이터 자가 치유 작동]\n손상 의심 데이터를 제외하고 정상 저장되었습니다.\n\n" +
-                                "[치유 내역]\n• " + healReports.join("\n• ") + "\n\n" +
-                                "⚠️ 관리자는 해당 유저의 활동을 점검하십시오.";
-                Api.replyRoom("내리다", reportMsg);
-                Api.replyRoom("베릭방", "🩹 [Healer Audit]\n━━━━━━━━━━━━━━━\n" + healReports.join("\n") + "\n━━━━━━━━━━━━━━━");
+                var reportMsg = "🩹 [Healer Audit]\n━━━━━━━━━━━━━━━\n" + healReports.join("\n") + "\n━━━━━━━━━━━━━━━";
+                Api.replyRoom("베릭방", reportMsg);
             } catch(e) {}
         }
 
     } catch (validationError) {
-        // 검증 실패 시 로그 남기고 저장 중단 (파일 오염 방지)
-        Log.error("!!! [데이터 오염 방지 작동] !!!");
-        Log.error("사유: " + validationError.message);
-        try {
-            Api.replyRoom("베릭방", "🚨 [데이터 보호 시스템 작동]\n심각한 데이터 오염이 감지되어 자동 저장을 차단했습니다.\n사유: " + validationError.message + "\n\n⚠️ 관리자는 즉시 시스템을 점검하십시오.");
-        } catch (e) {}
+        Log.error("!!! [데이터 오염 방지 작동] !!!: " + validationError.message);
+        try { Api.replyRoom("베릭방", "🚨 [데이터 보호] 오염 감지로 자동 저장 차단: " + validationError.message); } catch (e) {}
         return; 
     }
 
-    // [중요] 메모리 동기화 (즉시 반영하여 명령어 반응 속도 유지)
     globalData = data;
 
-    /**
-     * [2단계: 비동기 영속화] - Throttling(0.5초 지연) 적용
-     * 기능: 연타 시 I/O 부하를 막기 위해 0.5초 대기 후 마지막 요청만 저장합니다.
-     */
     if (isForceBackup) {
-        if (typeof _saveTimer !== 'undefined' && _saveTimer) { 
-            clearTimeout(_saveTimer); 
-            _saveTimer = null; 
-        }
+        if (typeof _saveTimer !== 'undefined' && _saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
         _performPhysicalSave(data, isForceBackup);
     } else {
         if (typeof _saveTimer !== 'undefined' && _saveTimer) return; 
@@ -1266,23 +1251,14 @@ function _performPhysicalSave(data, isForceBackup) {
             var isAcquired = false; 
             try {
                 isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
-                if (!isAcquired) return; // 다른 스레드가 이미 작업 중이면 즉시 종료하여 병목 방지
+                if (!isAcquired) return;
 
-                var scrubbed = (function deepScrub(obj) {
-                    var clone = Array.isArray(obj) ? [] : {};
-                    for (var k in obj) {
-                        var v = obj[k];
-                        if (v === null || v === undefined || typeof v === 'function') continue;
-                        if (typeof v === 'object') {
-                            if (v.getClass !== undefined || (v.constructor && v.constructor.name === 'SessionCacheReplier')) continue;
-                            clone[k] = deepScrub(v);
-                        } else { clone[k] = v; }
-                    }
-                    return clone;
-                })(data);
+                // [v16.0 지능형 소각 엔진 적용] 저장 직전 데이터 전수 검역
+                if (typeof util_fastClean === 'function') {
+                    util_fastClean(data, 0);
+                }
 
-                var content = JSON.stringify(scrubbed);
-                
+                var content = JSON.stringify(data);
                 var check = JSON.parse(content);
                 if (!check || !check.rooms) throw new Error("데이터 구조 불완전 (rooms 누락)");
 
@@ -1297,7 +1273,6 @@ function _performPhysicalSave(data, isForceBackup) {
                     if (orgFile.exists()) orgFile.delete();
                     tempFile.renameTo(orgFile);
 
-                    // 모든 물리적 파일 저장이 끝난 시점에서 면제권을 일괄 회수
                     for (var r in data.rooms) {
                         if (!data.rooms[r].users) continue;
                         for (var id in data.rooms[r].users) {
@@ -1306,27 +1281,25 @@ function _performPhysicalSave(data, isForceBackup) {
                     }
                 }
 
+                // [신규] 3세대 순환 백업 엔진 (Rotation Backup)
                 if (isForceBackup) {
-                    var backupPath = BACKUP_DIR + "last_stable_backup.json";
-                    FileStream.write(backupPath + ".tmp", content);
-                    var bTemp = new java.io.File(backupPath + ".tmp");
-                    if (bTemp.exists() && bTemp.length() > 0) {
-                        var oldB = new java.io.File(backupPath);
-                        if (oldB.exists()) oldB.delete();
-                        bTemp.renameTo(oldB);
-                    }
+                    if (data._backupCycle === undefined) data._backupCycle = 1;
+                    var cycle = data._backupCycle;
+                    
+                    var backupPath = BACKUP_DIR + "stable_backup_" + cycle + ".json";
+                    FileStream.write(backupPath, content);
+                    
+                    // 다음 저장을 위해 사이클 갱신 (1 -> 2 -> 3 -> 1)
+                    data._backupCycle = (cycle % 3) + 1;
+                    // Log.info("💾 [Backup] 슬롯 " + cycle + "번에 백업 완료.");
                 }
                 
                 content = null; 
             } catch (e) {
                 Log.error("Async Save Fail: " + e.message);
-                var saveErr = "🚨 [시스템 비상: 저장 마비]\n━━━━━━━━━━━━━━━\n• 사유: " + e.message + "\n⚠️ 기기 저장소 권한 및 용량을 확인하세요.";
-                try { Api.replyRoom("베릭방", saveErr); } catch (err) {}
+                try { Api.replyRoom("베릭방", "🚨 [시스템 비상] 저장 마비: " + e.message); } catch (err) {}
             } finally {
-                // 중요: 락을 성공적으로 획득했을 때만 해제 (IllegalMonitorStateException 방지)
-                if (isAcquired) {
-                    lock.unlock();
-                }
+                if (isAcquired) lock.unlock();
                 java.lang.System.gc(); 
             }
         }

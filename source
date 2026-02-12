@@ -1243,10 +1243,10 @@ function safeSaveData(data, isForceBackup) {
                         healReports.push(u.name + " (자산/항목 정밀 수리: 무역 상태 보존)");
                     }
                 }
-            } // 유저 루프 종료
-    } // 방(rName) 루프 종료 - 이 위치가 정확해야 리포트가 한 번만 나옵니다.
+            } // 유저 루프 종료 (3번째 중괄호)
+        } // 방 루프 종료 (4번째 중괄호)
 
-   // [치유 리포트 출력]
+        // 모든 방의 검사가 끝난 시점에 한 번만 치유 보고서 발송
         if (isHealed && healReports.length > 0) {
             try {
                 var reportMsg = "🚨 [데이터 자가 치유 작동]\n손상 의심 데이터를 제외하고 정상 저장되었습니다.\n\n" +
@@ -1257,73 +1257,94 @@ function safeSaveData(data, isForceBackup) {
             } catch(e) {}
         }
 
-        // [메모리 동기화]
-        globalData = data;
-
-        // [2단계: 비동기 영속화 엔진]
-       SaveExecutor.execute(new java.lang.Runnable({
-            run: function() {
-                var isAcquired = false; 
-                try {
-                    isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
-                    if (!isAcquired) return;
-
-                    var content = JSON.stringify(data, function(key, value) {
-                        if (value === null || value === undefined) return value;
-                        if (typeof value === 'object') {
-                            if (value.getClass !== undefined || (value.constructor && value.constructor.name === 'SessionCacheReplier')) {
-                                return undefined; 
-                            }
-                        }
-                        return value;
-                    });
-                    
-                    var check = JSON.parse(content);
-                    if (!check || !check.rooms) throw new Error("데이터 구조 불완전 (rooms 누락)");
-
-                    FileStream.write(FILE_PATH + ".tmp", content);
-                    var tempFile = new java.io.File(FILE_PATH + ".tmp");
-
-                    if (tempFile.exists() && tempFile.length() > 0) {
-                        var orgFile = new java.io.File(FILE_PATH);
-                        if (orgFile.exists()) orgFile.delete();
-                        tempFile.renameTo(orgFile);
-
-                        for (var r in data.rooms) {
-                            if (!data.rooms[r].users) continue;
-                            for (var id in data.rooms[r].users) {
-                                data.rooms[r].users[id].skipHealing = false;
-                            }
-                        }
-                    }
-
-                    if (isForceBackup) {
-                        var backupPath = BACKUP_DIR + "last_stable_backup.json";
-                        FileStream.write(backupPath + ".tmp", content);
-                        var bTemp = new java.io.File(backupPath + ".tmp");
-                        if (bTemp.exists() && bTemp.length() > 0) {
-                            var oldB = new java.io.File(backupPath);
-                            if (oldB.exists()) oldB.delete();
-                            bTemp.renameTo(oldB);
-                        }
-                    }
-                    content = null; 
-                } catch (e) {
-                    Log.error("Async Save Fail: " + e.message);
-                } finally {
-                    if (isAcquired) lock.unlock();
-                    java.lang.System.gc(); 
-                }
-            }
-        })); 
-
     } catch (validationError) {
+        // 검증 실패 시 로그 남기고 저장 중단 (파일 오염 방지)
         Log.error("!!! [데이터 오염 방지 작동] !!!");
         Log.error("사유: " + validationError.message);
         try {
             Api.replyRoom("베릭방", "🚨 [데이터 보호 시스템 작동]\n심각한 데이터 오염이 감지되어 자동 저장을 차단했습니다.\n사유: " + validationError.message + "\n\n⚠️ 관리자는 즉시 시스템을 점검하십시오.");
         } catch (e) {}
+        return; 
     }
+
+    // [중요] 메모리 동기화 (즉시 반영하여 명령어 반응 속도 유지)
+    globalData = data;
+
+    /**
+     * [2단계: 비동기 영속화] - 배경 스레드 수행 (팅김 방지 핵심)
+     * 무거운 '문자열 변환(Stringify)'과 '파일 쓰기'를 배경에서 몰래 처리하여
+     * 메인 스레드(명령어 처리)가 멈추거나 팅기는 것을 방지합니다.
+     */
+    SaveExecutor.execute(new java.lang.Runnable({
+        run: function() {
+            var isAcquired = false; 
+            try {
+                isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                if (!isAcquired) return; // 다른 스레드가 이미 작업 중이면 즉시 종료하여 병목 방지
+
+                var scrubbed = (function deepScrub(obj) {
+                    var clone = Array.isArray(obj) ? [] : {};
+                    for (var k in obj) {
+                        var v = obj[k];
+                        if (v === null || v === undefined || typeof v === 'function') continue;
+                        if (typeof v === 'object') {
+                            if (v.getClass !== undefined || (v.constructor && v.constructor.name === 'SessionCacheReplier')) continue;
+                            clone[k] = deepScrub(v);
+                        } else { clone[k] = v; }
+                    }
+                    return clone;
+                })(data);
+
+                var content = JSON.stringify(scrubbed);
+                
+                var check = JSON.parse(content);
+                if (!check || !check.rooms) throw new Error("데이터 구조 불완전 (rooms 누락)");
+
+                var targetPath = FILE_PATH;
+                var tempPath = FILE_PATH + ".tmp";
+                
+                FileStream.write(tempPath, content);
+                var tempFile = new java.io.File(tempPath);
+
+                if (tempFile.exists() && tempFile.length() > 0) {
+                    var orgFile = new java.io.File(targetPath);
+                    if (orgFile.exists()) orgFile.delete();
+                    tempFile.renameTo(orgFile);
+
+                    // 모든 물리적 파일 저장이 끝난 시점에서 면제권을 일괄 회수
+                    for (var r in data.rooms) {
+                        if (!data.rooms[r].users) continue;
+                        for (var id in data.rooms[r].users) {
+                            data.rooms[r].users[id].skipHealing = false;
+                        }
+                    }
+                }
+
+                if (isForceBackup) {
+                    var backupPath = BACKUP_DIR + "last_stable_backup.json";
+                    FileStream.write(backupPath + ".tmp", content);
+                    var bTemp = new java.io.File(backupPath + ".tmp");
+                    if (bTemp.exists() && bTemp.length() > 0) {
+                        var oldB = new java.io.File(backupPath);
+                        if (oldB.exists()) oldB.delete();
+                        bTemp.renameTo(oldB);
+                    }
+                }
+                
+                content = null; 
+            } catch (e) {
+                Log.error("Async Save Fail: " + e.message);
+                var saveErr = "🚨 [시스템 비상: 저장 마비]\n━━━━━━━━━━━━━━━\n• 사유: " + e.message + "\n⚠️ 기기 저장소 권한 및 용량을 확인하세요.";
+                try { Api.replyRoom("베릭방", saveErr); } catch (err) {}
+            } finally {
+                // 중요: 락을 성공적으로 획득했을 때만 해제 (IllegalMonitorStateException 방지)
+                if (isAcquired) {
+                    lock.unlock();
+                }
+                java.lang.System.gc(); 
+            }
+        }
+    }));
 }
 
 //==========섹터4==========
@@ -5552,17 +5573,18 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
             var realRoom = room ? room.trim() : "";
             var roomName = realRoom; 
             var cleanSender = sender ? String(sender).trim() : "";
-            var targetUid = null; // targetUid 변수 명시적 선언 (ReferenceError 방지)
             var user = null;
 
             if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && isGroupChat === true) return;
             if (cleanSender === "오픈채팅봇") return;
 
+            // [Step 2] 순차 처리 엔진 가동
             LogicQueue.execute(new java.lang.Runnable({
                 run: function() {
                     try {
                         var nowTs = Date.now();
                         var user = null; 
+                        var targetUid = null;
                         var cacheKey = "GLOBAL_" + cleanSender;
                     lock.lock(); 
 
@@ -5611,20 +5633,47 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
                     }
 
                     // 사진으로 매칭된 경우 ID 할당 및 닉네임 동기화
-                if (!targetUid && hashMatchId) {
+                    if (!targetUid && hashMatchId) {
                         targetUid = hashMatchId;
                         var u = data.rooms[roomName].users[targetUid];
                         if (typeof util_syncIdentityGlobal === 'function') util_syncIdentityGlobal(targetUid, u.name, cleanSender);
                         u.name = cleanSender;
                     }
                 }
+
+                // [핵심 패치] 식별 경로(동기화 or 검색)와 상관없이 성공 시 즉시 캐시에 등록
+                if (targetUid) {
+                    globalData.nameToIdCache[cacheKey] = targetUid;
+                }
             }
 
-            // [최적화] 식별 직후 단 한 번의 통합 소독 실행
-            if (targetUid && data.rooms[roomName].users[targetUid]) {
-                user = data.rooms[roomName].users[targetUid];
-                util_scrubUser(user); 
-            }
+                        // 추가: 유저가 식별된 직후, 객체에 붙은 모든 불순물(Replier 등)을 강제 제거
+                if (targetUid && data.rooms[roomName].users[targetUid]) {
+    var u = data.rooms[roomName].users[targetUid];
+    
+   // 1단계: 직접적인 자바 객체 참조 삭제
+                    var forbiddenKeys = ['replier', 'imageDB'];
+                    forbiddenKeys.forEach(function(k) { if (u[k]) delete u[k]; });
+                    
+                    // 2단계: 전수 조사를 통한 변종 오염물 소각
+                    for (var key in u) {
+                        var val = u[key];
+                        if (val !== null && typeof val === 'object') {
+                            if (val.getClass !== undefined || (val.constructor && val.constructor.name && val.constructor.name.indexOf('SessionCache') !== -1)) {
+                                delete u[key];
+                                Log.warn("🗑️ [Filter] " + u.name + "의 오염 필드(" + key + ") 제거");
+                            } else {
+                                try {
+                                    JSON.stringify(val);
+                                } catch (e) {
+                                    delete u[key];
+                                    Log.error("🚨 [Filter] " + u.name + "의 파손 필드(" + key + ") 강제 제거");
+                                }
+                            }
+                        }
+                        if (typeof val === 'function') delete u[key];
+                    } 
+                }
 
                         // [중계 시스템] 유저 입력 실시간 탈취
                         // 유저가 카지노 감시 모드일 때, 해당 유저가 치는 모든 채팅을 중계방에 전송
@@ -6121,627 +6170,49 @@ if (user) {
     _processMainLogic(msg, user, data, customReplier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData);
 }
 
-      } catch (e) {
-                        var errorDetail = e.name + ": " + e.message + " (Line: " + e.lineNumber + ")";
-                        Log.error("🚨 [Main Loop Error] " + errorDetail);
-                    } finally {
-                        if (typeof lock !== 'undefined' && lock !== null && lock.isHeldByCurrentThread()) {
-                            lock.unlock();
-                        }
-                    }
-                } // LogicQueue run 마감
-            })); // LogicQueue.execute 마감
-        } // ParallelPool run 마감
-    })); // ParallelPool.execute 마감
-}; // msgbot_main_logic 최종 마감
+   } catch (e) {
+        var errorDetail = e.name + ": " + e.message + " (Line: " + e.lineNumber + ")";
+        Log.error("🚨 [런타임 에러] " + errorDetail);
 
-//==========섹터20-2==========
-
-/* [수정] 인자 리스트에 imageDB, sender를 추가하여 내부 로직 오류를 해결합니다. */
-function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData) {
-
-   /**
-     * [v14.5 성능 가드 엔진]
-     * 기능: 일반 채팅 시 불필요한 연산을 90% 차단하여 발열 및 지연 시간 해결
-     */
-    
-    var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
-    var isCommand = msg.startsWith("/");
-    var SYSTEM_KEYWORDS = ["줍기", "수락", "거절", "취소", "잡았다요놈", "배팅취소", "한번더", "그만", "🔁", "❎", "뒤로", "처음으로", "전부", "호위", "출항"];
-    var isKeyword = SYSTEM_KEYWORDS.indexOf(msg.trim()) !== -1;
-
-    var hasActiveSession = false;
-    var checkRooms = [data.rooms[roomName], data.rooms["내리다"]];
-    
-    for (var r = 0; r < checkRooms.length; r++) {
-        var rObj = checkRooms[r];
-        if (rObj && rObj.features && rObj.features.states) {
-            var st = rObj.features.states;
-            if ((st.menuWait && st.menuWait[targetUid]) || 
-                (st.bankProcess && st.bankProcess[targetUid]) || 
-                (st.selectWait && st.selectWait[targetUid]) || 
-                (st.lottoPurchase && st.lottoPurchase[targetUid])) {
-                hasActiveSession = true;
-                break;
-            }
-        }
-    }
-
-    if (isCommand || isKeyword || hasActiveSession) {
-        util_scrubUser(user); 
-        util_stagingStart(user); 
-        user.skipHealing = true;
-    } else {
-        if (typeof _runChatBonusLogic === 'function' && isGroupRoom) {
-            _runChatBonusLogic(msg, user, data, replier, roomName, targetUid, realRoom);
-            return; 
-        }
-    }
-
-    // [1] 1:1방 데이터 동기화 (이제 일반 채팅이 아닌 경우 정상적으로 이 아래 로직을 수행함)
-    if (ALLOWED_ROOMS.indexOf(realRoom) === -1 || realRoom === "베릭방") {
-        var mainRoomData = data.rooms["내리다"];
-        if (mainRoomData && mainRoomData.users[targetUid]) {
-            user = mainRoomData.users[targetUid]; 
-        }
-    }
-
-    // [A] 채팅 보너스 카운트 (일반 채팅도 기록하기 위해 게이트 위에 배치)
-    if (user && msg.indexOf("/") !== 0) {
-        user.chatCount = (user.chatCount || 0) + 1;
-        user.chatCycleCount = (user.chatCycleCount || 0) + 1;
-    }
-
-    // [B] 고속 세척 (자바 객체 사전 차단)
-    if (user) {
-        util_fastClean(user);
-        // 항해 정보가 있다면 별도로 한 번 더 체크
-        if (user.voyage) util_fastClean(user.voyage);
-        if (user.lastAction) util_fastClean(user.lastAction);
-    }
-
-    // [C] 딥 헬러 (데이터 수리 - 명령어를 칠 때만 작동하여 로그 노이즈 제거)
-    if (user && targetUid) {
-        var isDeepHealed = false;
-        USER_SCHEMA.forEach(function(item) {
-            var val = user[item.key];
-            if (val === undefined || val === null) {
-                user[item.key] = (typeof item.default === 'object' && item.default !== null) 
-                                 ? JSON.parse(JSON.stringify(item.default)) : item.default;
-                isDeepHealed = true;
-            }
-        });
-        if (isDeepHealed) {
-            Log.info("[Deep-Healer] " + user.name + "님 구조 최적화 완료.");
-            safeSaveData(data, false);
-        }
-    }
-
-/* [데이터 & 가드 통합 엔진] 1:1방 동기화 및 숫자 핸들러 프리패스 */
-// roomData가 유실된 경우를 대비한 안전 장치
-if (!roomData) roomData = data.rooms[roomName] || { users: {} };
-
-/* [v11.0] 주식 -> 랜드마크 데이터 자동 마이그레이션 */
-if (user.landHoldings === undefined) {
-    // 1. 기존 주식 데이터를 부동산 데이터로 안전하게 이전
-    user.landHoldings = user.stockHoldings || {};
-    user.landAvg = user.stockAvg || {};
-    user.totalLandInvest = user.totalInvestAmount || 0;
-    user.landDeedCount = user.stockCertCount || 0;
-    
-    // 2. 이전 완료 후 구 데이터 필드 삭제 (메모리 최적화 및 중복 이전 방지)
-    delete user.stockHoldings;
-    delete user.stockAvg;
-    delete user.totalInvestAmount;
-    delete user.stockCertCount;
-}
-
-/* 데이터 구조 보정 및 필수 변수 초기화 */
-if (!user.inventory) user.inventory = [];
-if (user.landDeedCount === undefined) user.landDeedCount = 0;
-if (user.totalLandInvest === undefined) user.totalLandInvest = 0;
-
-if (msg === "줍기") {
-    var rFeatures = roomData.features;
-    if (rFeatures && rFeatures.sprinkleData && rFeatures.sprinkleData.active) {
-        if (typeof _gameActionLogic_Part3 === 'function') {
-            _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid);
-            return; // 줍기 처리 시 로직 종료하여 가드 우회 및 하단 로직 중복 방지
-        }
-    }
-}
-
-/* [수정] 데이터 구조 보정 및 초기화 */
-if (!user.inventory) user.inventory = [];
-if (user.tierGuard === undefined) user.tierGuard = 0;
-if (user.gameAuthCount === undefined) user.gameAuthCount = 0;
-if (user.purchasedAuthCount === undefined) user.purchasedAuthCount = 0;
-
-/* [신규: Gemini 요청 사항] 경고삭제권 구매 여부 필드 마이그레이션 */
-if (user.boughtWarningRemoval === undefined) user.boughtWarningRemoval = false;
-
-/* [개편] 랜덤박스 시스템 관련 변수 안전 초기화 및 자동 마이그레이션 */
-if (user.boxFragments === undefined) user.boxFragments = 0;
-if (user.boxTickets === undefined) user.boxTickets = 0;
-
-// 1. 기록장(collectedIcons)이 없으면 생성
-if (user.collectedIcons === undefined) {
-    user.collectedIcons = [];
-}
-
-// 2. [Gemini 요청 사항] 기존 보유 아이콘 기록 자동 마이그레이션
-// 가방에 있는 아이콘들을 전수 조사하여 한 번이라도 뽑은 기록에 자동 등록합니다.
-if (user.inventory && user.inventory.length > 0) {
-    user.inventory.forEach(function(it) {
-        if (it.effect === "icon" && user.collectedIcons.indexOf(it.icon) === -1) {
-            user.collectedIcons.push(it.icon);
-        }
-    });
-}
-
-/* [핵심] 강제 추심 플래그 초기화 및 보정 */
-if (user.isTransferred === undefined) user.isTransferred = false;
-
-/* [기능] 기존 아이콘 및 칭호 가방 자동 마이그레이션 */
-if (user.inventory) {
-    // 1. 아이콘 마이그레이션
-    if (user.icon && user.icon !== "") {
-        var hasIconInInv = false;
-        for (var j = 0; j < user.inventory.length; j++) {
-            if (user.inventory[j].icon === user.icon) { hasIconInInv = true; break; }
-        }
-        if (!hasIconInInv) {
-            for (var k = 0; k < SHOP_ITEMS.length; k++) {
-                if (SHOP_ITEMS[k].effect === "icon" && SHOP_ITEMS[k].icon === user.icon) {
-                    user.inventory.push({
-                        id: SHOP_ITEMS[k].id, name: SHOP_ITEMS[k].name, icon: SHOP_ITEMS[k].icon,
-                        effect: "icon", title: ""
-                    });
-                    // 마이그레이션 시 기록장에도 동시 등록
-                    if (user.collectedIcons.indexOf(user.icon) === -1) user.collectedIcons.push(user.icon);
-                    break;
-                }
-            }
-        }
-    }
-    
-    // 2. 칭호 마이그레이션 (누락분 추가)
-    if (user.title && user.title !== "") {
-        var hasTitleInInv = false;
-        for (var j = 0; j < user.inventory.length; j++) {
-            if (user.inventory[j].title === user.title) { hasTitleInInv = true; break; }
-        }
-        if (!hasTitleInInv) {
-            for (var k = 0; k < SHOP_ITEMS.length; k++) {
-                if (SHOP_ITEMS[k].effect === "title" && SHOP_ITEMS[k].title === user.title) {
-                    user.inventory.push({
-                        id: SHOP_ITEMS[k].id, name: SHOP_ITEMS[k].name, icon: SHOP_ITEMS[k].icon || "",
-                        effect: "title", title: SHOP_ITEMS[k].title
-                    });
-                    break;
-                }
-            }
-        }
-    }
-}
-
-/* [v11.9.9 긴급] 안전 모드 진입 */
-var today = getSimpleDate();
-user.point = Number(user.point || 0);
-
-if (user) {
-    user.skipHealing = true;
-    (function deepScrub(obj) {
-        for (var k in obj) {
-            if (obj[k] && typeof obj[k] === 'object') {
-                if (obj[k].getClass || (obj[k].constructor && obj[k].constructor.name === 'SessionCacheReplier')) {
-                    delete obj[k];
-                } else { deepScrub(obj[k]); }
-            }
-        }
-    })(user);
-}
-
-// 이제 깨끗해진 상태에서 스테이징을 시작합니다.
-util_stagingStart(user);
-
-var isProcessed = false; // 명령어 처리 확인 변수 초기화
-
-/* 민생지원금 즉시 체크 */
-if (user && user.lastDate !== today) {
-    checkEconomicStimulus(user, roomName, false);
-}
-
-if (user) {
-    user.skipHealing = true;
-    // 유저 객체 최상단에 숨은 네이티브 속성(replier, imageDB 등) 제거
-    for (var k in user) {
-        if (typeof user[k] === 'function' || (user[k] && typeof user[k] === 'object' && user[k].getClass)) {
-            delete user[k];
-        }
-    }
-}
-
-/* [신규] 기존 예금자 이자 엔진 강제 활성화 */
-// 예금은 있는데 기준 시간이 0인 경우, 지금 이 순간부터 이자가 쌓이도록 기준점 설정
-if (user.bank > 0 && (!user.lastBankUpdateTime || user.lastBankUpdateTime === 0)) {
-    user.lastBankUpdateTime = Date.now();
-}
-
-// [감시 엔진] 3분 미사용 시 세션 자동 초기화 로직
-var nowTs = Date.now();
-if (user.lastBotUseTime > 0 && (nowTs - user.lastBotUseTime > 180000)) {
-    // 3분(180,000ms) 초과 시 감시 데이터 리셋
-    user.casinoAuditStartTime = 0;
-    user.casinoAuditStartAssets = 0;
-    user.casinoAuditAlertHistory = [];
-}
-// 모든 활동 시 마지막 봇 사용 시간 갱신 (세션 유지)
-user.lastBotUseTime = nowTs;
-
-util_stagingStart(user); 
-
-// [교정] 섹터 25에서 사용할 명령어 처리 확인 변수를 여기서 선언합니다.
-var isProcessed = false; 
-
-/**
- * [독립형 함수] 중복 유저 선택 처리 엔진 (전역 원격 관제 v10.5)
- * 설명: 닉네임 검색 시 중복 발생 건에 대한 유저의 숫자 선택을 처리합니다.
- * 반영: 모든 관리자 명령어가 유저가 속한 실제 방(Target Room)의 데이터를 수정하도록 교정.
- */
-function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
-    if (!roomData || !roomData.features || !roomData.features.states.selectWait) return false;
-
-    var selectWaitState = roomData.features.states.selectWait;
-    if (!selectWaitState[targetUid]) return false;
-
-    // [보안] 자바 객체 오염 방지용 고속 소각
-    if (typeof util_fastClean === 'function') util_fastClean(user);
-
-    if (Date.now() - selectWaitState[targetUid].timestamp > 30000 || msg === "취소") {
-        delete selectWaitState[targetUid];
-        if (msg === "취소") replier.reply(formatCommand("🚫 선택 취소", user, "작업이 취소되었습니다."));
-        return true;
-    }
-
-    var choice = parseInt(msg.replace(/[^0-9]/g, ""));
-    if (!isNaN(choice) && choice >= 1 && choice <= selectWaitState[targetUid].results.length) {
-        var state = selectWaitState[targetUid];
-        var selected = state.results[choice - 1]; 
-        var type = state.type;
-        var extra = state.extra;
-        
-        // [핵심 교정]: 복사본이 아닌 유저가 실제 속한 방의 실시간 데이터를 직접 참조
-        var targetRoom = selected.roomName || "내리다";
-        var targetRoomData = data.rooms[targetRoom];
-        
-        if (!targetRoomData) {
-            replier.reply(formatError(user, "데이터 접근 오류", "해당 방(" + targetRoom + ")의 데이터를 찾을 수 없습니다."));
-            delete selectWaitState[targetUid];
-            return true;
-        }
-
-        var targetUser = targetRoomData.users[selected.id];
-        
-        if (!targetUser) return true;
-        if (typeof util_fastClean === 'function') util_fastClean(targetUser);
-        
-        delete selectWaitState[targetUid];
-
-        if (type === "admin_mani_select") {
-            var mode = extra.mode;
-            if (mode === "ON") {
-                targetUser.isManipulated = true;
-                targetUser.gambleWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_GAMBLE;
-                targetUser.fishLuck = SYSTEM_CONFIG.MANIPULATION.DEFAULT_FISH;
-                targetUser.horseWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_RACING;
-                targetUser.spittoWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_SPITTO;
-                targetUser.skipHealing = true; // 보안 엔진 롤백 방지
-                replier.reply(formatAdmin("🎯 조작 가동", "[" + targetRoom + "] " + targetUser.name + "님의 조작을 [기본값]으로 활성화했습니다."));
-            } else if (mode === "OFF") {
-                targetUser.isManipulated = false;
-                targetUser.skipHealing = true;
-                replier.reply(formatAdmin("🎯 조작 해제", "[" + targetRoom + "] " + targetUser.name + "님의 모든 조작을 종료했습니다."));
+        // 관리자(95 남 광어)에게 에러의 원인과 줄번호를 즉시 보고
+        try {
+            if (isAdmin(sender, data, targetUid)) {
+                replier.reply("🚫 [로직 충돌 보고]\n━━━━━━━━━━━━━━━\n• 유형: " + e.name + "\n• 내용: " + e.message + "\n• 위치: Line " + e.lineNumber + "\n━━━━━━━━━━━━━━━\n⚠️ 이 메시지를 알려주세요.");
             } else {
-                var status = "👤 대상: [" + targetRoom + "] " + targetUser.name + "\n" +
-                             "✨ 상태: " + (targetUser.isManipulated ? "🟢 가동 중" : "⚪ 미가동") + "\n\n" +
-                             "1. 🎲 홀짝 승률: " + (targetUser.gambleWinRate || 0) + "%\n" +
-                             "2. 🎣 낚시 보정: " + (targetUser.fishLuck || 0) + "%\n" +
-                             "3. 🏇 경마 보정: " + (targetUser.horseWinRate || 0) + "%\n" +
-                             "4. 🧧 스피또 보정: " + (targetUser.spittoWinRate || 0) + "%\n" +
-                             "5. ❌ 조작 전체 해제\n\n" +
-                             "💡 수정할 번호를 입력하세요.";
-                
-                var currentMenuWait = data.rooms[roomName].features.states.menuWait;
-                currentMenuWait[targetUid] = { 
-                    type: 'admin_mani_menu', 
-                    time: Date.now(), 
-                    extra: { targetId: selected.id, targetRoom: targetRoom } 
-                };
-                replier.reply(formatAdmin("🎯 조작 설정 센터", status));
-            }
-            safeSaveData(data, true); // 변경 사항 즉시 파일에 박제
-            return true;
-        }
-        else if (type === "stock_buy" || type === "stock_sell") {
-            var landName = selected; 
-            var cmdPrefix = (type === "stock_buy") ? "/투자 " : "/매각 ";
-            _gameLandmarkLogic(cmdPrefix + landName + " " + extra.amount, targetUser, data, replier, targetRoom, selected.id);
-            return true;
-        }
-        else if (type === "info") {
-            var cr = getCreditInfo(targetUser.creditScore);
-            var info = "📍 소속: " + targetRoom + "\n💰 포인트: " + fp(targetUser.point) + "P\n🏦 예금: " + fp(targetUser.bank) + "P\n💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n🏅 티어: " + (TIERS[targetUser.tier] || "아이언");
-            replier.reply(formatCommand("🔍 유저 상세 정보", targetUser, info, null));
-        }
-        else if (type === "mining_info") {
-            var isMin = (targetUser.mining && targetUser.mining.active === true);
-            var dur = isMin ? Math.floor((Date.now() - targetUser.mining.startTime) / 60000) : 0;
-            var tot = (targetUser.totalMiningTime || 0) + dur;
-            var pol = util_getActivePolicy(targetRoomData);
-            var mult = util_getEcoMultiplier(targetRoom) * (pol.mineMult || 1.0);
-            if (targetUser.loan && Number(targetUser.loan.debt) > 0) mult *= 1.5;
-            var est = isMin ? Math.floor(dur * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * mult) : 0;
-
-            var body = "\n" + (isMin ? "채굴 진행: " + dur + "분째...\n" : "✨ 상태: 현재 휴식 중입니다.\n") +
-                       "📈 누적 채굴: " + fp(tot) + "분 경과\n" +
-                       "💰 예상 수익: +" + fp(est) + "P\n" +
-                       "⚖️ 정책 효과: x" + mult.toFixed(1) + " (적용 중)\n\n" +
-                       "✨ 광물 발견 수익은 종료 시 합산됩니다.";
-            replier.reply(formatCommand("🔍 유저 광산 진행 현황", targetUser, body, null));
-        }
-        else if (type === "transfer") {
-            if (selected.id === targetUid) return replier.reply(formatError(user, "송금 불가", "자기 자신에게는 송금할 수 없습니다."));
-            util_updatePoint(user, roomData, -extra.amount, "송금 보냄", roomName);
-            var res = processRepayment(targetUser, extra.amount, selected.id, targetRoom);
-            util_updatePoint(targetUser, targetRoomData, Number(res.actualGain), "송금 받음", targetRoom);
-            replier.reply(formatCommand("💸 송금 완료", user, "[" + targetRoom + "] " + getDisplayName(targetUser) + "님께 " + fp(extra.amount) + "P 보냈습니다.", "내 잔액: " + fp(user.point) + "P"));
-        }
-        else if (type === "admin_userdata") { 
-            replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(targetUser, null, 2))); 
-        }
-        else if (type === "admin_point_give") {
-            util_updatePoint(targetUser, targetRoomData, extra.amount, "관리자 지급", targetRoom);
-            replier.reply(formatAdmin("포인트 지급 완료", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님: +" + fp(extra.amount) + "P\n(현재: " + fp(targetUser.point) + "P)"));
-            try { Api.replyRoom("베릭방", "⚙️ [Admin Action: Selected]\n• 실행자: " + user.name + "\n• 대상: [" + targetRoom + "] " + targetUser.name + "\n• 내용: " + fp(extra.amount) + "P 지급 완료"); } catch(e) {}
-        }
-        else if (type === "admin_point_take") {
-            util_updatePoint(targetUser, targetRoomData, -extra.amount, "관리자 차감", targetRoom);
-            replier.reply(formatAdmin("포인트 차감 완료", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님 차감 처리됨"));
-        }
-        else if (type === "admin_attend_edit") {
-            targetUser.totalAttendance = extra.days;
-            replier.reply(formatAdmin("출석 수정 완료", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님: " + extra.days + "일"));
-        }
-        else if (type === "admin_credit_edit") {
-            var oldScore = Number(targetUser.creditScore || 600);
-            targetUser.creditScore = Math.min(1000, Math.max(0, oldScore + extra.score));
-            if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(targetUser, targetRoom);
-            var crInfo = getCreditInfo(targetUser.creditScore);
-            replier.reply(formatAdmin("⚙️ 신용 점수 조정 완료", "대상: [" + targetRoom + "] " + getDisplayName(targetUser) + "\n변동: " + extra.score + "점\n현재: " + targetUser.creditScore + "점 (" + crInfo.label + ")"));
-        }
-        else if (type === "admin_title_take") {
-            var titleToTake = extra.title;
-            var inv = targetUser.inventory || [];
-            var removed = false;
-            targetUser.inventory = inv.filter(function(it) {
-                if (it.effect === "title" && (it.title === titleToTake || it.name.indexOf(titleToTake) !== -1)) {
-                    removed = true; return false;
-                }
-                return true;
-            });
-            if (targetUser.title === titleToTake) { targetUser.title = ""; removed = true; }
-            if (removed) {
-                replier.reply(formatAdmin("🎖️ 칭호 회수 완료", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님에게서 [" + titleToTake + "] 칭호를 박탈했습니다."));
-            } else {
-                replier.reply(formatAdmin("회수 실패", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님은 해당 칭호를 보유하고 있지 않습니다."));
-            }
-        }
-        else if (type === "admin_delete") {
-            var tName = targetUser.name;
-            var targetId = selected.id;
-            var refundLog = "";
-            var refundCount = 0;
-            var totalRefunded = 0;
-            // [교정] targetRoomData의 사채 계약 처리
-            if (targetRoomData.loanContracts) {
-                for (var cid in targetRoomData.loanContracts) {
-                    var c = targetRoomData.loanContracts[cid];
-                    if (c.borrowerUid === targetId) {
-                        var lender = targetRoomData.users[c.lenderUid];
-                        if (lender) {
-                            var debtAmt = Number(c.currentDebt);
-                            util_updatePoint(lender, targetRoomData, debtAmt, "사채 강제 정산", targetRoom);
-                            totalRefunded += debtAmt;
-                            refundCount++;
-                            try { Api.replyRoom(targetRoom, "🚬 [사채 강제 정산]\n" + tName + "님의 데이터 삭제로 인해 " + lender.name + "님께 미수금 " + fp(debtAmt) + "P가 전액 반환되었습니다."); } catch(e){}
-                        }
-                        delete targetRoomData.loanContracts[cid];
-                    }
+                // 일반 유저에게는 기존 보안 메시지 출력
+                var safeUser = { name: cleanSender, point: 0, bank: 0 }; 
+                if (typeof formatError === 'function') {
+                    replier.reply(formatError(safeUser, "시스템 보호 작동", "일시적인 오류가 감지되어 복구되었습니다.\n다시 시도해주세요."));
                 }
             }
-            if (targetUser.loan && Number(targetUser.loan.debt) > 0) {
-                var bankDebt = Number(targetUser.loan.debt);
-                util_updateReserve(targetRoomData, bankDebt, "대출금 국고 회수", targetRoom);
-                refundLog += "\n\n🏦 은행 대출금 " + fp(bankDebt) + "P가 국고로 자동 회수되었습니다.";
-            }
-            if (refundCount > 0) refundLog += "\n⚠️ 사채 보전 완료: " + refundCount + "건 (" + fp(totalRefunded) + "P)";
-            
-            // 캐시 삭제
-            if (typeof uidCache !== 'undefined') {
-                for (var key in uidCache) { if (uidCache[key] === targetId) delete uidCache[key]; }
-            }
-            // [교정] 실제 유저가 있는 방에서 삭제
-            delete targetRoomData.users[targetId];
-            try {
-                var regFile = new java.io.File(REGISTRY_PATH);
-                if (regFile.exists()) {
-                    var regData = JSON.parse(FileStream.read(REGISTRY_PATH));
-                    // [교정] 타겟 방 이름 키로 명부 삭제
-                    delete regData[targetRoom + "_" + tName];
-                    FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
+        } catch(inner) {}
+
+        // [Rollback] 에러 발생 시 데이터 복구
+        if (typeof util_stagingRollback === 'function' && user && user.uid) {
+            util_stagingRollback(user, roomName);
+        }
+    } finally {
+        // [Lock Release] 락 해제 및 지연 시간 측정
+        try {
+            if (typeof _perfStartTime !== 'undefined') {
+                var _pDur = java.lang.System.currentTimeMillis() - _perfStartTime;
+                if (typeof PERF_METRICS !== 'undefined') {
+                    PERF_METRICS.avgLag = Math.floor((PERF_METRICS.avgLag * 9 + _pDur) / 10);
+                    if (_pDur > PERF_METRICS.peakLag) PERF_METRICS.peakLag = _pDur;
+                    PERF_METRICS.msgPerMin++;
                 }
-            } catch (e) { Log.error("Registry Delete Error: " + e); }
-            replier.reply(formatAdmin("유저 삭제 완료", "[" + targetRoom + "] 방에서 [" + tName + "]님의 데이터를 영구 삭제했습니다." + refundLog));
-        }
-
-        else if (type === "admin_land_take") {
-            var holdings = targetUser.landHoldings || {};
-            var matchedLand = util_findStockByShorthand(holdings, extra.land);
-            
-            if (matchedLand.length === 0) {
-                replier.reply(formatAdmin("🚫 회수 실패", "[" + targetUser.name + "]님은 해당 지분이 없습니다."));
-            } else {
-                var sName = matchedLand[0];
-                var currentQty = Number(holdings[sName] || 0);
-                var takeQty = (extra.qty === "전부") ? currentQty : parseInt(extra.qty.replace(/,/g, ""));
-                if (takeQty > currentQty) takeQty = currentQty;
-
-                targetUser.skipHealing = true;
-                util_updateLandmark(targetUser, sName, -takeQty, "관리자 강제 회수", targetRoom);
-                
-                if (Number(targetUser.landHoldings[sName]) <= 0) {
-                    delete targetUser.landHoldings[sName];
-                    if (targetUser.landAvg) delete targetUser.landAvg[sName];
-                }
-                replier.reply(formatAdmin("⚙️ 부동산 회수 완료", "[" + targetRoom + "] " + targetUser.name + "님의 [" + sName + "] 지분을 회수했습니다."));
             }
-        }
-
-        else if (type === "admin_attend_reset") {
-            targetUser.lastDate = "";
-            replier.reply(formatAdmin("출석 초기화", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님의 오늘 출석 기록을 삭제했습니다."));
-        }
-        else if (type === "user_restore") {
-            var stablePath = BASE_DIR + "backup/last_stable_backup.json";
-            var stableFile = new java.io.File(stablePath);
-
-            if (!stableFile.exists() || stableFile.length() === 0) {
-                replier.reply(formatAdmin("🚫 복구 실패", "안전 백업 파일(last_stable_backup.json)을 찾을 수 없습니다."));
-                return true;
+            // 현재 스레드가 락을 쥐고 있을 때만 해제하여 IllegalMonitorStateException 방지
+            if (typeof lock !== 'undefined' && lock !== null && lock.isHeldByCurrentThread()) {
+                lock.unlock(); 
             }
-
-            try {
-                var sourceCode = (extra && extra.sourceCode) ? extra.sourceCode : selected.id;
-                var targetId = selected.id;
-                var fullNick = selected.data.name; 
-
-                var backupContent = FileStream.read(stablePath);
-                var backupData = JSON.parse(backupContent);
-                var rawBackupUser = null;
-
-                for (var r in backupData.rooms) {
-                    if (backupData.rooms[r].users[sourceCode]) {
-                        rawBackupUser = backupData.rooms[r].users[sourceCode];
-                        break;
-                    }
-                }
-
-                if (!rawBackupUser) throw new Error("백업본에 해당 데이터(ID:" + sourceCode + ")가 없습니다.");
-
-                // [수정] 백업 유저 객체 전체 복제 (Deep Clone)
-                var backupUser = JSON.parse(JSON.stringify(rawBackupUser));
-                
-                // 데이터 검증용 스냅샷 (출력용)
-                var tInf = backupUser.tradeCount || 0;
-                var sInf = backupUser.shipLevel || 1;
-                var iInf = (backupUser.collectedIcons && backupUser.collectedIcons.length) || 0;
-                var aInf = backupUser.artifactPieces || 0;
-
-                // USER_SCHEMA 전체 순회하며 모든 필드 강제 이식
-                USER_SCHEMA.forEach(function(item) {
-                    if (backupUser[item.key] === undefined) {
-                        backupUser[item.key] = (typeof item.default === 'object' && item.default !== null) 
-                                               ? JSON.parse(JSON.stringify(item.default)) : item.default;
-                    }
-                });
-
-                backupUser.name = fullNick;
-                backupUser.uid = targetId;
-                backupUser.skipHealing = true; 
-
-                // 현재 방 데이터베이스에 백업본 강제 주입
-                targetRoomData.users[targetId] = backupUser;
-
-                safeSaveData(data, false);
-                if (typeof globalData !== 'undefined') globalData = data;
-
-                // 새로운 검증형 UI 리포트 구성
-                var debugBody = "👤 대상: " + fullNick + "\n" +
-                                 "━━━━━━━━━━━━━━━\n" +
-                                 "💰 복구 잔액: " + fp(backupUser.point) + "P\n" +
-                                 "🚢 무역 횟수: " + tInf + "회\n" +
-                                 "🏗️ 선박 등급: " + sInf + "단계\n" +
-                                 "🎒 수집 아이콘: " + iInf + "종\n" +
-                                 "🧩 유물 조각: " + aInf + "개\n" +
-                                 "━━━━━━━━━━━━━━━\n" +
-                                 "💡 모든 무역/수집 기록이 백업 시점으로 복원되었습니다. 수치가 0이라면 더 이전 백업 파일을 사용하세요.";
-
-                replier.reply(formatAdmin("✅ 특정 유저 정밀 복원 완료", debugBody));
-
-            } catch (e) {
-                replier.reply(formatAdmin("🚫 복구 중단", "복구 처리 중 오류가 발생했습니다.\n사유: " + e.message));
-                Log.error("Select Restore Error: " + e);
-            }
-        }
-        else if (type === "admin_nick_log") {
-            var hist = data.nickHistory[selected.id] || [];
-            if (hist.length === 0) {
-                replier.reply(formatAdmin("닉네임 기록", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님은 변경 이력이 없습니다."));
-            } else {
-                var logMsg = [];
-                for(var i=0; i<hist.length; i++) logMsg.push((i+1) + ". " + hist[i].old + " (" + hist[i].date + ")");
-                replier.reply(formatAdmin("📋 닉네임 변경 이력", "📍 소속: " + targetRoom + "\n현재: " + targetUser.name + "\n\n[과거 기록]\n" + logMsg.join("\n")));
-            }
-        }
-        else if (type === "admin_blackbox") {
-            _executeBlackboxSearch(selected.id, targetUser, replier);
-        }
-        else if (type === "admin_reg_delete") {
-            var targetKey = selected.id; 
-            var targetFullNick = selected.data.name;
-            try {
-                var regFile = new java.io.File(REGISTRY_PATH);
-                if (regFile.exists()) {
-                    var regData = JSON.parse(FileStream.read(REGISTRY_PATH));
-                    delete regData[targetKey];
-                    FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
-                    replier.reply(formatAdmin("명부 삭제 완료", "찾은 유저: [" + targetFullNick + "]\n관련 식별 코드를 명부에서 파기했습니다."));
-                }
-            } catch (e) { Log.error("Registry Delete Error: " + e); }
-        }
-
-        else if (type === "admin_cargo_fix") {
-        var itemName = String(extra.item);
-            var count = Number(extra.qty);
-            
-            if (isNaN(count)) {
-                replier.reply(formatAdmin("🚫 복구 실패", "수량 데이터가 올바르지 않습니다. (NaN)"));
-                return true;
-            }
-
-            var isSpec = false;
-            for (var n in TRADE_RELATION) { 
-                if (TRADE_RELATION[n].set === itemName) { isSpec = true; break; } 
-            }
-
-            if (isSpec) {
-                if (!targetUser.specialties) targetUser.specialties = {};
-                targetUser.specialties[itemName] = (Number(targetUser.specialties[itemName]) || 0) + count;
-            } else {
-                if (!targetUser.cargo) targetUser.cargo = {};
-                targetUser.cargo[itemName] = (Number(targetUser.cargo[itemName]) || 0) + count;
-            }
-        
-        targetUser.skipHealing = true;
-        replier.reply(formatAdmin("📦 화물 강제 복구 완료", "대상: [" + targetRoom + "] " + targetUser.name + "\n품목: " + (isSpec ? "[특] " : "") + itemName + "\n수량: " + count + "개 추가 완료"));
-    }
-
-        safeSaveData(data);
-        return true; 
-    } // if (!isNaN(choice)...) 블록 마감
-}
+        } catch (err) { Log.error("Lock Release Fail: " + err); }
+    }
+} // LogicQueue.run 종료
+    })); // LogicQueue.execute 종료
+} // ParallelPool.run 종료
+    })); // ParallelPool.execute 종료
+}; // action 함수 완전 종료
 
 //==========섹터21==========
 

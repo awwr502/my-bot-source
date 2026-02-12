@@ -17425,8 +17425,24 @@ function _handlePillageSelect(choice, user, data, replier, roomName, targetUid) 
     var victim = target.data;
     var vId = target.uid;
 
+    if (!target.isAI) {
+        victim.isPillaged = true; 
+        if (victim.voyage) victim.voyage.isPillaged = true;
+        
+        // 약탈 세션 선행 생성 (호위함 유무와 상관없이 생성하여 스케줄러가 추적 가능하게 함)
+        if (!mainRoom.features.activePillages) mainRoom.features.activePillages = {};
+        mainRoom.features.activePillages[vId] = {
+            pirateUid: targetUid, 
+            pirateName: user.name, 
+            startTime: Date.now(),
+            room: target.roomName, 
+            isBattled: false, 
+            isProcessing: false
+        };
+    }
+
     if (target.isAI) {
-        // [핵심] 호위함 존재 여부에 따른 분기 처리
+        // [AI 상단 로직]
         if (victim.voyage && victim.voyage.escortUid) {
             replier.reply("🛡️ [경보]\n습격한 '" + victim.name + "'은(는) AI 상단입니다!\n호위 중인 'AI 해군' 함대와 즉시 교전이 시작됩니다!");
             _executeSeaCombat(user, vId, "AI_NAVY_ELITE", data, roomName, "AI_COMBAT");
@@ -17436,53 +17452,27 @@ function _handlePillageSelect(choice, user, data, replier, roomName, targetUid) 
                 _processPillageSuccess(vId, { pirateUid: targetUid, victimName: victim.name }, data, roomName);
             }
         }
-        delete roomData.features.states.menuWait[targetUid];
-        safeSaveData(data, true);
-        return; // AI 로직 종료
-    }
-
-    // 선택 시점에 대상 유저의 최신 데이터를 다시 확인하여 이미 털린 유저인지 2차 검증
-    if (victim.isPillaged === true || (victim.voyage && victim.voyage.isPillaged === true)) {
-        replier.reply(formatError(user, "습격 실패", "이미 다른 해적에게 약탈당했거나 정산이 완료된 선박입니다."));
-        return;
-    }
-
-    // 중복 확인 (선점 가드: 현재 공격 진행 중인지 확인)
-    var mainRoom = data.rooms["내리다"];
-    if (mainRoom.features.activePillages[vId]) {
-        replier.reply(formatError(user, "습격 실패", "이미 다른 해적이 공격 중인 선박입니다."));
-        return;
-    }
-
-    if (victim.job === 'navy') {
-        // 1순위: 약탈 대상(A)이 해군인 경우 -> 즉시 자동 토벌 진행
-        replier.reply("📡 [위기 발생]\n이런! 당신이 습격한 상인 '" + victim.name + "'님은 위장 무역 중이던 '해군'이었습니다!\n즉시 해상 교전이 시작됩니다!");
-        
-        // 전투 실행: 해적(user) vs 해군상인(victim)
-        // mode를 "ESCORT"로 전달하면 victim이 해군측으로 자동 계산됩니다.
-        _executeSeaCombat(user, vId, vId, data, roomName, "ESCORT");
-    } 
-    else if (victim.voyage.escortUid) {
-        // 2순위: 대상은 일반인이지만 고용된 호위 해군이 있는 경우
-        replier.reply("🛡️ [경보] 습격한 선박에 전용 호위함이 대기 중입니다!\n즉시 해전이 시작됩니다!");
-        _executeSeaCombat(user, vId, victim.voyage.escortUid, data, roomName, "ESCORT");
-    } 
-    else {
-        // 3순위: 대상이 일반인이고 호위도 없는 경우 -> 정상 약탈 세션(3분) 진입
-        mainRoom.features.activePillages[vId] = {
-            pirateUid: targetUid,
-            pirateName: user.name,
-            startTime: Date.now(),
-            room: target.roomName
-        };
-
-        var alertMsg = "🚨 [해상 긴급 타전]\n━━━━━━━━━━━━━━━\n" +
-                       "🏴‍☠️ 해적 '" + user.name + "'(이)가\n" +
-                       "📦 '" + victim.name + "'님의 선박을 습격했습니다!\n\n" +
-                       "⚠️ 약탈 완료까지: 3분\n" +
-                       "⚔️ 해군 본부는 즉시 토벌대를 파견하십시오!";
-        
-        Api.replyRoom("내리다", alertMsg);
+    } else {
+        // [유저 상인 로직]
+        if (victim.job === 'navy') {
+            // 1순위: 대상이 해군인 경우 (위장 무역)
+            replier.reply("📡 [위기 발생]\n이런! 당신이 습격한 상인 '" + victim.name + "'님은 위장 무역 중이던 '해군'이었습니다!\n즉시 해상 교전이 시작됩니다!");
+            _executeSeaCombat(user, vId, vId, data, roomName, "ESCORT");
+        } 
+        else if (victim.voyage.escortUid) {
+            // 2순위: 고용된 호위 해군이 있는 경우
+            replier.reply("🛡️ [경보] 습격한 선박에 전용 호위함이 대기 중입니다!\n즉시 해전이 시작됩니다!");
+            _executeSeaCombat(user, vId, victim.voyage.escortUid, data, roomName, "ESCORT");
+        } 
+        else {
+            // 3순위: 무방비 상인 (알림 전송, 세션은 이미 생성됨)
+            var alertMsg = "🚨 [해상 긴급 타전]\n━━━━━━━━━━━━━━━\n" +
+                           "🏴‍☠️ 해적 '" + user.name + "'(이)가\n" +
+                           "📦 '" + victim.name + "'님의 선박을 습격했습니다!\n\n" +
+                           "⚠️ 약탈 완료까지: 3분\n" +
+                           "⚔️ 해군 본부는 즉시 토벌대를 파견하십시오!";
+            Api.replyRoom("내리다", alertMsg);
+        }
     }
     
     delete roomData.features.states.menuWait[targetUid];
@@ -17653,8 +17643,7 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         var bounty = baseReward + (Number(pirate.currentBounty) || 0);
         pirate.currentBounty = Number(cfg.PIRATE.bountyBase);
 
-        // [분배] 고용된 AI 해군 승리 시에도 현재 방의 유저 해군들에게 현상금 균등 분배
-       if (isAINavy || isAICombat) {
+        if (isAINavy || isAICombat) {
             var localNavies = [];
             var totalNavyLevels = 0;
             var targetRoomObj = data.rooms[roomName];
@@ -17668,7 +17657,6 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
                     }
                 }
             }
-
             if (localNavies.length > 0) {
                 localNavies.forEach(function(n) { 
                     var weight = (n.shipLevel || 1) / totalNavyLevels;
@@ -17688,22 +17676,21 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
             resultMsg += "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득\n";
         }
 
+        // [핵심] 해군 승리 시: 호위 해제(해군 가용화) 및 상인 약탈 방어 플래그 유지
         if (!isAICombat && victim && victim.voyage) {
-            victim.voyage.escortUid = null; // 해군은 즉시 자유 신분 (고용 가능)
+            victim.voyage.escortUid = null; 
             victim.voyage.escortFee = 0;
-            victim.isPillaged = true; // [상인 보호] 한번 시도된 선박은 약탈 가능 목록에서 제외
-            if (victim.voyage) victim.voyage.isPillaged = true;
-            resultMsg += "🛡️ [임무 완료]: 해적을 격퇴했습니다. 해당 상선은 보호 프로토콜에 따라 더 이상 습격받지 않습니다.\n";
+            victim.voyage.isPillaged = true; // 이번 항해 중 추가 약탈 방지
+            victim.isPillaged = true;        // 유저 객체 레벨에서도 차단
+            resultMsg += "🛡️ [임무 완료]: 해적을 격퇴했습니다. 해당 해군함은 즉시 다른 호위 임무 수행이 가능합니다.\n";
         }
 
         if (session) delete mainRoom.features.activePillages[victimUid];
         resultMsg += "🔥 [해군 승리] 해적선이 나포되었습니다!\n\n" +
-                     "⚓ " + pirate.name + ": 약탈 금지 " + Math.floor(piratePenaltyMs / 60000) + "분 부과\n" +
-                     (isAICombat ? "" : "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득");
+                     "⚓ " + pirate.name + ": 약탈 금지 " + Math.floor(piratePenaltyMs / 60000) + "분 부과";
+
     } else {
-       // 해적 승리 (해군 패배) 로직
         if (isAICombat) {
-            // AI 상인 상대로 해적이 승리했을 때: 시뮬레이션 보상 지급
             var ecoMult = util_getEcoMultiplier("내리다");
             var virtualMargin = (Math.floor(Math.random() * 150000) + 50000) * ecoMult;
             var pMin = cfg.PIRATE.pillageRateMin || 0.3;
@@ -17720,10 +17707,9 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
             util_checkPirateTitle(pirate, null, "내리다");
 
             resultMsg += "🏴‍☠️ [AI 상단 약탈 성공]\n해적 '" + pirate.name + "'이 유령 상단을 완벽히 제압했습니다!\n" +
-                         "💰 이번 약탈 수익: +" + fp(pillageAmt) + "P (정산 대기)\n" +
+                         "💰 이번 약탈 수익: +" + fp(pillageAmt) + "P (정산소 입고)\n" +
                          "📈 적용 약탈률: " + (pRate * 100).toFixed(1) + "%";
         } else {
-            // [방어] 유저 해군이 존재할 때만 페널티 부여 (AI 해군은 페널티 생략)
             var retreatMs = cfg.NAVY.retreatTime || 300000;
             var fameLoss = (mode === "INTERVENE") ? 20 : 10;
             var navyName = isAINavy ? "AI 연합함대" : (navy ? navy.name : "해군 호위함");
@@ -17735,14 +17721,22 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
 
             pirate.infamy = (pirate.infamy || 0) + 5;
 
-            resultMsg += "💀 [해적 승리] " + navyName + "가 패퇴했습니다!\n\n" +
-                         (!isAINavy ? "📉 " + navyName + ": 명성 -" + fameLoss + "점 하락\n" : "") +
-                         (!isAINavy ? "🩹 " + navyName + ": " + Math.floor(retreatMs/60000) + "분간 정비 돌입\n" : "📡 AI 호위함대가 퇴각하여 상선이 노출되었습니다!\n") +
-                         "⚠️ 약탈이 계속 진행됩니다!";
+            // [요청 2 반영] 해적 승리 시 세션을 유지하여 3분 후 자동 정산 진행
+            if (session) {
+                session.isBattled = false;   
+                session.isProcessing = false; 
+            }
+            
+            pirate.hasNotifiedReward = false; 
+
+            resultMsg += "💀 [해적 승리] " + navyName + "가 패퇴했습니다!\n" +
+                         "📡 호위함대가 퇴각하여 상선이 노출되었습니다!\n" +
+                         "⚠️ 약탈이 계속 진행됩니다! (3분 후 자동 정산)";
 
             if (victim && victim.voyage) {
-                victim.voyage.escortUid = null;
-                if (session) session.isBattled = false;
+                victim.voyage.escortUid = null;  // 패배한 해군 해제
+                victim.voyage.isPillaged = true; // 약탈 시도 기록 확정
+                victim.isPillaged = true;
             }
         }
     }

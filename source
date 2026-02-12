@@ -1246,105 +1246,85 @@ function safeSaveData(data, isForceBackup) {
             } // 유저 루프 종료
     } // 방(rName) 루프 종료 - 이 위치가 정확해야 리포트가 한 번만 나옵니다.
 
-    if (isHealed && healReports.length > 0) {
-        try {
-            var reportMsg = "🚨 [데이터 자가 치유 작동]\n손상 의심 데이터를 제외하고 정상 저장되었습니다.\n\n" +
-                            "[치유 내역]\n• " + healReports.join("\n• ") + "\n\n" +
-                            "⚠️ 관리자는 해당 유저의 활동을 점검하십시오.";
-            Api.replyRoom("내리다", reportMsg);
-            Api.replyRoom("베릭방", "🩹 [Healer Audit]\n━━━━━━━━━━━━━━━\n" + healReports.join("\n") + "\n━━━━━━━━━━━━━━━");
-        } catch(e) {}
-    }
+   // [치유 리포트 출력]
+        if (isHealed && healReports.length > 0) {
+            try {
+                var reportMsg = "🚨 [데이터 자가 치유 작동]\n손상 의심 데이터를 제외하고 정상 저장되었습니다.\n\n" +
+                                "[치유 내역]\n• " + healReports.join("\n• ") + "\n\n" +
+                                "⚠️ 관리자는 해당 유저의 활동을 점검하십시오.";
+                Api.replyRoom("내리다", reportMsg);
+                Api.replyRoom("베릭방", "🩹 [Healer Audit]\n━━━━━━━━━━━━━━━\n" + healReports.join("\n") + "\n━━━━━━━━━━━━━━━");
+            } catch(e) {}
+        }
+
+        // [메모리 동기화]
+        globalData = data;
+
+        // [2단계: 비동기 영속화 엔진]
+        SaveExecutor.execute(new java.lang.Runnable({
+            run: function() {
+                var isAcquired = false; 
+                try {
+                    isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    if (!isAcquired) return;
+
+                    var content = JSON.stringify(data, function(key, value) {
+                        if (value === null || value === undefined) return value;
+                        if (typeof value === 'object') {
+                            if (value.getClass !== undefined || (value.constructor && value.constructor.name === 'SessionCacheReplier')) {
+                                return undefined; 
+                            }
+                        }
+                        return value;
+                    });
+                    
+                    var check = JSON.parse(content);
+                    if (!check || !check.rooms) throw new Error("데이터 구조 불완전 (rooms 누락)");
+
+                    FileStream.write(FILE_PATH + ".tmp", content);
+                    var tempFile = new java.io.File(FILE_PATH + ".tmp");
+
+                    if (tempFile.exists() && tempFile.length() > 0) {
+                        var orgFile = new java.io.File(FILE_PATH);
+                        if (orgFile.exists()) orgFile.delete();
+                        tempFile.renameTo(orgFile);
+
+                        for (var r in data.rooms) {
+                            if (!data.rooms[r].users) continue;
+                            for (var id in data.rooms[r].users) {
+                                data.rooms[r].users[id].skipHealing = false;
+                            }
+                        }
+                    }
+
+                    if (isForceBackup) {
+                        var backupPath = BACKUP_DIR + "last_stable_backup.json";
+                        FileStream.write(backupPath + ".tmp", content);
+                        var bTemp = new java.io.File(backupPath + ".tmp");
+                        if (bTemp.exists() && bTemp.length() > 0) {
+                            var oldB = new java.io.File(backupPath);
+                            if (oldB.exists()) oldB.delete();
+                            bTemp.renameTo(oldB);
+                        }
+                    }
+                    content = null; 
+                } catch (e) {
+                    Log.error("Async Save Fail: " + e.message);
+                } finally {
+                    if (isAcquired) lock.unlock();
+                    java.lang.System.gc(); 
+                }
+            }
+        })); 
 
     } catch (validationError) {
-        // 검증 실패 시 로그 남기고 저장 중단 (파일 오염 방지)
         Log.error("!!! [데이터 오염 방지 작동] !!!");
         Log.error("사유: " + validationError.message);
         try {
             Api.replyRoom("베릭방", "🚨 [데이터 보호 시스템 작동]\n심각한 데이터 오염이 감지되어 자동 저장을 차단했습니다.\n사유: " + validationError.message + "\n\n⚠️ 관리자는 즉시 시스템을 점검하십시오.");
         } catch (e) {}
-        return; 
     }
-
-    // [중요] 메모리 동기화 (즉시 반영하여 명령어 반응 속도 유지)
-    globalData = data;
-
-    /**
-     * [2단계: 비동기 영속화] - 배경 스레드 수행 (팅김 방지 핵심)
-     * 무거운 '문자열 변환(Stringify)'과 '파일 쓰기'를 배경에서 몰래 처리하여
-     * 메인 스레드(명령어 처리)가 멈추거나 팅기는 것을 방지합니다.
-     */
-    SaveExecutor.execute(new java.lang.Runnable({
-        run: function() {
-            var isAcquired = false; 
-            try {
-                isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
-                if (!isAcquired) return;
-
-                // [고속 엔진] 데이터 전체 복제 없이 stringify 과정에서 즉시 필터링
-                var content = JSON.stringify(data, function(key, value) {
-                    if (value === null || value === undefined) return value;
-                    if (typeof value === 'object') {
-                        if (value.getClass !== undefined || (value.constructor && value.constructor.name === 'SessionCacheReplier')) {
-                            return undefined; 
-                        }
-                    }
-                    return value;
-                });
-                
-                // 데이터 무결성 검증
-                var check = JSON.parse(content);
-                if (!check || !check.rooms) throw new Error("데이터 구조 불완전 (rooms 누락)");
-
-                var targetPath = FILE_PATH;
-                var tempPath = FILE_PATH + ".tmp";
-                
-                FileStream.write(tempPath, content);
-                var tempFile = new java.io.File(tempPath);
-
-                if (tempFile.exists() && tempFile.length() > 0) {
-                    var orgFile = new java.io.File(targetPath);
-                    if (orgFile.exists()) orgFile.delete();
-                    tempFile.renameTo(orgFile);
-
-                    // 모든 물리적 파일 저장이 끝난 시점에서 면제권을 일괄 회수
-                    for (var r in data.rooms) {
-                        if (!data.rooms[r].users) continue;
-                        for (var id in data.rooms[r].users) {
-                            data.rooms[r].users[id].skipHealing = false;
-                        }
-                    }
-                }
-
-                if (isForceBackup) {
-                    var backupPath = BACKUP_DIR + "last_stable_backup.json";
-                    FileStream.write(backupPath + ".tmp", content);
-                    var bTemp = new java.io.File(backupPath + ".tmp");
-                    if (bTemp.exists() && bTemp.length() > 0) {
-                        var oldB = new java.io.File(backupPath);
-                        if (oldB.exists()) oldB.delete();
-                        bTemp.renameTo(oldB);
-                    }
-                }
-                
-                content = null; 
-            } catch (e) {
-                Log.error("Async Save Fail: " + e.message);
-                var saveErr = "🚨 [시스템 비상: 저장 마비]\n━━━━━━━━━━━━━━━\n• 사유: " + e.message + "\n⚠️ 기기 저장소 권한 및 용량을 확인하세요.";
-                try { Api.replyRoom("베릭방", saveErr); } catch (err) {}
-            } finally {
-                    // 중요: 락을 성공적으로 획득했을 때만 해제
-                    if (isAcquired) {
-                        lock.unlock();
-                    }
-                    java.lang.System.gc(); 
-                }
-            } // [1] SaveExecutor의 run: function() 종료
-        })); // [2] SaveExecutor.execute(...) 종료
-    } catch (validationError) {
-        // (검증 에러 처리 로직 생략 - 기존 유지)
-    }
-} // [3] safeSaveData 함수 전체 종료
+}
 
 //==========섹터4==========
 
@@ -5632,10 +5612,11 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
 
                     // 사진으로 매칭된 경우 ID 할당 및 닉네임 동기화
                 if (!targetUid && hashMatchId) {
-                    targetUid = hashMatchId;
-                    var u = data.rooms[roomName].users[targetUid];
-                    if (typeof util_syncIdentityGlobal === 'function') util_syncIdentityGlobal(targetUid, u.name, cleanSender);
-                    u.name = cleanSender;
+                        targetUid = hashMatchId;
+                        var u = data.rooms[roomName].users[targetUid];
+                        if (typeof util_syncIdentityGlobal === 'function') util_syncIdentityGlobal(targetUid, u.name, cleanSender);
+                        u.name = cleanSender;
+                    }
                 }
             }
 
@@ -6185,6 +6166,7 @@ if (user) {
         } // [4] ParallelPool의 run: function() 종료
     })); // [5] ParallelPool.execute(...) 종료
 }; // [6] this.msgbot_main_logic 함수 전체 종료
+
 //==========섹터20-2==========
 
 /* [수정] 인자 리스트에 imageDB, sender를 추가하여 내부 로직 오류를 해결합니다. */
@@ -6433,6 +6415,7 @@ util_stagingStart(user);
 
 // [교정] 섹터 25에서 사용할 명령어 처리 확인 변수를 여기서 선언합니다.
 var isProcessed = false; 
+}
 
 /**
  * [독립형 함수] 중복 유저 선택 처리 엔진 (전역 원격 관제 v10.5)

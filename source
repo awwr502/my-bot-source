@@ -1881,11 +1881,26 @@ function util_stagingRollback(user, roomName) {
     Log.info("[Atomic Rollback] " + user.name + "님의 트랜잭션 실패로 복구되었습니다.");
 }
 
-// 0원 증발 현상을 완벽히 해결하면서도 노트9에서 최상의 속도를 내는 수동 복제 방식
+/**
+ * [v15.5] 고속 재귀 복제 엔진 (단점 제로)
+ * JSON 방식을 버리고 엔진 레벨의 루프 복사를 수행하여 참조 오염을 막고 속도를 회복합니다.
+ */
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
-    
     GLOBAL_STAGING.active[user.uid] = true;
+
+    var deepCopy = function(obj) {
+        if (obj === null || typeof obj !== 'object') return obj;
+        if (obj.getClass !== undefined) return null; // 자바 객체 복제 차단
+        var clone = Array.isArray(obj) ? [] : {};
+        for (var key in obj) {
+            clone[key] = deepCopy(obj[key]); // 재귀적 참조 단절
+        }
+        return clone;
+    };
+
+    GLOBAL_STAGING.cache[user.uid] = deepCopy(user);
+}
     
     // 1단계: 기본 신분 정보 복제
     var safeSnapshot = { uid: user.uid, name: user.name };
@@ -5611,19 +5626,21 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
                         if (targetUid && data.rooms[logicRoomName] && data.rooms[logicRoomName].users[targetUid]) {
                             user = data.rooms[logicRoomName].users[targetUid];
                             
-                            // [v6.6 딥 헬러] UID 강제 일치화 및 누락 복구
+                            // [v15.5 지능형 고속 소독]
+                            // 전수 조사를 수행하되, 원시 타입은 즉시 통과시켜 CPU 부하를 최소화합니다.
                             if (!user.uid || user.uid !== targetUid) {
                                 user.uid = targetUid;
                                 Log.info("🩹 [Deep-Healer] " + user.name + "의 UID 무결성을 복구했습니다.");
                                 safeSaveData(data, false);
                             }
 
-                            // [소각] 네이티브 객체 및 오염 필드 고속 세척
-                            util_fastClean(user);
                             for (var k in user) {
-                                if (user[k] && typeof user[k] === 'object' && user[k].getClass) delete user[k];
+                                var v = user[k];
+                                if (v === null || typeof v !== 'object') continue; // 숫자, 문자열은 즉시 패스 (속도 향상 핵심)
+                                if (v.getClass !== undefined || k === 'replier' || k === 'imageDB') {
+                                    delete user[k]; // 자바 객체만 정밀 타격하여 크래시 방지
+                                }
                             }
-                        }
 
                         // [중계 시스템] 유저 입력 실시간 탈취
                         // 유저가 카지노 감시 모드일 때, 해당 유저가 치는 모든 채팅을 중계방에 전송

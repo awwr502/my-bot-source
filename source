@@ -15628,7 +15628,7 @@ function _manageShip(user, replier, cfg) {
 
 // [신설] 강화 주사위 로직 (섹터 51 하단 추가)
 function _processShipEnhanceRoll(user, data, replier, roomName) {
-    var ec = SHIP_ENHANCE_CONFIG; // 설정 객체 참조
+    var ec = SHIP_ENHANCE_CONFIG;
     var cost = ec.COST;
     if (Number(user.point) < cost) {
         return replier.reply(formatError(user, "자금 부족", "강화 시도에는 " + fp(cost) + "P가 필요합니다."));
@@ -15636,11 +15636,24 @@ function _processShipEnhanceRoll(user, data, replier, roomName) {
 
     util_updatePoint(user, data.rooms["내리다"], -cost, "함선 초월 강화 시도", roomName);
 
-    // [v15.7] 설정값 기반 유동적 범위 계산 공식 적용
-    // 공식: Math.floor(Math.random() * (max - min + 1)) + min
-    var rLimit = Math.floor(Math.random() * (ec.LIMIT.max - ec.LIMIT.min + 1)) + ec.LIMIT.min;
-    var rTime = Math.floor(Math.random() * (ec.TIME.max - ec.TIME.min + 1)) + ec.TIME.min;
-    var rProfit = Math.floor(Math.random() * (ec.PROFIT.max - ec.PROFIT.min + 1)) + ec.PROFIT.min;
+    /**
+     * [v15.8] 지능형 확률 보정 엔진 (Subtle Skew Logic)
+     * 가중치(skew)가 1.0보다 크면 낮은 값(Bad)이, 1.0보다 작으면 높은 값(Good)이 더 잘 나옵니다.
+     * 1.2 정도의 수치는 수백 번 이상 수행해야 체감될 정도로 매우 정교하고 티가 나지 않습니다.
+     */
+    var skewBad = 1.2; 
+
+    // 1. 적재량/수익: 높은 수치가 '좋음' -> 낮은 쪽(min)으로 확률 밀어내기
+    var randLimit = Math.pow(Math.random(), skewBad);
+    var rLimit = Math.floor(randLimit * (ec.LIMIT.max - ec.LIMIT.min + 1)) + ec.LIMIT.min;
+
+    var randProfit = Math.pow(Math.random(), skewBad);
+    var rProfit = Math.floor(randProfit * (ec.PROFIT.max - ec.PROFIT.min + 1)) + ec.PROFIT.min;
+
+    // 2. 항해시간: 높은 수치가 '나쁨'(+초) -> 높은 쪽(max)으로 확률 밀어내기
+    // (1 - 난수) 공식을 써서 확률의 무게를 반대편으로 보냅니다.
+    var randTime = 1 - Math.pow(Math.random(), skewBad);
+    var rTime = Math.floor(randTime * (ec.TIME.max - ec.TIME.min + 1)) + ec.TIME.min;
 
     user.tempEnh = { limit: rLimit, time: rTime, profit: rProfit };
 

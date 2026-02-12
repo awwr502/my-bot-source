@@ -1276,24 +1276,20 @@ function safeSaveData(data, isForceBackup) {
      * 메인 스레드(명령어 처리)가 멈추거나 팅기는 것을 방지합니다.
      */
     SaveExecutor.execute(new java.lang.Runnable({
-        run: function() {
-            var isAcquired = false; 
-            try {
-                isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
-                if (!isAcquired) return; // 다른 스레드가 이미 작업 중이면 즉시 종료하여 병목 방지
+    run: function() {
+        var isAcquired = false; 
+        try {
+            isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+            if (!isAcquired) return;
 
-                var scrubbed = (function deepScrub(obj) {
-                    var clone = Array.isArray(obj) ? [] : {};
-                    for (var k in obj) {
-                        var v = obj[k];
-                        if (v === null || v === undefined || typeof v === 'function') continue;
-                        if (typeof v === 'object') {
-                            if (v.getClass !== undefined || (v.constructor && v.constructor.name === 'SessionCacheReplier')) continue;
-                            clone[k] = deepScrub(v);
-                        } else { clone[k] = v; }
-                    }
-                    return clone;
-                })(data);
+            // [변경] 무거운 deepScrub(복제) 대신 stringify 리플레이서로 고속 필터링
+            var content = JSON.stringify(data, function(key, value) {
+                if (value === null || value === undefined) return value;
+                if (typeof value === 'object' && (value.getClass !== undefined || (value.constructor && value.constructor.name === 'SessionCacheReplier'))) {
+                    return undefined; // 자바 객체 발견 시 해당 필드만 제외하고 즉시 변환
+                }
+                return value;
+            });
 
                 var content = JSON.stringify(scrubbed);
                 
@@ -5636,39 +5632,11 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
                     }
                 }
 
-                // [핵심 패치] 식별 경로(동기화 or 검색)와 상관없이 성공 시 즉시 캐시에 등록
-                if (targetUid) {
-                    globalData.nameToIdCache[cacheKey] = targetUid;
-                }
+                // [최적화] 중복 소독 로직 전면 삭제 후 통합 엔진(util_scrubUser)으로 단일화
+            if (targetUid && data.rooms[roomName].users[targetUid]) {
+                var u = data.rooms[roomName].users[targetUid];
+                util_scrubUser(u); 
             }
-
-                        // 추가: 유저가 식별된 직후, 객체에 붙은 모든 불순물(Replier 등)을 강제 제거
-                if (targetUid && data.rooms[roomName].users[targetUid]) {
-    var u = data.rooms[roomName].users[targetUid];
-    
-   // 1단계: 직접적인 자바 객체 참조 삭제
-                    var forbiddenKeys = ['replier', 'imageDB'];
-                    forbiddenKeys.forEach(function(k) { if (u[k]) delete u[k]; });
-                    
-                    // 2단계: 전수 조사를 통한 변종 오염물 소각
-                    for (var key in u) {
-                        var val = u[key];
-                        if (val !== null && typeof val === 'object') {
-                            if (val.getClass !== undefined || (val.constructor && val.constructor.name && val.constructor.name.indexOf('SessionCache') !== -1)) {
-                                delete u[key];
-                                Log.warn("🗑️ [Filter] " + u.name + "의 오염 필드(" + key + ") 제거");
-                            } else {
-                                try {
-                                    JSON.stringify(val);
-                                } catch (e) {
-                                    delete u[key];
-                                    Log.error("🚨 [Filter] " + u.name + "의 파손 필드(" + key + ") 강제 제거");
-                                }
-                            }
-                        }
-                        if (typeof val === 'function') delete u[key];
-                    } 
-                }
 
                         // [중계 시스템] 유저 입력 실시간 탈취
                         // 유저가 카지노 감시 모드일 때, 해당 유저가 치는 모든 채팅을 중계방에 전송
@@ -6255,12 +6223,11 @@ function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanS
         
         // 이후 하단 로직으로 진입하여 명령어 처리
     } else {
-        // [Fast-Path] 일반 채팅 시에는 가벼운 로직(채팅 보너스 등)만 수행 후 즉시 종료
-        if (typeof _runChatBonusLogic === 'function') {
-            _runChatBonusLogic(msg, user, data, replier, roomName, targetUid, realRoom);
-        }
-        return; // 하단의 무거운 무역/게임 로직을 실행하지 않고 여기서 즉시 반환
+    if (typeof _runChatBonusLogic === 'function') {
+        _runChatBonusLogic(msg, user, data, replier, roomName, targetUid, realRoom);
     }
+    return; 
+}
 
    // [1] 1:1방 데이터 동기화 (최우선 순위: 게이트 통과를 위해 필수)
     if (ALLOWED_ROOMS.indexOf(realRoom) === -1 || realRoom === "베릭방") {

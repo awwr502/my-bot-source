@@ -1645,27 +1645,32 @@ function util_autoClearTimeouts(data) {
 
 /**
  * [v15.0] 원자적 개편: 범용 데이터 게이트웨이
- * 업그레이드: 타입 검증 후, 스테이징 스냅샷과 대조하여 메모리 단에서 즉시 무결성을 확보합니다.
+ * 검증: 타입 일치 및 유효 숫자 여부를 선행 검사하고 메모리 스냅샷과 대조하여 즉시 무결성을 확보합니다.
  */
 function util_setData(user, key, value, reason, roomName) {
     if (!user || key === undefined) return;
     
     var preValue = user[key];
     
-    // [원자적 검증] 타입 오염 및 NaN 차단
+    // [원자적 검증] 기존 데이터와 타입이 다르거나 숫자가 아닌 경우(NaN) 차단
     if (preValue !== undefined && preValue !== null) {
         if (typeof preValue !== typeof value || (typeof value === 'number' && isNaN(value))) {
-            var body = "❌ 내용: 데이터 타입 오염 차단\n" +
+            var body = "❌ 내용: 데이터 타입 오염 시도 차단\n" +
                        "🔑 필드: " + key + "\n" +
-                       "⚠️ 시도값: " + value;
-            var securityMsg = util_formatSecurityLog("🛡️ [ATOMIC: 무결성 가드]", user.name, (roomName || "내리다"), body, "변경 거부");
+                       "⚠️ 시도값: " + value + " (타입: " + (typeof value) + ")";
+            
+            var securityMsg = util_formatSecurityLog("🛡️ [ATOMIC: 데이터 무결성 가드]", user.name, (roomName || "내리다"), body, "변경 거부 및 데이터 보호");
             try { Api.replyRoom("베릭방", securityMsg); } catch(e) {}
             return; 
         }
     }
 
     user[key] = value; 
-    user.skipHealing = true; 
+    user.skipHealing = true; // 정상 로직에 의한 변경이므로 헬러 무시 권한 부여
+
+    if (key === 'tier' && preValue !== value) {
+        Log.info("[Status Change] " + user.name + " 티어 변동: " + preValue + " -> " + value);
+    }
 }
 
 /**

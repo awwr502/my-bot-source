@@ -1644,8 +1644,8 @@ function util_autoClearTimeouts(data) {
 }
 
 /**
- * [v15.0] 원자적 개편: 범용 데이터 게이트웨이
- * 검증: 타입 일치 및 유효 숫자 여부를 선행 검사하고 메모리 스냅샷과 대조하여 즉시 무결성을 확보합니다.
+ * [원자적 개편: 범용 데이터 게이트웨이] v2.0
+ * 검증: 타입 일치 및 유효 숫자 여부를 선행 검사하고 정상 변경 승인 플래그 부여
  */
 function util_setData(user, key, value, reason, roomName) {
     if (!user || key === undefined) return;
@@ -1871,16 +1871,17 @@ function util_stagingRollback(user, roomName) {
 
 /**
  * [v15.5] 고속 재귀 복제 엔진 (최종 수정본)
- * 업그레이드: JSON 직렬화를 제거하여 Note 9의 핑 지연을 해결하고, 검증용 스냅샷을 생성합니다.
+ * 기능: 무거운 JSON 변환을 제거하여 핑 지연을 해결하고, 중복 구문을 제거하여 문법 오류를 수정했습니다.
  */
 function util_stagingStart(user) {
     if (!user || !user.uid) return;
     
     GLOBAL_STAGING.active[user.uid] = true;
 
+    // 내부 재귀 복사 함수 (참조 오염 방지 및 고속 처리)
     var deepCopy = function(obj) {
         if (obj === null || typeof obj !== 'object') return obj;
-        if (obj.getClass !== undefined) return null; 
+        if (obj.getClass !== undefined) return null; // 자바 객체 복제 차단
         var clone = Array.isArray(obj) ? [] : {};
         for (var key in obj) {
             clone[key] = deepCopy(obj[key]); 
@@ -1888,62 +1889,58 @@ function util_stagingStart(user) {
         return clone;
     };
 
+    // 가상 주머니(Cache)에 복제본 저장
     GLOBAL_STAGING.cache[user.uid] = deepCopy(user);
 }
 
 /**
- * [v15.0] 원자적 개편: 포인트 게이트웨이 엔진 (Staging Mirroring)
- * 업그레이드: 느린 파일 I/O 대조를 폐지하고, util_stagingStart에서 생성된 스냅샷과 실시간 메모리 대조를 수행합니다.
+ * [원자적 개편: 포인트 게이트웨이 엔진] v7.2 (Staging 호환형)
  */
 function util_updatePoint(user, roomData, delta, reason, roomName) {
     if (!user || isNaN(delta) || delta === 0) return;
 
-    // [중복 실행 방어]
+    // [감시] 동일 사유로 연속 지급(delta > 0)되는 경우 체크
     if (delta > 0 && user.lastAction && user.lastAction.cmd === reason) {
         var timeGap = Date.now() - user.lastAction.time;
-        if (reason.indexOf("무역 정산") !== -1 && timeGap < 10000) throw new Error("중복 정산 가드");
-        else if (timeGap < 1000) throw new Error("연타 가드");
-    }
-    
-    var prePoint = Number(user.point || 0);
-
-    // [v15.0 메모리 미러링 검증] I/O 렉 없이 무결성 확보
-    if (GLOBAL_STAGING.active[user.uid] && GLOBAL_STAGING.cache[user.uid]) {
-        var snapshot = GLOBAL_STAGING.cache[user.uid];
-        // 스냅샷과의 논리적 결함 체크 가능
-    }
-
-    // [침식 방어]
-    var isAdminAction = (reason && reason.indexOf("차감") !== -1);
-    if (!GLOBAL_STAGING.active[user.uid] && delta < 0 && !isAdminAction) {
-        var cr = getCreditInfo(user.creditScore || 600);
-        var dropLimit = Math.max(cr.limit * 1.2, prePoint * 0.4); 
-        if (Math.abs(delta) > dropLimit) {
-            throw new Error("침식 방어 작동 (한도 초과)");
+        
+        // 무역 정산은 최소 1시간 이상 걸리는 작업이므로 10초(10000ms) 차단 적용
+        if (reason.indexOf("무역 정산") !== -1 && timeGap < 10000) {
+            Log.error("🚨 [무역 복사 차단] " + user.name + " (" + timeGap + "ms)");
+            throw new Error("무역 정산 중복 실행 방지 작동 (5초 가드)");
+        }
+        
+        // 그 외 일반 활동(스피또, 박스 등)은 정상적인 연속 호출을 고려해 1초(1000ms)만 방어
+        else if (timeGap < 1000) {
+            Log.error("🚨 [연타 과부하 차단] " + user.name + " : " + reason);
+            throw new Error("시스템 과부하 방지 (연타 차단)");
         }
     }
+    
+    // [v10.0] 스테이징 활성화 여부에 따른 동적 참조
+    var targetUser = GLOBAL_STAGING.active[user.uid] ? user : user;
+    /* (참고: 스테이징 중이면 이미 user 객체가 메모리상에서 분리된 상태임) */
 
-    var actualDelta = (delta < 0 && (prePoint + delta) < 0) ? -prePoint : Number(delta);
-    var expectedPoint = prePoint + actualDelta;
-
-    user.point = expectedPoint; 
-    user.skipHealing = true;
-
-    // [중요] 저널링(블랙박스) 기록
-    if (roomName) {
-        logLock.lock();
-        try {
-            var journalEntry = Date.now() + "|" + user.uid + "|" + roomName + "|" + actualDelta + "|0|" + reason + "\n";
-            FileStream.append(JOURNAL_PATH, journalEntry);
-        } finally { logLock.unlock(); }
+   // [점진적 침식 방어] 스테이징(보호막) 외부에서 발생하는 모든 차감을 신용 등급 기준으로 필터링
+    // [수정]: 관리자 활동(reason에 '차감' 포함)이거나 직접적인 관리자 권한 확인 시 방어 로직 통과
+    var isAdminAction = (reason && reason.indexOf("차감") !== -1);
+    
+    if (!GLOBAL_STAGING.active[user.uid] && delta < 0 && !isAdminAction) {
+        var cr = getCreditInfo(user.creditScore || 600);
+        // 1회 최대 허용치: 신용한도의 1.2배 또는 현재 자산의 40% 중 큰 값
+        var dropLimit = Math.max(cr.limit * 1.2, (user.point || 0) * 0.4); 
+        
+        if (Math.abs(delta) > dropLimit) {
+            var guardBody = "⚠️ 내용: 비정상 지출(신용한도 초과) 감지\n" +
+                            "💵 시도: " + fp(Math.abs(delta)) + "P (한도: " + fp(dropLimit) + "P)\n" +
+                            "📈 사유: " + (reason || "미분류 활동");
+            
+            var guardMsg = util_formatSecurityLog("🛡️ [GUARD: 침식 방어 작동]", user.name, (roomName || "내리다"), guardBody, "자산 보호를 위해 거래 차단 및 롤백");
+            
+            Api.replyRoom(roomName, guardMsg);
+            try { Api.replyRoom("베릭방", "🚨 [Security Alert] 침식 방어 시스템이 위협을 차단했습니다."); } catch(e) {}
+            throw new Error("신용 등급 지출 한도 초과 (침식 방어)");
+        }
     }
-
-    // [최종 무결성 확인] 
-    if (isNaN(user.point) || user.point !== expectedPoint) {
-        if (GLOBAL_STAGING.active[user.uid]) util_stagingRollback(user, roomName);
-        throw new Error("연산 무결성 파손 및 롤백");
-    }
-}
 
     var normalKeywords = [
         "부동산", "매입", "매각", "배당", "임대", "건물", "투자",

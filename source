@@ -81,7 +81,7 @@ globalData._isInitialized = false;
 
         // 3. [최적화] 엔진 생성 및 전역 변수 할당 (var 제거)
         // ParallelPool: 메시지 처리용 (노트9 발열 억제를 위해 2개로 고정)
-        ParallelPool = java.util.concurrent.Executors.newFixedThreadPool(8); 
+        ParallelPool = java.util.concurrent.Executors.newFixedThreadPool(4); 
         LogicQueue = java.util.concurrent.Executors.newSingleThreadExecutor();
         // Executor: 디스코드 백업 및 외부 통신용 (복구 완료)
         Executor = java.util.concurrent.Executors.newCachedThreadPool();
@@ -6210,7 +6210,20 @@ function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanS
     }
 
     // [C] 딥 헬러 (데이터 수리 - 명령어를 칠 때만 작동하여 로그 노이즈 제거)
-    if (user && targetUid) {
+    var isCmd = msg.startsWith("/");
+    var isKeyword = ["줍기", "수락", "거절", "취소", "잡았다요놈", "배팅취소", "한번더", "그만", "전부", "출항", "호위", "뒤로", "처음으로"].indexOf(msg.trim()) !== -1;
+    var isInputWait = false;
+    
+    // 현재 유저가 무언가 입력 대기 중인지 확인 (숫자 입력 대응)
+    if (roomData && roomData.features && roomData.features.states) {
+        var st = roomData.features.states;
+        if (st.menuWait[targetUid] || st.bankProcess[targetUid] || st.selectWait[targetUid] || st.lottoPurchase[targetUid]) {
+            isInputWait = true;
+        }
+    }
+
+    // [조건 강화] 유저가 식별되었고 && (명령어거나 OR 키워드거나 OR 입력대기중)일 때만 스키마 검사 수행
+    if (user && targetUid && (isCmd || isKeyword || isInputWait)) {
         var isDeepHealed = false;
         USER_SCHEMA.forEach(function(item) {
             var val = user[item.key];
@@ -6221,7 +6234,8 @@ function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanS
             }
         });
         if (isDeepHealed) {
-            Log.info("[Deep-Healer] " + user.name + "님 구조 최적화 완료.");
+            // 로그도 노이즈 방지를 위해 실제 수정이 일어났을 때만 출력
+            // Log.info("[Deep-Healer] " + user.name + "님 구조 최적화 완료."); 
             safeSaveData(data, false);
         }
     }
@@ -15631,10 +15645,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     if (!user || !user.voyage) return; // 항해 중이 아니면 즉시 종료
     var v = user.voyage; 
 
-    if (typeof util_scrubNativeObject === 'function') {
-        util_scrubNativeObject(user);
-        util_scrubNativeObject(v);
-    }
+    util_fastClean(user);
+    if (v) util_fastClean(v);
 
     // 1. [잠금 통합 관리]: 1분 이상 잠겨있으면 유령 잠금으로 판단하여 해제 후 진행
     if (v.isProcessing === true) {

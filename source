@@ -1635,17 +1635,12 @@ function util_autoClearTimeouts(data) {
 
                     if (u) {
                         try {
-                            // 핵심: originRoom이 "내리다"가 아니거나, 1:1방 세션인 경우 해당 방으로만 발송
-                            if (actualOrigin !== "내리다") {
-                                Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
-                            } else {
-                                // 순수 단체방 세션일 때만 단체방 발송
-                                Api.replyRoom("내리다", formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
-                            }
+// [수정] 세션 발생지(actualOrigin)로만 정확히 타임아웃 알림 전송
+                            Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
                         } catch(e) { Log.error("Timeout Notify Error: " + e); }
                     }
                     
-                    // [중요] 동기화된 모든 방의 세션을 즉시 파기 (중복 방지)
+                    // [중요] 동기화된 모든 방의 세션을 즉시 파기
                     if (data.rooms["내리다"].features.states[qKey]) delete data.rooms["내리다"].features.states[qKey][uid];
                     if (data.rooms[actualOrigin] && data.rooms[actualOrigin].features.states[qKey]) delete data.rooms[actualOrigin].features.states[qKey][uid];
                     delete q[uid]; 
@@ -2739,18 +2734,21 @@ function util_checkUserState(user, uid, roomName, isJobActivity) {
     if (typeof util_scrubNativeObject === 'function') util_scrubNativeObject(user);
     var now = Date.now();
     var data = getDatabase();
-    var roomNameKey = roomName || "내리다";
-    var roomData = data.rooms[roomNameKey];
     
-    // [보정] isJobActivity가 입력되지 않았을 경우를 대비해 기본값(false) 할당
-    isJobActivity = !!isJobActivity;
-    
-    // [교정]: 방별 독립 states 데이터 참조 (없을 경우 빈 객체 처리로 Crash 방지)
-    var states = (roomData && roomData.features) ? roomData.features.states : {};
-    var dData = states.duelData || {};
-    var aThefts = states.activeThefts || {};
-
-    var activePillages = (roomData && roomData.features) ? (roomData.features.activePillages || {}) : {};
+    // [개편] 전 구역 세션 스캔: 어느 방에서든 입력 대기 중이라면 '활동 중'으로 간주
+    for (var rN in data.rooms) {
+        var rObj = data.rooms[rN];
+        if (rObj.features && rObj.features.states) {
+            var s = rObj.features.states;
+            if (s.menuWait[uid] || s.bankProcess[uid] || s.selectWait[uid]) {
+                // 단, 현재 메시지가 발생한 방과 세션 발생지가 같다면 통과
+                var currentSession = s.menuWait[uid] || s.bankProcess[uid] || s.selectWait[uid];
+                if (currentSession.originRoom !== roomName) {
+                    return { canAction: false, reason: "현재 다른 대화방에서 메뉴를 이용 중입니다." };
+                }
+            }
+        }
+    }
 
     // 1. 해상 활동(isJobActivity: true) 검증 시: 해전 패배 타이머만 체크
     if (isJobActivity === true) {
@@ -5913,6 +5911,11 @@ var currentImgHash = (function(){ try { return imageDB ? imageDB.getProfileHash(
 var isIdentityRecovered = false;
 var cacheKey = "GLOBAL_" + cleanSender;
 
+// [핵심 패치] 지갑 데이터는 '내리다' 고정, 세션 데이터는 '현재 방' 고정
+var walletRoomData = data.rooms["내리다"]; 
+var sessionRoomData = data.rooms[roomName] || data.rooms["내리다"];
+
+// 하단 로직 호환성을 위해 roomData는 기존처럼 유지하되, 세션 접근 시 sessionRoomData를 쓰도록 유도
 var roomData = (roomName === "베릭방" || ALLOWED_ROOMS.indexOf(roomName) === -1) 
                ? data.rooms["내리다"] 
                : (data.rooms[roomName] || { users: {} });
@@ -8746,30 +8749,6 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     var MAIN_NAME = "내리다"; 
     var is1to1 = (ALLOWED_ROOMS.indexOf(realRoom) === -1);
     var logicRoom = is1to1 ? MAIN_NAME : roomName; 
-
-    // [v14.7] 세션 양방향 동기화 및 발생지 보호 로직
-if (is1to1) {
-    var pRoom = data.rooms[roomName]; // 1:1방
-    var mRoom = data.rooms[MAIN_NAME]; // 메인방
-    if (pRoom && pRoom.features && mRoom && mRoom.features) {
-        var sKeys = ["menuWait", "selectWait", "bankProcess", "lottoPurchase"];
-        sKeys.forEach(function(key) {
-            var pS = pRoom.features.states[key][targetUid];
-            var mS = mRoom.features.states[key][targetUid];
-
-            // 1:1방 세션을 메인방으로 복사할 때 발생지(originRoom)가 없으면 현재 1:1방으로 박제
-            if (pS && !mS) {
-                if (!pS.originRoom) pS.originRoom = roomName;
-                mRoom.features.states[key][targetUid] = pS;
-            } 
-            // 메인방 세션을 1:1방으로 가져올 때 발생지가 없으면 메인방으로 박제
-            else if (!pS && mS) {
-                if (!mS.originRoom) mS.originRoom = MAIN_NAME;
-                pRoom.features.states[key][targetUid] = mS;
-            }
-        });
-    }
-}
 
     var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);
 

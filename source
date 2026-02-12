@@ -10,6 +10,14 @@ var SCHEDULER_KEY = "kakaobot_scheduler_v5";
 var WATCHDOG_KEY = "kakaobot_watchdog_v1";
 var MY_INSTANCE_ID = java.lang.System.identityHashCode(this) + "";
 
+/* [v15.7 신설] 함선 초월 강화 밸런스 설정값 */
+var SHIP_ENHANCE_CONFIG = {
+    LIMIT:  { min: -3, max: 2 },  // 적재량 범위
+    TIME:   { min: -10, max: 30 },  // 항해시간 범위
+    PROFIT: { min: -3, max: 2 },  // 정산수익 범위
+    COST:   100000                // 강화 1회 비용
+};
+
 /**
  * [v15.0] 고지능 경로 지정 소각 엔진 (Path-Targeted Scrubbing)
  * 업그레이드: 전수 재귀 조사를 폐지하고, 자바 객체가 침투하는 '고위험 경로'만 정밀 타격하여 CPU 부하를 70% 절감합니다.
@@ -15593,15 +15601,16 @@ function _manageShip(user, replier, cfg) {
 
     // 2. 최고 레벨 시 강화 상세 안내 UI
     if (curLevel >= maxLevel) {
+        var ec = SHIP_ENHANCE_CONFIG; // 설정 객체 참조
         body += "🔥 [최고 레벨 도달: 초월 강화 해금]\n" +
-                "100,000P를 사용하여 아래 3종 옵션을\n" +
+                fp(ec.COST) + "P를 사용하여 아래 3종 옵션을\n" +
                 "랜덤하게 재설정(리롤) 할 수 있습니다.\n\n" +
                 "[🎲 강화 가능 범위]\n" +
-                "• 📦 적재량: -3칸 ~ +2칸\n" +
-                "• 🕒 항해시간: -5초 ~ +7초\n" +
-                "• 💰 정산보너스: -3% ~ +2%\n\n" +
+                "• 📦 적재량: " + ec.LIMIT.min + "칸 ~ " + (ec.LIMIT.max >= 0 ? "+" : "") + ec.LIMIT.max + "칸\n" +
+                "• 🕒 항해시간: " + ec.TIME.min + "초 ~ " + (ec.TIME.max >= 0 ? "+" : "") + ec.TIME.max + "초\n" +
+                "• 💰 정산보너스: " + ec.PROFIT.min + "% ~ " + (ec.PROFIT.max >= 0 ? "+" : "") + ec.PROFIT.max + "%\n\n" +
                 "👉 강화 시도: [강화] 입력";
-    } 
+    }
     // 3. 레벨업 가능 시 기존 개조 로직
     else if (next) {
         if (!user.job && curLevel >= 3) {
@@ -15619,17 +15628,19 @@ function _manageShip(user, replier, cfg) {
 
 // [신설] 강화 주사위 로직 (섹터 51 하단 추가)
 function _processShipEnhanceRoll(user, data, replier, roomName) {
-    var cost = 100000;
+    var ec = SHIP_ENHANCE_CONFIG; // 설정 객체 참조
+    var cost = ec.COST;
     if (Number(user.point) < cost) {
         return replier.reply(formatError(user, "자금 부족", "강화 시도에는 " + fp(cost) + "P가 필요합니다."));
     }
 
     util_updatePoint(user, data.rooms["내리다"], -cost, "함선 초월 강화 시도", roomName);
 
-    // 랜덤 수치 생성
-    var rLimit = Math.floor(Math.random() * 6) - 3; // -3 ~ +2
-    var rTime = Math.floor(Math.random() * 13) - 5;
-    var rProfit = Math.floor(Math.random() * 6) - 3; // -3% ~ +2%
+    // [v15.7] 설정값 기반 유동적 범위 계산 공식 적용
+    // 공식: Math.floor(Math.random() * (max - min + 1)) + min
+    var rLimit = Math.floor(Math.random() * (ec.LIMIT.max - ec.LIMIT.min + 1)) + ec.LIMIT.min;
+    var rTime = Math.floor(Math.random() * (ec.TIME.max - ec.TIME.min + 1)) + ec.TIME.min;
+    var rProfit = Math.floor(Math.random() * (ec.PROFIT.max - ec.PROFIT.min + 1)) + ec.PROFIT.min;
 
     user.tempEnh = { limit: rLimit, time: rTime, profit: rProfit };
 

@@ -8383,6 +8383,28 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         return true;
     }
 
+    /* 함선 초월 강화 확정 핸들러 */
+    else if (state.type === 'trade_enh_confirm') {
+        if (msg === "1" || msg === "예") {
+            var res = user.tempEnh;
+            if (!res) {
+                replier.reply(formatError(user, "데이터 유실", "강화 임시 데이터가 없습니다. 다시 시도하세요."));
+            } else {
+                user.enhLimit = res.limit;
+                user.enhTime = res.time;
+                user.enhProfit = res.profit;
+                user.tempEnh = null; // 사용 후 즉시 소각
+                replier.reply(formatCommand("✅ 초월 강화 완료", user, "선박에 새로운 성능이 각인되었습니다."));
+            }
+        } else {
+            user.tempEnh = null;
+            replier.reply(formatCommand("🚫 유지 결정", user, "기존 수치를 그대로 유지합니다."));
+        }
+        delete menuWaitState[targetUid];
+        safeSaveData(data);
+        return true;
+    }
+
 
     // 3. 통합 네비게이션: 처음으로 이동
 
@@ -8660,13 +8682,22 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         return true;
     }
 
-    else if (state.type === 'trade_ship') {
+        else if (state.type === 'trade_ship') {
+        // [추가] '강화' 키워드 입력 시 처리 (최우선 판정)
+        if (msg === "강화") {
+            _processShipEnhanceRoll(user, data, replier, roomName);
+            return true; // 강화 함수 내부에서 차기 세션을 생성하므로 여기서 리턴
+        }
+
+        // [기존] 개조 번호(1번) 입력 시 처리
         if (choice === "1") {
             _processShipUpgrade(user, data, replier, roomName, tradeCfg);
+            delete menuWaitState[targetUid]; // 개조 완료 후 세션 종료
         } else {
-            replier.reply(formatError(user, "번호 오류", "선박 개조를 원하시면 1번을 입력하세요."));
+            // [수정] 안내 문구에 '강화' 키워드 가이드 추가
+            replier.reply(formatError(user, "입력 오류", "개조를 원하시면 [1]번, 강화를 원하시면 [강화]를 입력하세요."));
+            delete menuWaitState[targetUid]; // 잘못된 입력 시 세션 종료
         }
-        delete menuWaitState[targetUid];
         return true;
     }
 
@@ -15542,56 +15573,73 @@ function _showVoyageStatus(user, replier, data, roomName) {
 
 /* [서브] 🛠️ 선박 관리 및 개조 */
 function _manageShip(user, replier, cfg) {
-    var cur = cfg.SHIPS[user.shipLevel || 1];
-    var next = cfg.SHIPS[(user.shipLevel || 1) + 1];
-    var body = "등급: " + cur.name + " (Lv." + (user.shipLevel || 1) + ")\n적재량: " + cur.capacity + "칸\n━━━━━━━━━━━━━━━\n";
-    if (next) {
-        // 수정: 상인 판별 시 !user.job(Falsy)을 사용하여 undefined 대응
-        if (!user.job && (user.shipLevel || 1) >= 3) {
+    var curLevel = user.shipLevel || 1;
+    var maxLevel = user.job ? 10 : 3; 
+    var cur = cfg.SHIPS[curLevel];
+    var next = cfg.SHIPS[curLevel + 1];
+    var body = "등급: " + cur.name + " (Lv." + curLevel + ")\n적재량: " + cur.capacity + "칸\n";
+
+    // [추가] 초월 강화 수치 표시 (0이 아닐 때만 노출)
+    if ((user.enhLimit || 0) !== 0 || (user.enhTime || 0) !== 0 || (user.enhProfit || 0) !== 0) {
+        body += "\n[✨ 초월 강화 적용 현황]\n" +
+                "• 적재량 보정: " + (user.enhLimit >= 0 ? "+" : "") + user.enhLimit + "칸\n" +
+                "• 항해시간 보정: " + (user.enhTime >= 0 ? "+" : "") + user.enhTime + "초\n" +
+                "• 정산수익 보정: " + (user.enhProfit >= 0 ? "+" : "") + user.enhProfit + "%\n";
+    }
+    body += "━━━━━━━━━━━━━━━\n";
+
+    // [핵심] 최고 레벨일 때 강화 메뉴 출력, 아닐 때는 기존 개조 로직 유지
+    if (curLevel >= maxLevel) {
+        body += "🔥 [최고 레벨 도달: 초월 강화 해금]\n" +
+                "100,000P를 사용하여 위 3종의 옵션을\n" +
+                "랜덤하게 재설정(리롤) 할 수 있습니다.\n\n" +
+                "👉 강화 시도: [강화] 입력";
+    } else if (next) {
+        if (!user.job && curLevel >= 3) {
+            // [복구] 기존 마스터 코드의 텍스트 그대로 보존
             body += "⚠️ [개조 한계]\n상인 신분으로는 3단계(갤리온)가 한계입니다.\n추가 개조는 해군/해적 전직 후 가능합니다.";
         } else {
             body += "[다음 단계 개조]\n• 대상: " + next.name + "\n• 적재: " + next.capacity + "칸\n• 비용: " + fp(next.upgradeCost) + "P\n\n(개조 시 1번 입력)";
         }
     } else {
-        body += "🎉 이미 최고등급 단계 함선을 보유 중입니다.";
-    }
-
-    body += "\n\n💰 보유 포인트: " + fp(user.point) + "P\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
-    replier.reply(formatCommand("🛠️ 선박 관리소", user, body, "개조하려면 1번을 입력하세요."));
-}
-
-/* [서브] 실제 선박 업그레이드 */
-function _processShipUpgrade(user, data, replier, roomName, cfg) {
-    var next = cfg.SHIPS[(user.shipLevel || 1) + 1];
-    var nextLevel = (user.shipLevel || 1) + 1;
-    // 수정: 상인 판별 조건을 !user.job으로 변경하여 정확도 향상
-    if (nextLevel > 3 && !user.job) {
-        return replier.reply(formatError(user, "개조 제한", "4단계 이상의 전투함은 해군/해적 전용입니다.\n조합 사무소에서 전직 후 다시 오세요."));
+        body += "🎉 이미 최고등급 단계 함선을 보유 중입니다.";
     }
 
-    if (!next || Number(user.point) < Number(next.upgradeCost)) {
-        return replier.reply(formatError(user, "개조 불가", "비용이 부족하거나 이미 최고 등급입니다."));
-    }
-    
-    user.skipHealing = true;
-    util_updatePoint(user, data.rooms[roomName], -next.upgradeCost, "선박 개조 비용", roomName);
-    
-    // 원자적 데이터 게이트웨이 사용 및 물리 저장 강제(true)
-    util_setData(user, 'shipLevel', (user.shipLevel || 1) + 1, "선박 등급 업그레이드", roomName);
-    safeSaveData(data, true); 
-    
-    replier.reply(formatCommand("🎊 선박 개조 완료", user, "축하합니다! 선박이 [" + next.name + "]으로 강화되었습니다."));
+    body += "\n\n💰 보유 포인트: " + fp(user.point) + "P\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+    replier.reply(formatCommand("🛠️ 선박 관리소", user, body, "강화 시도 시 [강화]를 입력하세요."));
 }
 
-// 추가: 무역 지부 전용 상점 출력 함수 구현
-function _showTradeShop(user, replier, roomData, cfg) {
-    var filteredItems = SHOP_ITEMS.filter(function(it) { return it.cat === 6; });
-    var list = filteredItems.map(function(item, j) {
-        return (j + 1) + ". " + item.icon + " " + item.name + " : " + fp(getItemPrice(item, user, user.mining ? user.mining.room : "내리다")) + "P";
-    });
+// [신설] 강화 주사위 로직 (섹터 51 하단 추가)
+function _processShipEnhanceRoll(user, data, replier, roomName) {
+    var cost = 100000;
+    if (Number(user.point) < cost) {
+        return replier.reply(formatError(user, "자금 부족", "강화 시도에는 " + fp(cost) + "P가 필요합니다."));
+    }
+
+    util_updatePoint(user, data.rooms["내리다"], -cost, "함선 초월 강화 시도", roomName);
+
+    // 랜덤 수치 생성
+    var rLimit = Math.floor(Math.random() * 6) - 3; // -3 ~ +2
+    var rTime = Math.floor(Math.random() * 6) - 2;  // -2 ~ +3
+    var rProfit = Math.floor(Math.random() * 6) - 3; // -3% ~ +2%
+
+    user.tempEnh = { limit: rLimit, time: rTime, profit: rProfit };
+
+    var body = "🎲 초월 강화 결과가 도출되었습니다!\n\n" +
+               "[항목] : [기존] ➔ [변경안]\n" +
+               "📦 적재: " + (user.enhLimit || 0) + " ➔ " + (rLimit >= 0 ? "+" : "") + rLimit + "칸\n" +
+               "🕒 시간: " + (user.enhTime || 0) + " ➔ " + (rTime >= 0 ? "+" : "") + rTime + "초\n" +
+               "💰 보너스: " + (user.enhProfit || 0) + " ➔ " + (rProfit >= 0 ? "+" : "") + rProfit + "%\n\n" +
+               "⚠️ 새로운 수치를 적용하시겠습니까?\n" +
+               "(적용 시 기존 강화 정보는 소멸됩니다)\n\n" +
+               "1. 예 (변경안 적용)\n" +
+               "2. 아니오 (기존 수치 유지)";
+
+    replier.reply(formatCommand("🏗️ 함선 초월 개조 결과", user, body, "번호를 입력하세요."));
     
-    var shopContent = list.join("\n") + "\n\n💰 보유 포인트: " + fp(user.point) + "P" + "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
-    replier.reply(formatCommand("🛒 무역 물품 적재 센터", user, shopContent, "구매할 물품의 번호를 입력하세요."));
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    data.rooms[logicRoom].features.states.menuWait[user.uid] = { type: 'trade_enh_confirm', time: Date.now(), originRoom: roomName };
+    safeSaveData(data);
 }
 
 /**

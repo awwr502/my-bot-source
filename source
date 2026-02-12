@@ -1276,23 +1276,24 @@ function safeSaveData(data, isForceBackup) {
      * 메인 스레드(명령어 처리)가 멈추거나 팅기는 것을 방지합니다.
      */
     SaveExecutor.execute(new java.lang.Runnable({
-    run: function() {
-        var isAcquired = false; 
-        try {
-            isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
-            if (!isAcquired) return;
+        run: function() {
+            var isAcquired = false; 
+            try {
+                isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                if (!isAcquired) return;
 
-            // [변경] 무거운 deepScrub(복제) 대신 stringify 리플레이서로 고속 필터링
-            var content = JSON.stringify(data, function(key, value) {
-                if (value === null || value === undefined) return value;
-                if (typeof value === 'object' && (value.getClass !== undefined || (value.constructor && value.constructor.name === 'SessionCacheReplier'))) {
-                    return undefined; // 자바 객체 발견 시 해당 필드만 제외하고 즉시 변환
-                }
-                return value;
-            });
-
-                var content = JSON.stringify(scrubbed);
+                // [고속 엔진] 데이터 전체 복제 없이 stringify 과정에서 즉시 필터링
+                var content = JSON.stringify(data, function(key, value) {
+                    if (value === null || value === undefined) return value;
+                    if (typeof value === 'object') {
+                        if (value.getClass !== undefined || (value.constructor && value.constructor.name === 'SessionCacheReplier')) {
+                            return undefined; 
+                        }
+                    }
+                    return value;
+                });
                 
+                // 데이터 무결성 검증
                 var check = JSON.parse(content);
                 if (!check || !check.rooms) throw new Error("데이터 구조 불완전 (rooms 누락)");
 
@@ -6205,29 +6206,23 @@ function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanS
                 (st.selectWait && st.selectWait[targetUid]) || 
                 (st.lottoPurchase && st.lottoPurchase[targetUid])) {
                 hasActiveSession = true;
-                break;
+                    break;
+                }
             }
         }
-    }
 
-    // 3. 지능형 필터링 집행
-    if (isCommand || isKeyword || hasActiveSession) {
-        // [소독] 명령어를 친 해당 유저만 정밀 소독
-        if (typeof util_scrubUser === 'function') util_scrubUser(user);
-        
-        // [복제] 지능형 선별 복제 시작 (참조 필드만 JSON 복제)
-        if (typeof util_stagingStart === 'function') util_stagingStart(user);
-        
-        // [보안] 헬러 면제권 일시 부여
-        user.skipHealing = true;
-        
-        // 이후 하단 로직으로 진입하여 명령어 처리
-    } else {
-    if (typeof _runChatBonusLogic === 'function') {
-        _runChatBonusLogic(msg, user, data, replier, roomName, targetUid, realRoom);
-    }
-    return; 
-}
+        // 3. 지능형 필터링 집행 (소독 및 스테이징 통합)
+        if (isCommand || isKeyword || hasActiveSession) {
+            util_scrubUser(user); 
+            util_stagingStart(user); 
+            user.skipHealing = true;
+        } else {
+            // 일반 채팅 시 고속 처리 후 종료
+            if (typeof _runChatBonusLogic === 'function') {
+                _runChatBonusLogic(msg, user, data, replier, roomName, targetUid, realRoom);
+            }
+            return; 
+        }
 
    // [1] 1:1방 데이터 동기화 (최우선 순위: 게이트 통과를 위해 필수)
     if (ALLOWED_ROOMS.indexOf(realRoom) === -1 || realRoom === "베릭방") {

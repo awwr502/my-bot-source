@@ -5559,89 +5559,55 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
                         var data = getDatabase(); 
                         if (!data) return;
 
-                       // 1. 캐시 우선 확인
-            targetUid = globalData.nameToIdCache[cacheKey];
-            var isSynced = false;
+                       // 1. [초고속 식별] 캐시 우선 확인 (연산량 O(1))
+                        targetUid = globalData.nameToIdCache[cacheKey];
 
-            // 2. 캐시에 없을 경우에만 식별 로직 가동
-            if (!targetUid) {
-                // 2-1. 1:1방 동기화 로직 (기존 유지)
-                if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-                    var targetSearchName = cleanSender.replace(/\s/g, "");
-                    for (var r in data.rooms) {
-                        var rObj = data.rooms[r];
-                        for (var mId in rObj.users) {
-                            if (rObj.users[mId].name.replace(/\s/g, "") === targetSearchName) {
-                                targetUid = mId;
-                                user = rObj.users[mId];
-                                roomName = r;
-                                isSynced = true;
-                                break;
-                            }
-                        }
-                        if (isSynced) break;
-                    }
-                }
-
-                // 2-2. 동기화로 못 찾았을 경우 DB 전체 검색 (기본 로직)
-                if (!targetUid) {
-                    var hashMatchId = null;
-                    var currentImgHash = null;
-                    try { if (imageDB) currentImgHash = imageDB.getProfileHash(); } catch(e) {}
-
-                    for (var id in (data.rooms[roomName] ? data.rooms[roomName].users : {})) {
-                        var u = data.rooms[roomName].users[id];
-                        if (u.name === cleanSender) { 
-                            targetUid = id; 
-                            break; 
-                        }
-                        if (currentImgHash && u.imageHash === currentImgHash) { 
-                            hashMatchId = id; 
-                        }
-                    }
-
-                    // 사진으로 매칭된 경우 ID 할당 및 닉네임 동기화
-                    if (!targetUid && hashMatchId) {
-                        targetUid = hashMatchId;
-                        var u = data.rooms[roomName].users[targetUid];
-                        if (typeof util_syncIdentityGlobal === 'function') util_syncIdentityGlobal(targetUid, u.name, cleanSender);
-                        u.name = cleanSender;
-                    }
-                }
-
-                // [핵심 패치] 식별 경로(동기화 or 검색)와 상관없이 성공 시 즉시 캐시에 등록
-                if (targetUid) {
-                    globalData.nameToIdCache[cacheKey] = targetUid;
-                }
-            }
-
-                        // 추가: 유저가 식별된 직후, 객체에 붙은 모든 불순물(Replier 등)을 강제 제거
-                if (targetUid && data.rooms[roomName].users[targetUid]) {
-    var u = data.rooms[roomName].users[targetUid];
-    
-   // 1단계: 직접적인 자바 객체 참조 삭제
-                    var forbiddenKeys = ['replier', 'imageDB'];
-                    forbiddenKeys.forEach(function(k) { if (u[k]) delete u[k]; });
-                    
-                    // 2단계: 전수 조사를 통한 변종 오염물 소각
-                    for (var key in u) {
-                        var val = u[key];
-                        if (val !== null && typeof val === 'object') {
-                            if (val.getClass !== undefined || (val.constructor && val.constructor.name && val.constructor.name.indexOf('SessionCache') !== -1)) {
-                                delete u[key];
-                                Log.warn("🗑️ [Filter] " + u.name + "의 오염 필드(" + key + ") 제거");
-                            } else {
-                                try {
-                                    JSON.stringify(val);
-                                } catch (e) {
-                                    delete u[key];
-                                    Log.error("🚨 [Filter] " + u.name + "의 파손 필드(" + key + ") 강제 제거");
+                        if (!targetUid) {
+                            // 2. [스마트 탐색] 캐시 없을 때만 1회성 전 구역 검색 (기존 중첩 루프 최적화)
+                            var searchName = cleanSender.replace(/\s/g, "");
+                            var mainUsers = (data.rooms["내리다"] && data.rooms["내리다"].users) ? data.rooms["내리다"].users : {};
+                            
+                            // A. 메인방 '내리다' 우선 탐색
+                            for (var mId in mainUsers) {
+                                if (mainUsers[mId].name.replace(/\s/g, "") === searchName) {
+                                    targetUid = mId; break;
                                 }
                             }
+                            // B. 없을 경우만 타 구역 전수 조사 (최초 1회만 수행)
+                            if (!targetUid) {
+                                for (var rN in data.rooms) {
+                                    if (rN === "내리다") continue;
+                                    var rO = data.rooms[rN];
+                                    for (var aId in rO.users) {
+                                        if (rO.users[aId].name.replace(/\s/g, "") === searchName) {
+                                            targetUid = aId; break;
+                                        }
+                                    }
+                                    if (targetUid) break;
+                                }
+                            }
+                            // C. 결과 캐시 박제 (연타 시 렉 방지 핵심)
+                            if (targetUid) globalData.nameToIdCache[cacheKey] = targetUid;
                         }
-                        if (typeof val === 'function') delete u[key];
-                    } 
-                }
+
+                        // 3. [무결성 및 정화] 유저 객체 확보 및 딥 헬러(UID 바인딩) 통합
+                        var logicRoomName = (realRoom === "베릭방" || ALLOWED_ROOMS.indexOf(realRoom) === -1) ? "내리다" : realRoom;
+                        if (targetUid && data.rooms[logicRoomName] && data.rooms[logicRoomName].users[targetUid]) {
+                            user = data.rooms[logicRoomName].users[targetUid];
+                            
+                            // [v6.6 딥 헬러] UID 강제 일치화 및 누락 복구
+                            if (!user.uid || user.uid !== targetUid) {
+                                user.uid = targetUid;
+                                Log.info("🩹 [Deep-Healer] " + user.name + "의 UID 무결성을 복구했습니다.");
+                                safeSaveData(data, false);
+                            }
+
+                            // [소각] 네이티브 객체 및 오염 필드 고속 세척
+                            util_fastClean(user);
+                            for (var k in user) {
+                                if (user[k] && typeof user[k] === 'object' && user[k].getClass) delete user[k];
+                            }
+                        }
 
                         // [중계 시스템] 유저 입력 실시간 탈취
                         // 유저가 카지노 감시 모드일 때, 해당 유저가 치는 모든 채팅을 중계방에 전송

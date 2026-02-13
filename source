@@ -18031,15 +18031,25 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
 
         // 2. [즉시 완료 분기] AI 상단 습격 시 3분 대기 없이 바로 정산
         if (isAICombat || isVictimAI) {
+            var ecoMult = util_getEcoMultiplier("내리다");
+            var vMargin = (Math.floor(Math.random() * 100001) + 100000) * ecoMult;
+            var pMin = cfg.PIRATE.pillageRateMin || 0.3;
+            var pMax = cfg.PIRATE.pillageRateMax || 0.5;
+            var pRate = pMin + (pMax - pMin) * (pShip - 1) / 9;
+            var pAmt = Math.floor(vMargin * pRate);
+
             if (typeof _processPillageSuccess === 'function') {
                 var vName = victim ? victim.name : "유령 상단";
-                _processPillageSuccess(victimUid, { pirateUid: pirate.uid, victimName: vName }, data, roomName);
+                // 계산된 pAmt와 pRate를 정산 함수로 전달 (중복 계산 방지)
+                _processPillageSuccess(victimUid, { pirateUid: pirate.uid, victimName: vName, forcedAmount: pAmt, forcedRate: pRate }, data, roomName);
             }
             
-            resultMsg += "🏴‍☠️ [AI 상단 약탈 성공]\n해적 '" + pirate.name + "'이 함대를 격파하고 화물을 즉시 탈취했습니다!\n" +
-                         "💰 약탈 수익이 정산소(나소)로 즉시 입고되었습니다.";
+            resultMsg += "🏴‍☠️ [AI 상단 약탈 성공]\n" +
+                         "해적 '" + pirate.name + "'이 유령 상단을 완벽히 제압했습니다!\n" +
+                         "💰 이번 약탈 수익: +" + fp(pAmt) + "P (정산 대기)\n" +
+                         "📈 적용 약탈률: " + (pRate * 100).toFixed(1) + "%";
         } 
-        // 3. [지연 완료 분기] 실제 유저 상단 습격 시에만 기존 3분 대기열 생성
+        // 실제 유저 상단 습격 시
         else {
             var retreatMs = cfg.NAVY.retreatTime || 300000;
             var fameLoss = (mode === "INTERVENE") ? 20 : 10;
@@ -18197,18 +18207,22 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
     var pName = isAI ? (pData.victimName || "유령 상단") : victim.name;
     var pRate = 0;
 
-    // 2. 정산 로직 분기
-    if (isAI) {
-        // [수정] AI 상단 약탈액 밸런스 조정: 유저 평균 순수익 마진의 약 30% 수준
-        var ecoMult = util_getEcoMultiplier("내리다");
-        var virtualMargin = (Math.floor(Math.random() * 100001) + 100000) * ecoMult; // 10만~20만P 기준
-        pRate = 0.3; // 30% 고정 약탈
-        
-        pillageAmount = Math.floor(virtualMargin * pRate);
-        // [삭제] util_updatePoint 제거 (정산소로만 입고되도록 변경)
-    } else {
-        // [유저 정산]: 기존 소스코드의 정밀 스냅샷 기반 계산 유지
-        var v = victim.voyage;
+    // [v16.8] 전투 리포트에서 전달된 확정 수치(forced) 우선 할당
+    var pRate = pData.forcedRate || 0;
+    var pillageAmount = pData.forcedAmount || 0;
+
+    // 확정 금액이 없을 때만(pillageAmount가 0일 때만) 아래 계산 로직을 실행합니다.
+    if (!pillageAmount) {
+        if (isAI) {
+            // AI 상단 약탈액 밸런스 조정: 유저 평균 순수익 마진의 약 30% 수준
+            var ecoMult = util_getEcoMultiplier("내리다");
+            var virtualMargin = (Math.floor(Math.random() * 100001) + 100000) * ecoMult; // 10만~20만P 기준
+            pRate = 0.3; // 30% 고정 약탈
+            
+            pillageAmount = Math.floor(virtualMargin * pRate);
+        } else {
+            // [유저 정산]: 기존 소스코드의 정밀 스냅샷 기반 계산 유지
+            var v = victim.voyage;
         var tRev = 0; var tCost = 0;
         var nSnap = v.marketSnapshot[v.dest];
         var cSnap = v.cargoSnapshot || {};

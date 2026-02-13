@@ -15351,10 +15351,10 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
     
     /* [분기 3] 선박 관리 처리 (개조 및 수리 통합) */
     if (state.type === 'trade_ship') {
-        var input = msg.trim();
+        var input = msg.replace(/\s/g, "");
 
         // [A] 수리 키워드 처리 (v16.9 신규)
-        if (input === "수리") {
+        if (input.indexOf("수리") !== -1) {
             if (user.currentLoc !== "무역 지부") {
                 replier.reply(formatError(user, "수리 불가", "이곳은 수리 시설이 없는 외지 항구입니다.\n'무역 지부'로 복귀하여 수리하세요."));
                 return true;
@@ -15380,18 +15380,20 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             user.skipHealing = true;
             
             replier.reply(formatCommand("🛠️ 선체 수리 완료", user, "기술자들이 밤새 매달려 배를 새것처럼 고쳤습니다!\n\n✨ 내구도: 100% 복구\n💰 소모 비용: -" + fp(repairCost) + "P", "내 잔액: " + fp(user.point) + "P"));
-            delete menuWaitState[targetUid]; // 수리 후 메뉴 닫기
+            delete menuWaitState[targetUid];
             safeSaveData(data, true);
             return true;
         }
 
-        // [B] 기존 선박 개조 로직 (보존)
+        // [B] 기존 선박 개조 로직
+        var choice = msg.replace(/[^0-9]/g, "").trim();
         if (choice === "1") {
             _processShipUpgrade(user, data, replier, roomName, tradeCfg);
             delete menuWaitState[targetUid];
+        } else if (msg.indexOf("강화") !== -1) {
+            _processShipEnhanceRoll(user, data, replier, roomName);
         } else {
-            // 수리/개조 외 입력 시 가이드 출력
-            replier.reply(formatError(user, "명령 오류", "개조를 원하시면 [1]번, 수리를 원하시면 [수리]를 입력하세요."));
+            replier.reply(formatError(user, "입력 오류", "개조를 원하시면 [1]번, 수리를 원하시면 [수리], 강화를 원하시면 [강화]를 입력하세요."));
         }
         return true;
     }
@@ -15964,7 +15966,7 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     replier.reply(formatCommand("🌊 출항 명령 하달", user, msg, "항해 중 타 활동이 가능합니다."));
 }
 
-/* [수정] 📦 항해 현황판 (호위함 표시 추가) */
+/* 📦 항해 현황판 (호위함 표시 추가) */
 function _showVoyageStatus(user, replier, data, roomName) {
     var msg = "";
     if (!user.voyage || user.voyage.active !== true) {
@@ -15976,6 +15978,9 @@ function _showVoyageStatus(user, replier, data, roomName) {
     var v = user.voyage;
     var remain = (v.arrival || 0) - Date.now();
     var cfg = SYSTEM_CONFIG.TRADE;
+
+    // roomData 변수 선언 추가
+    var roomData = data.rooms[roomName] || data.rooms["내리다"];
     
     // [v15.9] 현황판 강화 수치 연동
     var shipCapacity = cfg.SHIPS[user.shipLevel || 1].capacity + (user.enhLimit || 0);
@@ -15986,7 +15991,8 @@ function _showVoyageStatus(user, replier, data, roomName) {
     var shipCapacity = cfg.SHIPS[user.shipLevel || 1].capacity + (user.enhLimit || 0);
 
     var nSnap = v.marketSnapshot[v.dest] || { favorite: "N/A", hate: "N/A" };
-    var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { level: 1 };
+    var pInfo = (roomData.features && roomData.features.portData && roomData.features.portData[v.dest]) 
+                ? roomData.features.portData[v.dest] : { level: 1 };
     var portLevelBonus = Number((pInfo.level - 1) * (cfg.INVEST.BONUS_PER_LEVEL || 0.01));
 
     var cSnap = v.cargoSnapshot || {};
@@ -16234,23 +16240,27 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     if (!user || !user.voyage) return; // 항해 중이 아니면 즉시 종료
     var v = user.voyage; 
 
+    var isHomeReturn = (v.dest === "무역 지부");
+
     util_fastClean(user);
     if (v) util_fastClean(v);
 
     // 1. 기초 설정 및 정책 로드
+    var isHomeReturn = (v.dest === "무역 지부");
+
     var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var economyRoomData = data.rooms[economyRoomName];
     var pol = util_getActivePolicy(economyRoomData);
     var cfg = SYSTEM_CONFIG.TRADE;
 
-    // 2. [v16.3] 단일 이벤트 추첨 (함수 시작 시 딱 한 번만!)
     var baseDisasterProb = cfg.EVENTS.PROB || 0.40;
-    var finalDisasterProb = baseDisasterProb * (pol.disasterProbMult || 1.0);
+    var finalDisasterProb = isHomeReturn ? 0 : (baseDisasterProb * (pol.disasterProbMult || 1.0));
     var triggeredDisaster = null;
 
-    if (Math.random() < finalDisasterProb) {
+    if (!isHomeReturn && Math.random() < finalDisasterProb) {
         var eventKeys = ["STORM", "FIRE", "CORROSION", "SMOOTH", "FESTIVAL", "FLOTSAM", "MONSTER", "FOG", "SCURVY"];
         triggeredDisaster = eventKeys[Math.floor(Math.random() * eventKeys.length)];
+    }
 
         // [안전 가드] 설정값(cfg)에 해당 키가 없으면 이벤트 취소 (Crash 방지)
         if (!cfg.EVENTS.LIST[triggeredDisaster]) {
@@ -16683,13 +16693,13 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     // [v16.7] 7. 특산품 발견 및 진귀한 유물 판정
     var specialtyFound = "";
-    if (Math.random() < cfg.SPECIALTY_CHANCE) {
+    if (!isHomeReturn && Math.random() < cfg.SPECIALTY_CHANCE) {
         if (v.dest === ELDORADO_CONFIG.NAME) {
-            // 엘도라도: 진귀한 보물 획득
             user.rareSpecialties = (user.rareSpecialties || 0) + 1;
-            specialtyFound = "\n\n💎 [전설의 유물]: '아스테리아 황금 성배' 1개 획득!\n(일반 항구 매각 시 100,000P)";
+            specialtyFound = "\n\n💎 [전설의 유물]: '아스테리아 황금 성배' 1개 획득!";
         } else {
-            // 일반 항구: 기존 특산품 로직
+            // [교정] nationInfo 안전 참조 보강 (undefined 방지)
+            var nationInfo = (v.marketSnapshot && v.marketSnapshot[v.dest]) ? v.marketSnapshot[v.dest] : { specialty: "생필품" };
             var newItem = nationInfo.specialty;
             var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { governorUid: "" };
             var isGov = (pInfo.governorUid === targetUid);

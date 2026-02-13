@@ -8355,6 +8355,41 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         return true;
     }
 
+    /* v16.7 고대 지도 제작 세션 처리 (도굴왕 획득자 전용) */
+    else if (state.type === 'artifact_book') {
+        if (msg === "제작") {
+            // 1. 도굴왕 획득(보유) 여부 재검증 (인벤토리 스캔)
+            var hasDugKing = (user.inventory || []).some(function(it) { 
+                return it.effect === "title" && it.title === "도굴왕"; 
+            });
+
+            if (!hasDugKing) {
+                replier.reply(formatError(user, "제작 권한 없음", "고대 지도는 [도굴왕] 칭호를 획득한 분만 제작할 수 있습니다."));
+                return true;
+            }
+
+            var pieces = Number(user.artifactPieces || 0);
+            if (pieces < 10) {
+                replier.reply(formatError(user, "재료 부족", "지도를 제작하려면 유물 조각 10개가 필요합니다.\n(현재 보유: " + pieces + "개)"));
+                return true;
+            }
+
+            // 2. 제작 집행 (조각 10 -> 지도 1)
+            user.artifactPieces -= 10;
+            user.ancientMaps = (user.ancientMaps || 0) + 1;
+            user.skipHealing = true; // 보안 엔진 예외 허용
+            
+            var craftMsg = "유물 조각 10개를 소모하여\n[고대 지도] 1장을 성공적으로 제작했습니다!\n\n" +
+                           "🗺️ 현재 고대 지도: " + user.ancientMaps + " / 10 장\n" +
+                           "🧩 남은 유물 조각: " + user.artifactPieces + "개";
+
+            replier.reply(formatCommand("🗺️ 고대 지도 제작 성공", user, craftMsg, "추가 제작은 다시 [제작]을 입력하세요."));
+            state.time = Date.now(); // 세션 시간 연장 (연속 제작 지원)
+            safeSaveData(data);
+            return true;
+        }
+    }
+
     // [수정] 기존의 단독 if를 'else if'로 연결하여 논리적 충돌 방지
     else if (state.type === 'trade_main') {
         if (user.job && (choice === "2" || choice === "3" || choice === "5")) {
@@ -13118,46 +13153,29 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-        /* [v16.6] 유물 도감 조회 및 고대 지도 제작 엔진 (미획득 가드 강화) */
-    if (msg.indexOf("/유물도감") === 0) {
+        /* [v16.7] 유물 도감 조회 및 제작 세션 활성화 (제작 명령어 제거본) */
+    if (msg === "/유물도감") {
         var pieces = Number(user.artifactPieces || 0);
         var maps = Number(user.ancientMaps || 0);
         
-        // 1. 도굴왕 칭호 획득 여부 선제 판정 (인벤토리 스캔)
+        // 1. 도굴왕 칭호 획득 여부 선제 판정 (인벤토리 전수 조사)
         var hasDugKing = (user.inventory || []).some(function(it) { 
             return it.effect === "title" && it.title === "도굴왕"; 
         });
 
-        // [기능 1] 지도 제작 로직 (/유물도감 제작)
-        if (msg.indexOf("제작") !== -1) {
-            // [교정]: 장착 중이 아니라 '미획득' 상태일 때 차단
-            if (!hasDugKing) {
-                replier.reply(formatError(user, "제작 권한 없음", "고대 지도는 전설적인 고고학자인 [도굴왕] 칭호를 획득한 분만 제작할 수 있습니다.\n\n💡 조각 50개를 모아 칭호를 먼저 획득하세요."));
-                return true;
-            }
+        // 2. 세션 활성화: 이제부터 입력되는 "제작" 키워드는 섹터 23-4에서 처리됩니다.
+        var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+        var menuWaitState = data.rooms[logicRoom].features.states.menuWait;
+        menuWaitState[targetUid] = { 
+            type: 'artifact_book', 
+            time: Date.now(), 
+            originRoom: roomName 
+        };
 
-            if (pieces < 10) {
-                replier.reply(formatError(user, "재료 부족", "지도를 제작하려면 유물 조각 10개가 필요합니다.\n(현재 보유: " + pieces + "개)"));
-                return true;
-            }
-            
-            user.artifactPieces -= 10;
-            user.ancientMaps = maps + 1;
-            user.skipHealing = true;
-
-            var craftMsg = "유물 조각 10개를 소모하여\n[고대 지도] 1장을 성공적으로 제작했습니다!\n\n" +
-                           "🗺️ 현재 고대 지도: " + user.ancientMaps + " / 10 장\n" +
-                           "🧩 남은 유물 조각: " + user.artifactPieces + "개";
-
-            replier.reply(formatCommand("🗺️ 고대 지도 제작 성공", user, craftMsg, "출항 준비: [/무역] ➔ [2]번 ➔ [0]번"));
-            safeSaveData(data);
-            return true;
-        }
-
-        // [기능 2] 가변형 도감 수집 현황 계산
+        // 3. 가변형 도감 수집 현황 계산
         var targetGoal = 10;
         var nextTitle = "도굴꾼";
-        if (pieces >= 50) { targetGoal = 50; nextTitle = "도굴왕 ⚜️"; }
+        if (pieces >= 50 || hasDugKing) { targetGoal = 50; nextTitle = "도굴왕 ⚜️"; }
         else if (pieces >= 40) { targetGoal = 50; nextTitle = "도굴왕 ⚜️"; }
         else if (pieces >= 30) { targetGoal = 40; nextTitle = "트레저헌터"; }
         else if (pieces >= 20) { targetGoal = 30; nextTitle = "발굴가"; }
@@ -13173,9 +13191,9 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
                             "━━━━━━━━━━━━━━━\n" +
                             "💎 [지도 제작 센터]\n" +
                             "• 조각 10개 ➔ 고대 지도 1장\n" +
-                            "• 명령어: [/유물도감 제작]";
+                            "• 입력: [제작]";
 
-        // [교정]: 가이드 메시지도 '미획득' 기준으로 변경
+        // 4. 가이드 메시지 (미획득 기준 경고 적용)
         var guideText = hasDugKing 
             ? "지도 10장을 모아 '엘도라도' 항로를 개방하세요!" 
             : "⚠️ [주의]: 도굴왕 칭호 미획득 시 지도 제작이 불가능합니다.";

@@ -16181,25 +16181,37 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // 3단계: 최종 세전 마진 확정
     var margin = efficientMargin + pBonusTotal;
 
-    // [세금] 기부왕 혜택 적용 및 이득일 때만 세금 발생
-    var percentile = util_getNetWorthPercentile(user, roomName);
-    var autoTaxRate = 0.05; // 기본 하한선 5%
+    // === [v16.1] 지능형 관세 및 백분위 엔진 교정 (1:1방 연동 최적화) ===
+    var autoTaxRate = 0.05; // 기본 하한 세율 5%
+    var taxBenefitTag = "";
 
-    // 1. 자산 비율에 따른 기본 관세 책정 (상위 15%는 10%, 상위 40%는 7%, 그 외 5%)
-    if (percentile <= 15) autoTaxRate = 0.10;
-    else if (percentile <= 40) autoTaxRate = 0.07;
-    else autoTaxRate = 0.05;
+    try {
+        // [교정] roomName 대신 실제 유저 데이터가 모여있는 economyRoomName(내리다)을 전달
+        var percentile = (typeof util_getNetWorthPercentile === 'function') ? 
+                         util_getNetWorthPercentile(user, economyRoomName) : 50;
 
-    // 2. [자율 지능] 국고 위기 상태라면 자동으로 추가 관세 부과 (방어 기제)
-    if (roomData.lastBankAlert === "warning") autoTaxRate += 0.02;
-    else if (roomData.lastBankAlert === "disaster") autoTaxRate += 0.05;
+        // 1. 자산 백분위에 따른 기본 세율 결정
+        if (percentile <= 15) autoTaxRate = 0.10;      // 상위 15% (자산가)
+        else if (percentile <= 40) autoTaxRate = 0.07; // 상위 40% (중산층)
+        else autoTaxRate = 0.05;                       // 그 외 (서민층)
 
-    // 3. [칭호 혜택] 기부왕은 모든 계산이 끝난 최종 세율에서 50% 자동 감면
-    if (user.title === "기부왕") autoTaxRate *= 0.5;
+        // 2. [자율 지능] 국고 위기 상태에 따른 방어 관세 가산 (economyRoomData 참조)
+        if (economyRoomData.lastBankAlert === "warning") autoTaxRate += 0.02;
+        else if (economyRoomData.lastBankAlert === "disaster") autoTaxRate += 0.05;
 
+        // 3. [칭호 혜택] 기부왕 최종 세율 50% 감면
+        if (user.title === "기부왕") {
+            autoTaxRate *= 0.5;
+            taxBenefitTag = " ✨기부왕 혜택";
+        }
+    } catch (e) {
+        Log.error("무역 관세 계산 오류: " + e);
+        autoTaxRate = 0.05; // 에러 시 기본세율로 회귀 (무한 루프 방지)
+    }
+
+    // [확정] 마진이 이득(>0)일 때만 세금 계산, 손실 시 0P 처리
     taxAmount = margin > 0 ? Math.floor(margin * autoTaxRate) : 0;
     var taxPercentText = (autoTaxRate * 100).toFixed(1);
-    var taxBenefitTag = (user.title === "기부왕") ? " ✨기부왕 혜택" : "";
     var afterTaxMargin = margin - taxAmount;
 
     // [관세] 총독 관세 징수 로직

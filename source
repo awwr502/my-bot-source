@@ -15864,6 +15864,45 @@ function _manageShip(user, replier, cfg) {
     replier.reply(formatCommand("🛠️ 선박 관리소", user, body, "강화 시도 시 [강화]를 입력하세요."));
 }
 
+/**
+ * [v16.8] 선박 등급 업그레이드 엔진
+ * 기능: 상인(Lv.3 제한) 및 직업군(Lv.10 제한) 선박 등급 상승 처리
+ */
+function _processShipUpgrade(user, data, replier, roomName, cfg) {
+    var curLevel = Number(user.shipLevel || 1);
+    var maxLevel = user.job ? 10 : 3;
+    var next = cfg.SHIPS[curLevel + 1];
+
+    if (!next || curLevel >= maxLevel) {
+        var limitMsg = user.job ? "현재 함선이 도달 가능한 최종 등급입니다." : "상인 신분으로는 3단계까지만 개조 가능합니다.\n추가 개조는 해군/해적 전직이 필요합니다.";
+        return replier.reply(formatError(user, "개조 불가", limitMsg));
+    }
+
+    if (Number(user.point) < next.upgradeCost) {
+        return replier.reply(formatError(user, "자금 부족", "개조 비용 " + fp(next.upgradeCost) + "P가 부족합니다."));
+    }
+
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var roomData = data.rooms[logicRoom];
+
+    // 1. 포인트 게이트웨이 정산
+    util_updatePoint(user, roomData, -next.upgradeCost, "선박 등급 업그레이드: " + next.name, roomName);
+
+    // 2. 레벨업 반영 및 보안 면제
+    user.shipLevel = curLevel + 1;
+    user.skipHealing = true;
+
+    var resMsg = "함선 설계도를 갱신하고 개조를 완료했습니다!\n\n" +
+                 "🚢 새로운 등급: [" + next.name + "]\n" +
+                 "📦 기본 적재량: " + next.capacity + "칸\n" +
+                 "💰 소모 비용: -" + fp(next.upgradeCost) + "P";
+
+    replier.reply(formatCommand("🏗️ 선박 등급 업그레이드 완료", user, resMsg, "내 잔액: " + fp(user.point) + "P"));
+    
+    // 3. 즉시 영속화
+    safeSaveData(data, true);
+}
+
 // [신설] 강화 주사위 로직 (섹터 51 하단 추가)
 function _processShipEnhanceRoll(user, data, replier, roomName) {
     var ec = SHIP_ENHANCE_CONFIG;

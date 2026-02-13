@@ -8243,35 +8243,21 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
 
     }
 
-
-
     if (!menuWaitState || !menuWaitState[targetUid]) return false;
-
-
 
     var state = menuWaitState[targetUid];
 
     // 처리 가능 타입 리스트 최적화 (help_main 통합)
 
     var types = [
-
         'shop_category', 'shop_detail', 'help_main', 
-
         'trade_main', 'trade_market', 'trade_depart', 'trade_status', 'trade_ship',
-
         'trade_select_cargo', 'trade_governor_office', 'trade_escort_select', 
-
         'trade_job_enlist', 'trade_pirate_menu', 'trade_navy_menu', 
-
         'trade_raid_list', 'trade_battle_list', 'trade_escort_confirm',
-
         'casino_main', 'casino_ladder', 'casino_baccarat',
-
         'casino_ladder_sub', 'casino_baccarat_sub' 
-
     ];
-
-
 
     // 수정: 개별 네비게이션(처음으로/취소) 로직을 제거하고 '뒤로' 가기 로직의 계층만 정밀화함 (섹터 24에서 중앙 처리하므로 삭제)
     if (msg === "뒤로" || msg === "↩️ 뒤로") {
@@ -8296,6 +8282,10 @@ var logicRoom = (typeof ALLOWED_ROOMS !== 'undefined' && ALLOWED_ROOMS.indexOf(r
 var roomData = data.rooms[logicRoom]; 
 var tradeCfg = (typeof SYSTEM_CONFIG !== 'undefined') ? SYSTEM_CONFIG.TRADE : null;
 var bankProcessState = (roomData && roomData.features) ? roomData.features.states.bankProcess : null;
+
+// 문자열 전처리를 최상단에 배치하여 '수리' 등의 키워드 오인 방지
+    var cleanInput = String(msg || "").replace(/\s/g, "");
+    var choice = String(msg || "").replace(/[^0-9]/g, "").trim();
 
 // 핵심 데이터 로드 실패 시 숫자 로직 진입 방지
 if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false;
@@ -8915,11 +8905,10 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
 
         else if (state.type === 'trade_ship') {
 
-        // 1. 수리 키워드 최우선 판정
-            if (input.indexOf("수리") !== -1) {
-                // 섹터 51의 실제 무역 로직으로 처리를 위임하기 위해 세션을 유지하고 리턴합니다.
-                return _gameTradeLogic(msg, user, data, replier, roomName, targetUid);
-            }
+        // 1. 수리 키워드 최우선 판정 (cleanInput 사용)
+        if (cleanInput.indexOf("수리") !== -1) {
+            return _gameTradeLogic(msg, user, data, replier, roomName, targetUid);
+        }
 
         // '강화' 키워드 입력 시 처리 (최우선 판정)
         if (msg === "강화") {
@@ -15143,6 +15132,9 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
     var menuWaitState = roomData.features.states.menuWait;
     var tradeCfg = SYSTEM_CONFIG.TRADE;
 
+    // [보안] 변수명 충돌 방지를 위해 cleanMsg로 명명 및 안전 선언
+    var cleanMsg = String(msg || "").replace(/\s/g, "");
+
     // 1. [진입점] /무역 명령어
     if (msg === "/무역") {
         // 선박 정보 안전 로드
@@ -15361,31 +15353,25 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         var input = msg.replace(/\s/g, "");
 
         // [A] 수리 키워드 처리 (v16.9 신규)
-        if (input.indexOf("수리") !== -1) {
+        if (cleanMsg.indexOf("수리") !== -1) {
             if (user.currentLoc !== "무역 지부") {
                 replier.reply(formatError(user, "수리 불가", "이곳은 수리 시설이 없는 외지 항구입니다.\n'무역 지부'로 복귀하여 수리하세요."));
                 return true;
             }
-            
             var curDura = Number(user.durability === undefined ? 100 : user.durability);
             if (curDura >= 100) {
                 replier.reply(formatSimple("🔧 수리 불필요", "이미 선박 상태가 최상(100%)입니다."));
                 return true;
             }
-
             var ecobase = Math.floor(util_getEcoMultiplier(logicRoom) * 100);
-            var repairCost = (100 - curDura) * (300 + ecobase); 
-
+            var repairCost = (100 - curDura) * (300 + ecobase);
             if (Number(user.point) < repairCost) {
                 replier.reply(formatError(user, "수리비 부족", "수리비 " + fp(repairCost) + "P가 부족합니다."));
                 return true;
             }
-
-            // 결제 및 수리 집행
             util_updatePoint(user, roomData, -repairCost, "선박 내구도 완전 수리", roomName);
             user.durability = 100;
             user.skipHealing = true;
-            
             replier.reply(formatCommand("🛠️ 선체 수리 완료", user, "기술자들이 밤새 매달려 배를 새것처럼 고쳤습니다!\n\n✨ 내구도: 100% 복구\n💰 소모 비용: -" + fp(repairCost) + "P", "내 잔액: " + fp(user.point) + "P"));
             delete menuWaitState[targetUid];
             safeSaveData(data, true);
@@ -15393,18 +15379,17 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         }
 
         // [B] 기존 선박 개조 로직
-        var choice = msg.replace(/[^0-9]/g, "").trim();
+        var choice = String(msg || "").replace(/[^0-9]/g, "").trim();
         if (choice === "1") {
             _processShipUpgrade(user, data, replier, roomName, tradeCfg);
             delete menuWaitState[targetUid];
-        } else if (msg.indexOf("강화") !== -1) {
+        } else if (cleanMsg.indexOf("강화") !== -1) {
             _processShipEnhanceRoll(user, data, replier, roomName);
         } else {
-            replier.reply(formatError(user, "입력 오류", "개조를 원하시면 [1]번, 수리를 원하시면 [수리], 강화를 원하시면 [강화]를 입력하세요."));
+            replier.reply(formatError(user, "입력 오류", "개조[1], 수리[수리], 강화[강화] 중 원하는 명령을 입력하세요."));
         }
         return true;
     }
-
     return false;
 }
 

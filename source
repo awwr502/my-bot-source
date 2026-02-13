@@ -3885,7 +3885,7 @@ function runScheduler() {
                 _runSeaPillageScheduler(data, ctx);
             }
 
-            /* [신규] 하이브리드 디스코드 원격 백업 (30분 전체 / 1분 로그) */
+            /* 하이브리드 디스코드 원격 백업 (30분 전체 / 1분 로그) */
             /* [3. 디스코드 백업 - 에러 격리 보호막 설치] */
             try {
                 var webhookUrl = SYSTEM_CONFIG.BACKUP ? SYSTEM_CONFIG.BACKUP.DISCORD_WEBHOOK_URL : "";
@@ -4007,7 +4007,7 @@ function runScheduler() {
     java.lang.System.setProperty(WATCHDOG_KEY, String(newDog));
 
 /**
- * [신규] 디스코드 파일 전송 헬퍼 함수
+ * 디스코드 파일 전송 헬퍼 함수
  */
 function _sendDiscordFile(url, filePath, fileName) {
     Executor.execute(new java.lang.Runnable({
@@ -4032,7 +4032,7 @@ function _sendDiscordFile(url, filePath, fileName) {
 }
 
 /** * [Gemini 요청 사항] 대시보드 데이터 전송 함수 (부동산 데이터 전송 규격)
- * 수정 내용: 주식(stocks) 필드를 랜드마크(landmarks) 필드로 교체하여 전송합니다.
+ * 주식(stocks) 필드를 랜드마크(landmarks) 필드로 교체하여 전송합니다.
  */
 function _sendToDashboard(data, ctx) {
     var totalPoints = 0;
@@ -4074,7 +4074,7 @@ function _sendToDashboard(data, ctx) {
 }
 
 /**
- * [신설] 해상 약탈 실시간 프로세서 및 직업 유지관리 엔진
+ * 해상 약탈 실시간 프로세서 및 직업 유지관리 엔진
  * 기능 1: 3분간 토벌되지 않은 약탈 세션을 '성공'으로 확정 정산
  * 기능 2: 7일간 무역/약탈/토벌 활동이 없는 유저의 직업 강제 박탈
  */
@@ -4329,31 +4329,51 @@ function _runSector16Logic(data, ctx) {
 
     /* [시스템] 5분 주기 오토세이브 & 부동산 시장 제어 */
     try {
-        if (currentMin % 5 === 0 && data.lastAutoSaveMin !== currentMin) {
-            data.lastAutoSaveMin = currentMin;
-            ctx.isUpdated = true;
-            ctx.isForceBackup = true; 
-        }
+                if (currentMin % 5 === 0 && data.lastAutoSaveMin !== currentMin) {
+                    data.lastAutoSaveMin = currentMin;
+                    ctx.isUpdated = true;
+                    ctx.isForceBackup = true; 
+                }
 
-        /* [v10.0 IPM] 5분 주기 시스템 성능 진단 및 자율 최적화 */
-        if (currentMin % 5 === 0 && data.lastMonitorMin !== currentMin) {
-            data.lastMonitorMin = currentMin;
-            var logFile = new java.io.File(JOURNAL_PATH);
-            PERF_METRICS.logSize = logFile.exists() ? logFile.length() : 0;
+                /* [v16.0 IPM] 5분 주기 지능형 자율 최적화 (Auto-Log Manager) */
+                if (currentMin % 5 === 0 && data.lastMonitorMin !== currentMin) {
+                    data.lastMonitorMin = currentMin;
+                    var logFile = new java.io.File(JOURNAL_PATH);
+                    var errLogFile = new java.io.File(ERROR_LOG_PATH);
+                    var limit = (INTELLIGENT_CONFIG && INTELLIGENT_CONFIG.PERFORMANCE) ? INTELLIGENT_CONFIG.PERFORMANCE.MAX_LOG_SIZE : 1572864; // 1.5MB
 
-            if (PERF_METRICS.logSize > (INTELLIGENT_CONFIG ? INTELLIGENT_CONFIG.PERFORMANCE.MAX_LOG_SIZE : 1572864)) {
-                var archivePath = BASE_DIR + "logs/transaction_" + ctx.today + ".bak";
-                logFile.renameTo(new java.io.File(archivePath));
-                Log.info("[IPM] 성능 유지를 위해 로그 아카이빙을 완료했습니다.");
-            }
+                    // 1. 블랙박스 로그 용량 기반 자동 아카이빙 (Auto-Rolling)
+                    if (logFile.exists() && logFile.length() > limit) {
+                        var archiveName = "journal_arc_" + ctx.today + "_" + Date.now() + ".log";
+                        var archivePath = BASE_DIR + "logs/" + archiveName;
+                        var moved = logFile.renameTo(new java.io.File(archivePath));
+                        
+                        if (moved) {
+                            var logReport = util_formatSecurityLog(
+                                "📂 [SYSTEM: 하이퍼 로그 매니저]", 
+                                "IPM_CORE", 
+                                "SERVER", 
+                                "✅ 내용: 로그 용량 임계치 초과로 자동 아카이빙 완료\n📊 크기: " + (logFile.length()/(1024*1024)).toFixed(2) + " MB\n📄 파일: logs/" + archiveName,
+                                "기존 로그 백업 및 신규 로그 스트림 생성"
+                            );
+                            try { Api.replyRoom("베릭방", logReport); } catch(e) {}
+                            Log.info("[LogManager] 블랙박스 로그 롤링 완료.");
+                        }
+                    }
 
-            if (PERF_METRICS.avgLag > (INTELLIGENT_CONFIG ? INTELLIGENT_CONFIG.PERFORMANCE.LAG_THRESHOLD_MS : 450)) {
-                globalData.nameToIdCache = {}; 
-                java.lang.System.gc();        
-                Log.warn("[IPM] 성능 저하가 감지되어 메모리 긴급 최적화를 수행했습니다.");
-            }
-            PERF_METRICS.msgPerMin = 0; 
-        }
+                    // 2. 오류 로그 관리 (0.5MB 초과 시 자동 비움)
+                    if (errLogFile.exists() && errLogFile.length() > 524288) {
+                        FileStream.write(ERROR_LOG_PATH, "");
+                        Log.info("🧹 [LogManager] 오류 로그 파일 자동 소각 (용량 초과)");
+                    }
+
+                    if (PERF_METRICS.avgLag > (INTELLIGENT_CONFIG ? INTELLIGENT_CONFIG.PERFORMANCE.LAG_THRESHOLD_MS : 450)) {
+                        globalData.nameToIdCache = {}; 
+                        java.lang.System.gc();        
+                        Log.warn("[IPM] 성능 저하가 감지되어 메모리 긴급 최적화를 수행했습니다.");
+                    }
+                    PERF_METRICS.msgPerMin = 0; 
+                }
 
         // [부동산] 개장 시 시가 동기화 로직
         if (currentHour === conf.SETTINGS.OPEN_HOUR && currentMin === 0 && data.lastMarketOpenDate !== ctx.today) {

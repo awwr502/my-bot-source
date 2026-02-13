@@ -10990,25 +10990,45 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
             }
         }
 
-        // 4. 영구 명부 파일에서 해당 유저와 관련된 모든 바인딩 키 제거
+        // 4. 전 서버 모든 방에서 해당 UID 데이터 말소 (좀비 데이터 방지 핵심)
+        var deletedRooms = [];
+        for (var r in data.rooms) {
+            if (data.rooms[r].users && data.rooms[r].users[targetId]) {
+                delete data.rooms[r].users[targetId];
+                deletedRooms.push(r);
+            }
+        }
+
+        // 5. 영구 명부 파일에서 해당 UID와 연결된 모든 바인딩 키(1:1방 등) 제거
         try {
             var regFile = new java.io.File(REGISTRY_PATH);
             if (regFile.exists()) {
                 var regData = JSON.parse(FileStream.read(REGISTRY_PATH));
                 for (var rKey in regData) {
-                    if (regData[rKey] === targetId) delete regData[rKey];
+                    if (regData[rKey] === targetId) {
+                        delete regData[rKey];
+                    }
                 }
                 FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
             }
         } catch (e) { Log.error("Registry Global Purge Error: " + e); }
 
+        // 6. 메모리 캐시 및 데이터 확정 저장
+        if (globalData.nameToIdCache) {
+            for (var cKey in globalData.nameToIdCache) {
+                if (globalData.nameToIdCache[cKey] === targetId) delete globalData.nameToIdCache[cKey];
+            }
+        }
+
         safeSaveData(data, true); // 즉시 물리 저장하여 무결성 확보
+        
         replier.reply(formatAdmin("유저 완전 삭제 완료", 
             "👤 대상: [" + tName + "]\n" +
-            "🏠 삭제 구역: " + deletedRooms.join(", ") + "\n" +
+            "🏠 삭제 구역: " + (deletedRooms.length > 0 ? deletedRooms.join(", ") : "기록 없음") + "\n" +
             "📑 명부 조치: 해당 UID와 연결된 모든 식별 코드 파기" + refundLog));
+
         return true;
-        }
+     }
 
     if (msg.indexOf("/채굴시간복구 ") === 0) {
         var ps = msg.split(" "), addMin = parseInt(ps.pop()), tn = ps.slice(1).join(" ");

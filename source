@@ -18189,12 +18189,12 @@ function _handleJobSettlement(msg, user, data, replier, roomName, targetUid) {
 }
 
 /* [시스템] 약탈 성공 정산 (스케줄러에서 3분 만료 시 호출) */
-/* [시스템] 약탈 성공 정산 (스케줄러에서 3분 만료 시 호출) */
 function _processPillageSuccess(victimUid, pData, data, roomName) {
     var victim = null;
     var pirate = null;
-   var isAI = (victimUid.indexOf("AI_BOT_") === 0);
+    var isAI = (victimUid.indexOf("AI_BOT_") === 0);
 
+    // 1. 유저 식별 및 위치 탐색
     for (var r in data.rooms) {
         if (!isAI && data.rooms[r].users[victimUid]) victim = data.rooms[r].users[victimUid];
         if (data.rooms[r].users[pData.pirateUid]) pirate = data.rooms[r].users[pData.pirateUid];
@@ -18204,99 +18204,99 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
     if (!isAI && (!victim || !victim.voyage)) return;
 
     var cfg = SYSTEM_CONFIG.TRADE;
-    var pillageAmount = 0;
     var pName = isAI ? (pData.victimName || "유령 상단") : victim.name;
-    var pRate = 0;
 
-    // [v16.8] 전투 리포트에서 전달된 확정 수치(forced) 우선 할당
+    // [v16.8] 전투 리포트에서 전달된 확정 수치(forced)를 우선 할당 (중복 선언 제거)
     var pRate = pData.forcedRate || 0;
     var pillageAmount = pData.forcedAmount || 0;
 
-    // 확정 금액이 없을 때만(pillageAmount가 0일 때만) 아래 계산 로직을 실행합니다.
+    // 2. 확정 금액이 없을 때만(스케줄러 자동 만료 시) 아래 계산 로직을 실행
     if (!pillageAmount) {
         if (isAI) {
-            // AI 상단 약탈액 밸런스 조정: 유저 평균 순수익 마진의 약 30% 수준
+            // AI 상단 약탈액 밸런싱
             var ecoMult = util_getEcoMultiplier("내리다");
-            var virtualMargin = (Math.floor(Math.random() * 100001) + 100000) * ecoMult; // 10만~20만P 기준
-            pRate = 0.3; // 30% 고정 약탈
-            
+            var virtualMargin = (Math.floor(Math.random() * 100001) + 100000) * ecoMult;
+            pRate = 0.3; 
             pillageAmount = Math.floor(virtualMargin * pRate);
         } else {
             // [유저 정산]: 기존 소스코드의 정밀 스냅샷 기반 계산 유지
             var v = victim.voyage;
-        var tRev = 0; var tCost = 0;
-        var nSnap = v.marketSnapshot[v.dest];
-        var cSnap = v.cargoSnapshot || {};
-        var sSnap = v.specialtySnapshot || {};
+            var tRev = 0; var tCost = 0;
+            var nSnap = v.marketSnapshot[v.dest];
+            var cSnap = v.cargoSnapshot || {};
+            var sSnap = v.specialtySnapshot || {};
 
-        for (var g in cSnap) {
-            var qty = Number(cSnap[g]); if (qty <= 0) continue;
-            var myPurchasePrice = Number((victim.cargoAvg && victim.cargoAvg[g]) || cfg.GOODS_COST[g]);
-            var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.15, norm: 1.05, hate: 0.8 };
-            var mult = (g === nSnap.favorite) ? rateInfo.pref : (g === nSnap.hate ? rateInfo.hate : rateInfo.norm);
-            tCost += (myPurchasePrice * qty);
-            tRev += Math.floor(myPurchasePrice * mult * qty);
+            // 일반 화물 매출/원가 계산
+            for (var g in cSnap) {
+                var qty = Number(cSnap[g]); if (qty <= 0) continue;
+                var myPurchasePrice = Number((victim.cargoAvg && victim.cargoAvg[g]) || cfg.GOODS_COST[g]);
+                var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.15, norm: 1.05, hate: 0.8 };
+                var mult = (g === nSnap.favorite) ? rateInfo.pref : (g === nSnap.hate ? rateInfo.hate : rateInfo.norm);
+                tCost += (myPurchasePrice * qty);
+                tRev += Math.floor(myPurchasePrice * mult * qty);
+            }
+            // 특산품 매출/원가 계산
+            for (var s in sSnap) {
+                var sQty = Number(sSnap[s]); if (sQty <= 0) continue;
+                var pG = "";
+                for (var rel in TRADE_RELATION) { if (TRADE_RELATION[rel].set === s) { pG = TRADE_RELATION[rel].produce; break; } }
+                var sBase = cfg.SPECIALTY_COST[pG] || 10000;
+                var sMult = (pG === nSnap.favorite) ? cfg.SPECIALTY_PROFIT : (pG === nSnap.hate ? 0.5 : 1.0);
+                tCost += (sBase * sQty);
+                tRev += Math.floor(sBase * sQty * sMult);
+            }
+
+            var margin = (tRev - tCost);
+            var shipEff = (victim.shipLevel === 1) ? 4.2 : (victim.shipLevel === 2 ? 1.9 : 1.15);
+            
+            // 항구 발전도 보너스 합산 정산
+            var pInfo = (data.rooms[roomName].features.portData && data.rooms[roomName].features.portData[v.dest]) ? data.rooms[roomName].features.portData[v.dest] : { level: 1 };
+            var pBonus = Math.floor(Math.floor(margin * shipEff) * ((pInfo.level - 1) * 0.01));
+            var totalNetMargin = Math.floor(margin * shipEff) + pBonus;
+
+            // 해적 숙련도(선박 레벨)에 따른 약탈률 적용
+            var pMin = cfg.JOBS.PIRATE.pillageRateMin || 0.3;
+            var pMax = cfg.JOBS.PIRATE.pillageRateMax || 0.5;
+            pRate = pMin + (pMax - pMin) * (Number(pirate.shipLevel || 1) - 1) / 9;
+            
+            pillageAmount = totalNetMargin > 0 ? Math.floor(totalNetMargin * pRate) : 0;
+
+            // 피해자 상태 업데이트
+            victim.isPillaged = true;
+            v.isPillaged = true;
+            v.pillageRateSnapshot = pRate;
         }
-        for (var s in sSnap) {
-            var sQty = Number(sSnap[s]); if (sQty <= 0) continue;
-            var pG = "";
-            for (var rel in TRADE_RELATION) { if (TRADE_RELATION[rel].set === s) { pG = TRADE_RELATION[rel].produce; break; } }
-            var sBase = cfg.SPECIALTY_COST[pG] || 10000;
-            var sMult = (pG === nSnap.favorite) ? cfg.SPECIALTY_PROFIT : (pG === nSnap.hate ? 0.5 : 1.0);
-            tCost += (sBase * sQty);
-            tRev += Math.floor(sBase * sQty * sMult);
-        }
+    }
 
-        var margin = (tRev - tCost);
-        var shipEff = (victim.shipLevel === 1) ? 4.2 : (victim.shipLevel === 2 ? 1.9 : 1.15);
+    // 3. 공통 데이터 반영 및 주머니(정산소) 적립
+    if (pillageAmount > 0) {
+        var pirateCfg = (SYSTEM_CONFIG.TRADE.JOBS && SYSTEM_CONFIG.TRADE.JOBS.PIRATE) ? SYSTEM_CONFIG.TRADE.JOBS.PIRATE : { bountyInc: 15000 };
         
-        // [수정] 순수익 합계(마진*효율 + 보너스)를 약탈 기준점으로 설정
-        var pInfo = (data.rooms[roomName].features.portData && data.rooms[roomName].features.portData[v.dest]) ? data.rooms[roomName].features.portData[v.dest] : { level: 1 };
-        var pBonus = Math.floor(Math.floor(margin * shipEff) * ((pInfo.level - 1) * 0.01));
-        var totalNetMargin = Math.floor(margin * shipEff) + pBonus;
-
-        var pMin = cfg.JOBS.PIRATE.pillageRateMin || 0.3;
-        var pMax = cfg.JOBS.PIRATE.pillageRateMax || 0.5;
-        
-        pRate = pMin + (pMax - pMin) * (Number(pirate.shipLevel || 1) - 1) / 9;
-        
-        // [30% 약탈 적용] 순수익 합계 기준으로 계산
-        pillageAmount = totalNetMargin > 0 ? Math.floor(totalNetMargin * pRate) : 0;
-
-        victim.isPillaged = true;
-        v.isPillaged = true;
-        v.pillageRateSnapshot = pRate;
-      }
-   }
-
-   if (pillageAmount > 0) {
-        var pirateCfg = SYSTEM_CONFIG.TRADE.JOBS.PIRATE;
-        
-        // 1. 자산 및 스탯 업데이트
+        // 데이터 업데이트
         pirate.claimableReward = (Number(pirate.claimableReward) || 0) + pillageAmount;
         pirate.infamy = (pirate.infamy || 0) + 10;
         pirate.currentBounty = (Number(pirate.currentBounty) || 0) + (pirateCfg.bountyInc || 15000);
         pirate.totalPillageSuccess = (pirate.totalPillageSuccess || 0) + 1;
         
-        // 2. 상태값 및 쿨타임 설정
         pirate.hasNotifiedReward = false;
         pirate.pillageCooldownEndTime = Date.now() + (cfg.JOBS.PIRATE.winCooldown || 300000);
         
-        // 3. 칭호 체크 및 저장
+        // 칭호 체크 및 영속성 저장 (Master Logic 준수)
         util_checkPirateTitle(pirate, null, "내리다");
         safeSaveData(data, true);
 
-    var successMsg = "🏴‍☠️ [약탈 완료 보고]\n━━━━━━━━━━━━━━━\n" +
-                     "해적 '" + pirate.name + "'이 '" + pName + "'의 상선을\n" +
-                     "완벽하게 제압하고 약탈에 성공했습니다!\n\n" +
-                     "📉 피해: " + (isAI ? "시뮬레이션 " : "정산 ") + "마진의 " + (pRate * 100).toFixed(1) + "% 강탈\n" +
-                     "💰 이번 약탈 수익: +" + fp(pillageAmount) + "P\n" +
-                     "💀 누적 현상금: " + fp(pirate.currentBounty) + "P 돌파!";
-    
-    Api.replyRoom("내리다", successMsg);
-    Log.info("[Pillage] " + pirate.name + " -> " + pName + " 성공 (" + pillageAmount + "P)");
+        // 결과 리포트 출력
+        var successMsg = "🏴‍☠️ [약탈 완료 보고]\n━━━━━━━━━━━━━━━\n" +
+                         "해적 '" + pirate.name + "'이 '" + pName + "'의 상선을\n" +
+                         "완벽하게 제압하고 약탈에 성공했습니다!\n\n" +
+                         "📉 피해: " + (isAI ? "시뮬레이션 " : "정산 ") + "마진의 " + (pRate * 100).toFixed(1) + "% 강탈\n" +
+                         "💰 이번 약탈 수익: +" + fp(pillageAmount) + "P\n" +
+                         "💀 누적 현상금: " + fp(pirate.currentBounty) + "P 돌파!";
+        
+        Api.replyRoom("내리다", successMsg);
+        Log.info("[Pillage] " + pirate.name + " -> " + pName + " 성공 (" + pillageAmount + "P)");
     }
- }
+}
 
 // 신설: 해적 전용 보석금 납부 로직
 function _processPirateBail(user, data, replier, roomName, targetUid) {

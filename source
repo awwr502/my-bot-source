@@ -15228,11 +15228,48 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
     
-    /* [분기 3] 선박 관리 처리 */
+    /* [분기 3] 선박 관리 처리 (개조 및 수리 통합) */
     if (state.type === 'trade_ship') {
-        if (choice === "1") _processShipUpgrade(user, data, replier, roomName, tradeCfg);
-        else replier.reply(formatError(user, "번호 오류", "개조를 위해 1번을 입력하세요."));
-        delete menuWaitState[targetUid];
+        var input = msg.trim();
+
+        // [A] 수리 키워드 처리 (v16.9 신규)
+        if (input === "수리") {
+            if (user.currentLoc !== "무역 지부") {
+                replier.reply(formatError(user, "수리 불가", "이곳은 수리 시설이 없는 외지 항구입니다.\n'무역 지부'로 복귀하여 수리하세요."));
+                return true;
+            }
+            
+            var curDura = Number(user.durability === undefined ? 100 : user.durability);
+            if (curDura >= 100) {
+                replier.reply(formatSimple("🔧 수리 불필요", "이미 선박 상태가 최상(100%)입니다."));
+                return true;
+            }
+
+            var repairCost = (100 - curDura) * 2000; // 1%당 2000P
+            if (Number(user.point) < repairCost) {
+                replier.reply(formatError(user, "수리비 부족", "수리비 " + fp(repairCost) + "P가 부족합니다."));
+                return true;
+            }
+
+            // 결제 및 수리 집행
+            util_updatePoint(user, roomData, -repairCost, "선박 내구도 완전 수리", roomName);
+            user.durability = 100;
+            user.skipHealing = true;
+            
+            replier.reply(formatCommand("🛠️ 선체 수리 완료", user, "기술자들이 밤새 매달려 배를 새것처럼 고쳤습니다!\n\n✨ 내구도: 100% 복구\n💰 소모 비용: -" + fp(repairCost) + "P", "내 잔액: " + fp(user.point) + "P"));
+            delete menuWaitState[targetUid]; // 수리 후 메뉴 닫기
+            safeSaveData(data, true);
+            return true;
+        }
+
+        // [B] 기존 선박 개조 로직 (보존)
+        if (choice === "1") {
+            _processShipUpgrade(user, data, replier, roomName, tradeCfg);
+            delete menuWaitState[targetUid];
+        } else {
+            // 수리/개조 외 입력 시 가이드 출력
+            replier.reply(formatError(user, "명령 오류", "개조를 원하시면 [1]번, 수리를 원하시면 [수리]를 입력하세요."));
+        }
         return true;
     }
 
@@ -15369,7 +15406,7 @@ function _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid
 
 
 /**
- * [수정] 🚢 무역 하역 설정 UI 출력 함수 (디자인 가독성 강화)
+ * 🚢 무역 하역 설정 UI 출력 함수 (디자인 가독성 강화)
  */
 function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS) {
     var market = roomData.features.tradeMarket || cfg.NATIONS;
@@ -15478,18 +15515,37 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
         return;
     }
 
-    /* v16.7 엘도라도 출항 승인 핸들러 (0번) */
+    // [A] 무역 지부 회항 승인 (0번)
     if (input === "0") {
-        var currentMaps = Number(user.ancientMaps || 0);
-        if (currentMaps < ELDORADO_CONFIG.MAP_UNLOCK_COUNT) return; // 입항 허가증(지도 10장) 미달 시 무시
-        
-        var lastHidden = Number(user.lastHiddenVoyage || 0);
-        if (Date.now() - lastHidden < ELDORADO_CONFIG.COOLDOWN) {
-            replier.reply(formatError(user, "항로 폐쇄", "엘도라도 항로가 아직 안개에 갇혀 있습니다."));
+        if (user.currentLoc === "무역 지부") {
+            replier.reply(formatError(user, "명령 무효", "이미 무역 지부에 위치하고 있습니다."));
+            return;
+        }
+        state.dest = "무역 지부";
+        replier.reply("🏠 모든 화물을 보존한 채 고향 항구로 회항합니다.");
+        _departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec);
+        delete roomData.features.states.menuWait[targetUid];
+        return;
+    }
+
+    // [B] 엘도라도 출항 승인 (9번)
+    if (input === "9") {
+        // 내구도 가드 추가: 20% 미만이면 엘도라도 출항 원천 차단
+        if (durability < 20) {
+            replier.reply(formatError(user, "진입 불가", "선체 내구도가 낮아 전설의 항로를 버틸 수 없습니다!\n'무역 지부'로 복귀하여 수리부터 하십시오."));
             return;
         }
 
-        user.ancientMaps -= ELDORADO_CONFIG.MAP_UNLOCK_COUNT; // 지도 10장 소모
+        var currentMaps = Number(user.ancientMaps || 0);
+        if (currentMaps < ELDORADO_CONFIG.MAP_UNLOCK_COUNT) return; 
+        
+        var lastHidden = Number(user.lastHiddenVoyage || 0);
+        if (Date.now() - lastHidden < ELDORADO_CONFIG.COOLDOWN) {
+            replier.reply(formatError(user, "항로 폐쇄", "안개가 걷히지 않아 입항이 불가능합니다."));
+            return;
+        }
+
+        user.ancientMaps -= ELDORADO_CONFIG.MAP_UNLOCK_COUNT;
         user.lastHiddenVoyage = Date.now();
         state.dest = ELDORADO_CONFIG.NAME;
         
@@ -15660,18 +15716,19 @@ function _prepareVoyage(user, replier, cfg, roomData) {
         nStr += (i + 1) + ". " + nName + " (" + nInfo.favorite + "🔺 " + nInfo.hate + "🔹)" + govMark + "\n";
     }
 
+   // 1. [복귀 메뉴] 0번은 항상 '무역 지부'로 고정 (중복 방지)
     if (currentLoc !== "무역 지부") {
         nStr += "🏠 0. 무역 지부 (회항 및 수리 가능)\n";
     }
 
-    /* v16.7 엘도라도 입항 허가 가드 (지도 10장 보유자 전용 노출) */
+    /* v16.7 엘도라도 입항 허가 가드 (번호를 9번으로 변경) */
     var maps = Number(user.ancientMaps || 0);
     if (maps >= ELDORADO_CONFIG.MAP_UNLOCK_COUNT) {
         var lastHidden = Number(user.lastHiddenVoyage || 0);
         var isCool = (Date.now() - lastHidden < ELDORADO_CONFIG.COOLDOWN);
         
         if (!isCool) {
-            nStr += "🌟 0. " + ELDORADO_CONFIG.NAME + " (지도 10장 소모)\n";
+            nStr += "🌟 9. " + ELDORADO_CONFIG.NAME + " (지도 10장 소모)\n"; // 0에서 9로 변경
         } else {
             var remainMs = ELDORADO_CONFIG.COOLDOWN - (Date.now() - lastHidden);
             var remainH = Math.floor(remainMs / 3600000);
@@ -15885,7 +15942,14 @@ function _manageShip(user, replier, cfg) {
     var maxLevel = user.job ? 10 : 3; 
     var cur = cfg.SHIPS[curLevel];
     var next = cfg.SHIPS[curLevel + 1];
-    var body = "등급: " + cur.name + " (Lv." + curLevel + ")\n적재량: " + cur.capacity + "칸\n";
+    // [v16.9] 내구도 및 수리비 계산
+    var durability = Number(user.durability === undefined ? 100 : user.durability);
+    var currentLoc = user.currentLoc || "무역 지부";
+    var dIcon = durability > 50 ? "🟢" : (durability >= 20 ? "🟡" : "🔴");
+    
+    var body = "등급: " + cur.name + " (Lv." + curLevel + ")\n" +
+               "적재량: " + (cur.capacity + (user.enhLimit || 0)) + "칸\n" +
+               "내구도: " + dIcon + " " + durability + "%\n";
 
     // 1. 현재 적용 중인 강화 수치가 있다면 먼저 표시
     if ((user.enhLimit || 0) !== 0 || (user.enhTime || 0) !== 0 || (user.enhProfit || 0) !== 0) {
@@ -15895,6 +15959,19 @@ function _manageShip(user, replier, cfg) {
                 "• 정산수익 보정: " + (user.enhProfit >= 0 ? "+" : "") + user.enhProfit + "%\n";
     }
     body += "━━━━━━━━━━━━━━━\n";
+
+    // [v16.9] 수리 안내문 동적 삽입
+    if (durability < 100) {
+        if (currentLoc === "무역 지부") {
+            var repairCost = (100 - durability) * 2000;
+            body += "🔧 [선박 수리 서비스 가동]\n" +
+                    "• 비용: " + fp(repairCost) + "P (전액 수리)\n" +
+                    "👉 수리 진행: [수리] 입력\n\n";
+        } else {
+            body += "⚠️ [주의] 선체 파손 상태입니다.\n" +
+                    "수리는 '무역 지부'에서만 가능합니다.\n\n";
+        }
+    }
 
     // 2. 최고 레벨 시 강화 상세 안내 UI
     if (curLevel >= maxLevel) {

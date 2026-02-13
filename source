@@ -480,14 +480,19 @@ var SYSTEM_CONFIG = {
             10: { name: "산 펠리페", capacity: 40, speedMult: 0.30, upgradeCost: 1000000 }
         },
         EVENTS: {
-            PROB: 0.40,             // 무역 정산 시 이벤트 발생 총 확률 (40%)
+            PROB: 1.0,             // 무역 정산 시 이벤트 발생 총 확률 (40%)
             LIST: {
                 STORM: { name: "폭풍우", penalty: 0.15, msg: "🌊 폭풍우를 만나 선체가 파손되었습니다! (수리비 지출)" },
                 FIRE: { name: "화재", penalty: 0.2, target: ["식료품", "공예품"], msg: "🔥 창고에 화재가 발생하여 적재물이 전소되었습니다!" },
                 CORROSION: { name: "부식", penalty: 0.2, target: ["공업품", "귀금속"], msg: "🧪 소금물에 화물이 부식되어 가치가 하락했습니다!" },
                 PIRACY: { name: "해적습격", penalty: 0.3, msg: "🏴‍☠️ 해적에게 습격당해 무역 대금의 일부를 약탈당했습니다!" },
-                SMOOTH: { name: "순항", boost: 0.2, msg: "🌬️ 순풍을 타고 예정보다 빠르게 도착했습니다!" }
-            }
+                SMOOTH: { name: "순항", boost: 0.2, msg: "🌬️ 순풍을 타고 예정보다 빠르게 도착했습니다!" },
+                FESTIVAL: { name: "축제", boost: 0.15, msg: "🎊 항구의 축제로 물자가 비싸게 팔렸습니다!" },
+                RESCUE:   { name: "구조", reward: 10000, msg: "🆘 조난자를 구조하여 보상금을 받았습니다!" },
+                MONSTER:  { name: "괴수습격", penalty: 0.25, msg: "🦑 심해 괴수의 습격으로 배가 반파되었습니다!" },
+                FOG:      { name: "짙은안개", penalty: 0.1, msg: "🌫️ 안개로 인해 입항이 지연되었습니다." },
+                SCURVY:   { name: "선원괴질", flatPenalty: 20000, msg: "🏥 괴혈병 치료비로 지출이 발생했습니다." }
+          }
         },
         GOODS: ["식료품", "공예품", "공업품", "귀금속", "보석"],
         BASE_PRICE: 10000,
@@ -15777,6 +15782,30 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     util_fastClean(user);
     if (v) util_fastClean(v);
 
+    // 1. 기초 설정 및 정책 로드
+    var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var economyRoomData = data.rooms[economyRoomName];
+    var pol = util_getActivePolicy(economyRoomData);
+    var cfg = SYSTEM_CONFIG.TRADE;
+
+    // 2. [v16.3] 단일 이벤트 추첨 (함수 시작 시 딱 한 번만!)
+    var baseDisasterProb = cfg.EVENTS.PROB || 0.40;
+    var finalDisasterProb = baseDisasterProb * (pol.disasterProbMult || 1.0);
+    var triggeredDisaster = null;
+
+    if (Math.random() < finalDisasterProb) {
+        var eventKeys = ["STORM", "FIRE", "CORROSION", "PIRACY", "SMOOTH", "FESTIVAL", "FLOTSAM", "MONSTER", "FOG", "SCURVY"];
+        triggeredDisaster = eventKeys[Math.floor(Math.random() * eventKeys.length)];
+    }
+    if (user.title === "해상왕") triggeredDisaster = null;
+
+    // 3. 정산용 변수 초기화
+    var totalRevenue = 0;
+    var totalCost = 0;
+    var soldLog = [];
+    var disasterLog = "";
+    var hasFavoriteSold = false;
+
     // 1. [잠금 통합 관리]: 1분 이상 잠겨있으면 유령 잠금으로 판단하여 해제 후 진행
     if (v.isProcessing === true) {
         if (Date.now() - (v.arrival || 0) > 60000) {
@@ -15828,19 +15857,6 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         }
 
         v.isAlerted = false; // 8. 정산 프로세스 상태 초기화
-
-        // [필수] pol 변수 선언 (이게 없어서 에러가 났던 겁니다)
-        var pol = util_getActivePolicy(economyRoomData); 
-
-        // [로직 통합] 재해 판정을 최상단에서 수행 (해상왕 칭호 적용)
-        var baseDisasterProb = cfg.EVENTS.PROB || 0.25; 
-        var finalDisasterProb = baseDisasterProb * (pol.disasterProbMult || 1.0);
-        var triggeredDisaster = (Math.random() < finalDisasterProb) ? ["STORM", "FIRE", "CORRO", "PIRACY"][Math.floor(Math.random() * 4)] : null;
-
-        var seaKingTag = (user.title === "해상왕") ? " (✨해상왕 혜택)" : "";
-        if (user.title === "해상왕") {
-            triggeredDisaster = null; // 모든 부정적 이벤트 0% 고정
-        }
 
    // [보안] 실시간 가방이 아닌, 출항 시 박제했던 스냅샷을 정산 대상으로 설정
     // 1. [Snapshot] 출항 시점의 고정 데이터들을 정산 대상으로 설정 (휘발성/롤백 방지)
@@ -16011,14 +16027,6 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var taxPercentText = (autoTaxRate * 100).toFixed(1);
     var taxBenefitTag = (user.title === "기부왕") ? " ✨기부왕 혜택" : "";
     var afterTaxMargin = margin - taxAmount;
-
-    var baseDisasterProb = cfg.EVENTS.PROB || 0.40; 
-    var finalDisasterProb = baseDisasterProb * (pol.disasterProbMult || 1.0);
-    
-    var triggeredDisaster = (Math.random() < finalDisasterProb) ? ["STORM", "FIRE", "CORRO"][Math.floor(Math.random() * 3)] : null;
-    
-    // 해상왕 칭호 재검증 (보안 차원)
-    if (user.title === "해상왕") triggeredDisaster = null;
 
     // [관세] 총독 관세 징수 로직
     var pDataPath = roomData.features.portData;
@@ -16192,6 +16200,31 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
    // 누적 수익 강화 보정 (예: enhProfit이 5라면 1.05배)
    var profitBonusMult = 1 + ((user.enhProfit || 0) / 100);
    totalNetMargin = Math.floor(totalNetMargin * profitBonusMult);
+
+    // [v16.1] 해상 이벤트 실정산 로직
+    var flotsamBonus = 0;
+    if (triggeredDisaster) {
+        var ev = cfg.EVENTS.LIST[triggeredDisaster];
+        if (triggeredDisaster === "FESTIVAL" && hasFavoriteSold) {
+            var festAmt = Math.floor(totalNetMargin * ev.boost);
+            totalNetMargin += festAmt;
+            disasterLog += "\n" + ev.msg + " (+" + fp(festAmt) + "P)";
+        } 
+        else if (triggeredDisaster === "FLOTSAM") {
+            flotsamBonus = Math.floor(Math.random() * (ev.max - ev.min + 1)) + ev.min;
+            disasterLog += "\n" + ev.msg + " (+" + fp(flotsamBonus) + "P)";
+        }
+        else if (triggeredDisaster === "MONSTER" || triggeredDisaster === "FOG") {
+            var loss = Math.floor(totalNetMargin * ev.penalty);
+            totalNetMargin -= loss;
+            disasterLog += "\n" + ev.msg + " (-" + fp(loss) + "P)";
+        }
+        else if (triggeredDisaster === "SCURVY") {
+            var medFee = Math.floor(Math.random() * (ev.max - ev.min + 1)) + ev.min;
+            totalNetMargin -= medFee;
+            disasterLog += "\n" + ev.msg + " (-" + fp(medFee) + "P)";
+        }
+    }
 
     // 2. 세금 및 기타 차감액 재계산 (이제 모든 세금은 '합계'를 기준으로 징수)
     taxAmount = totalNetMargin > 0 ? Math.floor(totalNetMargin * autoTaxRate) : 0;

@@ -15207,37 +15207,41 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
 
     var choice = msg.replace(/[^0-9]/g, "").trim();
 
-    /* [분기 2] 목적지 선택 및 출항 */
+    /* [분기 2] 목적지 선택 및 출항 준비 단계 */
     if (state.type === 'trade_depart') {
         var nations = Object.keys(tradeCfg.NATIONS);
         var idx = parseInt(choice) - 1;
+
+        // 1~5번 일반 국가 번호가 아닌 경우 (0번/9번 등은 아래 로직이나 다른 핸들러에서 처리하도록 통과)
         if (isNaN(idx) || idx < 0 || idx >= nations.length) {
-            replier.reply(formatError(user, "목적지 오류", "올바른 번호를 입력하세요."));
+            return false; 
+        }
+
+        /* [v16.9] 입력 보안 및 내구도 검증 가드 */
+        var destName = nations[idx];
+        var currentLoc = user.currentLoc || "무역 지부";
+        var durability = Number(user.durability === undefined ? 100 : user.durability);
+
+        // 1. 현재 있는 항구로 다시 출항하려는 행위 차단 (제자리 무역 버그 방지)
+        if (destName === currentLoc) {
+            replier.reply(formatError(user, "출항 불가", "현재 위치한 [" + destName + "] 항구로는 출항할 수 없습니다."));
+            return true; // 로직 종료 (명령어 처리 완료)
+        }
+
+        // 2. 내구도 20% 미만 시 지부 외 출항 시도 원격 차단
+        if (durability < 20 && destName !== "무역 지부") {
+            replier.reply(formatError(user, "안전 제한", "선체가 파손되어 일반 항로 진입이 거부되었습니다.\n'무역 지부'로 복귀하여 수리하세요."));
             return true;
         }
-        /* [개편] 단계 이동 시 타임스탬프를 갱신하여 동기화 엔진에게 최신 상태임을 알림 */
-       var destName = nations[idx];
-    var currentLoc = user.currentLoc || "무역 지부";
-    var durability = Number(user.durability === undefined ? 100 : user.durability);
 
-    // 1. 현재 있는 항구로 다시 출항하려는 행위 차단
-    if (destName === currentLoc) {
-        replier.reply(formatError(user, "출항 불가", "현재 위치한 [" + destName + "] 항구로는 출항할 수 없습니다."));
-        return;
-    }
-
-    // 2. 내구도 20% 미만 시 지부 외 출항 시도 원격 차단
-    if (durability < 20 && destName !== "무역 지부") {
-        replier.reply(formatError(user, "안전 제한", "선체가 파손되어 일반 항로 진입이 거부되었습니다.\n'무역 지부'로 복귀하여 수리하세요."));
-        return;
-    }
+        // [개편] 검증 통과 시 하역 설정 단계로 이동 및 세션 갱신
         state.type = 'trade_select_cargo';
         state.dest = destName;
         state.selCargo = {};
         state.selSpec = {};
-        state.time = Date.now(); // 타임스탬프 강제 갱신
+        state.time = Date.now(); // 타임스탬프 갱신 (동기화 보장)
         
-        // 하역 설정 화면 출력
+        // 하역 설정 UI 호출
         _showTradeCargoSelectUI(user, replier, roomData, tradeCfg, destName, {}, {});
         return true;
     }

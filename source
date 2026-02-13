@@ -8374,7 +8374,7 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         return true;
     }
 
-    /* 함선 초월 강화 확정 핸들러 (연속 강화 상태 전이 추가) */
+   /* 함선 초월 강화 확정 핸들러 (연속 강화 루프 통합) */
     else if (state.type === 'trade_enh_confirm') {
         if (msg === "1" || msg === "예") {
             var res = user.tempEnh;
@@ -8382,13 +8382,13 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
                 replier.reply(formatError(user, "데이터 유실", "강화 임시 데이터가 없습니다. 다시 시도하세요."));
                 delete menuWaitState[targetUid];
             } else {
-                // 수치 반영
+                // 강화 수치 누적 반영
                 user.enhLimit = (user.enhLimit || 0) + res.limit;
                 user.enhTime = (user.enhTime || 0) + res.time;
                 user.enhProfit = (user.enhProfit || 0) + res.profit;
-                user.tempEnh = null; // 임시 저장 소각
+                user.tempEnh = null; // 임시 데이터 소각
 
-                // [핵심] 세션을 종료하지 않고 '재시도 대기' 상태로 전환
+                // 세션 유지 및 재시도 상태로 전환
                 state.type = 'trade_enh_retry';
                 state.time = Date.now();
                 
@@ -8397,26 +8397,30 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
                 replier.reply(formatCommand("✅ 초월 강화 완료", user, successBody, "추가 강화를 원하시면 [강화]를 입력하세요."));
             }
         } else {
-            // 아니오 선택 시 세션 종료
+            // [수정] 아니오(유지) 선택 시에도 세션을 유지하여 즉시 재도전 기회 제공
             user.tempEnh = null;
-            delete menuWaitState[targetUid];
-            replier.reply(formatCommand("🚫 유지 결정", user, "기존 수치를 그대로 유지합니다."));
+            state.type = 'trade_enh_retry';
+            state.time = Date.now();
+
+            var maintainBody = "기존 수치를 그대로 유지합니다.\n\n" +
+                               "🔁 강화 / ❎ 취소";
+            replier.reply(formatCommand("🚫 유지 결정", user, maintainBody, "추가 강화를 원하시면 [강화]를 입력하세요."));
         }
         safeSaveData(data);
         return true;
     }
 
-    /* [신규] 초월 강화 연속 시도 핸들러 (강화 입력 시 루프 발생) */
+    /* 초월 강화 연속 시도 핸들러 (강화 입력 시 롤링 루프 발생) */
     else if (state.type === 'trade_enh_retry') {
         var input = msg.trim();
         if (input === "강화" || input === "🔁") {
-            // 섹터 51의 강화 로직 실행 (내부에서 다시 'trade_enh_confirm' 상태로 되돌림)
+            // 섹터 51의 강화 로직 실행 (비용 차감 후 다시 'trade_enh_confirm'으로 복귀함)
             _processShipEnhanceRoll(user, data, replier, roomName);
         } else if (input === "취소" || input === "❎") {
             delete menuWaitState[targetUid];
             replier.reply(formatCommand("🚪 강화 종료", user, "함선 초월 강화 작업을 마칩니다."));
         } else {
-            // 잘못된 입력 시 세션 유지하며 가이드 재출력
+            // 다른 입력 시 가이드 출력 및 세션 유지 (30초 자동 만료 시스템 작동 중)
             replier.reply(formatError(user, "입력 오류", "[강화] 또는 [취소]를 입력해주세요.\n\n🔁 강화 / ❎ 취소"));
         }
         return true;

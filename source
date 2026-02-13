@@ -15135,6 +15135,11 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         } else {
             menu += "\n6. " + jobLabel;
         }
+
+        /* v16.7 진귀한 보물 매각 메뉴 (자치령 전리품 전용) */
+        if (rareTreasureCount > 0) {
+            menu += "\n8. 💎 보물 매각 (개당 " + fp(ELDORADO_CONFIG.RARE_PRICE) + "P)";
+        }
         
         replier.reply(formatCommand("⛵ 내리다 무역 지부", user, menu, "번호를 입력하세요."));
         
@@ -15362,11 +15367,20 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
         }
     }
 
+    /* v16.7 하역 UI 내 보물 리스트 및 적재 현황 추가 */
+    var rareCount = Number(user.rareSpecialties || 0);
+    var selectedRare = Number(selS._rare || 0); // 특산품 스냅샷 내 내부 키 사용
+    var remainingRare = rareCount - selectedRare;
+
+    if (remainingRare > 0) {
+        availableItems.push({ type: 'rare', name: "진귀한 보물", qty: remainingRare, status: "💰고정가 (10만P)" });
+    }
+
     if (availableItems.length === 0) {
         body += "- 적재 가능한 보유 물품 없음 -\n";
     } else {
         availableItems.forEach(function(it, i) {
-            var prefix = it.type === 'spec' ? "⭐" : "";
+            var prefix = (it.type === 'spec' || it.type === 'rare') ? "⭐" : "";
             body += (i + 1) + ". " + prefix + it.name + " (" + it.qty + "상자) - " + it.status + "\n";
         });
     }
@@ -15374,7 +15388,10 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
     body += "\n[✅ 선박 적재 완료]\n";
     var selList = [];
     for (var c in selC) selList.push("• " + c + " x" + selC[c] + "상자");
-    for (var s in selS) selList.push("• ⭐" + s + " x" + selS[s] + "개");
+    for (var s in selS) {
+        if (s === "_rare") selList.push("• 💎진귀한 보물 x" + selS[s] + "개");
+        else selList.push("• ⭐" + s + " x" + selS[s] + "개");
+    }
     body += (selList.length > 0 ? selList.join("\n") : "- 선택된 화물 없음 -");
 
     body += "\n\n\n💬 [입력 방법]\n" +
@@ -15414,6 +15431,26 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     // 추가: '호위' 키워드 입력 시 해군 고용 핸들러를 호출하는 로직 삽입
     if (input === "호위") {
         _handleEscortHire(input, user, data, replier, roomName, targetUid);
+        return;
+    }
+
+    /* v16.7 엘도라도 출항 승인 핸들러 (0번) */
+    if (input === "0") {
+        var currentMaps = Number(user.ancientMaps || 0);
+        if (currentMaps < ELDORADO_CONFIG.MAP_UNLOCK_COUNT) return; // 입항 허가증(지도 10장) 미달 시 무시
+        
+        var lastHidden = Number(user.lastHiddenVoyage || 0);
+        if (Date.now() - lastHidden < ELDORADO_CONFIG.COOLDOWN) {
+            replier.reply(formatError(user, "항로 폐쇄", "엘도라도 항로가 아직 안개에 갇혀 있습니다."));
+            return;
+        }
+
+        user.ancientMaps -= ELDORADO_CONFIG.MAP_UNLOCK_COUNT; // 지도 10장 소모
+        user.lastHiddenVoyage = Date.now();
+        state.dest = ELDORADO_CONFIG.NAME;
+        
+        _departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec);
+        delete roomData.features.states.menuWait[targetUid];
         return;
     }
 
@@ -15459,11 +15496,13 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     }
 
     var selected = availableItems[idx];
-    // 수량 파싱: 미입력 시 '전부'로 간주
     var inputQty = parts.length > 1 ? parseInt(parts[1].replace(/[^0-9]/g, "")) : 999999;
     var finalQty = Math.min(inputQty, selected.qty);
 
-    if (selected.type === 'cargo') {
+    /* [수정] v16.7 보물 선택 시 즉시 매각이 아닌 '적재 목록'으로 추가 */
+    if (selected.type === 'rare') {
+        state.selSpec["_rare"] = (state.selSpec["_rare"] || 0) + finalQty;
+    } else if (selected.type === 'cargo') {
         state.selCargo[selected.name] = (state.selCargo[selected.name] || 0) + finalQty;
     } else {
         state.selSpec[selected.name] = (state.selSpec[selected.name] || 0) + finalQty;
@@ -15555,6 +15594,22 @@ function _prepareVoyage(user, replier, cfg, roomData) {
         var nInfo = market[nName];
         var govMark = (pData[nName] && pData[nName].governorUid === user.uid) ? " 👑" : "";
         nStr += (i + 1) + ". " + nName + " (" + nInfo.favorite + "🔺 " + nInfo.hate + "🔹)" + govMark + "\n";
+    }
+
+    /* v16.7 엘도라도 입항 허가 가드 (지도 10장 보유자 전용 노출) */
+    var maps = Number(user.ancientMaps || 0);
+    if (maps >= ELDORADO_CONFIG.MAP_UNLOCK_COUNT) {
+        var lastHidden = Number(user.lastHiddenVoyage || 0);
+        var isCool = (Date.now() - lastHidden < ELDORADO_CONFIG.COOLDOWN);
+        
+        if (!isCool) {
+            nStr += "🌟 0. " + ELDORADO_CONFIG.NAME + " (지도 10장 소모)\n";
+        } else {
+            var remainMs = ELDORADO_CONFIG.COOLDOWN - (Date.now() - lastHidden);
+            var remainH = Math.floor(remainMs / 3600000);
+            var remainM = Math.ceil((remainMs % 3600000) / 60000);
+            nStr += "🔒 " + ELDORADO_CONFIG.NAME + " (정비 중: " + remainH + "시간 " + remainM + "분 남음)\n";
+        }
     }
 
     nStr += "\n━━━━━━━━━━━━━━━\n" +
@@ -16239,41 +16294,60 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     if (taxAmount > 0) util_updateReserve(economyRoomData, taxAmount, "무역세 징수", economyRoomName);
     if (creditLoss > 0) util_updateReserve(economyRoomData, creditLoss, "신용 등급 차등 수익 환수", economyRoomName);
 
-    // 7. 특산품 발견 및 수량 표시 처리 (총독 권한 연동)
+    // [v16.7] 7. 특산품 발견 및 진귀한 유물 판정
     var specialtyFound = "";
-    if (Math.random() < cfg.SPECIALTY_CHANCE) { // 상수 0.50 (50%) 적용
-        var newItem = nationInfo.specialty;
-        var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { governorUid: "" };
-        
-        var isGov = (pInfo.governorUid === targetUid);
-        var amount = 1; // 일반 유저 기본 획득량
-        
-        if (isGov) {
-            var min = Number(cfg.INVEST.GOV_SPEC_MIN); 
-            var max = Number(cfg.INVEST.GOV_SPEC_MAX);
-            amount = Math.floor(Math.random() * (max - min + 1)) + min;
+    if (Math.random() < cfg.SPECIALTY_CHANCE) {
+        if (v.dest === ELDORADO_CONFIG.NAME) {
+            // 엘도라도: 진귀한 보물 획득
+            user.rareSpecialties = (user.rareSpecialties || 0) + 1;
+            specialtyFound = "\n\n💎 [전설의 유물]: '아스테리아 황금 성배' 1개 획득!\n(일반 항구 매각 시 100,000P)";
+        } else {
+            // 일반 항구: 기존 특산품 로직
+            var newItem = nationInfo.specialty;
+            var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { governorUid: "" };
+            var isGov = (pInfo.governorUid === targetUid);
+            var amount = isGov ? (Math.floor(Math.random() * (Number(cfg.INVEST.GOV_SPEC_MAX) - Number(cfg.INVEST.GOV_SPEC_MIN) + 1)) + Number(cfg.INVEST.GOV_SPEC_MIN)) : 1;
+            user.specialties[newItem] = (user.specialties[newItem] || 0) + amount;
+            specialtyFound = "\n\n✨ 특산품 '" + newItem + "' " + (isGov ? "x" + amount + " " : "") + "발견!";
         }
-
-        user.specialties[newItem] = (user.specialties[newItem] || 0) + amount;
-        
-        // 총독일 경우에만 x수량 표시, 일반 유저는 발견 메시지만 출력
-        specialtyFound = "\n\n✨특산품 '" + newItem + "' " + (isGov ? "x" + amount + " " : "") + "발견!";
     }
 
-    // 8. 적재 품목 요약 생성 (예: 식료품x30)
-    var cargoDisplayList = [];
-    for (var k in cargoToSell) { if (Number(cargoToSell[k]) > 0) cargoDisplayList.push(k + "x" + cargoToSell[k]); }
-    for (var s in specialtyToSell) { if (Number(specialtyToSell[s]) > 0) cargoDisplayList.push(s + "x" + specialtyToSell[s]); }
-    var cargoSummaryStr = cargoDisplayList.join(", ");
+    // [v16.7] 7-1. 엘도라도 전용 수익 보정 및 특산품 판매 제외
+    if (v.dest === ELDORADO_CONFIG.NAME) {
+        // [보정] 특산품 매출(sRev)뿐만 아니라 특산품 원가까지 제외하여 순수 교역품 마진만 2배로 계산
+        var pureCargoMargin = Math.floor((tRev - (sRev || 0) - (totalCost - (sBase * sCount || 0))) * shipEff);
+        efficientMargin = pureCargoMargin * ELDORADO_CONFIG.PROFIT_MULT;
+        pBonusTotal = 0; // 자치령 보너스 제외
+        soldLog = soldLog.filter(function(line){ return line.indexOf("[특]") === -1; });
+        disasterLog += "\n✨ [황금의 가호]: 엘도라도의 기운으로 일반 교역 순수익이 2배로 기록되었습니다.";
+    }
 
-   // 1. 순수익 합계 계산 (선박효율이 적용된 마진 + 항구 발전도 보너스)
-    var totalNetMargin = efficientMargin + pBonusTotal; // 기존 세전 마진
-   // 누적 수익 강화 보정 (예: enhProfit이 5라면 1.05배)
-   var profitBonusMult = 1 + ((user.enhProfit || 0) / 100);
-   totalNetMargin = Math.floor(totalNetMargin * profitBonusMult);
+    // [v16.7] 7-2. 무역 성공 시 20% 확률 고대 지도 보급 (공통)
+    var mapLootMsg = "";
+    if (Math.random() < ELDORADO_CONFIG.MAP_PROB) {
+        user.ancientMaps = (user.ancientMaps || 0) + 1;
+        mapLootMsg = "\n\n🗺️ [뜻밖의 수확]: 선실 구석에서 '고대 지도' 1장을 발견했습니다!";
+    }
 
-    // [v16.1] 해상 이벤트 실정산 로직
-    var flotsamBonus = 0;
+    /* v16.7 적재된 진귀한 보물(성배 등) 판매 정산 */
+    var rareLootCount = Number(sSnap["_rare"] || 0);
+    if (rareLootCount > 0) {
+        var rareRevenue = rareLootCount * (ELDORADO_CONFIG.RARE_PRICE || 100000);
+        totalRevenue += rareRevenue;
+        // 보물은 획득가가 0이므로 마진 계산 시 수익으로만 전액 합산
+        efficientMargin += Math.floor(rareRevenue * shipEff); 
+        soldLog.push("• 💎진귀한 보물 x" + rareLootCount + ": " + fp(rareRevenue) + "P 🔺");
+        
+        // 유저 실제 보유 데이터에서 차감
+        user.rareSpecialties = Math.max(0, (user.rareSpecialties || 0) - rareLootCount);
+    }
+
+    // [유지] 1. 순수익 합계 계산 및 초월 강화 보정
+    var profitBonusMult = 1 + ((user.enhProfit || 0) / 100);
+    var totalNetMargin = Math.floor((efficientMargin + pBonusTotal) * profitBonusMult);
+    var enhProfitTag = (user.enhProfit > 0) ? " (✨수익강화 +" + user.enhProfit + "%)" : "";
+
+    // [유지] 2. 해상 이벤트(재해/축제) 실정산 로직 (기존 로직 보존)
     if (triggeredDisaster) {
         var ev = cfg.EVENTS.LIST[triggeredDisaster];
         if (triggeredDisaster === "FESTIVAL" && hasFavoriteSold) {
@@ -16282,7 +16356,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             disasterLog += "\n" + ev.msg + " (+" + fp(festAmt) + "P)";
         } 
         else if (triggeredDisaster === "FLOTSAM") {
-            flotsamBonus = Math.floor(Math.random() * (ev.max - ev.min + 1)) + ev.min;
+            var flotsamBonus = Math.floor(Math.random() * (ev.max - ev.min + 1)) + ev.min;
+            totalNetMargin += flotsamBonus;
             disasterLog += "\n" + ev.msg + " (+" + fp(flotsamBonus) + "P)";
         }
         else if (triggeredDisaster === "MONSTER" || triggeredDisaster === "FOG") {
@@ -16297,27 +16372,24 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         }
     }
 
-    // 2. 세금 및 기타 차감액 재계산 (이제 모든 세금은 '합계'를 기준으로 징수)
+    // [유지] 3. 최종 세금 및 실지급액 확정
     taxAmount = totalNetMargin > 0 ? Math.floor(totalNetMargin * autoTaxRate) : 0;
     var afterTaxMargin = totalNetMargin - taxAmount;
-
-    // 관세 및 호위비 차감 (순수익 합계에서 차감)
     if (govTag && govInfo && govInfo.governorUid !== targetUid) {
         var tariff = totalNetMargin > 0 ? Math.floor(totalNetMargin * 0.01) : 0;
         afterTaxMargin -= tariff;
     }
     if (v.escortFee) afterTaxMargin -= v.escortFee;
     
-    // 3. 최종 실지급 순이익 및 총 수령액(원금+순이익) 확정
     var finalNetProfit = Math.floor(afterTaxMargin * creditMult); 
     var totalPayout = totalCost + finalNetProfit;
 
-    // 4. 리포트 본문 조립 (가독성을 위해 순수익 합계 강조)
+    // 4. 리포트 본문 조립 (전체 메시지 통합)
     var report = "📍 목적지: " + v.dest + " (" + cargoSummaryStr + ")\n\n" +
                  "💰 총 매출액: " + fp(totalRevenue) + "P\n" +
                  "📈 순수 이익: +" + fp(efficientMargin) + "P\n" + 
                  "🏗️ 발전도 보너스: +" + fp(pBonusTotal) + "P\n" +
-                 "💵 순수익 합계: " + fp(totalNetMargin) + "P" + seaKingTag + "\n" +
+                 "💵 순수익 합계: " + fp(totalNetMargin) + "P" + seaKingTag + enhProfitTag + "\n" +
                  (disasterLog ? disasterLog.trim() + "\n" : "") +
                  "⚖️ 무역세(" + taxPercentText + "%): -" + fp(taxAmount) + "P" + taxBenefitTag + "\n" +
                  (pillageLog ? pillageLog.trim() + "\n" : "") +
@@ -16326,7 +16398,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                  "\n" +
                  "🎊 최종 수령액: " + fp(totalPayout) + "P\n" +
                  "(신용 " + crInfo.label + " " + (creditMult * 100).toFixed(0) + "%지급)\n" +
-                 (specialtyFound ? "\n" + specialtyFound.trim() : "");
+                 (specialtyFound ? specialtyFound.trim() : "") + 
+                 (mapLootMsg ? mapLootMsg.trim() : "");
 
     // 5. 결과 메시지 전송 (내리다 방 고정)
     var resultMsg = formatCommand("🌊 [항해 일지: 무역 보고]", user, report, "누적 무역 " + user.tradeCount + "회 / 잔액 " + fp(user.point) + "P");
@@ -17532,6 +17605,10 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
         for (var uid in roomObj.users) {
             var u = roomObj.users[uid];
             var isSailing = (u.voyage && u.voyage.active === true);
+
+            /* [추가] v16.7 엘도라도 스텔스 모드: 고대 항로를 이용 중인 선박은 해적 레이더에 잡히지 않습니다. */
+            if (isSailing && u.voyage.dest === ELDORADO_CONFIG.NAME) continue;
+
             var hasEnoughTime = isSailing && (u.voyage.arrival - now >= 180000);
             var alreadyTargeted = (u.isPillaged === true || (u.voyage && u.voyage.isPillaged === true));
             var isUnderAttack = (currentPillages && currentPillages[uid]); 

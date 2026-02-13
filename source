@@ -261,7 +261,9 @@ var USER_SCHEMA = [
     { key: 'lastPirateWageDate', default: '', type: 'string' },
     { key: 'lastNavyWageDate', default: '', type: 'string' },
     { key: 'claimableReward', default: 0, type: 'number' },
-    { key: 'hasNotifiedReward', default: false, type: 'boolean' }
+    { key: 'hasNotifiedReward', default: false, type: 'boolean' },
+    { key: 'durability', default: 100, type: 'number' }, // 선박 내구도 (0~100)
+    { key: 'currentLoc', default: '무역 지부', type: 'string' } // 현재 위치
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -15066,6 +15068,11 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         
         // [v15.9] 초월 강화 적재량 합산 로직 적용
         var totalCapacity = ship.capacity + (user.enhLimit || 0);
+
+        // === UI용 변수 계산 ===
+        var durability = Number(user.durability || 0);
+        var dIcon = durability > 50 ? "🟢" : (durability >= 20 ? "🟡" : "🔴");
+        var currentLocation = user.currentLoc || "무역 지부";
         
         // [참조 오류 방지] shipLabel 변수를 명확히 선언
         var shipName = (user.shipName !== undefined) ? user.shipName : "";
@@ -15140,9 +15147,10 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         // [UI 개편] 요청하신 순서대로 레이아웃 재구성
         var menu = "📍 현재 위치: " + currentLocation + "\n" +
                    "🚢 보유 선박: " + shipLabel + " (Lv." + shipLevel + ")\n" +
+                   "🛠️ 내구도: " + dIcon + " " + durability + "%\n" +
                    "📦 일반 교역품: " + currentGeneralCount + " / " + totalCapacity + " 칸\n" + 
                    "📦 특산품: " + currentSpecTypeCount + " / 5 종류\n" + 
-                   "💎 진귀한 보물: " + rareTreasureCount + " 개" + 
+                   "💎 진귀한 보물: " + rareTreasureCount + " 개" +
                    pillageAlert + navyStatus + "\n" +
                    (myGovernorTitle ? myGovernorTitle + "\n" : "") + "\n" +
                    "1. 🌍 세계 시세 및 항구 투자\n" +
@@ -15366,6 +15374,8 @@ function _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid
 function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS) {
     var market = roomData.features.tradeMarket || cfg.NATIONS;
     var nInfo = market[dest];
+    var currentLoc = user.currentLoc || "무역 지부";
+    var localProduce = TRADE_RELATION[currentLoc] ? TRADE_RELATION[currentLoc].produce : "";
     var body = "📍 목적지: [" + dest + "]\n\n" +
                "[📦 무역품 보유 현황]\n";
     
@@ -15377,6 +15387,7 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
         var remaining = total - selected;
         
         if (remaining > 0) {
+        if (k === localProduce) continue; // 현재 항구 생산품은 팔 수 없음
             var status = (k === nInfo.favorite) ? "🔺선호" : (k === nInfo.hate ? "🔹기피" : "➖일반");
             availableItems.push({ type: 'cargo', name: k, qty: remaining, status: status });
         }
@@ -15601,6 +15612,17 @@ function _showTradeMarket(user, replier, roomData, cfg) {
 
 /* [서브] 🚢 출항 준비 및 화물 확인 */
 function _prepareVoyage(user, replier, cfg, roomData) {
+    var durability = Number(user.durability || 0);
+    var currentLoc = user.currentLoc || "무역 지부";
+
+    if (durability < 20 && currentLoc !== "무역 지부") {
+        var warnMsg = "🚨 [출항 불가: 선체 손상]\n━━━━━━━━━━━━━━━\n" +
+                      "현재 내구도가 " + durability + "%로 매우 위험한 상태입니다.\n\n" +
+                      "⚠️ 사고 예방을 위해 모든 상업 항로가 폐쇄되었습니다.\n" +
+                      "즉시 '무역 지부'로 복귀하여 수리를 진행하세요.";
+        replier.reply(formatError(user, "내구도 부족", warnMsg, "[0]번을 입력하여 복귀하세요."));
+    }
+
     var cargoList = []; var total = 0;
     var myCargo = user.cargo || {};
     
@@ -15631,9 +15653,15 @@ function _prepareVoyage(user, replier, cfg, roomData) {
     
     for (var i = 0; i < nations.length; i++) {
         var nName = nations[i];
+        if (nName === currentLoc) continue;
+        if (isBroken) continue;
         var nInfo = market[nName];
         var govMark = (pData[nName] && pData[nName].governorUid === user.uid) ? " 👑" : "";
         nStr += (i + 1) + ". " + nName + " (" + nInfo.favorite + "🔺 " + nInfo.hate + "🔹)" + govMark + "\n";
+    }
+
+    if (currentLoc !== "무역 지부") {
+        nStr += "🏠 0. 무역 지부 (회항 및 수리 가능)\n";
     }
 
     /* v16.7 엘도라도 입항 허가 가드 (지도 10장 보유자 전용 노출) */
@@ -15696,6 +15724,11 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     // 4단계: 최종 시간 확정 (최소 1분 보장)
     var finalTimeMin = Math.max(1, Math.floor(totalSec / 60));
     var arrival = Date.now() + (totalSec * 1000);
+
+    // === 내구도 차감 로직 ===
+    var wear = Math.floor(Math.random() * 6) + 10; // 10~15%
+    user.durability = Math.max(0, (user.durability || 100) - wear);
+    user.skipHealing = true;
     
     // 데이터 패키징 (v.arrival에 최종 계산된 값 저장)
     user.voyage = {
@@ -16409,18 +16442,28 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     // 포인트 지급 및 국고 연동
     util_updatePoint(user, economyRoomData, totalPayout, "무역 정산 완료 (원금+수익)", economyRoomName);
+
+    // 1. 현재 위치를 목적지 항구로 갱신 (무역 지부로 복귀하지 않고 현지 체류)
+    user.currentLoc = v.dest; 
     
-    // [버그 수정] 누적 무역 횟수 증가 로직 (확정)
+    // 2. 무역 횟수 누적 기록
     util_setData(user, 'tradeCount', (user.tradeCount || 0) + 1, "무역 횟수 누적", roomName);
 
-    // [MODIFIED] 데이터 증발 방지를 위해 모든 포인트 지급이 완료된 후 항해를 종료합니다.
-    v.active = false; 
-    v.isProcessing = false; 
-    user.skipHealing = true;
-    
-    // 국고 귀속 (세금 및 신용 차액) 처리
+    // 3. 국고 귀속 (세금 및 신용 차액) 확정 처리
     if (taxAmount > 0) util_updateReserve(economyRoomData, taxAmount, "무역세 징수", economyRoomName);
     if (creditLoss > 0) util_updateReserve(economyRoomData, creditLoss, "신용 등급 차등 수익 환수", economyRoomName);
+
+    // 4. 현재 항해 세션 공식 종료 (메모리 락 해제)
+    v.active = false; 
+    v.isProcessing = false;
+
+    // 5. [내구도 0% 시스템] 무역 지부 자동 회항 (견인 로직)
+    if (user.durability <= 0 && user.currentLoc !== "무역 지부") {
+        Api.replyRoom("내리다", "🚨 [기동 불능] 선박 내구도가 0%에 도달했습니다! 안전을 위해 모든 화물을 싣고 즉시 '무역 지부'로 자동 견인됩니다.");
+        
+        // 보유한 화물(cargo)과 특산품(specialties)을 그대로 실은 채 지부로 재출항
+        _departVoyage(user, data, replier, roomName, "무역 지부", cfg, user.cargo, user.specialties); 
+    }
 
     // [v16.7] 7. 특산품 발견 및 진귀한 유물 판정
     var specialtyFound = "";
@@ -16481,6 +16524,13 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // [유지] 2. 해상 이벤트(재해/축제) 실정산 로직 (기존 로직 보존)
     if (triggeredDisaster) {
         var ev = cfg.EVENTS.LIST[triggeredDisaster];
+
+        if (["STORM", "FIRE", "MONSTER"].indexOf(triggeredDisaster) !== -1) {
+                var extraWear = Math.floor(Math.random() * 6) + 20; // 20~25%
+                user.durability = Math.max(0, user.durability - extraWear);
+                disasterLog += "\n🛠️ [내구도 급락]: " + ev.name + "의 여파로 선체가 대파되었습니다! (-" + extraWear + "%)";
+            }
+
         if (triggeredDisaster === "FESTIVAL" && hasFavoriteSold) {
             var festAmt = Math.floor(totalNetMargin * ev.boost);
             totalNetMargin += festAmt;

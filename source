@@ -1166,10 +1166,12 @@ function safeSaveData(data, isForceBackup) {
                     var safeU = DB_DATA.rooms[rName].users[uid];
                     var isFieldHealed = false;
 
+                    // [수정] 파일(safeU)이 초기화된 상태일 경우, 메모리(u)의 데이터를 덮어씌우지 않도록 가드 추가
                     var filePoint = Number(safeU.point || 0);
                     var memoPoint = Number(u.point || 0);
                     if (filePoint < 1000 && memoPoint > 10000) continue; 
 
+                    // A. 포인트 정밀 체크 (NaN 방어 및 비정상 급감 체크)
                     var lastPoint = filePoint;
                     var cr = getCreditInfo(u.creditScore || 600, rName);
                     var maxAllowDrop = Math.max(cr.limit * 1.5, lastPoint * 0.5);
@@ -1182,6 +1184,7 @@ function safeSaveData(data, isForceBackup) {
                         isFieldHealed = true;
                     }
 
+                    // B. 은행 잔고 정밀 체크
                     var lastBank = Number(safeU.bank || 0);
                     if (isNaN(u.bank) || u.bank === null) {
                         u.bank = lastBank;
@@ -1191,6 +1194,30 @@ function safeSaveData(data, isForceBackup) {
                         isFieldHealed = true;
                     }
 
+                    // [신규] 논리적 무결성 상시 수술 (Auto-Surgical Repair)
+                    // 1. 대출금 논리 체크: 잔액은 있는데 상세 내역이 증발한 경우 자동 복구
+                    if (u.loan && Number(u.loan.debt) > 0) {
+                        if (!Array.isArray(u.loan.items) || u.loan.items.length === 0) {
+                            u.loan.items = [Number(u.loan.debt)];
+                            isFieldHealed = true;
+                            Log.warn("🩹 [Surgical] " + u.name + " 대출 내역 논리 복구");
+                        }
+                    }
+
+                    // 2. 항해 데이터 논리 체크: 활성화 상태인데 필수 정보가 누락된 경우 강제 귀항
+                    if (u.voyage && u.voyage.active === true) {
+                        if (!u.voyage.dest || !u.voyage.arrival || isNaN(u.voyage.arrival)) {
+                            u.voyage.active = false;
+                            isFieldHealed = true;
+                            Log.warn("🩹 [Surgical] " + u.name + " 비정상 항해 세션 종료");
+                        }
+                    }
+
+                    // 3. 음수 자산 강제 정규화
+                    if (Number(u.point) < 0) { u.point = 0; isFieldHealed = true; }
+                    if (Number(u.bank) < 0) { u.bank = 0; isFieldHealed = true; }
+
+                    // C. 부동산 지분 정밀 체크
                     if (safeU.landHoldings && u.landHoldings) {
                         for (var lName in safeU.landHoldings) {
                             var lastQty = Number(safeU.landHoldings[lName] || 0);
@@ -1211,15 +1238,22 @@ function safeSaveData(data, isForceBackup) {
 
                     if (isFieldHealed) {
                         isHealed = true;
-                        healReports.push(u.name + " (자산/항목 정밀 수리)");
+                        healReports.push(u.name + " (무결성 정밀 수술 완료)");
                     }
                 }
             } 
         } 
 
+        // 모든 방의 검사가 끝난 시점에 한 번만 치유 보고서 발송
         if (isHealed && healReports.length > 0) {
             try {
-                var reportMsg = "🩹 [Healer Audit]\n━━━━━━━━━━━━━━━\n" + healReports.join("\n") + "\n━━━━━━━━━━━━━━━";
+                var reportMsg = util_formatSecurityLog(
+                    "🩹 [SYSTEM: 자가 무결성 수술 보고]", 
+                    "HEALER_BOT", 
+                    "ALL_ROOMS", 
+                    "✅ 내용: 논리적 결함 및 자산 오염 자동 수정 완료\n📊 대상: " + healReports.length + "명 추출됨",
+                    "메모리 정규화 및 물리 저장 데이터 반영"
+                );
                 Api.replyRoom("베릭방", reportMsg);
             } catch(e) {}
         }

@@ -16009,6 +16009,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     
     var totalRevenue = 0; 
     var totalCost = 0; 
+    var totalSpecRev = 0;  // 엘도라도 계산용: 특산품 총 매출
+    var totalSpecCost = 0; // 엘도라도 계산용: 특산품 총 원가
     var soldLog = []; 
     var disasterLog = ""; 
     var cargoSummary = []; 
@@ -16065,6 +16067,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         // 최종 개별 매출 = 내 매입가 * 수익률% * 남은 수량
         var earn = Math.floor(myPurchasePrice * multiplier * count);
         totalRevenue += earn;
+        cargoSummary.push(good + "x" + count);
 
         if (count > 0 && multiplier > 0) {
             var sign = (multiplier >= 1.1) ? "🔺" : (multiplier <= 0.9 ? "🔹" : "➖");
@@ -16095,7 +16098,9 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             }
         }
 
-        totalCost += (sBasePrice * sCount);
+        // [v16.7] 원가 일단 합산
+        var currentItemCost = (sBasePrice * sCount);
+        totalCost += currentItemCost;
 
         if (parentGood === producedByDest) {
             sMult = 0;
@@ -16109,16 +16114,24 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             sTag = "🔹 [수요급감]";
         }
 
+       // [v16.7] 매출 계산 및 엘도라도용 변수 누적 (중요!)
         var sRev = Math.floor(sBasePrice * sCount * sMult);
-        totalRevenue += sRev;
+        
         if (sMult > 0) {
+            totalRevenue += sRev;
+            totalSpecRev += sRev;           // 엘도라도 정산 시 뺄 금액
+            totalSpecCost += currentItemCost; // 엘도라도 정산 시 뺄 원가
             soldLog.push("• [특] " + sName + " x" + sCount + ": " + fp(sRev) + "P " + sTag);
+            cargoSummary.push(sName + "x" + sCount); // 리포트 요약용 추가
         }
-        // 매입 거부된 특산품이 아닐 때만 가방에서 삭제
+
         if (parentGood !== producedByDest) {
             if (user.specialties) user.specialties[sName] = 0;
         }
     }
+
+    // [🚨 핵심] 루프가 모두 끝난 직후에 요약 문자열 생성
+    var cargoSummaryStr = cargoSummary.join(", ");
 
     // 5. [핵심] 순수익(마진) 기반 차등 정산 로직
     var baseMargin = totalRevenue - totalCost; // 순수 마진(이익금) 산출
@@ -16129,15 +16142,33 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     else if (user.shipLevel === 2) shipEfficiency = 1.9; 
     else shipEfficiency = 1.15; 
 
-    // 1단계: 선박 효율이 적용된 '기초 수익' 확정
-    var efficientMargin = Math.floor(baseMargin * shipEfficiency);
+    // 1단계: 선박 효율이 적용된 '기초 수익' 확정 (변수명을 shipEff로 통일)
+    var shipEff = (user.shipLevel === 1) ? 4.2 : (user.shipLevel === 2 ? 1.9 : 1.15); 
+    var efficientMargin = Math.floor(baseMargin * shipEff);
 
-    // 2단계: 효율이 적용된 금액을 기준으로 발전도 보너스 산출 (정확히 레벨-1 %)
-    var pInfo = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : { level: 1 };
-    var portLevelRate = Number((pInfo.level - 1) * 0.01);
-    pBonusTotal = efficientMargin > 0 ? Math.floor(efficientMargin * portLevelRate) : 0;
+    // 1-2단계: 엘도라도(잊혀진 성역) 전용 수익 증폭 및 특산품 배제
+    if (v.dest === ELDORADO_CONFIG.NAME) {
+        // [수정] 위에서 선언한 shipEff를 그대로 사용하여 '순수 일반 교역품 마진' 계산
+        var pureCargoMargin = Math.floor((totalRevenue - totalSpecRev - (totalCost - totalSpecCost)) * shipEff);
+        
+        // 엘도라도는 기초 효율 마진을 2배(PROFIT_MULT)로 증폭
+        efficientMargin = pureCargoMargin * ELDORADO_CONFIG.PROFIT_MULT;
+        
+        // 엘도라도는 자치령 보너스(pBonusTotal)를 0으로 고정
+        pBonusTotal = 0; 
+        
+        // 리포트 가독성을 위해 특산품 판매 로그 필터링
+        soldLog = soldLog.filter(function(line){ return line.indexOf("[특]") === -1; });
+        disasterLog += "\n✨ [황금의 가호]: 엘도라도의 기운으로 일반 교역 순수익이 2배로 기록되었습니다.";
+    } 
+    else {
+        // 2단계: 일반 항구일 경우 기존의 발전도 보너스 산출 로직 수행
+        var pInfo = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : { level: 1 };
+        var portLevelRate = Number((pInfo.level - 1) * 0.01);
+        pBonusTotal = efficientMargin > 0 ? Math.floor(efficientMargin * portLevelRate) : 0;
+    }
 
-    // 3단계: 최종 세전 마진 = (기초 수익 + 발전도 보너스)
+    // 3단계: 최종 세전 마진 확정
     var margin = efficientMargin + pBonusTotal;
 
     // [세금] 기부왕 혜택 적용 및 이득일 때만 세금 발생

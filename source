@@ -17774,30 +17774,24 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         resultMsg += "🔥 [해군 승리] 해적선이 나포되었습니다!\n\n" +
                      "⚓ " + pirate.name + ": 약탈 금지 " + Math.floor(piratePenaltyMs / 60000) + "분 부과\n" +
                      ((isAICombat || isAINavy) ? "" : "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득");
-    } else {
-       // 해적 승리 (해군 패배) 로직
-        if (isAICombat) {
-            // AI 상인 상대로 해적이 승리했을 때: 시뮬레이션 보상 지급
-            var ecoMult = util_getEcoMultiplier("내리다");
-            var virtualMargin = (Math.floor(Math.random() * 150000) + 50000) * ecoMult;
-            var pMin = cfg.PIRATE.pillageRateMin || 0.3;
-            var pMax = cfg.PIRATE.pillageRateMax || 0.5;
-            var pRate = pMin + (pMax - pMin) * (pShip - 1) / 9;
-            var pillageAmt = Math.floor(virtualMargin * pRate);
-            
-            pirate.claimableReward = (Number(pirate.claimableReward) || 0) + pillageAmt;
-            pirate.hasNotifiedReward = false;
-            pirate.infamy = (pirate.infamy || 0) + 10;
-            pirate.currentBounty = (Number(pirate.currentBounty) || 0) + 15000;
-            pirate.totalPillageSuccess = (pirate.totalPillageSuccess || 0) + 1;
-            pirate.pillageCooldownEndTime = Date.now() + 300000;
-            util_checkPirateTitle(pirate, null, "내리다");
-
-            resultMsg += "🏴‍☠️ [AI 상단 약탈 성공]\n해적 '" + pirate.name + "'이 유령 상단을 완벽히 제압했습니다!\n" +
-                         "💰 이번 약탈 수익: +" + fp(pillageAmt) + "P (정산 대기)\n" +
-                         "📈 적용 약탈률: " + (pRate * 100).toFixed(1) + "%";
         } else {
-            // [방어] 유저 해군이 존재할 때만 페널티 부여 (AI 해군은 페널티 생략)
+        // 해적 승리 (해군 패배) 로직 시작
+        
+        // 1. [교정] 습격 대상이 AI인지 여부 선행 판별 (유령 상단 및 고용된 AI 함대 포함)
+        var isVictimAI = (victimUid && victimUid.indexOf("AI_BOT_") === 0);
+
+        // 2. [즉시 완료 분기] AI 상단 습격 시 3분 대기 없이 바로 정산
+        if (isAICombat || isVictimAI) {
+            if (typeof _processPillageSuccess === 'function') {
+                var vName = victim ? victim.name : "유령 상단";
+                _processPillageSuccess(victimUid, { pirateUid: pirate.uid, victimName: vName }, data, roomName);
+            }
+            
+            resultMsg += "🏴‍☠️ [AI 상단 약탈 성공]\n해적 '" + pirate.name + "'이 함대를 격파하고 화물을 즉시 탈취했습니다!\n" +
+                         "💰 약탈 수익이 정산소(나소)로 즉시 입고되었습니다.";
+        } 
+        // 3. [지연 완료 분기] 실제 유저 상단 습격 시에만 기존 3분 대기열 생성
+        else {
             var retreatMs = cfg.NAVY.retreatTime || 300000;
             var fameLoss = (mode === "INTERVENE") ? 20 : 10;
             var navyName = isAINavy ? "AI 연합함대" : (navy ? navy.name : "해군 호위함");

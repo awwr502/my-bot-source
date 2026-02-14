@@ -15320,13 +15320,13 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
     var state = menuWaitState[targetUid];
     if (!state || !state.type.startsWith('trade_')) return false;
 
-    /* [수정] 하역 화물 선택 상태(trade_select_cargo) 처리 분기 추가 */
+    /* 하역 화물 선택 상태(trade_select_cargo) 처리 분기 추가 */
     if (state.type === 'trade_select_cargo') {
         _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg);
         return true;
     }
 
-    // [추가] 총독 집무실 관세 정산 핸들러 연결
+    // 총독 집무실 관세 정산 핸들러 연결
     if (state.type === 'trade_governor_office') {
         _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid);
         return true;
@@ -15336,37 +15336,49 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
 
     /* [분기 2] 목적지 선택 및 출항 준비 단계 */
     if (state.type === 'trade_depart') {
+        if (!tradeCfg) return false; 
+        
         var nations = Object.keys(tradeCfg.NATIONS);
-        var destName = "";
+        // [보안] 비교 대상 문자열에서 투명 문자 및 공백 전면 제거
+        var currentLoc = (user.currentLoc || "무역 지부").replace(/[\u200b-\u200d\ufeff]/g, "").trim();
+        var durability = Number(user.durability === undefined ? 100 : user.durability);
+        var isBroken = (durability < 20 && currentLoc !== "무역 지부");
 
-        // [v16.9.5] 선택 번호 파싱 및 목적지 확정 로직 개선 (0, 9번 수용)
+        // [핵심] UI와 동일한 가용 목적지 리스트 재구성 (인덱스 매칭용)
+        var selectable = [];
+        for (var i = 0; i < nations.length; i++) {
+            if (nations[i] === currentLoc || isBroken) continue;
+            selectable.push(nations[i]);
+        }
+
+        var destName = "";
         if (choice === "0") {
             destName = "무역 지부";
         } else if (choice === "9") {
             if (user.eldoradoUnlocked) destName = ELDORADO_CONFIG.NAME;
         } else {
             var idx = choice !== "" ? parseInt(choice) - 1 : -1;
-            if (!isNaN(idx) && idx >= 0 && idx < nations.length) {
-                destName = nations[idx];
+            // [수정] 전체 nations가 아닌, 필터링된 selectable 리스트에서 인덱스 참조
+            if (!isNaN(idx) && idx >= 0 && idx < selectable.length) {
+                destName = selectable[idx];
             }
         }
 
-        // 1~5번 외 번호가 들어와도 destName이 확정되었다면 통과시킴
+        // 유효하지 않은 번호 입력 시 동적 가이드 제공
         if (!destName) {
-            return false; 
+            var guideNums = (user.eldoradoUnlocked) ? "0, 1~5, 9" : "0, 1~5";
+            replier.reply(formatError(user, "번호 오류", guideNums + "번 사이의 출항지를 선택하세요."));
+            return true;
         }
 
         /* [v16.9] 입력 보안 및 내구도 검증 가드 */
-        var currentLoc = user.currentLoc || "무역 지부";
-        var durability = Number(user.durability === undefined ? 100 : user.durability);
-
-        // 1. 현재 있는 항구로 다시 출항하려는 행위 차단 (제자리 무역 버그 방지)
-        if (destName === currentLoc) {
+        // [보안] 비교 시 특수 문자 제거 후 재검증
+        var cleanDest = destName.replace(/[\u200b-\u200d\ufeff]/g, "").trim();
+        if (cleanDest === currentLoc) {
             replier.reply(formatError(user, "출항 불가", "현재 위치한 [" + destName + "] 항구로는 출항할 수 없습니다."));
-            return true; // 로직 종료 (명령어 처리 완료)
+            return true;
         }
 
-        // 2. 내구도 20% 미만 시 지부 외 출항 시도 원격 차단
         if (durability < 20 && destName !== "무역 지부") {
             replier.reply(formatError(user, "안전 제한", "선체가 파손되어 일반 항로 진입이 거부되었습니다.\n'무역 지부'로 복귀하여 수리하세요."));
             return true;

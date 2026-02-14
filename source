@@ -1662,6 +1662,7 @@ function util_getActivePolicy(roomData) {
  */
 function util_autoClearTimeouts(data) {
     var now = Date.now();
+    var notifiedInThisCycle = {};
     for (var rName in data.rooms) {
         var roomObj = data.rooms[rName];
         if (!roomObj || !roomObj.features || !roomObj.features.states) continue;
@@ -1678,22 +1679,24 @@ function util_autoClearTimeouts(data) {
                 
                 if (startTime > 0 && (now - startTime > 30000)) {
                     var actualOrigin = entry.originRoom || rName;
-                    var u = null;
-                    if (data.rooms["내리다"] && data.rooms["내리다"].users[uid]) {
-                        u = data.rooms["내리다"].users[uid];
-                    }
+                    if (!notifiedInThisCycle[uid]) {
+                        var u = null;
+                        if (data.rooms["내리다"] && data.rooms["내리다"].users[uid]) {
+                            u = data.rooms["내리다"].users[uid];
+                        }
 
-                    if (u) {
-                        try {
-// [수정] 세션 발생지(actualOrigin)로만 정확히 타임아웃 알림 전송
-                            Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
-                        } catch(e) { Log.error("Timeout Notify Error: " + e); }
+                        if (u) {
+                            try {
+                                Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
+                                notifiedInThisCycle[uid] = true; // 알림 기록
+                            } catch(e) { Log.error("Timeout Notify Error: " + e); }
+                        }
                     }
                     
                     // [중요] 동기화된 모든 방의 세션을 즉시 파기
                     if (data.rooms["내리다"].features.states[qKey]) delete data.rooms["내리다"].features.states[qKey][uid];
                     if (data.rooms[actualOrigin] && data.rooms[actualOrigin].features.states[qKey]) delete data.rooms[actualOrigin].features.states[qKey][uid];
-                    delete q[uid]; 
+                    if (rName !== "내리다" && rName !== actualOrigin) delete q[uid];
                 }
             }
         });

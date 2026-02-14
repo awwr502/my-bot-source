@@ -8456,11 +8456,7 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     // [분기] 항해 현황 및 긴급회항 처리
     else if (state.type === 'trade_status') {
         if (msg.indexOf("긴급회항") !== -1) {
-            // [중요] 세션을 먼저 파기하여 중복 실행 및 타임아웃 메시지 발생을 차단
-            if (data.rooms[roomName].features.states.menuWait[targetUid]) delete data.rooms[roomName].features.states.menuWait[targetUid];
-            if (data.rooms["내리다"].features.states.menuWait[targetUid]) delete data.rooms["내리다"].features.states.menuWait[targetUid];
-            
-            // 무역 로직으로 명령 전달
+            // 세션 삭제를 여기서 하지 않고, 로직 함수로 제어권을 넘깁니다.
             return _gameTradeLogic("긴급회항", user, data, replier, roomName, targetUid);
         }
         // 그 외 입력 시 현황판 리프레시 및 세션 유지
@@ -15440,6 +15436,60 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
     var state = menuWaitState[targetUid];
     if (!state || !state.type.startsWith('trade_')) return false;
 
+    // [v17.5] 긴급회항 세션 한정 실행 로직
+    if (msg.indexOf("긴급회항") !== -1) {
+        // 사용자가 요청한 대로 '출항준비(trade_depart)' 또는 '항해현황(trade_status)' 세션일 때만 작동
+        if (state.type === 'trade_depart' || state.type === 'trade_status') {
+            if (!user.voyage || user.voyage.active !== true) {
+                replier.reply(formatError(user, "명령 무효", "현재 항해 중인 선박이 없습니다."));
+                delete menuWaitState[targetUid]; // 무의미한 세션 종료
+                return true;
+            }
+
+            var v = user.voyage;
+            var tCost = 0;
+            // 1. 적재 화물의 원가 계산 (세션 스냅샷 기준)
+            for (var g in (v.cargoSnapshot || {})) {
+                var uCost = Number((user.cargoAvg && user.cargoAvg[g]) || tradeCfg.GOODS_COST[g] || 10000);
+                tCost += (uCost * Number(v.cargoSnapshot[g]));
+            }
+            for (var s in (v.specialtySnapshot || {})) {
+                var pG = "";
+                for (var rel in TRADE_RELATION) { if (TRADE_RELATION[rel].set === s) { pG = TRADE_RELATION[rel].produce; break; } }
+                var sBase = tradeCfg.SPECIALTY_COST[pG] || 10000;
+                tCost += (sBase * Number(v.specialtySnapshot[s]));
+            }
+
+            // 2. 수수료 및 포인트 정산
+            var returnFee = Math.max(10000, Math.floor(tCost * 0.01));
+            if (Number(user.point) < returnFee) {
+                replier.reply(formatError(user, "자금 부족", "긴급회항 수수료 " + fp(returnFee) + "P가 부족합니다."));
+                return true;
+            }
+
+            user.skipHealing = true;
+            util_updatePoint(user, data.rooms["내리다"], -returnFee, "긴급회항 수수료 지불", roomName);
+            user.currentLoc = v.origin || "무역 지부";
+            v.active = false;
+
+            // 3. UI 출력 및 세션 파기
+            var resBody = "🚨 [긴급 상황 발생: 즉시 회항]\n━━━━━━━━━━━━━━━\n" +
+                          "선단의 안전을 위해 모든 항로를 취소하고\n" +
+                          "출발 항구인 [" + user.currentLoc + "](으)로 복귀했습니다.\n\n" +
+                          "💰 지불 수수료: -" + fp(returnFee) + "P\n" +
+                          "📦 상태: 모든 화물 안전하게 보존됨";
+
+            replier.reply(formatCommand("⚓ 긴급 회항 완료", user, resBody, "내 잔액: " + fp(user.point) + "P"));
+            
+            // 모든 연동된 방의 세션 청소
+            delete menuWaitState[targetUid];
+            if (data.rooms["내리다"].features.states.menuWait[targetUid]) delete data.rooms["내리다"].features.states.menuWait[targetUid];
+            
+            safeSaveData(data, true);
+            return true;
+        }
+    }
+
     /* 하역 화물 선택 상태(trade_select_cargo) 처리 분기 추가 */
     if (state.type === 'trade_select_cargo') {
         _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg);
@@ -15496,61 +15546,6 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         }
         return true;
     }
-
-    // 긴급회항 키워드 감지 및 처리
-    if (cleanMsg.indexOf("긴급회항") !== -1) {
-        if (!user.voyage || user.voyage.active !== true) {
-            replier.reply(formatError(user, "명령 무효", "현재 항해 중인 선박이 없습니다."));
-            return true;
-        }
-
-        var v = user.voyage;
-        var tCost = 0;
-        // 1. 적재 화물의 원가 합계 계산
-        for (var g in (v.cargoSnapshot || {})) {
-            var uCost = Number((user.cargoAvg && user.cargoAvg[g]) || tradeCfg.GOODS_COST[g] || 10000);
-            tCost += (uCost * Number(v.cargoSnapshot[g]));
-        }
-        for (var s in (v.specialtySnapshot || {})) {
-            var pG = "";
-            for (var rel in TRADE_RELATION) { if (TRADE_RELATION[rel].set === s) { pG = TRADE_RELATION[rel].produce; break; } }
-            var sBase = tradeCfg.SPECIALTY_COST[pG] || 10000;
-            tCost += (sBase * Number(v.specialtySnapshot[s]));
-        }
-
-        // 2. 수수료 산출 (원가 1% vs 최소 10,000P)
-        var returnFee = Math.max(10000, Math.floor(tCost * 0.01));
-
-        if (Number(user.point) < returnFee) {
-            replier.reply(formatError(user, "자금 부족", "긴급회항 수수료 " + fp(returnFee) + "P가 부족합니다."));
-            return true;
-        }
-
-        // 3. 회항 집행: 포인트 차감 및 위치 리셋
-        user.skipHealing = true;
-        util_updatePoint(user, data.rooms["내리다"], -returnFee, "긴급회항 수수료 지불", roomName);
-        
-        user.currentLoc = v.origin || "무역 지부"; // 출발지로 위치 복구
-        v.active = false; // 항해 세션 종료
-
-        // 해적 습격 중이었다면 세션도 함께 파기
-        var mainRoom = data.rooms["내리다"];
-        if (mainRoom.features.activePillages && mainRoom.features.activePillages[targetUid]) {
-            delete mainRoom.features.activePillages[targetUid];
-        }
-
-        var resBody = "🚨 [긴급 상황 발생: 즉시 회항]\n━━━━━━━━━━━━━━━\n" +
-                      "선단의 안전을 위해 모든 항로를 취소하고\n" +
-                      "출발 항구인 [" + user.currentLoc + "](으)로 복귀했습니다.\n\n" +
-                      "💰 지불 수수료: -" + fp(returnFee) + "P\n" +
-                      "📦 상태: 모든 화물 안전하게 보존됨";
-
-        replier.reply(formatCommand("⚓ 긴급 회항 완료", user, resBody, "내 잔액: " + fp(user.point) + "P"));
-        delete menuWaitState[targetUid];
-        safeSaveData(data, true);
-        return true;
-    }
-
     return false;
 }
 

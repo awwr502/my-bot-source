@@ -1614,7 +1614,8 @@ var CMD_LIST = {
         { cmd: "/데이터전수조사", desc: "[닉네임] 명부 무시 DB 전체 스캔", func: "_adminUserManageLogic" },
         { cmd: "/명부강제등록", desc: "[닉네임] [UID] 수동 바인딩", func: "_adminUserManageLogic" },
         { cmd: "/전체직업초기화", desc: "모든 유저의 직업 및 악명/명성 데이터 초기화", func: "_adminUserManageLogic" },
-        { cmd: "/화물복구", desc: "[닉네임] [품목] [수량] 화물 수동 복구", func: "_adminUserManageLogic" }
+        { cmd: "/화물복구", desc: "[닉네임] [품목] [수량] 화물 수동 복구", func: "_adminUserManageLogic" },
+        { cmd: "/무역즉시완료", desc: "[닉네임] 항해 시간 즉시 종료 및 도착 처리", func: "_adminUserManageLogic" }
     ]
 };
 
@@ -6844,6 +6845,17 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
         replier.reply(formatAdmin("📦 화물 강제 복구 완료", "대상: [" + targetRoom + "] " + targetUser.name + "\n품목: " + (isSpec ? "[특] " : "") + itemName + "\n수량: " + count + "개 추가 완료"));
     }
 
+         else if (type === "admin_trade_speedup") {
+        if (!targetUser.voyage || targetUser.voyage.active !== true) {
+            replier.reply(formatAdmin("❌ 명령 무효", targetUser.name + "님은 현재 항해 중이 아닙니다."));
+        } else {
+            targetUser.voyage.arrival = Date.now() - 1000;
+            targetUser.skipHealing = true;
+            replier.reply(formatAdmin("⚓ 항해 가속 완료", "[" + targetRoom + "] " + targetUser.name + "님의 선박이 목적지에 즉시 도착했습니다."));
+            safeSaveData(data, true);
+        }
+    }
+
         safeSaveData(data);
         return true; 
     } // if (!isNaN(choice)...) 블록 마감
@@ -11624,7 +11636,32 @@ if (msg.startsWith("/화물복구")) {
         return true;
     }
 
-// [신규] 전 서버 직업 초기화 (직업 미활동 유저 정리용)
+/* 무역 시간 강제 가속 명령어 */
+    if (msg.indexOf("/무역즉시완료 ") === 0) {
+        var tn = msg.substring(8).trim();
+        var found = findUserGlobal(tn, roomName);
+
+        if (found.length === 0) return replier.reply(formatAdmin("🚫 대상 없음", "[" + tn + "] 유저를 찾을 수 없습니다."));
+        if (found.length > 1) {
+            handleUserSelection(replier, targetUid, found, "admin_trade_speedup", null, user, roomName);
+            return true;
+        }
+
+        var tUser = found[0].data;
+        if (!tUser.voyage || tUser.voyage.active !== true) {
+            return replier.reply(formatAdmin("❌ 명령 무효", tUser.name + "님은 현재 항해 중이 아닙니다."));
+        }
+
+        // 도착 시간을 현재 시간보다 1초 전으로 설정하여 즉시 도착 판정 유도
+        tUser.voyage.arrival = Date.now() - 1000;
+        tUser.skipHealing = true;
+
+        safeSaveData(data, true);
+        replier.reply(formatAdmin("⚓ 항해 가속 완료", tUser.name + "님의 선박이 목적지에 즉시 도착했습니다.\n\n💡 해당 유저가 채팅을 입력하면 즉시 정산됩니다."));
+        return true;
+    }
+
+// 전 서버 직업 초기화 (직업 미활동 유저 정리용)
     if (msg === "/전체직업초기화") {
         var count = 0;
         for (var r in data.rooms) {

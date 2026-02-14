@@ -15411,6 +15411,61 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         }
         return true;
     }
+
+    // 긴급회항 키워드 감지 및 처리
+    if (cleanMsg.indexOf("긴급회항") !== -1) {
+        if (!user.voyage || user.voyage.active !== true) {
+            replier.reply(formatError(user, "명령 무효", "현재 항해 중인 선박이 없습니다."));
+            return true;
+        }
+
+        var v = user.voyage;
+        var tCost = 0;
+        // 1. 적재 화물의 원가 합계 계산
+        for (var g in (v.cargoSnapshot || {})) {
+            var uCost = Number((user.cargoAvg && user.cargoAvg[g]) || tradeCfg.GOODS_COST[g] || 10000);
+            tCost += (uCost * Number(v.cargoSnapshot[g]));
+        }
+        for (var s in (v.specialtySnapshot || {})) {
+            var pG = "";
+            for (var rel in TRADE_RELATION) { if (TRADE_RELATION[rel].set === s) { pG = TRADE_RELATION[rel].produce; break; } }
+            var sBase = tradeCfg.SPECIALTY_COST[pG] || 10000;
+            tCost += (sBase * Number(v.specialtySnapshot[s]));
+        }
+
+        // 2. 수수료 산출 (원가 1% vs 최소 10,000P)
+        var returnFee = Math.max(10000, Math.floor(tCost * 0.01));
+
+        if (Number(user.point) < returnFee) {
+            replier.reply(formatError(user, "자금 부족", "긴급회항 수수료 " + fp(returnFee) + "P가 부족합니다."));
+            return true;
+        }
+
+        // 3. 회항 집행: 포인트 차감 및 위치 리셋
+        user.skipHealing = true;
+        util_updatePoint(user, data.rooms["내리다"], -returnFee, "긴급회항 수수료 지불", roomName);
+        
+        user.currentLoc = v.origin || "무역 지부"; // 출발지로 위치 복구
+        v.active = false; // 항해 세션 종료
+
+        // 해적 습격 중이었다면 세션도 함께 파기
+        var mainRoom = data.rooms["내리다"];
+        if (mainRoom.features.activePillages && mainRoom.features.activePillages[targetUid]) {
+            delete mainRoom.features.activePillages[targetUid];
+        }
+
+        var resBody = "🚨 [긴급 상황 발생: 즉시 회항]\n━━━━━━━━━━━━━━━\n" +
+                      "선단의 안전을 위해 모든 항로를 취소하고\n" +
+                      "출발 항구인 [" + user.currentLoc + "](으)로 복귀했습니다.\n\n" +
+                      "💰 지불 수수료: -" + fp(returnFee) + "P\n" +
+                      "📦 상태: 모든 화물 안전하게 보존됨";
+
+        replier.reply(formatCommand("⚓ 긴급 회항 완료", user, resBody, "내 잔액: " + fp(user.point) + "P"));
+        delete menuWaitState[targetUid];
+        safeSaveData(data, true);
+        return true;
+    }
+
     return false;
 }
 
@@ -16108,6 +16163,7 @@ function _showVoyageStatus(user, replier, data, roomName) {
                       "💵 예상 순이익: " + fp(estimatedNetProfit) + "P" + enhProfitTag + "\n" +
                       "🕒 남은 시간: " + (remain > 0 ? Math.ceil(remain/60000) + "분" : "도착 완료");
 
+    var nextGuide = "도착 후 정산 / 👉 회항: [긴급회항]";
     replier.reply(formatCommand("📦 항해 현황", user, displayBody, "도착 후 채팅 입력 시 정산됩니다."));
 }
 

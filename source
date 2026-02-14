@@ -6262,6 +6262,19 @@ if (user) {
 /* [수정] 인자 리스트에 imageDB, sender를 추가하여 내부 로직 오류를 해결합니다. */
 function _processMainLogic(msg, user, data, replier, roomName, targetUid, cleanSender, isGroupChat, realRoom, imageDB, sender, roomData) {
 
+   // [v16.9.8] 가방 오염 데이터 자동 정화 엔진
+    if (user.specialties) {
+        if (user.specialties["undefined"] !== undefined) {
+            delete user.specialties["undefined"];
+            Log.info("🧹 [CleanUp] " + user.name + "님의 가방에서 오염된 특산품(undefined)을 제거했습니다.");
+        }
+    }
+    
+    // 일반 화물에도 undefined가 전이된 경우 대비
+    if (user.cargo && user.cargo["undefined"] !== undefined) {
+        delete user.cargo["undefined"];
+    }
+
    // [1] 1:1방 데이터 동기화 (최우선 순위: 게이트 통과를 위해 필수)
     if (ALLOWED_ROOMS.indexOf(realRoom) === -1 || realRoom === "베릭방") {
         var mainRoomData = data.rooms["내리다"];
@@ -16684,17 +16697,25 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // [v16.7] 7. 특산품 발견 및 진귀한 유물 판정
     var specialtyFound = "";
     if (!isHomeReturn && Math.random() < cfg.SPECIALTY_CHANCE) {
-        if (v.dest === ELDORADO_CONFIG.NAME) {
+        if (isEldorado) { 
             user.rareSpecialties = (user.rareSpecialties || 0) + 1;
             specialtyFound = "\n\n💎 [전설의 유물]: '아스테리아 황금 성배' 1개 획득!";
         } else {
-            // [교정] nationInfo 안전 참조 보강 (undefined 방지)
-            var nationInfo = (v.marketSnapshot && v.marketSnapshot[v.dest]) ? v.marketSnapshot[v.dest] : { specialty: "생필품" };
-            var newItem = nationInfo.specialty;
-            var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { governorUid: "" };
+            // v.dest가 스냅샷에 없을 경우를 대비해 기본값 "생필품" 강제 부여
+            var nSnap = (v.marketSnapshot && v.marketSnapshot[v.dest]) ? v.marketSnapshot[v.dest] : null;
+            var newItem = (nSnap && nSnap.specialty) ? nSnap.specialty : "생필품";
+            
+            var pInfo = (roomData.features && roomData.features.portData && roomData.features.portData[v.dest]) 
+                        ? roomData.features.portData[v.dest] : { level: 1, governorUid: "" };
+            
             var isGov = (pInfo.governorUid === targetUid);
             var amount = isGov ? (Math.floor(Math.random() * (Number(cfg.INVEST.GOV_SPEC_MAX) - Number(cfg.INVEST.GOV_SPEC_MIN) + 1)) + Number(cfg.INVEST.GOV_SPEC_MIN)) : 1;
-            user.specialties[newItem] = (user.specialties[newItem] || 0) + amount;
+            
+            if (!user.specialties) user.specialties = {};
+            // newItem이 혹시라도 누락되었을 경우를 대비한 최종 방어
+            if (newItem === "undefined" || !newItem) newItem = "생필품";
+            
+            user.specialties[newItem] = (Number(user.specialties[newItem]) || 0) + amount;
             specialtyFound = "\n\n✨ 특산품 '" + newItem + "' " + (isGov ? "x" + amount + " " : "") + "발견!";
         }
     }

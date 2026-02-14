@@ -8879,36 +8879,52 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         return true;
     }
 
+    // [v17.4.2] 목적지 선택 및 인덱스 매칭 버그 수정
     else if (state.type === 'trade_depart') {
         if (!tradeCfg) return false; 
         
         var nations = Object.keys(tradeCfg.NATIONS);
-        var destName = "";
+        var currentLoc = (user.currentLoc || "무역 지부").replace(/[\u200b-\u200d\ufeff]/g, "").trim();
+        var durability = Number(user.durability === undefined ? 100 : user.durability);
+        var isBroken = (durability < 20 && currentLoc !== "무역 지부");
 
-        // [핵심] 입력 번호에 따른 목적지 매핑 로직 개선
+        // [핵심] UI와 동일하게 현재 항구를 제외한 '진짜 선택지' 리스트 생성
+        var selectable = [];
+        for (var i = 0; i < nations.length; i++) {
+            var nName = nations[i].replace(/[\u200b-\u200d\ufeff]/g, "").trim();
+            if (nName === currentLoc || isBroken) continue;
+            selectable.push(nations[i]);
+        }
+
+        var destName = "";
+        // 1. 무역 지부(0번) 특수 처리 (즉시 출항 기능 유지)
         if (choice === "0") {
             destName = "무역 지부";
-        } else if (choice === "9") {
+        } 
+        // 2. 엘도라도(9번) 처리
+        else if (choice === "9") {
             if (!user.eldoradoUnlocked) {
                 replier.reply(formatError(user, "진입 불가", "고대 지도를 모아 엘도라도를 먼저 해금해야 합니다."));
                 return true;
             }
             destName = ELDORADO_CONFIG.NAME;
-        } else {
+        } 
+        // 3. 일반 항구(1~5번) 처리: 가용 리스트(selectable)에서 인덱스 참조
+        else {
             var idx = choice !== "" ? parseInt(choice) - 1 : -1;
-            if (!isNaN(idx) && idx >= 0 && idx < nations.length) {
-                destName = nations[idx];
+            if (!isNaN(idx) && idx >= 0 && idx < selectable.length) {
+                destName = selectable[idx];
             }
         }
 
-       // 유효하지 않은 번호 입력 시 동적 가이드 제공
+        // 유효하지 않은 번호 입력 시 차단 (현재 항구 번호 강제 입력 포함)
         if (!destName) {
             var guideNums = (user.eldoradoUnlocked) ? "0, 1~5, 9" : "0, 1~5";
-            replier.reply(formatError(user, "번호 오류", guideNums + "번 사이의 출항지를 선택하세요."));
+            replier.reply(formatError(user, "번호 오류", "목록에 표시된 번호를 선택하세요.\n현재 위치한 [" + currentLoc + "]은(는) 선택할 수 없습니다."));
             return true;
         }
 
-        /* [v17.0] 무역 지부(0번) 선택 시 즉시 출항 프로세스 적용 */
+        /* [v17.4.2] 무역 지부(0번) 선택 시 즉시 출항 프로세스 */
         if (destName === "무역 지부") {
             var returnMsg = "🏠 모든 화물을 보존한 채 즉시 회항합니다.";
             _departVoyage(user, data, replier, roomName, destName, tradeCfg, {}, {}, null, 0, returnMsg);
@@ -8916,16 +8932,15 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
             return true;
         }
 
-        /* [v16.9] 일반 항구 및 엘도라도는 기존 하역 설정 단계 유지 */
+        // 일반 항구 선택 시 하역 설정 단계로 진입
         state.type = 'trade_select_cargo';
         state.dest = destName;
         state.selCargo = {};
         state.selSpec = {};
         state.time = Date.now();
-
-        _showTradeCargoSelectUI(user, replier, roomData, tradeCfg, destName, state.selCargo, state.selSpec);
+        _showTradeCargoSelectUI(user, replier, roomData, tradeCfg, destName, {}, {});
         return true;
-       }
+    }
 
         else if (state.type === 'trade_ship') {
 
@@ -15333,68 +15348,6 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
     }
 
     var choice = msg.replace(/[^0-9]/g, "").trim();
-
-    /* [분기 2] 목적지 선택 및 출항 준비 단계 */
-    if (state.type === 'trade_depart') {
-        if (!tradeCfg) return false; 
-        
-        var nations = Object.keys(tradeCfg.NATIONS);
-        // [보안] 비교 대상 문자열에서 투명 문자 및 공백 전면 제거
-        var currentLoc = (user.currentLoc || "무역 지부").replace(/[\u200b-\u200d\ufeff]/g, "").trim();
-        var durability = Number(user.durability === undefined ? 100 : user.durability);
-        var isBroken = (durability < 20 && currentLoc !== "무역 지부");
-
-        // [핵심] UI와 동일한 가용 목적지 리스트 재구성 (인덱스 매칭용)
-        var selectable = [];
-        for (var i = 0; i < nations.length; i++) {
-            if (nations[i] === currentLoc || isBroken) continue;
-            selectable.push(nations[i]);
-        }
-
-        var destName = "";
-        if (choice === "0") {
-            destName = "무역 지부";
-        } else if (choice === "9") {
-            if (user.eldoradoUnlocked) destName = ELDORADO_CONFIG.NAME;
-        } else {
-            var idx = choice !== "" ? parseInt(choice) - 1 : -1;
-            // [수정] 전체 nations가 아닌, 필터링된 selectable 리스트에서 인덱스 참조
-            if (!isNaN(idx) && idx >= 0 && idx < selectable.length) {
-                destName = selectable[idx];
-            }
-        }
-
-        // 유효하지 않은 번호 입력 시 동적 가이드 제공
-        if (!destName) {
-            var guideNums = (user.eldoradoUnlocked) ? "0, 1~5, 9" : "0, 1~5";
-            replier.reply(formatError(user, "번호 오류", guideNums + "번 사이의 출항지를 선택하세요."));
-            return true;
-        }
-
-        /* [v16.9] 입력 보안 및 내구도 검증 가드 */
-        // [보안] 비교 시 특수 문자 제거 후 재검증
-        var cleanDest = destName.replace(/[\u200b-\u200d\ufeff]/g, "").trim();
-        if (cleanDest === currentLoc) {
-            replier.reply(formatError(user, "출항 불가", "현재 위치한 [" + destName + "] 항구로는 출항할 수 없습니다."));
-            return true;
-        }
-
-        if (durability < 20 && destName !== "무역 지부") {
-            replier.reply(formatError(user, "안전 제한", "선체가 파손되어 일반 항로 진입이 거부되었습니다.\n'무역 지부'로 복귀하여 수리하세요."));
-            return true;
-        }
-
-        // [개편] 검증 통과 시 하역 설정 단계로 이동 및 세션 갱신
-        state.type = 'trade_select_cargo';
-        state.dest = destName;
-        state.selCargo = {};
-        state.selSpec = {};
-        state.time = Date.now(); // 타임스탬프 갱신 (동기화 보장)
-        
-        // 하역 설정 UI 호출
-        _showTradeCargoSelectUI(user, replier, roomData, tradeCfg, destName, {}, {});
-        return true;
-    }
     
     /* [분기 3] 선박 관리 처리 (개조 및 수리 통합) */
     if (state.type === 'trade_ship') {

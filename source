@@ -8932,14 +8932,43 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         if (choice === "0") {
             destName = "무역 지부";
         } 
-        // 2. 엘도라도(9번) 처리
+
+        // 2. 엘도라도(9번) 처리: 해금 여부 및 6시간 쿨타임 검증 강화
         else if (choice === "9") {
-            if (!user.eldoradoUnlocked) {
-                replier.reply(formatError(user, "진입 불가", "고대 지도를 모아 엘도라도를 먼저 해금해야 합니다."));
+            // [검증 A] 현재 위치 중복 체크 (무한 체류 방지)
+            if (user.currentLoc === ELDORADO_CONFIG.NAME) {
+                replier.reply(formatError(user, "진입 불가", "이미 엘도라도 성역에 정박해 있습니다.\n다른 항구로 출항하여 교역을 마친 후 재입항하세요."));
+                return true; 
+            }
+            // [검증 B] 해금 여부 체크
+            if (user.eldoradoUnlocked !== true) {
+                replier.reply(formatError(user, "진입 불가", "고대 지도를 모아 엘도라도를 먼저 영구 해금해야 합니다."));
+                return true; 
+            }
+            // [검증 C] 6시간 재입항 쿨타임 체크
+            var lastHidden = Number(user.lastHiddenVoyage || 0);
+            var remainMs = ELDORADO_CONFIG.COOLDOWN - (Date.now() - lastHidden);
+            if (remainMs > 0) {
+                var remainH = Math.floor(remainMs / 3600000);
+                var remainM = Math.ceil((remainMs % 3600000) / 60000);
+                replier.reply(formatError(user, "성역 폐쇄", "성역의 안개가 아직 걷히지 않았습니다.\n(재입항 대기: " + remainH + "시간 " + remainM + "분)"));
                 return true;
             }
+            // 모든 검증 통과 시 목적지 확정
             destName = ELDORADO_CONFIG.NAME;
         } 
+        
+        // [공통 하단] 모든 가드를 통과한 유저만 화물 선택 창으로 이동
+        if (destName) {
+            state.type = 'trade_select_cargo';
+            state.dest = destName;
+            state.selCargo = {};
+            state.selSpec = {};
+            state.time = Date.now();
+            _showTradeCargoSelectUI(user, replier, roomData, tradeCfg, destName, {}, {});
+            return true;
+        }
+
         // 3. 일반 항구(1~5번) 처리: 가용 리스트(selectable)에서 인덱스 참조
         else {
             var idx = choice !== "" ? parseInt(choice) - 1 : -1;
@@ -15776,56 +15805,24 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
         return;
     }
 
-    // [B] 엘도라도 출항 승인 (9번)
-    if (input === "9") {
-        if (user.currentLoc === ELDORADO_CONFIG.NAME) {
-            replier.reply(formatError(user, "출항 불가", "이미 엘도라도 성역에 정박해 있습니다."));
-            return;
-        }
-        
-        var lastHidden = Number(user.lastHiddenVoyage || 0);
-        var remainMs = ELDORADO_CONFIG.COOLDOWN - (Date.now() - lastHidden);
-        
-        if (remainMs > 0) {
-            var remainH = Math.floor(remainMs / 3600000);
-            var remainM = Math.ceil((remainMs % 3600000) / 60000);
-            replier.reply(formatError(user, "항로 폐쇄", "아직 안개가 걷히지 않습니다.\n(재진입 대기: " + remainH + "시간 " + remainM + "분)"));
-            return;
-        }
-
-        // 미선언 변수 durability 참조 오류 해결을 위해 user 객체에서 안전하게 파싱
-        var checkDurability = Number(user.durability === undefined ? 100 : user.durability);
-
-        // 내구도 가드 추가: 20% 미만이면 엘도라도 출항 원천 차단
-        if (checkDurability < 20) {
-            replier.reply(formatError(user, "진입 불가", "선체 내구도가 낮아 전설의 항로를 버틸 수 없습니다!\n'무역 지부'로 복귀하여 수리부터 하십시오."));
-            return;
-        }
-
-        var currentMaps = Number(user.ancientMaps || 0);
-        if (currentMaps < ELDORADO_CONFIG.MAP_UNLOCK_COUNT) return; 
-        
-        var lastHidden = Number(user.lastHiddenVoyage || 0);
-        if (Date.now() - lastHidden < ELDORADO_CONFIG.COOLDOWN) {
-            replier.reply(formatError(user, "항로 폐쇄", "안개가 걷히지 않아 입항이 불가능합니다."));
-            return;
-        }
-
-        user.ancientMaps -= ELDORADO_CONFIG.MAP_UNLOCK_COUNT;
-        user.lastHiddenVoyage = Date.now();
-        state.dest = ELDORADO_CONFIG.NAME;
-        
-        _departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec);
-        delete roomData.features.states.menuWait[targetUid];
-        return;
-    }
-
     if (input === "출항") {
 
         // 1. 출항 시 부도 가드 추가
         if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
             replier.reply(formatError(user, "출항 불가능", "현재 국가 부도 상태이므로 모든 무역선박의 출항이 전면 금지되었습니다.\n\n⚠️ 사유: 국고 재원 부족으로 인한 항만 봉쇄"));
             return;
+        }
+
+        // 2. 엘도라도 최종 쿨타임 가드 (어뷰징 및 세션 조작 방지)
+        if (state.dest === ELDORADO_CONFIG.NAME) {
+            var lastHidden = Number(user.lastHiddenVoyage || 0);
+            var remainMs = ELDORADO_CONFIG.COOLDOWN - (Date.now() - lastHidden);
+            if (remainMs > 0) {
+                var remainH = Math.floor(remainMs / 3600000);
+                var remainM = Math.ceil((remainMs % 3600000) / 60000);
+                replier.reply(formatError(user, "입항 거절", "항해 직전 성역의 안개가 다시 짙어졌습니다.\n(대기: " + remainH + "시간 " + remainM + "분)"));
+                return;
+            }
         }
      
         var hasCargo = Object.keys(state.selCargo).length > 0 || Object.keys(state.selSpec).length > 0;

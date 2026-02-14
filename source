@@ -18,6 +18,17 @@ var SHIP_ENHANCE_CONFIG = {
     COST:   100000                // 강화 1회 비용
 };
 
+// === [v17.3] 난파선 인양 시스템 설정 추가 ===
+var SCAVENGE_CONFIG = {
+    RECOVERY_RATE: { min: 1.0, max: 1.0 }, // 손실분 중 100%를 난파선으로 박제
+    FIND_PROB: 0.5,                        // 동일 항로 항해 시 발견 확률 (50%)
+    ARTIFACT_PROB: 0.05                   // 인양 시 유물 조각 추가 발견 확률 (5%)
+};
+
+if (typeof globalData.shipwrecks === 'undefined') {
+    globalData.shipwrecks = {}; // { "포르투-코콜라": [{type:"ITEM", name:"식료품", qty:5, victim:"닉네임"}, ...], ... }
+}
+
 /**
  * [v16.0] 하이브리드 지능형 소각 엔진 (CPU-Safe Deep Scrub)
  * 업그레이드: 고위험 경로 우선 소탕 후, 재귀 깊이를 4단계로 제한한 '스마트 스캔'을 수행합니다.
@@ -15932,6 +15943,7 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     user.voyage = {
         active: true, 
         dest: dest, 
+        origin: user.currentLoc || "무역 지부",
         arrival: arrival, 
         startTime: Date.now(),
         marketSnapshot: JSON.parse(JSON.stringify(roomData.features.tradeMarket || cfg.NATIONS)), 
@@ -16249,6 +16261,45 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var isHomeReturn = (v.dest === "무역 지부");
     var isEldorado = (v.dest === ELDORADO_CONFIG.NAME);
 
+    // === [v17.3] 50% 확률: 단일 유저 유실물 100% 인양 프로세스 ===
+    var routeKey = (v.origin || "무역 지부") + "-" + v.dest;
+    if (!isHomeReturn && data.shipwrecks[routeKey] && data.shipwrecks[routeKey].length > 0) {
+        if (Math.random() < SCAVENGE_CONFIG.FIND_PROB) {
+            // 해당 항로에 쌓여있는 유실물 중 가장 오래된 '한 명의 기록'을 통째로 추출
+            var wreck = data.shipwrecks[routeKey].shift(); 
+            var rewardMsg = "";
+            
+            if (wreck.type === "POINT") {
+                // 박제된 포인트 100% 지급
+                util_updatePoint(user, data.rooms["내리다"], wreck.amt, "난파선 유실금액 인양", "내리다");
+                rewardMsg = "💰 유실금액 인양: +" + fp(wreck.amt) + "P";
+            } else {
+                // 박제된 아이템 수량 100% 지급
+                var isSpec = false;
+                for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === wreck.name) { isSpec = true; break; } }
+                if (isSpec) {
+                    user.specialties[wreck.name] = (Number(user.specialties[wreck.name]) || 0) + wreck.amt;
+                } else {
+                    user.cargo[wreck.name] = (Number(user.cargo[wreck.name]) || 0) + wreck.amt;
+                }
+                rewardMsg = "📦 유실물 인양: [" + wreck.name + "] " + wreck.amt + "상자";
+            }
+
+            var scavengeBody = "🌊 [심해 탐사: 난파선 인양 성공]\n" +
+                               "━━━━━━━━━━━━━━━\n" +
+                               "항로를 수색하던 중 과거 침몰한\n" +
+                               "'" + wreck.victim + "'님의 잔해를 발견했습니다!\n\n" + 
+                               rewardMsg;
+            
+            if (Math.random() < SCAVENGE_CONFIG.ARTIFACT_PROB) {
+                user.artifactPieces = (user.artifactPieces || 0) + 1;
+                scavengeBody += "\n🧩 [희귀] 파손된 선실에서 '유물 조각' 1개 추가 확보!";
+            }
+            Api.replyRoom(roomName, formatCommand("⚓ 유실물 센터 보고", user, scavengeBody + "\n\n바다는 모든 흔적을 기억하고 있습니다."));
+            safeSaveData(data, true);
+        }
+    }
+
     util_fastClean(user);
     if (v) util_fastClean(v);
 
@@ -16402,8 +16453,15 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
         // 재해 처리 (수량/가치 차감)
         if (triggeredDisaster === "FIRE" && (good === "식료품" || good === "공예품")) {
-            var lost = Math.ceil(count * 0.1); count -= lost;
-            disasterLog += "\n🔥 [재해: 화재]: " + good + " " + lost + "상자 소실";
+            var lost = Math.ceil(count * 0.1); 
+            count -= lost;
+            disasterLog += "\n🔥 [재해: 화재]: " + good + " " + lost + "상자 전소";
+            
+            // [v17.3] 화재로 인한 물건 소실 기록
+            var wreckQty = lost; // 랜덤 제거, 100% 대입
+            var rKey = (v.origin || "무역 지부") + "-" + v.dest;
+            if (!data.shipwrecks[rKey]) data.shipwrecks[rKey] = [];
+            data.shipwrecks[rKey].push({ type: "ITEM", name: good, amt: wreckQty, victim: user.name });
         } else if (triggeredDisaster === "CORRO" && (good === "공업품" || good === "귀금속")) {
             multiplier *= 0.9;
             disasterLog += "\n🧪 [재해: 부식]: 화물 가치 10% 하락";
@@ -16663,6 +16721,19 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         disasterLog += "\n🌊 [폭풍우]: 선체 파손 수리비 " + fp(repairFee) + "P 지출";
     }
 
+    // [v17.3] 난파선(포인트형) 생성 로직: 재해/약탈 손실액 박제
+    if (repairFee > 0 || (typeof pillageLoss !== 'undefined' && pillageLoss > 0) || (triggeredDisaster === "MONSTER" && (typeof loss !== 'undefined' && loss > 0))) {
+        var totalPointLoss = repairFee + (typeof pillageLoss !== 'undefined' ? pillageLoss : 0) + (triggeredDisaster === "MONSTER" ? (typeof loss !== 'undefined' ? loss : 0) : 0);
+        var wreckAmt = Math.floor(totalPointLoss * (Math.random() * 0.2 + 0.3)); // 손실액의 30~50%
+        var rKey = (v.origin || "무역 지부") + "-" + v.dest;
+        
+        if (!data.shipwrecks[rKey]) data.shipwrecks[rKey] = [];
+        data.shipwrecks[rKey].push({ type: "POINT", amt: wreckAmt, victim: user.name, time: Date.now() });
+        
+        // 데이터 무결성 위해 최대 5개 유지
+        if (data.shipwrecks[rKey].length > 5) data.shipwrecks[rKey].shift();
+    }
+
     // [최종] 지급액 확정 = 원금(보존) + 모든 보정이 끝난 순이익
     var totalPayout = totalCost + finalNetProfit;
 
@@ -16785,6 +16856,30 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                 totalNetMargin -= medFee;
                 disasterLog += "\n" + ev.msg + " (-" + fp(medFee) + "P)";
         }
+    }
+
+    // [v17.3] 포인트형 유실물 박제 로직 (소실액 100% 확정 기록)
+    // 모든 차감 변수(repairFee, pillageLoss, loss)의 최종값을 합산하여 기록합니다.
+    var totalPointLoss = Number(typeof repairFee !== 'undefined' ? repairFee : 0) + 
+                         Number(typeof pillageLoss !== 'undefined' ? pillageLoss : 0) + 
+                         (triggeredDisaster === "MONSTER" ? Number(typeof loss !== 'undefined' ? loss : 0) : 0);
+
+    if (totalPointLoss > 0) {
+        var wreckAmt = totalPointLoss; // 유저가 잃은 금액 100% 그대로 대입
+        var rKey = (v.origin || "무역 지부") + "-" + v.dest;
+        
+        if (!data.shipwrecks[rKey]) data.shipwrecks[rKey] = [];
+        data.shipwrecks[rKey].push({ 
+            type: "POINT", 
+            amt: wreckAmt, 
+            victim: user.name, 
+            time: Date.now() 
+        });
+        
+        // 데이터 무결성 및 용량 관리를 위해 한 항로당 최근 10개까지만 보관
+        if (data.shipwrecks[rKey].length > 10) data.shipwrecks[rKey].shift();
+        
+        Log.info("[Shipwreck: Point] " + rKey + " 항로에 " + fp(wreckAmt) + "P 유실물 생성 (피해자: " + user.name + ")");
     }
 
     // [유지] 3. 최종 세금 및 실지급액 확정

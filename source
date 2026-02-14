@@ -16360,8 +16360,6 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         // 모든 계산의 기초가 되는 '원가'를 루프 최상단에서 먼저 정의합니다.
         var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good] || 10000);
         var itemCost = Number(myPurchasePrice * count); // 여기서 itemCost를 확실히 정의
-
-        totalCost += itemCost;
         
         var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
         var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { level: 1 };
@@ -16374,7 +16372,11 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             disasterLog += "\n🚫 [반입 제한]: 자국 생산물 '" + good + "'은 매입이 거부되어 창고로 반환되었습니다.";
             // 실제 유저의 가방 수량을 삭감하지 않기 위해 아래에서 건너뜀
         } else {
-            if (good === nationInfo.favorite) {
+            if (isEldorado) {
+                // 엘도라도에서는 시세와 상관없이 무조건 해당 품목의 '선호 수익률(pref)'을 적용합니다.
+                multiplier = rateInfo.pref;
+            } 
+            else if (good === nationInfo.favorite) {
                 // 상단에서 선언된 itemCost를 안전하게 사용합니다.
                 var baseEarn = Math.floor(myPurchasePrice * rateInfo.pref * count);
                 var baseMargin = baseEarn - itemCost;
@@ -16398,17 +16400,19 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         }
 
         // 최종 개별 매출 = 내 매입가 * 수익률% * 남은 수량
-        var earn = Math.floor(myPurchasePrice * multiplier * count);
-        totalRevenue += earn;
-        cargoSummary.push(good + "x" + count);
+        if (multiplier > 0) {
+            var earn = Math.floor(myPurchasePrice * multiplier * count);
+            totalRevenue += earn;
+            totalCost += itemCost; // 실제 판매된 품목에 대해서만 원가 합산
+            cargoSummary.push(good + "x" + count);
 
-        if (count > 0 && multiplier > 0) {
             var sign = (multiplier >= 1.1) ? "🔺" : (multiplier <= 0.9 ? "🔹" : "➖");
-            soldLog.push("• " + good + " x" + count + ": " + fp(earn) + "P " + sign);
+            var deco = isEldorado ? "✨" : ""; // 엘도라도 판매 시 강조 표시
+            soldLog.push("• " + good + " x" + count + ": " + fp(earn) + "P " + sign + deco);
         }
         
         // 매입 거부된 품목이 아닐 때만 가방(평단가/수량)을 비움
-        if (good !== producedByDest) {
+        if (good !== producedByDest && multiplier > 0) {
             if (user.cargo) user.cargo[good] = 0;
             if (user.cargoAvg) user.cargoAvg[good] = 0;
         }
@@ -16429,6 +16433,12 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                 sBasePrice = cfg.SPECIALTY_COST[parentGood] || 10000;
                 break; 
             }
+        }
+
+        // === [엘도라도 특산품 반환 가드] ===
+        if (v.dest === ELDORADO_CONFIG.NAME) {
+            disasterLog += "\n🚫 [성역의 거부]: 특산품 '" + sName + "'은 성역에서 취급하지 않아 창고로 반환되었습니다.";
+            continue; // 매출 합산 및 가방 비우기 로직을 모두 건너뜁니다.
         }
 
         // [v16.7] 원가 일단 합산
@@ -16467,35 +16477,21 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var cargoSummaryStr = cargoSummary.join(", ");
 
     // 5. [핵심] 순수익(마진) 기반 차등 정산 로직
-    var baseMargin = totalRevenue - totalCost; // 순수 마진(이익금) 산출
+    var baseMargin = totalRevenue - totalCost; 
 
     // [선박 체급별 수익 구간 강제 밸런싱 엔진]
-    var shipEfficiency = 1.0;
-    if (user.shipLevel === 1) shipEfficiency = 3.5; 
-    else if (user.shipLevel === 2) shipEfficiency = 1.5; 
-    else shipEfficiency = 1.0; 
-
-    // 1단계: 선박 효율이 적용된 '기초 수익' 확정 (변수명을 shipEff로 통일)
     var shipEff = (user.shipLevel === 1) ? 3.5 : (user.shipLevel === 2 ? 1.5 : 1.0);
-    var efficientMargin = Math.floor(baseMargin * shipEff);
+    var efficientMargin = 0;
 
     // 1-2단계: 엘도라도(잊혀진 성역) 전용 수익 증폭 및 특산품 배제
     if (v.dest === ELDORADO_CONFIG.NAME) {
-        // [수정] 위에서 선언한 shipEff를 그대로 사용하여 '순수 일반 교역품 마진' 계산
-        var pureCargoMargin = Math.floor((totalRevenue - totalSpecRev - (totalCost - totalSpecCost)) * shipEff);
-        
-        // 엘도라도는 기초 효율 마진을 2배(PROFIT_MULT)로 증폭
-        efficientMargin = pureCargoMargin * ELDORADO_CONFIG.PROFIT_MULT;
-        
-        // 엘도라도는 자치령 보너스(pBonusTotal)를 0으로 고정
-        pBonusTotal = 0; 
-        
-        // 리포트 가독성을 위해 특산품 판매 로그 필터링
-        soldLog = soldLog.filter(function(line){ return line.indexOf("[특]") === -1; });
-        disasterLog += "\n✨ [황금의 가호]: 엘도라도의 기운으로 일반 교역 순수익이 2배로 기록되었습니다.";
+        efficientMargin = Math.floor(baseMargin * shipEff) * ELDORADO_CONFIG.PROFIT_MULT;
+        pBonusTotal = 0; // 성역은 항구 발전도 보너스를 지급하지 않음
+        disasterLog += "\n✨ [황금의 가호]: 모든 교역품에 우대 시세 및 수익 2배가 적용되었습니다.";
     } 
     else {
-        // 2단계: 일반 항구일 경우 기존의 발전도 보너스 산출 로직 수행
+        // 일반 항구 정산 로직 (기존 효율 및 발전도 보너스 유지)
+        efficientMargin = Math.floor(baseMargin * shipEff);
         var pInfo = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : { level: 1 };
         var portLevelRate = Number((pInfo.level - 1) * 0.01);
         pBonusTotal = efficientMargin > 0 ? Math.floor(efficientMargin * portLevelRate) : 0;

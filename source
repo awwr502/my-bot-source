@@ -13114,12 +13114,12 @@ function _executeItemGive(tUser, iName, count, replier, tRoom) {
     tUser.skipHealing = true;
     var logMsg = "";
     var item = null;
+    var cleanI = iName.replace(/\s/g,"");
     
-    // SHOP_ITEMS 검색
+    // 1. SHOP_ITEMS(상점 데이터) 검색
     for (var i = 0; i < SHOP_ITEMS.length; i++) {
         var sN = SHOP_ITEMS[i].name.replace(/\s/g,"");
-        var iN = iName.replace(/\s/g,"");
-        if (sN === iN || SHOP_ITEMS[i].name.indexOf(iName) !== -1) {
+        if (sN === cleanI || SHOP_ITEMS[i].name.indexOf(iName) !== -1) {
             item = SHOP_ITEMS[i]; break;
         }
     }
@@ -13141,14 +13141,35 @@ function _executeItemGive(tUser, iName, count, replier, tRoom) {
             tUser.purchasedAuthCount = (Number(tUser.purchasedAuthCount) || 0) + count;
         }
         logMsg = "[" + item.name + "] " + count + "개 지급 완료";
-    } else {
-        var sM = false; var cI = iName.replace(/\s/g,"");
-        if (cI === "고대지도") { tUser.ancientMaps = (Number(tUser.ancientMaps) || 0) + count; sM = true; }
-        else if (cI === "유물조각") { tUser.artifactPieces = (Number(tUser.artifactPieces) || 0) + count; sM = true; }
-        else if (cI === "진귀한보물") { tUser.rareSpecialties = (Number(tUser.rareSpecialties) || 0) + count; sM = true; }
-        else if (cI === "박스조각") { tUser.boxFragments = (Number(tUser.boxFragments) || 0) + count; sM = true; }
+    } 
+    // 2. 특수/수집 아이템 및 경마 장비 로직 통합
+    else {
+        var specMatch = false;
+        var rStub = { reply: function(m) { Api.replyRoom(tRoom, m); } };
+
+        if (cleanI === "고대지도") { tUser.ancientMaps = (Number(tUser.ancientMaps) || 0) + count; specMatch = true; }
+        else if (cleanI === "유물조각") { 
+            tUser.artifactPieces = (Number(tUser.artifactPieces) || 0) + count; 
+            specMatch = true; 
+            // 도굴왕 계보 체크 (10, 20, 30, 40, 50개 단위)
+            if (tUser.artifactPieces >= 50) util_checkAndAwardTitle(tUser, rStub, "도굴왕", 2915, "⚜️", "내리다 고고학 연구소", "유물 조각 50개 달성", "[장착 효과]: 희귀 광물 발견 확률 20% 상승", tRoom);
+            else if (tUser.artifactPieces >= 10) util_checkAndAwardTitle(tUser, rStub, "도굴꾼", 2911, "🧤", "내리다 고고학 연구소", "유물 조각 10개 달성", "첫 번째 유물 칭호 획득!", tRoom);
+        }
+        else if (cleanI === "진귀한보물") { tUser.rareSpecialties = (Number(tUser.rareSpecialties) || 0) + count; specMatch = true; }
+        else if (cleanI === "박스조각") { 
+            tUser.boxFragments = (Number(tUser.boxFragments) || 0) + count; 
+            while (tUser.boxFragments >= 5) { tUser.boxFragments -= 5; tUser.boxTickets = (Number(tUser.boxTickets) || 0) + 1; }
+            specMatch = true; 
+        }
+        // [신규] 경마 장비 개별 지급 로직
+        else if (["안장", "고삐", "등자", "채찍"].indexOf(cleanI) !== -1) {
+            if (!tUser.horseParts) tUser.horseParts = [];
+            for (var m = 0; m < count; m++) { if (tUser.horseParts.indexOf(cleanI) === -1) tUser.horseParts.push(cleanI); }
+            specMatch = true;
+            if (tUser.horseParts.length === 4) util_checkAndAwardTitle(tUser, rStub, "경마왕", 777, "🏇", "내리다 경마 협회", "경마 장비 4종 수집", "[장착 효과]: 배팅 취소 위약금 전액 면제", tRoom);
+        }
         
-        if (sM) logMsg = "[" + iName + "] " + count + "개 강제 주입 완료";
+        if (specMatch) logMsg = "[" + iName + "] " + count + "개 강제 주입 및 업적 정산 완료";
         else return replier.reply(formatAdmin("🚫 지급 실패", "[" + iName + "] 아이템을 찾을 수 없습니다."));
     }
     replier.reply(formatAdmin("✅ 아이템 지급 성공", "대상: [" + tRoom + "] " + tUser.name + "\n내용: " + logMsg));

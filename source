@@ -1546,6 +1546,7 @@ var CMD_LIST = {
         { cmd: "/부동산자산복구", desc: "유저 평단가 기반 시세 긴급 복구", func: "_adminEconomyLogic" },
         { cmd: "/매물추가", desc: "[이름] [가격] 신규 상장", func: "_adminEconomyLogic" },
         { cmd: "/매물삭제", desc: "[건물명] 시장에서 영구 제거", func: "_adminEconomyLogic" },
+        { cmd: "/아이템지급", desc: "[닉네임] [아이템명] [수량] 관리자 강제 지급", func: "_adminEconomyLogic" },
         { cmd: "/매물수정", desc: "[기존] [새이름] [가격] 수정", func: "_adminEconomyLogic" },
         { cmd: "/경제정보", desc: "은행 재원 및 경제 지표 확인", func: "_adminEconomyLogic" },
         { cmd: "/재원수정", desc: "[금액] 은행 금고 자본 조정", func: "_adminEconomyLogic" },
@@ -12923,7 +12924,31 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         return true;
     }
 
-    /* [신규] 모든 명령어 응답 무결성 점검 로직 */
+    /* [A] 명령어 입구: 여기는 _adminEconomyLogic 함수 "안쪽"입니다. */
+    if (msg.indexOf("/아이템지급 ") === 0) {
+        var ps = msg.trim().split(/\s+/);
+        if (ps.length < 4) {
+            replier.reply(formatAdmin("오류", "형식: /아이템지급 [닉네임] [아이템명] [수량]"));
+            return true;
+        }
+        var qty = parseInt(ps.pop().replace(/,/g, ""));
+        var itemName = ps.pop();
+        var targetNick = ps.slice(1).join(" ").trim();
+        if (isNaN(qty) || qty <= 0) return replier.reply(formatAdmin("오류", "수량은 1개 이상 숫자로 입력하세요."));
+
+        var found = findUserGlobal(targetNick, roomName);
+        if (found.length === 0) return replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
+        if (found.length > 1) {
+            handleUserSelection(replier, targetUid, found, "admin_item_give", { item: itemName, qty: qty }, user, roomName);
+            return true;
+        }
+        // 아래에서 만든 기계를 호출합니다.
+        _executeItemGive(found[0].data, itemName, qty, replier, found[0].roomName);
+        safeSaveData(data, true);
+        return true;
+    }
+
+    /* 모든 명령어 응답 무결성 점검 로직 */
     if (msg === "/명령어점검") {
         var statusReport = [];
         var totalCmds = CMD_LIST.user.concat(CMD_LIST.admin);
@@ -13079,8 +13104,54 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         }
         return true;
     }
-
     return false;
+}
+
+/** * [B] 실제 지급 기계 (함수 바깥 - 전역 스코프)
+ * 이 기계는 함수 바깥에 따로 있어야 중복 선택 창(섹터 11)에서도 호출할 수 있습니다.
+ */
+function _executeItemGive(tUser, iName, count, replier, tRoom) {
+    tUser.skipHealing = true;
+    var logMsg = "";
+    var item = null;
+    
+    // SHOP_ITEMS 검색
+    for (var i = 0; i < SHOP_ITEMS.length; i++) {
+        var sN = SHOP_ITEMS[i].name.replace(/\s/g,"");
+        var iN = iName.replace(/\s/g,"");
+        if (sN === iN || SHOP_ITEMS[i].name.indexOf(iName) !== -1) {
+            item = SHOP_ITEMS[i]; break;
+        }
+    }
+
+    if (item) {
+        if (item.effect === "icon" || item.effect === "title") {
+            for (var k = 0; k < count; k++) {
+                tUser.inventory.push({ id: item.id, name: item.name, icon: item.icon, effect: item.effect, title: item.title || "" });
+            }
+            if (item.effect === "icon" && tUser.collectedIcons.indexOf(item.icon) === -1) tUser.collectedIcons.push(item.icon);
+        } else if (item.effect === "trade_cargo") {
+            if (!tUser.cargo) tUser.cargo = {};
+            tUser.cargo[item.value] = (Number(tUser.cargo[item.value]) || 0) + count;
+        } else if (item.effect === "promotion") {
+            tUser.purchasedPromotionAttempts = (Number(tUser.purchasedPromotionAttempts) || 0) + count;
+        } else if (item.effect === "tierGuard") {
+            tUser.tierGuard = (Number(tUser.tierGuard) || 0) + count;
+        } else if (item.effect === "gameAuth") {
+            tUser.purchasedAuthCount = (Number(tUser.purchasedAuthCount) || 0) + count;
+        }
+        logMsg = "[" + item.name + "] " + count + "개 지급 완료";
+    } else {
+        var sM = false; var cI = iName.replace(/\s/g,"");
+        if (cI === "고대지도") { tUser.ancientMaps = (Number(tUser.ancientMaps) || 0) + count; sM = true; }
+        else if (cI === "유물조각") { tUser.artifactPieces = (Number(tUser.artifactPieces) || 0) + count; sM = true; }
+        else if (cI === "진귀한보물") { tUser.rareSpecialties = (Number(tUser.rareSpecialties) || 0) + count; sM = true; }
+        else if (cI === "박스조각") { tUser.boxFragments = (Number(tUser.boxFragments) || 0) + count; sM = true; }
+        
+        if (sM) logMsg = "[" + iName + "] " + count + "개 강제 주입 완료";
+        else return replier.reply(formatAdmin("🚫 지급 실패", "[" + iName + "] 아이템을 찾을 수 없습니다."));
+    }
+    replier.reply(formatAdmin("✅ 아이템 지급 성공", "대상: [" + tRoom + "] " + tUser.name + "\n내용: " + logMsg));
 }
 
 //==========섹터37==========

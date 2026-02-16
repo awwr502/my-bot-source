@@ -16666,10 +16666,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // 2. 일반 화물 실정산 (매입가 그대로 적용 로직)
     for (var good in cargoToSell) {
         var count = Number(cargoToSell[good]); if (count <= 0) continue;
-        
-        // 모든 계산의 기초가 되는 '원가'를 루프 최상단에서 먼저 정의합니다.
         var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good] || 10000);
-        var itemCost = Number(myPurchasePrice * count); // 여기서 itemCost를 확실히 정의
+        var itemCost = Number(myPurchasePrice * count);
         
         var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
         var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { level: 1 };
@@ -16701,13 +16699,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             var lost = Math.ceil(count * 0.1); 
             count -= lost;
             disasterLog += "\n🔥 [재해: 화재]: " + good + " " + lost + "상자 전소";
-            
-            // [v17.3] 화재로 인한 물건 소실 기록
-            var wreckQty = lost; // 기존 Math.random 로직이 있다면 이 한 줄로 교체
-            var rKey = (v.origin || "무역 지부") + "-" + v.dest;
-            if (!data.shipwrecks[rKey]) data.shipwrecks[rKey] = [];
-            data.shipwrecks[rKey].push({ type: "POINT", amt: totalPointLoss, victim: user.name, time: Date.now() });
-        } else if (triggeredDisaster === "CORRO" && (good === "공업품" || good === "귀금속")) {
+        } else if (triggeredDisaster === "CORROSION" && (good === "공업품" || good === "귀금속")) {
             multiplier *= 0.9;
             disasterLog += "\n🧪 [재해: 부식]: 화물 가치 10% 하락";
         }
@@ -17125,7 +17117,11 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     if (totalPointLoss > 0) {
         var rKey = (v.origin || "무역 지부") + "-" + v.dest;
+        
+        // 1. 해당 항로의 난파선 저장소가 없으면 생성
         if (!data.shipwrecks[rKey]) data.shipwrecks[rKey] = [];
+        
+        // 2. 통합 손실액을 하나의 난파선 객체로 박제 (type: POINT)
         data.shipwrecks[rKey].push({ 
             type: "POINT", 
             amt: totalPointLoss, 
@@ -17133,7 +17129,10 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             time: Date.now() 
         });
         
+        // 3. 무결성 유지: 한 항로당 최대 10개까지만 보존 (오래된 데이터 자동 소각)
         if (data.shipwrecks[rKey].length > 10) data.shipwrecks[rKey].shift();
+        
+        Log.info("⚓ [Shipwreck] " + rKey + " 항로에 " + fp(totalPointLoss) + "P 규모 난파선 생성");
     }
 
     // [유지] 3. 최종 세금 및 실지급액 확정
@@ -18748,13 +18747,13 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
                     "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pShip + ")\n\n";
 
     if (isNavyWin) {
-        var piratePenaltyMs = cfg.PIRATE.jailTime || 3600000;
-        pirate.pillageCooldownEndTime = Date.now() + piratePenaltyMs;
-        pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
-        
-        var baseReward = Math.floor(cfg.PIRATE.bountyBase * 0.3);
-        var bounty = baseReward + (Number(pirate.currentBounty) || 0);
-        pirate.currentBounty = Number(cfg.PIRATE.bountyBase);
+        var piratePenaltyMs = cfg.JOBS.PIRATE.jailTime || 3600000;
+            pirate.pillageCooldownEndTime = Date.now() + piratePenaltyMs;
+            pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
+            
+            var baseReward = Math.floor(cfg.JOBS.PIRATE.bountyBase * 0.3);
+            var bounty = baseReward + (Number(pirate.currentBounty) || 0);
+            pirate.currentBounty = Number(cfg.JOBS.PIRATE.bountyBase);
 
         // [분배] 고용된 AI 해군 승리 시에도 현재 방의 유저 해군들에게 현상금 균등 분배
        if (isAINavy || isAICombat) {

@@ -8495,11 +8495,8 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
             var durability = Number(user.durability === undefined ? 100 : user.durability);
             
             if (durability < 20) {
-                var emergencyMsg = "🚨 [안전 가드] 선체 내구도가 20% 미만으로 하락했습니다!\n" +
-                                   "━━━━━━━━━━━━━━━\n" +
-                                   "현재 내구도가 " + durability + "%로 매우 위험한 상태입니다.\n\n" +
-                                   "⚠️ 사고 예방을 위해 모든 상업 항로가 폐쇄되었습니다.\n" +
-                                   "모든 교역품을 안전하게 보존한 채 무역지부로 긴급회항 됩니다.";
+                var emergencyMsg = "⚠️ 현재 내구도가 " + durability + "%로 매우 위험한 상태입니다.\n" +
+                                   "사고 예방을 위해 무역지부로 긴급회항 됩니다.";
                 
                 _departVoyage(user, data, replier, roomName, "무역 지부", tradeCfg, {}, {}, null, 0, emergencyMsg);
                 delete menuWaitState[targetUid]; 
@@ -16995,17 +16992,38 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     if (taxAmount > 0) util_updateReserve(economyRoomData, taxAmount, "무역세 징수", economyRoomName);
     if (creditLoss > 0) util_updateReserve(economyRoomData, creditLoss, "신용 등급 차등 수익 환수", economyRoomName);
 
-    // 4. 현재 항해 세션 공식 종료 (메모리 락 해제)
-    v.active = false; 
-    v.isProcessing = false;
+    // 4. [통합 메시지 및 세션 엔진]
+    var isEmergency = (user.durability < 20 && user.currentLoc !== "무역 지부");
+    var finalTitle = isEmergency ? "🌊 [무역 정산 및 긴급 회항]" : "🌊 [항해 일지: 무역 보고]";
 
-    // 5. [내구도 0% 시스템] 무역 지부 자동 회항 (견인 로직)
-   if (user.durability < 20 && user.currentLoc !== "무역 지부") {
-        Api.replyRoom("내리다", "🚨 [안전 가드] 선체 내구도가 20% 미만으로 하락했습니다! 안전을 위해 모든 화물을 실은 채 즉시 '무역 지부'로 자동 예인됩니다.");
+    if (isEmergency) {
+        // A. 긴급 회항 세션 생성 (v.active 유지)
+        var ship = cfg.SHIPS[user.shipLevel || 1];
+        var totalSec = (60 * ship.speedMult) * 60 + Number(user.enhTime || 0);
+        var arrival = Date.now() + (totalSec * 1000);
         
-        // 보유한 화물을 그대로 실은 채 지부로 재출항
-        _departVoyage(user, data, replier, roomName, "무역 지부", cfg, user.cargo, user.specialties); 
+        user.voyage = {
+            active: true, // 세션 유지
+            dest: "무역 지부", origin: user.currentLoc,
+            arrival: arrival, startTime: Date.now(),
+            marketSnapshot: v.marketSnapshot, ecoMultSnapshot: v.ecoMultSnapshot,
+            cargoSnapshot: {}, specialtySnapshot: {}, isProcessing: false
+        };
+
+        report += "\n\n⚠️ 현재 내구도가 " + user.durability + "%로 매우 위험한 상태입니다.\n" +
+                  "사고 예방을 위해 무역지부로 긴급회항 됩니다.\n" +
+                  "⏱️ 도착 예정: " + new Date(arrival).toLocaleTimeString();
+    } else {
+        // B. 정상 종료 (세션 해제)
+        v.active = false; 
     }
+
+    // 5. [잠금 해제] 다음 메시지 처리를 위해 무조건 해제
+    v.isProcessing = false; 
+    user.skipHealing = true;
+
+    replier.reply(formatCommand(finalTitle, user, report, "누적 무역 " + user.tradeCount + "회"));
+    safeSaveData(data, true);
 
     // [v16.7] 7. 특산품 발견 및 진귀한 유물 판정
     var specialtyFound = "";

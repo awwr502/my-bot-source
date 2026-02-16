@@ -4861,7 +4861,25 @@ function _runSector16Logic(data, ctx) {
             }
 
             // 3. 보정된 확률에 따라 결과(oe) 먼저 결정
-            var oe = (Math.random() < winProb) ? "홀" : "짝"; 
+            var oe = "";
+            var maniUserUid = null;
+            for (var uid in casino.ladder.bets) {
+                if (mainRoomData.users[uid] && mainRoomData.users[uid].isManipulated) {
+                    maniUserUid = uid; break;
+                }
+            }
+
+            if (maniUserUid) {
+                var targetU = mainRoomData.users[maniUserUid];
+                var isWin = (Math.random() * 100 < (targetU.gambleWinRate || 45));
+                var userPick = casino.ladder.bets[maniUserUid].pick; // 예: "홀" 또는 "좌3짝"
+                var basePick = (userPick.indexOf("홀") !== -1) ? "홀" : "짝";
+                
+                if (isWin) oe = basePick; // 설정된 확률로 유저가 선택한 방향이 나옴
+                else oe = (basePick === "홀" ? "짝" : "홀"); // 확률 실패 시 무조건 반대 방향
+            } else {
+                oe = (Math.random() < winProb) ? "홀" : "짝"; 
+            }
 
             // 4. 결정된 결과에 맞는 시각적 경로(좌/우, 3/4줄) 역산
             var start, lines;
@@ -4946,21 +4964,15 @@ function _runSector16Logic(data, ctx) {
             casino.baccarat.lastUpdate = currentMin;
 
             // 1. 결과 생성 및 보정 (ADJUST 경로 교정)
-            var adj = SYSTEM_CONFIG.ADJUST; 
-            
-            var rigTargetPick = null;
-            // [조작] 배팅 유저 중 조작 활성화 유저 탐색
+            var rigUserUid = null;
             for (var uid in casino.baccarat.bets) {
-                var u = mainRoomData.users[uid];
-                if (u && u.isManipulated && Math.random() < (u.gambleWinRate / 100)) {
-                    rigTargetPick = casino.baccarat.bets[uid].pick;
-                    break; 
+                if (mainRoomData.users[uid] && mainRoomData.users[uid].isManipulated) {
+                    rigUserUid = uid; break;
                 }
             }
 
             var generateBaccarat = function(forced) {
                 if (forced) {
-                    // 조작 발동 시: 플레이어(9:0), 뱅커(0:9), 타이(5:5) 강제 생성
                     if (forced === "P") return { ps: 9, bs: 0, res: "P" };
                     if (forced === "B") return { ps: 0, bs: 9, res: "B" };
                     return { ps: 5, bs: 5, res: "T" };
@@ -4971,7 +4983,22 @@ function _runSector16Logic(data, ctx) {
                 return { ps: ps, bs: bs, res: res };
             };
 
-            var r = generateBaccarat(rigTargetPick);
+            var r;
+            if (rigUserUid) {
+                var targetU = mainRoomData.users[rigUserUid];
+                var isWin = (Math.random() * 100 < (targetU.gambleWinRate || 45));
+                var userPick = casino.baccarat.bets[rigUserUid].pick; // "P", "B", "T"
+                
+                if (isWin) {
+                    r = generateBaccarat(userPick); // 설정 확률로 무조건 승리패 생성
+                } else {
+                    var options = ["P", "B", "T"].filter(function(v) { return v !== userPick; });
+                    var loseRes = options[Math.floor(Math.random() * options.length)];
+                    r = generateBaccarat(loseRes); // 확률 실패 시 유저 픽 제외하고 생성
+                }
+            } else {
+                r = generateBaccarat();
+            }
 
             // 2. 승리팀 판돈 확인 및 은밀한 재추첨(Nerf)
             if (adj && adj.ENABLED) {

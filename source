@@ -7855,16 +7855,36 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
 
                 replier.reply(formatError(user, "포인트 부족", "총 " + fp(totalPrice) + "P가 필요합니다." + SHOP_NAV));
             } else {
+                // [이용권 선차감 및 포인트 부족분 계산]
+                var ticketsOwned = Number(user.boxTickets || 0);
+                var ticketsToUse = 0;
+                var finalPointCost = totalPrice; // 기본은 전체 포인트 결제
+                var isUsingTicket = false;
+
+                if (item.effect === "randomBox" && ticketsOwned > 0) {
+                    isUsingTicket = true;
+                    ticketsToUse = Math.min(qty, ticketsOwned); // 구매 수량과 보유권 중 작은 값 선택
+                    var unitPrice = getItemPrice(item, user, roomName);
+                    finalPointCost = unitPrice * (qty - ticketsToUse); // 이용권 제외 남은 수량만큼만 포인트 청구
+                }
+
+                // 포인트 잔액 재검증 (이용권 적용 후 금액 기준)
+                if (Number(user.point) < finalPointCost) {
+                    replier.reply(formatError(user, "자금 부족", "이용권을 제외하고도 " + fp(finalPointCost) + "P가 부족합니다." + SHOP_NAV));
+                    return true;
+                }
+
                 // [종료 처리] 결제가 성공했으므로 대기 상태를 삭제합니다.
                 delete bankProcessState[targetUid]; 
 
-                if (item.effect !== "trade_cargo") {
-                    util_updatePoint(user, roomData, -totalPrice, "상점 구매: " + item.name + " x" + qty, roomName);
+                // 포인트 차감 (차감할 금액이 있을 때만 수행)
+                if (item.effect !== "trade_cargo" && finalPointCost > 0) {
+                    util_updatePoint(user, roomData, -finalPointCost, "상점 구매: " + item.name + " x" + qty, roomName);
                 }
                 
-                // 최종 효과 발동 (메시지는 섹터 30에서 네비게이션 없이 출력됨)
+                // 최종 효과 발동 (isUsingTicket 값을 실제 사용 여부에 따라 true/false로 전달)
                 if (typeof _handleShopEffect === 'function') {
-                    _handleShopEffect(item, user, roomName, replier, data, targetUid, totalPrice, false, qty);
+                    _handleShopEffect(item, user, roomName, replier, data, targetUid, finalPointCost, isUsingTicket, qty);
                 }
                 return true;
             }

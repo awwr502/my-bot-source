@@ -10911,6 +10911,78 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
     return true;
 }
 
+    if (msg.indexOf("/무역정산 ") === 0) {
+        var tn = msg.substring(6).trim();
+        // 1. 전역 검색을 통해 유저 식별 (유연성 확보)
+        var found = findUserGlobal(tn, roomName);
+
+        if (found.length === 0) {
+            replier.reply(formatAdmin("🚫 대상 없음", "[" + tn + "] 유저를 찾을 수 없습니다."));
+            return true;
+        }
+        if (found.length > 1) {
+            // 중복 유저 발생 시 선택창으로 유도
+            handleUserSelection(replier, targetUid, found, "admin_trade_settle_manual", null, user, roomName);
+            return true;
+        }
+
+        var tUser = found[0].data;
+        var tRoom = found[0].roomName;
+        var tRoomData = data.rooms[tRoom];
+        var curLoc = tUser.currentLoc || "무역 지부";
+
+        // 2. 무역 지부 가드
+        if (curLoc === "무역 지부") {
+            replier.reply(formatAdmin("❌ 정산 불가", "[" + tUser.name + "]님은 현재 무역 지부에 정박 중입니다."));
+            return true;
+        }
+
+        // 3. 시세 및 화물 데이터 로드
+        var market = tRoomData.features.tradeMarket || {};
+        var nSnap = market[curLoc] || { rates: {} };
+        var totalGet = 0;
+        var log = [];
+
+        // 4. 일반 화물 강제 매각 루프 (평단가 기반)
+        for (var g in tUser.cargo) {
+            var qty = Number(tUser.cargo[g]);
+            if (qty > 0) {
+                var rate = nSnap.rates[g] || 1.0;
+                var unitPrice = (tUser.cargoAvg && tUser.cargoAvg[g]) ? tUser.cargoAvg[g] : 10000;
+                var earn = Math.floor(unitPrice * rate * qty);
+                
+                totalGet += earn;
+                log.push(g + " x" + qty + " (" + Math.round(rate*100) + "%)");
+                
+                // 데이터 초기화
+                tUser.cargo[g] = 0;
+                if (tUser.cargoAvg) tUser.cargoAvg[g] = 0;
+            }
+        }
+
+        if (totalGet === 0) {
+            replier.reply(formatAdmin("❌ 정산 실패", "[" + tUser.name + "]님의 선박에 적재된 화물이 없습니다."));
+            return true;
+        }
+
+        // 5. 최종 지급 및 저장 (국고 지출 연동)
+        tUser.skipHealing = true;
+        util_updatePoint(tUser, data.rooms["내리다"], totalGet, "관리자 수동 무역 정산", tRoom);
+        
+        // 항해 상태 강제 종료
+        if (tUser.voyage) tUser.voyage.active = false;
+        tUser.currentLoc = curLoc;
+
+        var resMsg = "✅ [" + tUser.name + "]님 수동 정산 완료!\n" +
+                     "📍 장소: " + curLoc + "\n" +
+                     "📦 매각: " + log.join(", ") + "\n" +
+                     "💰 지급: +" + fp(totalGet) + "P";
+
+        replier.reply(formatAdmin("⚓ 무역 정산 강제 집행", resMsg));
+        safeSaveData(data, true);
+        return true;
+    }
+
     /* 상세 유저 데이터 조회 */
     if (msg.indexOf("/유저데이터 ") === 0) {
         var tn = msg.substring(7).trim();
@@ -17370,48 +17442,6 @@ function util_notifySeaReward(user, replier) {
     
     replier.reply(formatCommand(rewardTitle, user, rewardMsg));
     user.hasNotifiedReward = true; // 첫 채팅 시 1회만 알림
-}
-
-/**
- * [긴급 복구] 정산 씹힘 해결용 수동 매각 엔진
- * 사용법: 관리자가 채팅창에 "/무역정산 [닉네임]" 입력
- */
-function util_forceTradeSettlement(targetName, data, replier) {
-    var target = findUserByName(targetName, data);
-    if (!target) return replier.reply("❌ 해당 유저를 찾을 수 없습니다.");
-    
-    var roomData = data.rooms["내리다"];
-    var currentLoc = target.currentLoc || "무역 지부";
-    
-    if (currentLoc === "무역 지부") return replier.reply("❌ 무역 지부에서는 정산할 화물이 없습니다.");
-
-    // 현재 도시의 실시간 시세 로드
-    var market = roomData.features.tradeMarket || {};
-    var nInfo = market[currentLoc] || { rates: {} };
-    var cfg = SYSTEM_CONFIG.TRADE;
-
-    var totalGet = 0;
-    var log = [];
-
-    // 1. 일반 화물 강제 매각
-    for (var g in target.cargo) {
-        var qty = Number(target.cargo[g]);
-        if (qty > 0) {
-            var rate = nInfo.rates[g] || 1.0;
-            var price = (target.cargoAvg[g] || 10000) * rate;
-            var earn = Math.floor(price * qty);
-            totalGet += earn;
-            log.push(g + " x" + qty + " (" + Math.round(rate*100) + "%)");
-            target.cargo[g] = 0;
-            target.cargoAvg[g] = 0;
-        }
-    }
-
-    if (totalGet === 0) return replier.reply("❌ 팔 물건이 없습니다.");
-
-    util_updatePoint(target, roomData, totalGet, "정산 오류 수동 복구 매각", "내리다");
-    replier.reply("✅ [" + targetName + "]님 수동 정산 완료!\n📍 장소: " + currentLoc + "\n📦 매각: " + log.join(", ") + "\n💰 지급: " + fp(totalGet) + "P");
-    safeSaveData(data, true);
 }
 
 //==========섹터52==========

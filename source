@@ -4511,49 +4511,43 @@ function _runSector16Logic(data, ctx) {
             var nations = ["포르투", "코콜라", "나폴리", "베라크루스", "킴벌리"];
             var goods = ["식료품", "공업품", "공예품", "귀금속", "보석"];
             
-            // [수정]: 중복 허용 및 최대 중복 3개 제한 로직 적용
-            var favIndices = [];
-            var goodsPickCount = [0, 0, 0, 0, 0]; // 각 품목이 선택된 횟수 기록
-
-            for (var i = 0; i < 5; i++) {
-                var candidates = [];
-                for (var j = 0; j < 5; j++) {
-                    // 규칙 1: 자국 생산 품목 제외 (j !== i)
-                    // 규칙 2: 동일 품목은 전 세계에서 최대 3회까지만 선호될 수 있음 (count < 3)
-                    if (j !== i && goodsPickCount[j] < 3) {
-                        candidates.push(j);
-                    }
-                }
-                // 가용 후보 중 랜덤 선택
-                var selectedIdx = candidates[Math.floor(Math.random() * candidates.length)];
-                favIndices[i] = selectedIdx;
-                goodsPickCount[selectedIdx]++;
-            }
-
             for (var i = 0; i < nations.length; i++) {
                 var nName = nations[i];
-                var favIdx = favIndices[i]; // 이번 국가의 선호 품목 확정
-                
-                // 3. 기피 품목은 선호 품목과 자국 생산물을 제외한 나머지 3개 중 하나로 선택
-                var hatePool = [];
-                for (var j = 0; j < 5; j++) {
-                    if (j !== i && j !== favIdx) hatePool.push(j);
-                }
-                var hateIdx = hatePool[Math.floor(Math.random() * hatePool.length)];
+                var rates = {}; // { "식료품": 1.05, "공업품": 0.90 ... }
 
+                for (var j = 0; j < goods.length; j++) {
+                    var gName = goods[j];
+                    
+                    // 1. 기본 등락폭: 0.85 ~ 1.15 (±15%)
+                    var baseRate = 0.85 + (Math.random() * 0.30);
+                    
+                    // 2. 특성 보정: 자국 생산품(produce)은 공급 과잉으로 시세 하락 (-5% ~ -10%)
+                    if (TRADE_RELATION[nName].produce === gName) {
+                        baseRate -= (Math.random() * 0.05 + 0.05); 
+                    }
+                    
+                    // 3. 랜덤 폭등/폭락 이벤트 (각 10% 확률)
+                    var eventR = Math.random();
+                    if (eventR < 0.1) baseRate += 0.25; // 폭등 (수요 급증)
+                    else if (eventR > 0.9) baseRate -= 0.20; // 폭락 (공급 과잉)
+
+                    // 4. 최종 범위 제한 (50% ~ 180%) 및 소수점 2자리 고정
+                    baseRate = Math.max(0.5, Math.min(1.8, baseRate));
+                    rates[gName] = Number(baseRate.toFixed(2));
+                }
+
+                // 기존 favorite/hate 구조 대신 rates 객체를 저장
                 mainRoomData.features.tradeMarket[nName] = {
-                    favorite: goods[favIdx],
-                    hate: goods[hateIdx],
+                    rates: rates, 
                     specialty: tradeCfg.NATIONS[nName].specialty
                 };
             }
 
             var tradeNotice = "⚙️ [내리다 무역 지부 공보]\n━━━━━━━━━━━━━━━\n" +
-                              "🌍 세계 교역 시세가 '순환 매칭'으로 변동되었습니다!\n\n" +
-                              "각 국가는 현재 부족한 타국 물자를 선호하며,\n자국 생산 품목은 일절 매입하지 않습니다.\n" +
+                              "🌍 세계 교역 시세가 변동되었습니다!\n" +
+                              "각 항구의 물가(%)가 갱신되었으니 시세표를 확인하세요.\n" +
                               "━━━━━━━━━━━━━━━\n" +
-                              "💡 확인: [/무역] ➔ 1. 세계 시세 확인\n" +
-                              "(※ 시세는 매시 30분 정각에 변동됩니다.)";
+                              "💡 확인: [/무역] ➔ 1. 세계 시세 리포트";
             
             Api.replyRoom(ctx.targetRoom, tradeNotice);
             ctx.isUpdated = true;
@@ -15395,6 +15389,43 @@ function _handleAdminManiStep(msg, user, data, replier, roomName, targetUid) {
  * 기능: 시세 스냅샷, 순풍, 4대 재해(10% 페널티), 지능형 누진세, 네비게이션 통합
  */
 
+/**
+ * 무역품 실시간 단가 계산기 (전역 헬퍼)
+ * 기능: 특정 품목(good)을 특정 항구(dest)에 팔 때의 개당 가격을 반환
+ */
+function util_calcTradePrice(good, dest, roomData) {
+    var cfg = SYSTEM_CONFIG.TRADE;
+    var market = roomData.features.tradeMarket || {};
+    var pData = roomData.features.portData || {};
+    var nInfo = market[dest] || { rates: {} };
+    var pInfo = pData[dest] || { level: 1 };
+    
+    // 1. 기초 원가 로드
+    var baseCost = cfg.GOODS_COST[good] || 10000;
+    
+    // 2. 현재 시세(Multiplier) 로드
+    var multiplier = 1.0;
+
+    // 엘도라도는 고정 고수익 (무조건 130%)
+    if (dest === ELDORADO_CONFIG.NAME) {
+        multiplier = 1.3; 
+    } 
+    // 일반 도시는 생성된 시세(rates) 적용
+    else if (nInfo.rates && nInfo.rates[good]) {
+        multiplier = nInfo.rates[good];
+    } 
+
+    // 3. 발전도 보너스 (시세가 100% 이상일 때만 추가 이익으로 적용)
+    var bonusAmt = 0;
+    if (multiplier > 1.0) {
+        var baseMargin = (baseCost * multiplier) - baseCost;
+        var portLevelRate = (pInfo.level - 1) * (cfg.INVEST.BONUS_PER_LEVEL || 0.01);
+        bonusAmt = Math.floor(baseMargin * portLevelRate);
+    }
+
+    return Math.floor((baseCost * multiplier) + bonusAmt);
+}
+
 /* [핵심] 무역 시스템 메인 핸들러 */
 function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
     var logicRoom = (roomName === "베릭방" || ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
@@ -15477,7 +15508,7 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         var shipName = (user.shipName !== undefined) ? user.shipName : "";
         var shipLabel = (shipName && shipName.length > 0) ? "'" + shipName + "'" : ship.name;
 
-        // [추가] 내가 현재 총독인 항구가 있는지 확인
+        // 내가 현재 총독인 항구가 있는지 확인
         var myGovernorTitle = "";
         var myPorts = []; 
         var pData = (roomData.features && roomData.features.portData) ? roomData.features.portData : {}; 
@@ -15520,7 +15551,7 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             pillageAlert = "\n\n🚨 [긴급] 해적 습격 발생! (교전 중)";
         }
 
-        // [신규] 해군 전용 실시간 호위 대상 추적 (닉네임 표시)
+        // 해군 전용 실시간 호위 대상 추적 (닉네임 표시)
         var navyStatus = "";
         if (user.job === 'navy') {
             for (var rN in data.rooms) {
@@ -15575,9 +15606,7 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         }
         
         replier.reply(formatCommand("⛵ 내리다 무역 지부", user, menu, "번호를 입력하세요."));
-        
-        // 중요: 유저를 'trade_main' 대기 상태로 만들고 함수를 종료합니다.
-        // 이제부터 입력되는 모든 숫자는 23-4 섹션에서 처리됩니다.
+
         menuWaitState[targetUid] = { type: 'trade_main', time: Date.now(), depth: 1, originRoom: roomName };
         return true;
     }
@@ -15908,7 +15937,7 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
 }
 
 /**
- * [수정] 🚢 무역 하역 화물 선택 핸들러 (입력 파싱 최적화)
+ * 🚢 무역 하역 화물 선택 핸들러 (입력 파싱 최적화)
  */
 function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, cfg) {
     var roomData = data.rooms[roomName];
@@ -15981,7 +16010,7 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
         return;
     }
 
-   // [Bug Fix]: UI에 표시된 '잔여량이 있는 목록'과 로직상의 인덱스를 완벽히 일치시킴
+   // UI에 표시된 '잔여량이 있는 목록'과 로직상의 인덱스를 완벽히 일치시킴
     var parts = input.split(/\s+/);
     var idx = parseInt(parts[0]) - 1;
     
@@ -16013,7 +16042,7 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     var inputQty = parts.length > 1 ? parseInt(parts[1].replace(/[^0-9]/g, "")) : 999999;
     var finalQty = Math.min(inputQty, selected.qty);
 
-    /* [수정] v16.7 보물 선택 시 즉시 매각이 아닌 '적재 목록'으로 추가 */
+    /* v16.7 보물 선택 시 즉시 매각이 아닌 '적재 목록'으로 추가 */
     if (selected.type === 'rare') {
         state.selSpec["_rare"] = (state.selSpec["_rare"] || 0) + finalQty;
     } else if (selected.type === 'cargo') {
@@ -16026,50 +16055,65 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     _showTradeCargoSelectUI(user, replier, roomData, cfg, state.dest, state.selCargo, state.selSpec);
 }
 
-/* [서브] 🌍 세계 시세 리포트 */
 function _showTradeMarket(user, replier, roomData, cfg) {
-   var market = roomData.features.tradeMarket || cfg.NATIONS;
-    var pData = roomData.features.portData || {};
-    
-    // 현재 시각 및 투자 가능 여부 판별
-   var h = new Date().getHours();
-    var isInvestOpen = (h >= 7); // 07:00 ~ 23:59
-    var investStatus = isInvestOpen ? "🟢 투자 가능" : "🔴 투자 마감";
+    var market = roomData.features.tradeMarket;
 
-    var header = "🌍 세계 시세 리포트 " + investStatus + "\n" +
+    // [방어] 시세 데이터가 아직 생성되지 않았다면 안내
+    if (!market || Object.keys(market).length === 0) {
+        replier.reply("⚠️ 세계 시세 데이터가 생성 중입니다.\n매시 30분에 첫 시세가 갱신됩니다.");
+        return;
+    }
+
+    var pData = roomData.features.portData || {};
+    var h = new Date().getHours();
+    var investStatus = (h >= 7) ? "🟢 투자 가능" : "🔴 투자 마감";
+
+    var header = "🌍 세계 무역 시세표 (갱신: 1시간)\n" +
                  "━━━━━━━━━━━━━━━\n" +
-                 getDisplayName(user) + "님\n\n";
+                 getDisplayName(user) + "님\n" +
+                 "(기준가 100% / 🔴고시세 🔵저시세)\n\n";
 
     var list = [];
     var idx = 1;
+    // 아이콘 매핑 및 순서 정의
+    var goodsIcons = { "식료품":"🍎", "공업품":"⚙️", "공예품":"🏺", "귀금속":"🪙", "보석":"💎" };
+    var goodsOrder = ["식료품", "공업품", "공예품", "귀금속", "보석"];
+
     for (var n in cfg.NATIONS) { 
-        var nInfo = market[n] || cfg.NATIONS[n];
+        var nInfo = market[n];
         var pInfo = pData[n] || { level: 1, totalInvest: 0, governorUid: "" };
         
-        var govName = "없음 (공석)";
+        var govName = "공석";
         if (pInfo.governorUid && roomData.users[pInfo.governorUid]) {
-            var gUser = roomData.users[pInfo.governorUid];
-            govName = "👑" + gUser.name;
+            govName = "👑" + roomData.users[pInfo.governorUid].name;
         }
 
-        var favSpec = ""; var hateSpec = "";
-        for (var rel in TRADE_RELATION) {
-            if (TRADE_RELATION[rel].produce === nInfo.favorite) favSpec = " (+" + TRADE_RELATION[rel].set + ")";
-            if (TRADE_RELATION[rel].produce === nInfo.hate) hateSpec = " (-" + TRADE_RELATION[rel].set + ")";
-        }
+        // [핵심] 시세 한 줄 요약 (아이콘 + 퍼센트만 깔끔하게)
+        var goodsIcons = { "식료품":"🍎", "공업품":"⚙️", "공예품":"🏺", "귀금속":"🪙", "보석":"💎" };
+        var goodsOrder = ["식료품", "공업품", "공예품", "귀금속", "보석"];
+        var rateLine = "";
+
+        goodsOrder.forEach(function(gKey) {
+            var rate = (nInfo.rates && nInfo.rates[gKey]) ? nInfo.rates[gKey] : 1.0;
+            var pct = Math.round(rate * 100);
+            
+            var colorTag = "";
+            if (pct >= 115) colorTag = "🔴";
+            else if (pct <= 90) colorTag = "🔵";
+
+            rateLine += goodsIcons[gKey] + pct + "%" + colorTag + " ";
+        });
 
         var entry = "📍 " + idx + ". " + n + " [Lv." + pInfo.level + "]\n" +
-                    "  🔺 선호: " + nInfo.favorite + favSpec + "\n" +
-                    "  🔹 기피: " + nInfo.hate + hateSpec + "\n" +
-                    "  👤 총독: " + govName;
+                    rateLine + "\n" +
+                    "(👤 총독: " + govName + ")";
         list.push(entry);
         idx++;
     }
 
-// 수정: 네비게이션 바를 위로 올리고 설명 및 투자 방법을 하단으로 배치하는 레이아웃 개편
     var footer = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소\n\n" +
-                 "각 국가의 발전도와 실시간 수요입니다.\n" +
-                 "(발전 레벨이 높을수록 선호품 가격 상승!)\n\n" +
+                 "[품목 범례]\n" +
+                 "🍎식료품 ⚙️공업품 🏺공예품 🪙귀금속 💎보석\n\n" +
                  "💬 [투자 방법]\n" +
                  "• 번호 입력 시 해당 항구에 투자합니다.\n" +
                  "• 100만P당 발전 레벨이 1단계 상승합니다. (최대 Lv.30)\n" +
@@ -16085,77 +16129,63 @@ function _prepareVoyage(user, replier, cfg, roomData) {
     var durability = Number(user.durability === undefined ? 100 : user.durability);
     var currentLoc = user.currentLoc || "무역 지부";
     
-    // 내구도가 20% 미만이고 무역 지부가 아닐 때 '파손 상태'로 정의
-    var isBroken = (durability < 20 && currentLoc !== "무역 지부");
-
-    if (isBroken) {
+    // 내구도 파손 체크
+    if (durability < 20 && currentLoc !== "무역 지부") {
         var warnMsg = "🚨 [출항 불가: 선체 손상]\n━━━━━━━━━━━━━━━\n" +
-                      "현재 내구도가 " + durability + "%로 매우 위험한 상태입니다.\n\n" +
-                      "⚠️ 사고 예방을 위해 모든 상업 항로가 폐쇄되었습니다.\n" +
+                      "현재 내구도가 " + durability + "%로 매우 위험한 상태입니다.\n" +
                       "즉시 '무역 지부'로 복귀하여 수리를 진행하세요.";
         replier.reply(formatError(user, "내구도 부족", warnMsg, "[0]번을 입력하여 복귀하세요."));
+        return;
     }
 
+    // 1. 내 화물 목록 작성
     var cargoList = []; var total = 0;
     var myCargo = user.cargo || {};
+    var mySpec = user.specialties || {};
     
     for (var k in myCargo) {
         var q = Number(myCargo[k]);
         if (q > 0) { cargoList.push("• " + k + ": " + q + "상자"); total += q; }
     }
-    for (var s in (user.specialties || {})) {
-        if (user.specialties[s] > 0) cargoList.push("⭐ " + s + ": " + user.specialties[s] + "상자");
+    for (var s in mySpec) {
+        if (mySpec[s] > 0) { cargoList.push("⭐ " + s + ": " + mySpec[s] + "상자"); total += 1; }
     }
-
-    /* 3. v16.7 진귀한 보물(성배 등) 표시 로직 */
-    var rareCount = Number(user.rareSpecialties || 0);
-    if (rareCount > 0) {
-        cargoList.push("• 💎 진귀한 보물: " + rareCount + "개");
-    }
+    if (user.rareSpecialties > 0) cargoList.push("• 💎 진귀한 보물: " + user.rareSpecialties + "개");
     
-    // 화물이 아예 없는 경우 가드 (보물만 있어도 출항 가능하도록 cargoList.length 체크)
     if (total === 0 && cargoList.length === 0) {
         replier.reply(formatError(user, "출항 불가", "실린 화물이 없습니다. 상점에서 물품을 구매하세요."));
         return false;
     }
 
-    var market = roomData.features.tradeMarket || cfg.NATIONS;
-    var pData = roomData.features.portData || {};
     var nations = Object.keys(cfg.NATIONS);
     var nStr = ""; 
-
     var displayIdx = 1;
 
-   // 1. [복귀 메뉴] 0번 무역 지부
+    // 2. [복귀 메뉴]
     if (currentLoc !== "무역 지부") {
         nStr += "🏠 0. 무역 지부 (회항 및 수리 가능)\n";
     }
 
-    // 2. [일반 항구] 가용 리스트 순차 출력
+    // 3. [일반 항구] 이름만 깔끔하게 나열
     for (var i = 0; i < nations.length; i++) {
         var nName = nations[i];
-        if (nName === currentLoc || (durability < 20 && currentLoc !== "무역 지부")) continue; 
-
-        var nInfo = market[nName];
-        if (!nInfo) continue; 
-
-        var govMark = (pData[nName] && pData[nName].governorUid === user.uid) ? " 👑" : "";
-        nStr += displayIdx + ". " + nName + " (" + nInfo.favorite + "🔺 " + nInfo.hate + "🔹)" + govMark + "\n";
-        displayIdx++; // 선택 가능한 항구만 번호 증가
+        if (nName === currentLoc) continue; 
+        
+        nStr += displayIdx + ". " + nName + "\n";
+        displayIdx++;
     }
 
-    /* v16.7 엘도라도 입항 허가 가드 (번호를 9번으로 변경) */
+    /* 엘도라도 */
     if (user.eldoradoUnlocked === true && currentLoc !== ELDORADO_CONFIG.NAME) {
         var lastHidden = Number(user.lastHiddenVoyage || 0);
         var isCool = (Date.now() - lastHidden < ELDORADO_CONFIG.COOLDOWN);
-        
         if (!isCool) {
-            nStr += "🌟 9. " + ELDORADO_CONFIG.NAME + " (🔓입항 허가됨)\n";
+            nStr += "🌟 9. " + ELDORADO_CONFIG.NAME + " [수익 1.3배 고정]\n";
         } else {
             var remainMs = ELDORADO_CONFIG.COOLDOWN - (Date.now() - lastHidden);
             var remainH = Math.floor(remainMs / 3600000);
             var remainM = Math.ceil((remainMs % 3600000) / 60000);
-            nStr += "🔒 " + ELDORADO_CONFIG.NAME + " (재입항 대기: " + remainH + "시간 " + remainM + "분)\n";
+            nStr += "🔒 " + ELDORADO_CONFIG.NAME + " (대기: " + remainH + "시간 " + remainM + "분)\n";
         }
     } else {
         var maps = Number(user.ancientMaps || 0);
@@ -16166,8 +16196,9 @@ function _prepareVoyage(user, replier, cfg, roomData) {
             "💡 👑표시는 당신이 총독인 항구입니다.\n" +
             "도착 시 특산품을 최대 3배 획득합니다!\n\n" +
             "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+            
     replier.reply(formatCommand("🚢 목적지 설정", user, "[내 보관함]\n" + cargoList.join("\n") + "\n\n[출항지 선택]\n" + nStr, "국가 번호를 입력하세요."));
-   return true;
+    return true;
 }
 
 /* 🌊 항해 시작 (호위 정보 저장 및 메시지 출력 보강) */
@@ -16222,7 +16253,8 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
         origin: user.currentLoc || "무역 지부",
         arrival: arrival, 
         startTime: Date.now(),
-        marketSnapshot: JSON.parse(JSON.stringify(roomData.features.tradeMarket || cfg.NATIONS)), 
+        // 기존 NATIONS 상수가 아닌 현재 방의 실시간 시세(tradeMarket)를 저장
+        marketSnapshot: JSON.parse(JSON.stringify(roomData.features.tradeMarket || {})), 
         ecoMultSnapshot: util_getEcoMultiplier(roomName),
         cargoSnapshot: JSON.parse(JSON.stringify(selC || {})), 
         specialtySnapshot: JSON.parse(JSON.stringify(selS || {})),
@@ -16715,8 +16747,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var specialtyToSell = v.specialtySnapshot || user.specialties || {};
     var producedByDest = TRADE_RELATION[v.dest] ? TRADE_RELATION[v.dest].produce : "";
 
-    // 수정: nationInfo 변수 선언 추가 (ReferenceError 해결)
-    var nationInfo = (v.marketSnapshot && v.marketSnapshot[v.dest]) ? v.marketSnapshot[v.dest] : (cfg.NATIONS[v.dest] || { favorite: "NONE", hate: "NONE" });
+    // nationInfo 변수 선언 추가 (ReferenceError 해결)
+    var nInfo = (v.marketSnapshot && v.marketSnapshot[v.dest]) ? v.marketSnapshot[v.dest] : { rates: {} };
     
     var totalRevenue = 0; 
     var totalCost = 0; 
@@ -16737,29 +16769,11 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good] || 10000);
         var itemCost = Number(myPurchasePrice * count);
         
-        var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[good] || { pref: 1.25, norm: 1.05, hate: 0.8 };
-        var pInfo = (roomData.features.portData && roomData.features.portData[v.dest]) ? roomData.features.portData[v.dest] : { level: 1 };
-        var portLevelBonus = Number((pInfo.level - 1) * (cfg.INVEST.BONUS_PER_LEVEL || 0.01));
         var multiplier = 1.0;
-
-        // [수정] 자국 생산물 매입 거부 if문을 삭제하고 시세 배율 판정으로 통합
         if (isEldorado) {
-            // 엘도라도에서는 시세와 상관없이 무조건 해당 품목의 '선호 수익률(pref)'을 적용
-            multiplier = rateInfo.pref;
-        } 
-        else if (good === nationInfo.favorite) {
-            var baseEarn = Math.floor(myPurchasePrice * rateInfo.pref * count);
-            var baseMargin = baseEarn - itemCost;
-            var bonusAmt = baseMargin > 0 ? Math.floor(baseMargin * portLevelBonus * (pol.tradeBonusMult || 1.0)) : 0;
-            pBonusTotal += bonusAmt;
-            multiplier = itemCost > 0 ? ((baseEarn + bonusAmt) / itemCost) : rateInfo.pref;
-        }
-        else if (good === nationInfo.hate || good === producedByDest) {
-            // 자국 생산물(producedByDest)이더라도 거부하지 않고 '기피' 시세로 매입
-            multiplier = rateInfo.hate;
-        }
-        else {
-            multiplier = rateInfo.norm;
+            multiplier = 1.3;
+        } else {
+            multiplier = (nInfo.rates && nInfo.rates[good]) ? nInfo.rates[good] : 1.0;
         }
 
         // 재해 처리 (수량/가치 차감)
@@ -16774,17 +16788,29 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
         // 최종 개별 매출 = 내 매입가 * 수익률% * 남은 수량
         if (multiplier > 0) {
-            var earn = Math.floor(myPurchasePrice * multiplier * count);
-            if (good === nationInfo.favorite) hasFavoriteSold = true;
-            tRev += earn; 
+            // 발전도 보너스 로직 이동
+            var baseEarn = Math.floor(myPurchasePrice * multiplier * count);
+            var baseMargin = baseEarn - itemCost;
+            
+            // 항구 발전도 보너스 (레벨당 1%) 
+            var pInfo = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : { level: 1 };
+            var portLevelBonus = 0;
+            if (baseMargin > 0 && !isEldorado) {
+                portLevelBonus = Math.floor(baseMargin * (pInfo.level - 1) * 0.01);
+                pBonusTotal += portLevelBonus;
+            }
+
+            var finalEarn = baseEarn + portLevelBonus;
+            tRev += finalEarn; 
             tCost += itemCost;
-            totalRevenue += earn;
+            totalRevenue += finalEarn;
             totalCost += itemCost;
             cargoSummary.push(good + "x" + count);
 
-            var sign = (multiplier >= 1.1) ? "🔺" : (multiplier <= 0.9 ? "🔹" : "➖");
-            var deco = isEldorado ? "✨" : ""; // 엘도라도 판매 시 강조 표시
-            soldLog.push("• " + good + " x" + count + ": " + fp(earn) + "P " + sign + deco);
+            var pct = Math.round(multiplier * 100);
+            var sign = (pct >= 115) ? "🔺" : (pct <= 90 ? "🔹" : "➖"); // 기준 변경 (115/90)
+            var deco = isEldorado ? "✨" : "";
+            soldLog.push("• " + good + " x" + count + ": " + fp(finalEarn) + "P (" + pct + "%) " + sign + deco);
         
         // 유저 인벤토리 실제 반영 (데이터 오염 방지 가드)
             if (user.cargo) {

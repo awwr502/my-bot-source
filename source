@@ -15875,7 +15875,14 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
         var remaining = total - selected;
         
         if (remaining > 0) {
-            var status = (k === nInfo.favorite) ? "🔺선호" : (k === nInfo.hate ? "🔹기피" : "➖일반");
+            var rate = (nInfo.rates && nInfo.rates[k]) ? nInfo.rates[k] : 1.0;
+            var pct = Math.round(rate * 100);
+            var status = pct + "%";
+            
+            if (pct >= 115) status += "🔥";
+            else if (pct <= 85) status += "❄️";
+            else status += "➖";
+
             availableItems.push({ type: 'cargo', name: k, qty: remaining, status: status });
         }
     }
@@ -15890,9 +15897,9 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
             for (var rel in TRADE_RELATION) {
                 if (TRADE_RELATION[rel].set === s) { pG = TRADE_RELATION[rel].produce; break; }
             }
-            var sStatus = "➖일반";
-            if (pG === nInfo.favorite) sStatus = "🔺선호";
-            else if (pG === nInfo.hate) sStatus = "🔹기피";
+            var sRate = (nInfo.rates && nInfo.rates[pG]) ? nInfo.rates[pG] : 1.0;
+            var sPct = Math.round(sRate * 100 * cfg.SPECIALTY_PROFIT); // 특산품 최종 수익률
+            var sStatus = sPct + "%⭐";
             
             availableItems.push({ type: 'spec', name: s, qty: remainingS, status: sStatus });
         }
@@ -16329,18 +16336,10 @@ function _showVoyageStatus(user, replier, data, roomName) {
         var itemCost = myPurchasePrice * qty;
         tCost += itemCost;
 
-        var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.15, norm: 1.05, hate: 0.8 };
-        var mult = 1.0;
-        if (g === nSnap.favorite) {
-            var baseEarn = Math.floor(myPurchasePrice * rateInfo.pref * qty);
-            var baseMargin = baseEarn - itemCost;
-            var bonusAmt = baseMargin > 0 ? Math.floor(baseMargin * portLevelBonus) : 0;
-            mult = itemCost > 0 ? ((baseEarn + bonusAmt) / itemCost) : rateInfo.pref;
-        } else if (g === nSnap.hate) mult = rateInfo.hate;
-        else mult = rateInfo.norm;
+        var mult = (v.marketSnapshot[v.dest] && v.marketSnapshot[v.dest].rates && v.marketSnapshot[v.dest].rates[g]) 
+                   ? v.marketSnapshot[v.dest].rates[g] : 1.0;
         
         tRev += Math.floor(myPurchasePrice * mult * qty);
-    }
 
     var sSnap = v.specialtySnapshot || {};
     for (var s in sSnap) {
@@ -16349,10 +16348,16 @@ function _showVoyageStatus(user, replier, data, roomName) {
         totalCargoInShip += sQty;
         var pG = "";
         for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === s) { pG = TRADE_RELATION[n].produce; break; } }
-        var sBase = cfg.SPECIALTY_COST[pG] || 10000;
-        var sMult = (pG === nSnap.favorite) ? cfg.SPECIALTY_PROFIT : (pG === nSnap.hate ? 0.5 : 1.0);
+        var sBase = 20000; // 통일된 원가 적용
+        var sRate = (v.marketSnapshot[v.dest] && v.marketSnapshot[v.dest].rates && v.marketSnapshot[v.dest].rates[pG])
+                    ? v.marketSnapshot[v.dest].rates[pG] : 1.0;
+        
+        // 자국 생산물 체크 로직 추가
+        var producedByDest = (TRADE_RELATION[v.dest]) ? TRADE_RELATION[v.dest].produce : "";
+        var finalSmult = (pG === producedByDest) ? 0 : (sRate * cfg.SPECIALTY_PROFIT);
+
         tCost += (sBase * sQty);
-        tRev += Math.floor(sBase * sQty * sMult);
+        tRev += Math.floor(sBase * sQty * finalSmult);
     }
 
     // 1. 기초 마진에 선박 효율을 먼저 곱하여 '세전 기대 수익'을 확정합니다.
@@ -16876,7 +16881,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             
             // 시세 상태에 따른 로그 태그 설정
             if (parentRate >= 1.15) sTag = "🔥 [수요폭발]";
-            else if (parentRate <= 0.85) sTag = "🌊 [공급과잉]";
+            else if (parentRate <= 0.85) sTag = "❄️ [공급과잉]";
             else sTag = "⭐";
         }
 

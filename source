@@ -16852,8 +16852,8 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     // 1-2단계: 엘도라도(잊혀진 성역) 전용 수익 증폭 및 특산품 배제
     if (v.dest === ELDORADO_CONFIG.NAME) {
-        // 루프 내부 변수가 아닌 확정된 누계 변수(totalRevenue, totalSpecRev 등)를 사용하여 ReferenceError 방지
-        var pureCargoMargin = Math.floor((tRev - tCost) * shipEff);
+        // ReferenceError 방지를 위해 누계 변수(totalSpecRev, totalSpecCost) 참조로 교체
+        var pureCargoMargin = Math.floor((tRev - totalSpecRev - (totalCost - totalSpecCost)) * shipEff);
         efficientMargin = pureCargoMargin * ELDORADO_CONFIG.PROFIT_MULT;
         pBonusTotal = 0; // 자치령 보너스 제외
         soldLog = soldLog.filter(function(line){ return line.indexOf("[특]") === -1; });
@@ -17050,39 +17050,6 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // 3. 국고 귀속 (세금 및 신용 차액) 확정 처리
     if (taxAmount > 0) util_updateReserve(economyRoomData, taxAmount, "무역세 징수", economyRoomName);
     if (creditLoss > 0) util_updateReserve(economyRoomData, creditLoss, "신용 등급 차등 수익 환수", economyRoomName);
-
-    // 4. [통합 메시지 및 세션 엔진]
-    var isEmergency = (user.durability < 20 && user.currentLoc !== "무역 지부");
-    var finalTitle = isEmergency ? "🌊 [무역 정산 및 긴급 회항]" : "🌊 [항해 일지: 무역 보고]";
-
-    if (isEmergency) {
-        // A. 긴급 회항 세션 생성 (v.active 유지)
-        var ship = cfg.SHIPS[user.shipLevel || 1];
-        var totalSec = (60 * ship.speedMult) * 60 + Number(user.enhTime || 0);
-        var arrival = Date.now() + (totalSec * 1000);
-        
-        user.voyage = {
-            active: true, // 세션 유지
-            dest: "무역 지부", origin: user.currentLoc,
-            arrival: arrival, startTime: Date.now(),
-            marketSnapshot: v.marketSnapshot, ecoMultSnapshot: v.ecoMultSnapshot,
-            cargoSnapshot: {}, specialtySnapshot: {}, isProcessing: false
-        };
-
-        report += "\n\n⚠️ 현재 내구도가 " + user.durability + "%로 매우 위험한 상태입니다.\n" +
-                  "사고 예방을 위해 무역지부로 긴급회항 됩니다.\n" +
-                  "⏱️ 도착 예정: " + new Date(arrival).toLocaleTimeString();
-    } else {
-        // B. 정상 종료 (세션 해제)
-        v.active = false; 
-    }
-
-    // 5. [잠금 해제] 다음 메시지 처리를 위해 무조건 해제
-    v.isProcessing = false; 
-    user.skipHealing = true;
-
-    replier.reply(formatCommand(finalTitle, user, report, "누적 무역 " + user.tradeCount + "회"));
-    safeSaveData(data, true);
 
     // [v16.7] 7. 특산품 발견 및 진귀한 유물 판정
     var specialtyFound = "";
@@ -19136,19 +19103,25 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
             var margin = (tRev - tCost);
             var shipEff = (victim.shipLevel === 1) ? 4.2 : (victim.shipLevel === 2 ? 1.9 : 1.15);
             
-            // 항구 발전도 보너스 합산 정산
-            var pInfo = (data.rooms[roomName].features.portData && data.rooms[roomName].features.portData[v.dest]) ? data.rooms[roomName].features.portData[v.dest] : { level: 1 };
-            var pBonus = Math.floor(Math.floor(margin * shipEff) * ((pInfo.level - 1) * 0.01));
-            var totalNetMargin = Math.floor(margin * shipEff) + pBonus;
+            // 1. 선박 효율이 적용된 기초 마진 계산
+            var efficientMargin = Math.floor(margin * shipEff);
 
-            // 해적 숙련도(선박 레벨)에 따른 약탈률 적용
+            // 2. 항구 발전도 보너스 계산 (기존 로직 유지, 수식 정리)
+            var pInfo = (data.rooms[roomName].features.portData && data.rooms[roomName].features.portData[v.dest]) ? data.rooms[roomName].features.portData[v.dest] : { level: 1 };
+            var pBonus = efficientMargin > 0 ? Math.floor(efficientMargin * (pInfo.level - 1) * 0.01) : 0;
+            
+            // 3. 최종 세전 순이익 합산
+            var totalNetMargin = efficientMargin + pBonus;
+
+            // 4. 해적 숙련도(선박 레벨)에 따른 약탈률 계산
             var pMin = cfg.JOBS.PIRATE.pillageRateMin || 0.3;
             var pMax = cfg.JOBS.PIRATE.pillageRateMax || 0.5;
             pRate = pMin + (pMax - pMin) * (Number(pirate.shipLevel || 1) - 1) / 9;
             
+            // 5. 최종 약탈액 확정
             pillageAmount = totalNetMargin > 0 ? Math.floor(totalNetMargin * pRate) : 0;
 
-            // 피해자 상태 업데이트
+            // 피해자 상태 업데이트 (누락 방지)
             victim.isPillaged = true;
             v.isPillaged = true;
             v.pillageRateSnapshot = pRate;

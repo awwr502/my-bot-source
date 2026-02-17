@@ -16778,36 +16778,30 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         
         var multiplier = 1.0;
         
-        // 1. 엘도라도는 1.3배 고정
+        // 1. 기초 시세 결정 (엘도라도 1.3배 / 일반 도시 스냅샷 참조)
         if (isEldorado) {
             multiplier = 1.3;
-        } 
-        // 2. 일반 도시: rates 데이터가 있으면 사용, 없으면(구버전 데이터) 1.0 적용
-        else {
-            if (nInfo.rates && nInfo.rates[good]) {
-                multiplier = nInfo.rates[good];
-            } else {
-                multiplier = 1.0; // 데이터 유실 시 본전치기 보장
-            }
+        } else {
+            // nInfo.rates가 안전하게 존재하는지 검증 후 할당
+            multiplier = (nInfo && nInfo.rates && nInfo.rates[good] !== undefined) ? nInfo.rates[good] : 1.0;
         }
 
-        // 재해 처리 (수량/가치 차감)
+        // 2. 재해 처리 (수량 전소 및 가치 하락 반영)
         if (triggeredDisaster === "FIRE" && (good === "식료품" || good === "공예품")) {
             var lost = Math.ceil(count * 0.1); 
             count -= lost;
             disasterLog += "\n🔥 [재해: 화재]: " + good + " " + lost + "상자 전소";
         } else if (triggeredDisaster === "CORROSION" && (good === "공업품" || good === "귀금속")) {
             multiplier *= 0.9;
-            disasterLog += "\n🧪 [재해: 부식]: 화물 가치 10% 하락";
+            disasterLog += "\n🧪 [재해: 부식]: " + good + " 화물 가치 10% 하락";
         }
 
-        // 최종 개별 매출 = 내 매입가 * 수익률% * 남은 수량
+        // 3. 최종 매출 및 보너스 계산
         if (multiplier > 0) {
-            // 발전도 보너스 로직 이동
             var baseEarn = Math.floor(myPurchasePrice * multiplier * count);
-            var baseMargin = baseEarn - itemCost;
+            var baseMargin = baseEarn - itemCost; // 순수 마진 (보너스 제외)
             
-            // 항구 발전도 보너스 (레벨당 1%) 
+            // 항구 발전 레벨 보너스 (레벨당 마진의 1% 가산 / 수익 발생 시에만)
             var pInfo = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : { level: 1 };
             var portLevelBonus = 0;
             if (baseMargin > 0 && !isEldorado) {

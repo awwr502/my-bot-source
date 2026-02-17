@@ -17054,7 +17054,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // [v16.7] 7. 특산품 발견 및 진귀한 유물 판정
     var specialtyFound = "";
     
-    // [교정] 쿨타임 기록을 확률 블록 밖으로 빼내어 무조건 작동하게 변경
+    // 쿨타임 기록을 확률 블록 밖으로 빼내어 무조건 작동하게 변경
     if (v.dest === ELDORADO_CONFIG.NAME) {
         user.lastHiddenVoyage = Date.now(); 
     }
@@ -17115,7 +17115,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         user.rareSpecialties = Math.max(0, (user.rareSpecialties || 0) - rareLootCount);
     }
 
-    // [유지] 1. 순수익 합계 계산 및 초월 강화 보정
+    // 1. 순수익 합계 계산 및 초월 강화 보정
     var profitBonusMult = 1 + ((user.enhProfit || 0) / 100);
     
     var enhancedPureMargin = Math.floor(efficientMargin * profitBonusMult); // 순수익 * 강화배율
@@ -17123,7 +17123,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     var enhProfitTag = (user.enhProfit > 0) ? " (✨수익강화 +" + user.enhProfit + "%)" : "";
 
-    // [유지] 2. 해상 이벤트(재해/축제) 실정산 로직 (기존 로직 보존)
+    // 2. 해상 이벤트(재해/축제) 실정산 로직 (기존 로직 보존)
     if (triggeredDisaster) {
         var ev = cfg.EVENTS.LIST[triggeredDisaster];
 
@@ -17179,7 +17179,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         Log.info("⚓ [Shipwreck] " + rKey + " 항로에 " + fp(totalPointLoss) + "P 규모 난파선 생성");
     }
 
-    // [유지] 3. 최종 세금 및 실지급액 확정
+    // 3. 최종 세금 및 실지급액 확정
     taxAmount = totalNetMargin > 0 ? Math.floor(totalNetMargin * autoTaxRate) : 0;
     var afterTaxMargin = totalNetMargin - taxAmount;
     if (govTag && govInfo && govInfo.governorUid !== targetUid) {
@@ -17191,28 +17191,55 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var finalNetProfit = Math.floor(afterTaxMargin * creditMult); 
     var totalPayout = totalCost + finalNetProfit;
 
-    // 4. 리포트 본문 조립 (용어 및 레이아웃 수정)
-    var report = "📍 목적지: " + v.dest + " (" + cargoSummaryStr + ")\n\n" +
-                 "💰 무역 원금: " + fp(totalCost) + "P\n" + // [수정] 총 매출액 -> 무역 원금
-                 "📈 상품 판매 이익: +" + fp(efficientMargin) + "P\n" + // [수정] 순수 이익 -> 상품 판매 이익
+    // 4. 긴급 회항 여부 체크 (계산 로직 종료 후 판정)
+    var isEmergency = (user.durability < 20 && user.currentLoc !== "무역 지부");
+    var finalTitle = isEmergency ? "🌊 [무역 정산 및 긴급 회항]" : "🌊 [항해 일지: 무역 보고]";
+    var disasterLogStr = (typeof disasterLog !== 'undefined' && disasterLog) ? disasterLog.trim() : "";
+
+    if (isEmergency) {
+        var ship_e = cfg.SHIPS[user.shipLevel || 1];
+        var totalSec_e = (60 * ship_e.speedMult) * 60 + Number(user.enhTime || 0);
+        var arrival_e = Date.now() + (totalSec_e * 1000);
+        
+        user.voyage = {
+            active: true, dest: "무역 지부", origin: user.currentLoc,
+            arrival: arrival_e, startTime: Date.now(),
+            marketSnapshot: v.marketSnapshot, ecoMultSnapshot: v.ecoMultSnapshot,
+            cargoSnapshot: {}, specialtySnapshot: {}, isProcessing: false
+        };
+
+        disasterLogStr += "\n\n⚠️ 현재 내구도가 " + user.durability + "%로 매우 위험한 상태입니다.\n사고 예방을 위해 무역지부로 긴급회항 됩니다.\n⏱️ 도착 예정: " + new Date(arrival_e).toLocaleTimeString();
+    } else {
+        v.active = false; 
+    }
+
+    // 5. 최종 보고서 조립 (모든 변수가 확정된 상태)
+    var report = "📍 목적지: " + v.dest + " (" + cargoSummary.join(", ") + ")\n\n" +
+                 "💰 무역 원금: " + fp(totalCost) + "P\n" +
+                 "📈 상품 판매 이익: +" + fp(efficientMargin) + "P\n" +
                  "🏗️ 발전도 보너스: +" + fp(pBonusTotal) + "P\n" +
-                 "💵 최종 산출 순이익: " + fp(totalNetMargin) + "P" + seaKingTag + enhProfitTag + "\n" + // [수정] 순수익 합계 -> 최종 산출 순이익
-                 (disasterLog ? disasterLog.trim() + "\n" : "") +
-                 "⚖️ 무역세(" + taxPercentText + "%): -" + fp(taxAmount) + "P" + taxBenefitTag + "\n" +
-                 (pillageLog ? pillageLog.trim() + "\n" : "") +
-                 (escortLog ? escortLog.trim() + "\n" : "") +
-                 (govTag ? govTag.trim() + "\n" : "") +
+                 "💵 최종 산출 순이익: " + fp(totalNetMargin) + "P" + (typeof seaKingTag !== 'undefined' ? seaKingTag : "") + (typeof enhProfitTag !== 'undefined' ? enhProfitTag : "") + "\n" +
+                 (disasterLogStr ? disasterLogStr + "\n" : "") +
+                 "⚖️ 무역세(" + (typeof taxPercentText !== 'undefined' ? taxPercentText : "0.0") + "%): -" + fp(taxAmount) + "P" + (typeof taxBenefitTag !== 'undefined' ? taxBenefitTag : "") + "\n" +
+                 (typeof pillageLog !== 'undefined' && pillageLog ? pillageLog.trim() + "\n" : "") +
+                 (typeof escortLog !== 'undefined' && escortLog ? escortLog.trim() + "\n" : "") +
+                 (typeof govTag !== 'undefined' && govTag ? govTag.trim() + "\n" : "") +
                  "\n" +
                  "🎊 최종 수령액: " + fp(totalPayout) + "P\n" +
                  "(신용 " + crInfo.label + " " + (creditMult * 100).toFixed(0) + "%지급)";
 
-    // [v16.9 교정] 특산품 및 지도 메시지 간 줄바꿈 강제 삽입
-    if (specialtyFound) report += "\n" + specialtyFound.trim();
-    if (mapLootMsg) report += "\n" + mapLootMsg.trim();
+    // 6. 특산품/지도 획득 메시지 추가
+    if (typeof specialtyFound !== 'undefined' && specialtyFound) report += "\n" + specialtyFound.trim();
+    if (typeof mapLootMsg !== 'undefined' && mapLootMsg) report += "\n" + mapLootMsg.trim();
 
-    // 5. 결과 메시지 전송 (리포트 끝에 \n을 추가하여 가이드라인과 간격 확보)
-    var resultMsg = formatCommand("🌊 [항해 일지: 무역 보고]", user, report + "\n", "누적 무역 " + user.tradeCount + "회 / 잔액 " + fp(user.point) + "P");
+    // 7. 세션 해제 및 전송
+    v.isProcessing = false; 
+    user.skipHealing = true;
+
+    var resultMsg = formatCommand(finalTitle, user, report + "\n", "누적 무역 " + user.tradeCount + "회 / 잔액 " + fp(user.point) + "P");
     Api.replyRoom("내리다", resultMsg);
+    
+    safeSaveData(data, true);
 
     /* [v16.5] 무역 횟수 기반 작위 수여 시스템 (누락분 복구) */
     var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };

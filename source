@@ -544,16 +544,16 @@ var SYSTEM_CONFIG = {
         GOODS: ["식료품", "공예품", "공업품", "귀금속", "보석"],
         BASE_PRICE: 10000,
         SPECIALTY_COST: {
-            "식료품": 10000,
-            "공업품": 15000,
+            "식료품": 20000,
+            "공업품": 20000,
             "공예품": 20000,
-            "귀금속": 25000,
-            "보석": 30000
+            "귀금속": 20000,
+            "보석": 20000
         },
         BASE_TAX: 0.1,
         MAX_TAX: 0.10,
         SPECIALTY_CHANCE: 0.50,
-        SPECIALTY_PROFIT: 3.0,
+        SPECIALTY_PROFIT: 2.0,
 
         JOBS: {
             PIRATE: { 
@@ -16837,13 +16837,13 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         var sMult = 1.0; var sTag = "";
 
         var parentGood = "";
-        var sBasePrice = 10000; // 기본값 (폴백)
+        var sBasePrice = 20000; // 기본값 (폴백)
 
         // 해당 특산품의 상위 카테고리(produce) 및 그에 따른 기본 가격 탐색
         for (var n in TRADE_RELATION) {
             if (TRADE_RELATION[n].set === sName) { 
                 parentGood = TRADE_RELATION[n].produce; 
-                sBasePrice = cfg.SPECIALTY_COST[parentGood] || 10000;
+                sBasePrice = cfg.SPECIALTY_COST[parentGood] || 20000;
                 break; 
             }
         }
@@ -16858,16 +16858,26 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         var currentItemCost = (sBasePrice * sCount);
         totalCost += currentItemCost;
 
-        if (parentGood === producedByDest) {
-            sMult = 0;
-            totalCost -= (sBasePrice * sCount); // 원가 제외
-            disasterLog += "\n🚫 [통관 거부]: 자국 특산품 '" + sName + "'은 매입이 거부되어 창고로 반환되었습니다.";
-        } else if (parentGood === nationInfo.favorite) {
-            sMult = cfg.SPECIALTY_PROFIT;
-            sTag = "⭐ [세트수요]";
-        } else if (parentGood === nationInfo.hate) {
-            sMult = 0.5;
-            sTag = "🔹 [수요급감]";
+        var sMult = 1.0; 
+        var sTag = "";
+        
+        // 1. 해당 특산품 품목군(parentGood)의 현재 시세(Rate)를 스냅샷에서 로드
+        var parentRate = (nInfo.rates && nInfo.rates[parentGood]) ? nInfo.rates[parentGood] : 1.0;
+
+        // 2. 자국 생산물(수출 금지) 체크: 생산지와 판매지가 같으면 매입 거부
+        if (parentGood === producedByDest) { 
+            sMult = 0; 
+            totalCost -= currentItemCost; // 원금 회수 처리
+            disasterLog += "\n🚫 [통관 거부]: 자국 특산품 '" + sName + "'은 매입이 거부되어 반환되었습니다.";
+        } 
+        // 3. 정상 판매: [현재 시세] x [특산품 프리미엄 배율(2.0)] 적용
+        else {
+            sMult = parentRate * cfg.SPECIALTY_PROFIT; 
+            
+            // 시세 상태에 따른 로그 태그 설정
+            if (parentRate >= 1.15) sTag = "🔥 [수요폭발]";
+            else if (parentRate <= 0.85) sTag = "🌊 [공급과잉]";
+            else sTag = "⭐";
         }
 
        // [v16.7] 매출 계산 및 엘도라도용 변수 누적 (중요!)

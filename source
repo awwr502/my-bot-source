@@ -17204,9 +17204,9 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var totalPayout = totalCost + finalNetProfit;
 
     // 4. 긴급 회항 여부 체크 (계산 로직 종료 후 판정)
-    var isEmergency = (user.durability < 20 && user.currentLoc !== "무역 지부");
-    var finalTitle = isEmergency ? "🌊 [무역 정산 및 긴급 회항]" : "🌊 [항해 일지: 무역 보고]";
+    var finalTitle = "🌊 [항해 일지: 무역 보고]"; 
     var disasterLogStr = (typeof disasterLog !== 'undefined' && disasterLog) ? disasterLog.trim() : "";
+    var separateEmergencyMsg = null; // 분리된 긴급회항 메시지를 담을 변수
 
     if (isEmergency) {
         var ship_e = cfg.SHIPS[user.shipLevel || 1];
@@ -17220,7 +17220,9 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             cargoSnapshot: {}, specialtySnapshot: {}, isProcessing: false
         };
 
-        disasterLogStr += "\n\n⚠️ 현재 내구도가 " + user.durability + "%로 매우 위험한 상태입니다.\n사고 예방을 위해 무역지부로 긴급회항 됩니다.\n⏱️ 도착 예정: " + new Date(arrival_e).toLocaleTimeString();
+        separateEmergencyMsg = "⚠️ 현재 내구도가 " + user.durability + "%로 매우 위험한 상태입니다.\n" +
+                               "사고 예방을 위해 무역지부로 긴급회항 됩니다.\n" +
+                               "⏱️ 도착 예정: " + new Date(arrival_e).toLocaleTimeString();
     } else {
         v.active = false; 
     }
@@ -17248,12 +17250,20 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     v.isProcessing = false; 
     user.skipHealing = true;
 
+    // 1차 메시지 전송 (무역 결과)
     var resultMsg = formatCommand(finalTitle, user, report + "\n", "누적 무역 " + user.tradeCount + "회 / 잔액 " + fp(user.point) + "P");
     Api.replyRoom("내리다", resultMsg);
     
+    // 2차 메시지 전송 (긴급 회항 알림이 있을 경우에만)
+    if (separateEmergencyMsg) {
+        // 약간의 딜레이 후 전송하면 더 자연스럽지만, 동기 처리를 위해 즉시 전송합니다.
+        var emergMsg = formatCommand("🌊 [무역 긴급 회항]", user, separateEmergencyMsg, "누적 무역 " + user.tradeCount + "회");
+        Api.replyRoom("내리다", emergMsg);
+    }
+    
     safeSaveData(data, true);
 
-    /* [v16.5] 무역 횟수 기반 작위 수여 시스템 (누락분 복구) */
+    /* [v16.5] 무역 횟수 기반 작위 수여 시스템 */
     var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
     var tCount = Number(user.tradeCount || 0);
 

@@ -43,6 +43,23 @@ var SCAVENGE_CONFIG = {
     ARTIFACT_PROB: 0.05                   // 인양 시 유물 조각 추가 발견 확률 (5%)
 };
 
+var DUNGEON_CONFIG = {
+    COSTS: [0, 3, 5, 7], // 난이도별 지도 소모량
+    LEVELS: {
+        MERCHANT: [0, 1, 2, 3],
+        JOB: [0, 3, 6, 10]
+    },
+    ENEMIES: [
+        { name: "유령선", hp: 300, atk: 25, desc: "오래된 망령들이 깃든 함선" },
+        { name: "심해 크라켄", hp: 800, atk: 55, desc: "거대한 촉수로 함선을 휘감는 괴수" },
+        { name: "레비아탄", hp: 2000, atk: 110, desc: "전설 속 바다의 지배자" }
+    ],
+    REWARDS: {
+        GOODS: [0, {min: 10, max: 15}, {min: 16, max: 22}, {min: 23, max: 30}],
+        POINTS: [0, 150000, 350000, 750000] // 직업군 상응 포인트
+    }
+};
+
 if (typeof globalData === 'undefined' || globalData === null) {
     globalData = { rooms: {}, botActive: true, statusCheck: {} };
 }
@@ -8701,9 +8718,15 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         }
         curIdx++; 
 
-        // C. 왕실 집무실 판별 (상인일 때만 노출)
+        // C. 해상 던전 진입 포인트
+        if (choiceNum === curIdx) {
+            return _gameDungeonLogic(choice, user, data, replier, roomName, targetUid);
+        }
+        curIdx++;
+
+        // D. 왕실 집무실 (상인 전용)
         if (!user.job && choiceNum === curIdx) {
-            _showRoyalOffice(user, replier, roomName, targetUid); 
+            _showRoyalOffice(user, replier, roomName, targetUid);
             return true;
         }
 
@@ -9202,6 +9225,15 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     else if (state.type === 'trade_battle_list') { _handleCombatSelect(choice, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_escort_select') { _handleEscortHire(choice, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_escort_confirm') { _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
+    /* [v17.6] 던전 난이도 선택 및 전투 액션 핸들러 */
+    else if (state.type === 'dungeon_main') {
+        _handleDungeonSelection(choice, user, data, replier, roomName, targetUid);
+        return true;
+    }
+    else if (state.type === 'dungeon_combat') {
+        _handleDungeonCombat(choice, user, data, replier, roomName, targetUid);
+        return true;
+    }
     else if (state.type.startsWith('casino_')) {
         return _gameCasinoLogic(msg, user, data, replier, roomName, targetUid);
     }
@@ -15778,7 +15810,7 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         else jobLabel = "⚓ 조합 사무소 (전직)";
 
         // 슬롯 배치 (총독이면 6번에 정산, 7번에 직업 / 아니면 6번에 직업)
-        var curIdx = 6;
+        var curIdx = 6;
         
         // [케이스 1, 2] 총독일 때만 6번(또는 시작 번호)에 관세 정산 배치
         if (hasGov) {
@@ -15790,6 +15822,10 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         menu += "\n" + curIdx + ". " + jobLabel;
         curIdx++;
         
+        // [v17.6] 해상 던전 입구 추가
+        menu += "\n" + curIdx + ". 🌀 심해의 균열 (던전)";
+        curIdx++;
+
         // [케이스 3] 직업이 없을 때(상인일 때)만 왕실 집무실 노출
         if (!user.job) { 
             menu += "\n" + curIdx + ". 🏰 왕실 집무실 (작위 수여)";
@@ -19596,4 +19632,176 @@ function util_checkNavyTitle(user, replier, roomName) {
     } else if (count >= 30) {
         util_checkAndAwardTitle(user, rStub, "해안경비대", 5321, "🛡️", "내리다 해군 사령부", "누적 토벌 30회 달성", "첫 토벌의 공로를 인정받아 정식 장교의 길을 걷습니다.", roomName);
     }
+}
+
+//==========섹터54 (해상던전 시스템)==========
+
+/**
+ * [v17.6] 해상 던전: 심해의 균열 (Instanced Dungeon) 시스템
+ * 기능: 상인/직업군 밸런스형 턴제 전투 및 보상 정산
+ */
+
+function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var roomData = data.rooms[logicRoom];
+    
+    // 1. 입장 가드
+    var stateRes = util_checkUserState(user, targetUid, roomName, true);
+    if (!stateRes.canAction) return replier.reply(formatError(user, "입장 불가", stateRes.reason));
+    
+    if (user.currentLoc !== "무역 지부") {
+        return replier.reply(formatError(user, "위치 부적격", "던전 탐사는 오직 '무역 지부'에서만 준비할 수 있습니다."));
+    }
+
+    // 2. 메인 메뉴 출력
+    var cfg = DUNGEON_CONFIG;
+    var maps = Number(user.ancientMaps || 0);
+    var isJob = !!user.job;
+    
+    var body = "바다의 깊은 곳, 차원의 틈새가 벌어졌습니다.\n" +
+               "강력한 괴수들과 맞서 보물을 쟁취하십시오!\n\n" +
+               "📜 [보유 지도]: " + maps + "장\n\n" +
+               "1. [일반] 유령선의 잔해\n" +
+               "   - 소모: 지도 3장 / 권장: " + (isJob ? "Lv.3" : "Lv.1") + "\n" +
+               "2. [정예] 크라켄의 둥지\n" +
+               "   - 소모: 지도 5장 / 권장: " + (isJob ? "Lv.6" : "Lv.2") + "\n" +
+               "3. [심연] 레비아탄의 심장\n" +
+               "   - 소모: 지도 7장 / 권장: " + (isJob ? "Lv.10" : "Lv.3") + "\n\n" +
+               "↩️ 뒤로 / ❎취소";
+
+    replier.reply(formatCommand("🌀 심해의 균열: 던전 입구", user, body, "난이도 번호를 선택하세요."));
+    roomData.features.states.menuWait[targetUid] = { type: 'dungeon_main', time: Date.now(), originRoom: roomName };
+    return true;
+}
+
+// 메뉴 선택 핸들러 보강 (섹터 23-4에 추가되도록 설계)
+function _handleDungeonSelection(choice, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    var diff = parseInt(choice);
+    if (isNaN(diff) || diff < 1 || diff > 3) return;
+
+    var cfg = DUNGEON_CONFIG;
+    var maps = Number(user.ancientMaps || 0);
+    if (maps < cfg.COSTS[diff]) return replier.reply(formatError(user, "지도 부족", "입장에 필요한 고대 지도가 부족합니다."));
+
+    // 스탯 산출 (상인 3레벨 vs 직업 10레벨 보정)
+    var isJob = !!user.job;
+    var sLv = Number(user.shipLevel || 1);
+    
+    // HP 산출: 상인(Lv*300) / 직업(Lv*100) + 강화(칸*20)
+    var myHP = isJob ? (sLv * 100) : (sLv * 300);
+    myHP += (Number(user.enhLimit || 0) * 20);
+    
+    // ATK 산출: 상인(Lv*40) / 직업(Lv*15) + 강화(수익%*2)
+    var myATK = isJob ? (sLv * 15) : (sLv * 45);
+    myATK += (Number(user.enhProfit || 0) * 2);
+
+    // 지도 소모
+    user.ancientMaps -= cfg.COSTS[diff];
+    user.skipHealing = true;
+
+    // 전투 세션 생성
+    user.dungeonCombat = {
+        diff: diff,
+        myHP: myHP,
+        myMaxHP: myHP,
+        myATK: myATK,
+        enemyHP: cfg.ENEMIES[diff-1].hp,
+        enemyMaxHP: cfg.ENEMIES[diff-1].hp,
+        enemyATK: cfg.ENEMIES[diff-1].atk,
+        enemyName: cfg.ENEMIES[diff-1].name,
+        turn: 1
+    };
+
+    roomData.features.states.menuWait[targetUid] = { type: 'dungeon_combat', time: Date.now() };
+    _showDungeonTurn(user, replier, roomName);
+    safeSaveData(data, true);
+}
+
+function _showDungeonTurn(user, replier, roomName) {
+    var c = user.dungeonCombat;
+    var pBar = "🟦".repeat(Math.ceil(c.myHP/c.myMaxHP*5)) + "⬜".repeat(5-Math.ceil(c.myHP/c.myMaxHP*5));
+    var eBar = "🟥".repeat(Math.ceil(c.enemyHP/c.enemyMaxHP*5)) + "⬜".repeat(5-Math.ceil(c.enemyHP/c.enemyMaxHP*5));
+
+    var body = "[⚔️ 제 " + c.turn + " 턴]\n\n" +
+               "👾 " + c.enemyName + "\n   HP [" + eBar + "] " + c.enemyHP + "\n" +
+               "🚢 내 함선\n   HP [" + pBar + "] " + c.myHP + "\n\n" +
+               "1. 전면 포격 (주사위 공격)\n" +
+               "2. 선체 수리 (HP 20% 회복, 1회)\n" +
+               "3. 긴급 탈출 (전투 포기)";
+
+    replier.reply(formatCommand("🌊 교전 중: " + c.enemyName, user, body, "행동 번호를 입력하세요."));
+}
+
+function _handleDungeonCombat(msg, user, data, replier, roomName, targetUid) {
+    var c = user.dungeonCombat;
+    if (!c) return;
+
+    if (msg === "1") {
+        var dice = Math.floor(Math.random() * 20) + 1;
+        var damage = Math.floor(c.myATK * (dice / 10));
+        if (dice === 20) damage *= 2; // 크리티컬
+
+        c.enemyHP -= damage;
+        var log = "💥 포격 성공! " + damage + "의 피해를 입혔습니다." + (dice === 20 ? " (치명타!)" : "");
+
+        if (c.enemyHP <= 0) return _finishDungeon(user, data, replier, roomName, targetUid, true);
+
+        // 적 반격
+        var eDamage = Math.floor(c.enemyATK * (Math.random() * 0.5 + 0.8));
+        c.myHP -= eDamage;
+        log += "\n🏹 적의 반격! " + eDamage + "의 피해를 입었습니다.";
+
+        if (c.myHP <= 0) return _finishDungeon(user, data, replier, roomName, targetUid, false);
+
+        c.turn++;
+        _showDungeonTurn(user, replier, roomName);
+    } else if (msg === "2") {
+        if (c.hasRepaired) return replier.reply("⚠️ 이미 수리를 진행했습니다!");
+        var heal = Math.floor(c.myMaxHP * 0.2);
+        c.myHP = Math.min(c.myMaxHP, c.myHP + heal);
+        c.hasRepaired = true;
+        replier.reply("🔧 긴급 수리로 HP를 " + heal + " 회복했습니다.");
+        _showDungeonTurn(user, replier, roomName);
+    } else if (msg === "3") {
+        user.dungeonCombat = null;
+        delete data.rooms[roomName].features.states.menuWait[targetUid];
+        replier.reply("🏃 함선을 돌려 전장을 이탈했습니다.");
+    }
+    safeSaveData(data);
+}
+
+function _finishDungeon(user, data, replier, roomName, targetUid, isWin) {
+    var c = user.dungeonCombat;
+    var diff = c.diff;
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var roomData = data.rooms[logicRoom];
+    
+    user.dungeonCombat = null;
+    delete data.rooms[roomName].features.states.menuWait[targetUid];
+
+    if (isWin) {
+        var rewardMsg = "";
+        if (user.job) {
+            var pts = DUNGEON_CONFIG.REWARDS.POINTS[diff];
+            var res = processRepayment(user, pts, targetUid, roomName);
+            util_updatePoint(user, roomData, Number(res.actualGain), "해상 던전 승리 보상", roomName);
+            rewardMsg = "💰 정산금: +" + fp(pts) + "P 지급 완료" + (res.repayMsg || "");
+        } else {
+            var goods = SYSTEM_CONFIG.TRADE.GOODS;
+            var targetGood = goods[Math.floor(Math.random() * goods.length)];
+            var rCfg = DUNGEON_CONFIG.REWARDS.GOODS[diff];
+            var qty = Math.floor(Math.random() * (rCfg.max - rCfg.min + 1)) + rCfg.min;
+            
+            if (!user.cargo) user.cargo = {};
+            user.cargo[targetGood] = (Number(user.cargo[targetGood]) || 0) + qty;
+            rewardMsg = "📦 화물 획득: [" + targetGood + "] " + qty + "상자 입고";
+        }
+
+        replier.reply(formatCommand("🏆 던전 공략 성공!", user, "거대 괴수를 물리치고 보물을 확보했습니다!\n\n" + rewardMsg, "내 잔액: " + fp(user.point) + "P"));
+    } else {
+        user.durability = Math.max(0, (user.durability || 100) - 30);
+        replier.reply(formatCommand("💀 함선 대파 (패배)", user, "괴수의 공격을 견디지 못하고 후퇴했습니다.\n내구도가 30% 급감했습니다.", "수리 필요: 무역 지부"));
+    }
+    safeSaveData(data, true);
 }

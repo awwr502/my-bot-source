@@ -322,7 +322,8 @@ var USER_SCHEMA = [
     { key: 'currentLoc', default: '무역 지부', type: 'string' }, // 현재 위치
     { key: 'eldoradoUnlocked', default: false, type: 'boolean' }, // 엘도라도 영구 해금 여부
     { key: 'royalMedals', default: 0, type: 'number' },
-    { key: 'nobleRank', default: 0, type: 'number' }
+    { key: 'nobleRank', default: 0, type: 'number' },
+    { key: 'unknownCargo', default: 0, type: 'number' }
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -16424,6 +16425,33 @@ function _prepareVoyage(user, replier, cfg, roomData) {
 function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, escortUid, escortFee, extraMsg) {
     var roomData = data.rooms[roomName];
     user.skipHealing = true;
+
+    var unknownCount = Number(user.unknownCargo || 0);
+    if (unknownCount > 0 && Object.keys(selC).length > 0) {
+        var maxQty = -1;
+        var maxGoodKey = "";
+
+        // 1. 배에 실린 일반 화물(selC) 중 가장 많은 품목 탐색
+        for (var good in selC) {
+            if (selC[good] > maxQty) {
+                maxQty = selC[good];
+                maxGoodKey = good;
+            }
+        }
+
+        if (maxGoodKey !== "") {
+            // 2. 가장 많은 품목으로 미확인 화물 전량 변환 및 적재
+            selC[maxGoodKey] = (Number(selC[maxGoodKey]) || 0) + unknownCount;
+            
+            // 3. 유저의 미확인 화물 및 가방 원본 데이터 차감 (이미 실었으므로)
+            user.unknownCargo = 0;
+            
+            var transformMsg = "✨ [물자 변환 완료]: 미확인 교역품 " + unknownCount + "상자가 수량이 가장 많은 [" + maxGoodKey + "](으)로 변환되어 선적되었습니다.";
+            if (extraMsg) extraMsg += "\n" + transformMsg;
+            else extraMsg = transformMsg;
+        }
+    }
+
     user.isPillaged = false; 
 
     var mainRoom = data.rooms["내리다"];
@@ -19786,14 +19814,12 @@ function _finishDungeon(user, data, replier, roomName, targetUid, isWin) {
             util_updatePoint(user, roomData, Number(res.actualGain), "해상 던전 승리 보상", roomName);
             rewardMsg = "💰 정산금: +" + fp(pts) + "P 지급 완료" + (res.repayMsg || "");
         } else {
-            var goods = SYSTEM_CONFIG.TRADE.GOODS;
-            var targetGood = goods[Math.floor(Math.random() * goods.length)];
             var rCfg = DUNGEON_CONFIG.REWARDS.GOODS[diff];
             var qty = Math.floor(Math.random() * (rCfg.max - rCfg.min + 1)) + rCfg.min;
             
-            if (!user.cargo) user.cargo = {};
-            user.cargo[targetGood] = (Number(user.cargo[targetGood]) || 0) + qty;
-            rewardMsg = "📦 화물 획득: [" + targetGood + "] " + qty + "상자 입고";
+            // 특정 품목이 아닌 '미확인 화물' 변수에 저장
+            user.unknownCargo = (Number(user.unknownCargo) || 0) + qty;
+            rewardMsg = "📦 [미확인 교역품] " + qty + "상자 확보!\n💡 출항 시 적재량이 가장 많은 품목으로 자동 변환됩니다.";
         }
 
         replier.reply(formatCommand("🏆 던전 공략 성공!", user, "거대 괴수를 물리치고 보물을 확보했습니다!\n\n" + rewardMsg, "내 잔액: " + fp(user.point) + "P"));

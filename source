@@ -16535,6 +16535,9 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     user.durability = Math.max(0, (user.durability || 100) - wear);
     user.skipHealing = true;
     
+   // [v17.7.3] 출항 시점의 계약 정보 박제 (출발 시간 기준 판정의 핵심)
+    var currentQuest = (roomData.features && roomData.features.activeContract) ? JSON.parse(JSON.stringify(roomData.features.activeContract)) : null;
+
     // 데이터 패키징 (v.arrival에 최종 계산된 값 저장)
     user.voyage = {
         active: true, 
@@ -16542,6 +16545,7 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
         origin: user.currentLoc || "무역 지부",
         arrival: arrival, 
         startTime: Date.now(),
+        contractSnapshot: currentQuest, // 현재 계약 정보를 스냅샷으로 보관
         // 기존 NATIONS 상수가 아닌 현재 방의 실시간 시세(tradeMarket)를 저장
         marketSnapshot: JSON.parse(JSON.stringify(roomData.features.tradeMarket || {})), 
         ecoMultSnapshot: util_getEcoMultiplier(roomName),
@@ -17051,14 +17055,14 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var taxTag = "";    
     var pBonusTotal = 0;
 
-    // 2. 일반 화물 실정산 (매입가 그대로 적용 로직)
-    var quest = roomData.features.activeContract;
+    // [v17.7.3] 정산 시 전역 변수가 아닌 '박제된 계약 정보'를 참조 (출발 시간 기준 판정)
+    var quest = v.contractSnapshot; 
     var isQuestSuccess = false;
 
-    // [신규] 퀘스트 성공 여부 선제 판정 (루프 진입 전 단 한 번만 체크)
-    if (quest && quest.active && v.startTime < quest.endTime && v.dest === quest.nation) {
+    // 판정 조건: 박제된 계약이 있고, 출발 시각(v.startTime)이 계약 기한(startTime ~ endTime) 내에 있는가?
+    if (quest && v.startTime >= quest.startTime && v.startTime <= quest.endTime && v.dest === quest.nation) {
         var deliveredQty = Number(v.cargoSnapshot[quest.item] || 0);
-        if (deliveredQty >= 20) { // 최소 20개 이상 납품 시 성공 판정
+        if (deliveredQty >= 20) { 
             isQuestSuccess = true;
         }
     }
@@ -19495,13 +19499,17 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
             var nSnap = v.marketSnapshot[v.dest];
             var cSnap = v.cargoSnapshot || {};
             var sSnap = v.specialtySnapshot || {};
+            var quest = v.contractSnapshot;
 
             // 일반 화물 매출/원가 계산
             for (var g in cSnap) {
                 var qty = Number(cSnap[g]); if (qty <= 0) continue;
                 var myPurchasePrice = Number((victim.cargoAvg && victim.cargoAvg[g]) || cfg.GOODS_COST[g]);
                 var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.15, norm: 1.05, hate: 0.8 };
-                var mult = (g === nSnap.favorite) ? rateInfo.pref : (g === nSnap.hate ? rateInfo.hate : rateInfo.norm);
+                // [퀘스트 정규화] 1.5배 시세 적용 여부를 출발 시간(v.startTime) 기준으로 판정
+                var isPremium = (quest && v.startTime >= quest.startTime && v.startTime <= quest.endTime && v.dest === quest.nation && g === quest.item);
+                var mult = isPremium ? 1.5 : ((g === nSnap.favorite) ? rateInfo.pref : (g === nSnap.hate ? rateInfo.hate : rateInfo.norm));
+                
                 tCost += (myPurchasePrice * qty);
                 tRev += Math.floor(myPurchasePrice * mult * qty);
             }

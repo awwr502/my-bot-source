@@ -1595,7 +1595,7 @@ var CMD_LIST = {
         { cmd: "/부동산자산복구", desc: "유저 평단가 기반 시세 긴급 복구", func: "_adminEconomyLogic" },
         { cmd: "/매물추가", desc: "[이름] [가격] 신규 상장", func: "_adminEconomyLogic" },
         { cmd: "/매물삭제", desc: "[건물명] 시장에서 영구 제거", func: "_adminEconomyLogic" },
-        { cmd: "/아이템지급", desc: "[닉네임] [아이템명] [수량] 관리자 강제 지급", func: "_adminEconomyLogic" },
+        { cmd: "/아이템지급", desc: "[닉네임] > [아이템명] [수량] 관리자 강제 지급", func: "_adminEconomyLogic" },
         { cmd: "/매물수정", desc: "[기존] [새이름] [가격] 수정", func: "_adminEconomyLogic" },
         { cmd: "/경제정보", desc: "은행 재원 및 경제 지표 확인", func: "_adminEconomyLogic" },
         { cmd: "/재원수정", desc: "[금액] 은행 금고 자본 조정", func: "_adminEconomyLogic" },
@@ -13185,25 +13185,43 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         return true;
     }
 
-    /* [A] 명령어 입구: 여기는 _adminEconomyLogic 함수 "안쪽"입니다. */
+   /* [A] 명령어 입구: 지능형 구분자 파싱 지원 */
     if (msg.indexOf("/아이템지급 ") === 0) {
-        var ps = msg.trim().split(/\s+/);
-        if (ps.length < 4) {
-            replier.reply(formatAdmin("오류", "형식: /아이템지급 [닉네임] [아이템명] [수량]"));
-            return true;
+        var rawContent = msg.substring(7).trim(); // 명령어 제외 본문만 추출
+        var targetNick, itemName, qty;
+
+        // [v17.6.3] 지능형 띄어쓰기 가드: 구분자(>) 존재 여부에 따른 파싱 분기
+        if (rawContent.indexOf(">") !== -1) {
+            // 새 방식: /아이템지급 95 남 광어 > 식료품 상자 10
+            var mainParts = rawContent.split(">");
+            targetNick = mainParts[0].trim();
+            
+            var itemAndQty = mainParts[1].trim().split(/\s+/);
+            qty = parseInt(itemAndQty.pop().replace(/,/g, "")); // 마지막 단어는 항상 수량
+            itemName = itemAndQty.join(" ").trim(); // 중간은 모두 아이템명
+        } else {
+            // 기존 방식 하위 호환: /아이템지급 홍길동 보석 5 (아이템명에 띄어쓰기 불가)
+            var ps = rawContent.split(/\s+/);
+            if (ps.length < 3) {
+                replier.reply(formatAdmin("오류", "띄어쓰기가 포함된 이름/아이템은 구분자(>)를 사용하세요.\n예) /아이템지급 95 남 광어 > 식료품 상자 10"));
+                return true;
+            }
+            qty = parseInt(ps.pop().replace(/,/g, ""));
+            itemName = ps.pop();
+            targetNick = ps.join(" ").trim();
         }
-        var qty = parseInt(ps.pop().replace(/,/g, ""));
-        var itemName = ps.pop();
-        var targetNick = ps.slice(1).join(" ").trim();
-        if (isNaN(qty) || qty <= 0) return replier.reply(formatAdmin("오류", "수량은 1개 이상 숫자로 입력하세요."));
+
+        if (isNaN(qty) || qty <= 0) return replier.reply(formatAdmin("오류", "수량은 숫자로 입력하세요."));
+        if (!itemName) return replier.reply(formatAdmin("오류", "아이템명을 입력하세요."));
 
         var found = findUserGlobal(targetNick, roomName);
-        if (found.length === 0) return replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
+        if (found.length === 0) return replier.reply(formatAdmin("오류", "유저 [" + targetNick + "]를 찾을 수 없습니다."));
+        
         if (found.length > 1) {
             handleUserSelection(replier, targetUid, found, "admin_item_give", { item: itemName, qty: qty }, user, roomName);
             return true;
         }
-        // 아래에서 만든 기계를 호출합니다.
+
         _executeItemGive(found[0].data, itemName, qty, replier, found[0].roomName);
         safeSaveData(data, true);
         return true;

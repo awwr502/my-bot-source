@@ -8691,6 +8691,7 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
     /* [서브 상태 핸들러 로직군 - 전체 else if 연결] */
     else if (state.type === 'trade_job_enlist') { _handleJobJoin(choice, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_governor_office') { _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid); return true; }
+    else if (state.type === 'trade_royal_office') { _handleRoyalOffice(msg, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_job_settlement') { _handleJobSettlement(msg, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_select_cargo') { _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
     else if (state.type === 'trade_pirate_menu') {
@@ -16944,6 +16945,17 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var pBonusTotal = 0;
 
     // 2. 일반 화물 실정산 (매입가 그대로 적용 로직)
+    var quest = roomData.features.activeContract;
+    var isQuestSuccess = false;
+
+    // [신규] 퀘스트 성공 여부 선제 판정 (루프 진입 전 단 한 번만 체크)
+    if (quest && quest.active && v.startTime < quest.endTime && v.dest === quest.nation) {
+        var deliveredQty = Number(v.cargoSnapshot[quest.item] || 0);
+        if (deliveredQty >= 20) { // 최소 20개 이상 납품 시 성공 판정
+            isQuestSuccess = true;
+        }
+    }
+
     for (var good in cargoToSell) {
         var count = Number(cargoToSell[good]); if (count <= 0) continue;
         var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good] || 10000);
@@ -16957,6 +16969,11 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         } else {
             // nInfo.rates가 안전하게 존재하는지 검증 후 할당
             multiplier = (nInfo && nInfo.rates && nInfo.rates[good] !== undefined) ? nInfo.rates[good] : 1.0;
+        }
+
+        // [퀘스트] 납품 대상 품목인 경우 시세를 1.5배로 강제 덮어쓰기
+        if (isQuestSuccess && good === quest.item) {
+            multiplier = 1.5; 
         }
 
         // 2. 재해 처리 (수량 전소 및 가치 하락 반영)
@@ -17332,6 +17349,15 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     if (Math.random() < ELDORADO_CONFIG.MAP_PROB) {
         user.ancientMaps = (user.ancientMaps || 0) + 1;
         mapLootMsg = "\n\n🗺️ [뜻밖의 수확]: 선실 구석에서 '고대 지도' 1장을 발견했습니다!";
+    }
+
+    if (isQuestSuccess) {
+        var earnedMedals = Math.floor(Math.random() * 2) + 1; // 1~2개 랜덤
+        user.royalMedals = (user.royalMedals || 0) + earnedMedals;
+        disasterLog += "\n📜 [계약 완수]: 귀족의 의뢰를 성공적으로 마쳤습니다! (시세 1.5배 적용됨)\n🎁 보상: 왕실 훈장 +" + earnedMedals + "개 획득";
+        
+        // 퀘스트 완료 후 해당 유저에 대해 퀘스트 데이터 초기화(중복 수령 방지)
+        // (참고: activeContract 자체는 스케줄러가 1시간 뒤 비활성화함)
     }
 
     /* v16.7 적재된 진귀한 보물(성배 등) 판매 정산 */
@@ -19452,6 +19478,68 @@ function _processPirateBail(user, data, replier, roomName, targetUid) {
     
     replier.reply(formatCommand("🔓 즉시 석방 완료", user, "보석금 " + fp(cfg.bailAmount) + "P를 지불하고 자유의 몸이 되었습니다!\n즉시 해상 활동이 가능합니다."));
     safeSaveData(data, true);
+}
+
+// === 왕실 집무실 핸들러 ===
+function _showRoyalOffice(user, replier, roomName, targetUid) {
+    var curRank = user.nobleRank || 0;
+    var nextRank = NOBLE_RANK_CONFIG.RANKS[curRank + 1];
+    var myMedals = user.royalMedals || 0;
+    
+    var body = "👑 [국가 왕실 집무실]\n" +
+               "━━━━━━━━━━━━━━━\n" +
+               "현재 계급: " + NOBLE_RANK_CONFIG.RANKS[curRank].name + "\n" +
+               "보유 훈장: " + myMedals + "개\n\n" +
+               "[🎖️ 작위 수여 조건]\n";
+    
+    NOBLE_RANK_CONFIG.RANKS.forEach(function(r, i) {
+        if (i === 0) return;
+        var mark = (curRank >= i) ? "✅" : (myMedals >= r.medals ? "⭕" : "❌");
+        body += i + ". " + r.name + ": 훈장 " + r.medals + "개 " + mark + "\n";
+    });
+
+    body += "\n[✨ 작위별 상시 혜택]\n" +
+            "• 공통: 각 단계별 특산품 발견확률 +10% 누적\n" +
+            "• 공작 달성 시: 특산품 발견확률 100% 확정\n\n" +
+            "💬 [승급 방법]: 원하는 작위 번호를 입력하세요.\n" +
+            "↩️ 뒤로 / ❎취소";
+
+    replier.reply(formatCommand("🏰 왕실 집무실", user, body));
+    
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    globalData.rooms[logicRoom].features.states.menuWait[targetUid] = { type: 'trade_royal_office', time: Date.now() };
+}
+
+function _handleRoyalOffice(choice, user, data, replier, roomName, targetUid) {
+    var idx = parseInt(choice);
+    if (isNaN(idx) || idx < 1 || idx >= NOBLE_RANK_CONFIG.RANKS.length) {
+        return replier.reply(formatError(user, "번호 오류", "승급을 희망하는 작위 번호를 입력하세요."));
+    }
+
+    if (user.nobleRank >= idx) return replier.reply(formatError(user, "승급 불가", "이미 해당 작위이거나 더 높은 직위를 보유 중입니다."));
+    if (user.nobleRank !== idx - 1) return replier.reply(formatError(user, "승급 불가", "작위는 순차적으로만 승급할 수 있습니다."));
+
+    var targetRank = NOBLE_RANK_CONFIG.RANKS[idx];
+    if (user.royalMedals < targetRank.medals) {
+        return replier.reply(formatError(user, "훈장 부족", targetRank.name + " 수여에는 훈장 " + targetRank.medals + "개가 필요합니다."));
+    }
+
+    // 승급 집행
+    user.royalMedals -= targetRank.medals;
+    user.nobleRank = idx;
+    user.skipHealing = true;
+
+    var winMsg = "🎊 [국가 왕실: 작위 수여식] 🎊\n" +
+                 "━━━━━━━━━━━━━━━\n" +
+                 "국가 발전에 헌신한 '" + user.name + "'님께\n" +
+                 "왕실의 이름으로 [" + targetRank.name + "] 작위를 하사합니다.\n\n" +
+                 "✨ 상시 혜택: 특산품 발견확률 " + (targetRank.bonus * 100).toFixed(0) + "% 보너스 적용\n" +
+                 "━━━━━━━━━━━━━━━\n" +
+                 "이제 의원님의 위상은 국가 전역에 빛날 것입니다.";
+    
+    replier.reply(winMsg);
+    delete data.rooms[roomName].features.states.menuWait[targetUid];
+    safeSaveData(data, true);
 }
 
 /**

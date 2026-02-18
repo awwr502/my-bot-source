@@ -17055,15 +17055,20 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var taxTag = "";    
     var pBonusTotal = 0;
 
-    // [v17.7.3] 정산 시 전역 변수가 아닌 '박제된 계약 정보'를 참조 (출발 시간 기준 판정)
-    var quest = v.contractSnapshot; 
+    // [v17.7.4] 퀘스트 판정 로직 보강 (과도기 데이터 유실 방지)
     var isQuestSuccess = false;
-
-    // 판정 조건: 박제된 계약이 있고, 출발 시각(v.startTime)이 계약 기한(startTime ~ endTime) 내에 있는가?
-    if (quest && v.startTime >= quest.startTime && v.startTime <= quest.endTime && v.dest === quest.nation) {
-        var deliveredQty = Number(v.cargoSnapshot[quest.item] || 0);
-        if (deliveredQty >= 20) { 
-            isQuestSuccess = true;
+    // 1순위: 배에 박제된 스냅샷 참조 / 2순위: 스냅샷 없으면 현재 방의 활성 퀘스트 참조
+    var quest = v.contractSnapshot || (roomData.features ? roomData.features.activeContract : null);
+    
+    if (quest && quest.active) {
+        // 출발 시간이 기한 내에 있거나, 혹은 도착했을 때 여전히 해당 퀘스트가 진행 중인 경우 인정
+        var timeValid = (v.startTime >= quest.startTime && v.startTime <= quest.endTime) || (Date.now() <= quest.endTime);
+        
+        if (timeValid && v.dest === quest.nation) {
+            var deliveredQty = Number(v.cargoSnapshot[quest.item] || 0);
+            if (deliveredQty >= 20) { 
+                isQuestSuccess = true;
+            }
         }
     }
 
@@ -17496,13 +17501,16 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         user.rareSpecialties = Math.max(0, (user.rareSpecialties || 0) - rareLootCount);
     }
 
-    // 1. 순수익 합계 계산 및 초월 강화 보정
+    // [v17.7.4] 수익 강화 가드 (손실 뻥튀기 방지)
     var profitBonusMult = 1 + ((user.enhProfit || 0) / 100);
     
-    var enhancedPureMargin = Math.floor(efficientMargin * profitBonusMult); // 순수익 * 강화배율
-    var totalNetMargin = enhancedPureMargin + pBonusTotal;                  // + 발전도 보너스
+    // 순이익이 0보다 클 때만 강화 배율을 적용하고, 마이너스일 때는 원금만 차감
+    var enhancedPureMargin = (efficientMargin > 0) 
+                             ? Math.floor(efficientMargin * profitBonusMult) 
+                             : efficientMargin;
 
-    var enhProfitTag = (user.enhProfit > 0) ? " (✨수익강화 +" + user.enhProfit + "%)" : "";
+    var totalNetMargin = enhancedPureMargin + pBonusTotal; 
+    var enhProfitTag = (user.enhProfit > 0 && efficientMargin > 0) ? " (✨수익강화 +" + user.enhProfit + "%)" : "";
 
     // 2. 해상 이벤트(재해/축제) 실정산 로직 (기존 로직 보존)
     if (triggeredDisaster) {

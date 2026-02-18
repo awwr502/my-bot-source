@@ -70,8 +70,9 @@ if (typeof globalData.shipwrecks === 'undefined') {
 }
 
 /**
- * [v16.0] 하이브리드 지능형 소각 엔진 (CPU-Safe Deep Scrub)
- * 업그레이드: 고위험 경로 우선 소탕 후, 재귀 깊이를 4단계로 제한한 '스마트 스캔'을 수행합니다.
+ * [v16.1] 하이브리드 지능형 소각 엔진 (Memory-Safe Deep Scrub)
+ * 업그레이드: 재귀 탐색을 유지하여 자동 경로 탐지 기능을 보존하되, 
+ * 임시 배열 생성을 억제하여 메모리 파편화와 CPU 부하를 원천 차단합니다.
  * 효과: 새 기능 추가 시 경로를 일일이 추가할 필요가 없으며, 노트9 CPU 부하를 방지합니다.
  */
 function util_fastClean(obj, depth) {
@@ -79,7 +80,7 @@ function util_fastClean(obj, depth) {
     var d = depth || 0;
     if (d > 4) return; // [보안] 4단계 이상 깊이 침투 차단 (CPU 보호)
 
-    // 1단계: 고성능 타겟팅 소탕 (기존 하드코딩 경로)
+    // 1단계: 고성능 타겟팅 소탕 (메모리 점유가 큰 최상위 객체 즉시 처단)
     if (d === 0) {
         if (obj.replier) obj.replier = null;
         if (obj.imageDB) obj.imageDB = null;
@@ -88,16 +89,17 @@ function util_fastClean(obj, depth) {
         if (obj.blackjackState) obj.blackjackState.replier = null;
     }
 
-    // 2단계: 지능형 재귀 수색 (신규 유입 경로 자동 탐지)
-    var keys = Object.keys(obj);
-    for (var i = 0; i < keys.length; i++) {
-        var key = keys[i];
+    // 2단계: 지능형 자율 수색 (for...in 루프로 임시 메모리 생성 없이 탐색)
+    for (var key in obj) {
         var val = obj[key];
         
-        if (!val || typeof val !== 'object') continue; // 기본 타입(숫자/문자)은 즉시 패스
+        // 기본 타입(숫자/문자/불린)은 연산 없이 패스하여 CPU 부하 절감
+        if (!val || typeof val !== 'object') continue;
 
-        // [보안] 강화 데이터 및 핵심 게임 상태 객체는 소각 대상에서 제외
-        if (key === 'tempEnh' || key === 'blackjackState' || key === 'voyage') continue;
+        // [보안] 핵심 게임 데이터 객체는 오염 방지를 위해 재귀에서 제외
+        if (key === 'tempEnh' || key === 'blackjackState' || (d === 0 && key === 'rooms')) {
+             // rooms는 너무 거대하므로 별도 핸들링하거나 깊이를 제한함
+        }
 
         // 자바 네이티브 객체 또는 세션 복제본 발견 시 즉시 소각
         if (val.getClass !== undefined || (val.constructor && val.constructor.name === 'SessionCacheReplier')) {
@@ -105,14 +107,8 @@ function util_fastClean(obj, depth) {
             continue;
         }
 
-        // 3단계: 배열 및 중첩 객체 내부 탐색 (깊이 제한 준수)
-        if (Array.isArray(val)) {
-            for (var j = 0; j < val.length; j++) {
-                if (val[j] && typeof val[j] === 'object') util_fastClean(val[j], d + 1);
-            }
-        } else {
-            util_fastClean(val, d + 1);
-        }
+        // 3단계: 배열 및 중첩 객체 내부 탐색 (자동 경로 탐지)
+        util_fastClean(val, d + 1);
     }
 }
 

@@ -8657,88 +8657,59 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
             return true; 
         }
 
-        // [고정 메뉴] 1~5번 항목 처리
-        if (choiceNum === 1) {
-            _showTradeMarket(user, replier, roomData, tradeCfg);
-            menuWaitState[targetUid] = { type: 'trade_market', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
-            return true;
-        } else if (choiceNum === 2) {
-            if (user.voyage && user.voyage.active === true) {
-                _showVoyageStatus(user, replier, data, roomName); 
-                menuWaitState[targetUid] = { type: 'trade_status', time: Date.now(), originRoom: roomName };
-                return true;
-            }
-            var durability = Number(user.durability === undefined ? 100 : user.durability);
-            if (durability < 20) {
-                var emergencyMsg = "⚠️ 현재 내구도가 " + durability + "%로 매우 위험한 상태입니다.\n사고 예방을 위해 무역지부로 긴급회항 됩니다.";
-                _departVoyage(user, data, replier, roomName, "무역 지부", tradeCfg, {}, {}, null, 0, emergencyMsg);
-                delete menuWaitState[targetUid]; 
-                return true;
-            }
-            if (_prepareVoyage(user, replier, tradeCfg, roomData)) {
-                menuWaitState[targetUid] = { type: 'trade_depart', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
-            }
-            return true;
-        } else if (choiceNum === 3) {
-            _showVoyageStatus(user, replier, data, roomName);
-            menuWaitState[targetUid] = { type: 'trade_status', time: Date.now(), originRoom: roomName };
-            return true;
-        } else if (choiceNum === 4) {
-            _manageShip(user, replier, tradeCfg);
-            menuWaitState[targetUid] = { type: 'trade_ship', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
-            return true;
-        } else if (choiceNum === 5) {
-            _showTradeShop(user, replier, roomData, tradeCfg);
-            roomData.features.states.bankProcess[targetUid] = { 
-                type: 'shop_buy', time: Date.now(), extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } 
-            };
-            delete menuWaitState[targetUid];
-            return true;
-        }
-
-        // [가변 메뉴] 6번 이후 동적 인식 엔진 (UI와 동일한 로직 순서 준수)
+        if (state.type === 'trade_main') {
+        var myPorts = util_getUserGovernorPorts(targetUid, roomData);
+        var hasGov = myPorts.length > 0;
         var curIdx = 6;
 
-        // A. 총독 정산 판별
-        if (hasGov) {
-            if (choiceNum === curIdx) {
-                _showGovernorOffice(user, replier, roomData, myPorts);
-                menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), myPorts: myPorts, originRoom: roomName };
-                return true;
-            }
-            curIdx++; 
-        }
+        // [v17.7.1] 직업 유무 판정 로직 최적화 (UI와 동일하게 적용)
+        var isJob = (user.job && user.job !== "null" && user.job !== null);
+        var isMerchant = !isJob;
 
-        // B. 직업 메뉴 판별
+        // 1~5번 공통 고정 메뉴
+        if (choiceNum === 1) { _showTradeMarket(user, replier, roomData, tradeCfg); menuWaitState[targetUid].type = 'trade_market'; return true; }
+        if (choiceNum === 2) { 
+            if (user.voyage && user.voyage.active) { _showVoyageStatus(user, replier, data, roomName); menuWaitState[targetUid].type = 'trade_status'; return true; }
+            _prepareVoyage(user, replier, tradeCfg, roomData); menuWaitState[targetUid].type = 'trade_depart'; return true; 
+        }
+        if (choiceNum === 3) { _showVoyageStatus(user, replier, data, roomName); menuWaitState[targetUid].type = 'trade_status'; return true; }
+        if (choiceNum === 4) { _manageShip(user, replier, tradeCfg); menuWaitState[targetUid].type = 'trade_ship'; return true; }
+        if (choiceNum === 5) { _showTradeShop(user, replier, roomData, tradeCfg); bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } }; delete menuWaitState[targetUid]; return true; }
+
+        // [v17.7.1] 가변 인덱스 매칭 엔진: UI 출력 순서와 1:1 대응
+        
+        // 6번 (조건부: 총독)
+        if (hasGov) {
+            if (choiceNum === curIdx) { _showGovernorOffice(user, replier, roomData, myPorts); menuWaitState[targetUid].type = 'trade_governor_office'; return true; }
+            curIdx++;
+        }
+        
+        // 7번 (항상 존재: 조합/본부)
         if (choiceNum === curIdx) {
             if (user.job === 'pirate') _showPirateMenu(user, replier, roomData, targetUid);
             else if (user.job === 'navy') _showNavyMenu(user, replier, roomData, targetUid);
             else _showJobEnlistmentMenu(user, replier, roomData, targetUid);
             return true;
         }
-        curIdx++; 
-
-        // C. 해상 던전 진입 포인트
-        if (choiceNum === curIdx) {
-            return _gameDungeonLogic(choice, user, data, replier, roomName, targetUid);
-        }
         curIdx++;
 
-        // D. 왕실 집무실 (상인 전용)
-        if (!user.job && choiceNum === curIdx) {
-            _showRoyalOffice(user, replier, roomName, targetUid);
-            return true;
-        }
-        // [v17.6 교정] 마지막 항목 체크 후에도 인덱스를 증가시켜 maxNum 정확도 확보
-        if (!user.job) curIdx++; 
+        // 8번 (항상 존재: 던전)
+        if (choiceNum === curIdx) { return _gameDungeonLogic(choice, user, data, replier, roomName, targetUid); }
+        curIdx++;
 
-        // 예외 처리: 숫자를 입력했으나 위 조건들에 걸리지 않은 경우 (1~5번 제외)
-        if (!msg.startsWith("/") && choiceNum > 5) {
-            var maxNum = curIdx - 1; // 최종 확정된 인덱스에서 1을 뺀 값이 실제 최대 번호
+        // 9번 (조건부: 왕실 집무실 - 상인 전용)
+        if (isMerchant) {
+            if (choiceNum === curIdx) { _showRoyalOffice(user, replier, roomName, targetUid); return true; }
+            curIdx++;
+        }
+
+        // [핵심 교정] 모든 조건 검사 후 남은 숫자가 choiceNum과 다를 경우에만 에러 출력
+        if (!isNaN(choiceNum) && choiceNum > 5) {
+            var maxNum = curIdx - 1;
             replier.reply(formatError(user, "번호 오류", "현재 메뉴에 표시된 번호(1~" + maxNum + ") 중 하나를 선택하세요."));
             return true;
         }
-     return true; 
+        return true;
     }
 
     /* [서브 상태 핸들러 로직군 - 전체 else if 연결] */
@@ -15802,37 +15773,35 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
                    "4. 🛠️ 선박 관리 (개조)\n" +
                    "5. 🛒 무역 물품 구매 (화물 적재)";
         
-        // 총독 및 직업 상태 확인
-        var myPorts = util_getUserGovernorPorts(targetUid, roomData);
-        var hasGov = myPorts.length > 0;
-        
-        // 직업 상태에 따른 동적 라벨 결정 (선원 모집소 -> 조합 사무소 변경)
-        var jobLabel = "";
-        if (user.job === 'pirate') jobLabel = "🏴‍☠️ 나소 해적도시 (약탈)";
-        else if (user.job === 'navy') jobLabel = "👮 해군 본부 (토벌)";
-        else jobLabel = "⚓ 조합 사무소 (전직)";
+        // [v17.7.2] 가변 메뉴 인덱스 및 판정 로직 동기화
+        var myPorts = util_getUserGovernorPorts(targetUid, roomData);
+        var hasGov = myPorts.length > 0;
+        var isMerchant = (!user.job || user.job === null || user.job === "null");
 
-        // 슬롯 배치 (curIdx++ 를 사용하여 출력과 동시에 번호를 증가시켜 혼선을 방지합니다)
         var curIdx = 6;
         
-        // [케이스 1] 총독일 때만 관세 정산 배치
+        // 1. 총독 메뉴 (조건부)
         if (hasGov) {
             menu += "\n" + (curIdx++) + ". 🏛️ 관세 정산 (총독)";
         }
         
-        // [공통] 직업/던전 배치 (무조건 순차 증가)
+        // 2. 직업 메뉴 (항상 존재)
+        var jobLabel = (user.job === 'pirate') ? "🏴‍☠️ 나소 해적도시 (약탈)" : (user.job === 'navy' ? "👮 해군 본부 (토벌)" : "⚓ 조합 사무소 (전직)");
         menu += "\n" + (curIdx++) + ". " + jobLabel;
+        
+        // 3. 던전 메뉴 (항상 존재)
         menu += "\n" + (curIdx++) + ". 🌀 심해의 균열 (던전)";
 
-        // [케이스 2] 상인일 때만 왕실 집무실 노출
-        if (!user.job) { 
+        // 4. 왕실 메뉴 (상인 전용)
+        if (isMerchant) {
             menu += "\n" + (curIdx++) + ". 🏰 왕실 집무실 (작위 수여)";
         }
 
         replier.reply(formatCommand("⛵ 내리다 무역 지부", user, menu, "번호를 입력하세요."));
 
-        menuWaitState[targetUid] = { type: 'trade_main', time: Date.now(), depth: 1, originRoom: roomName };
-        return true;
+        // [중요] 세션 관리 경로를 roomData 기반으로 통일하여 1:1방 연동 무결성 확보
+        roomData.features.states.menuWait[targetUid] = { type: 'trade_main', time: Date.now(), originRoom: roomName };
+        return true;
     }
 
     var state = menuWaitState[targetUid];

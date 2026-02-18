@@ -16081,11 +16081,15 @@ function _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid
  */
 function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS) {
     var market = roomData.features.tradeMarket || cfg.NATIONS;
-    // [보안 패치] 목적지가 무역 지부인 경우 예외 객체 생성하여 TypeError 방지
     var nInfo = (dest === "무역 지부") ? { favorite: "N/A", hate: "N/A" } : (market[dest] || { favorite: "NONE", hate: "NONE" });
     var currentLoc = user.currentLoc || "무역 지부";
     var body = "📍 목적지: [" + dest + "]\n\n" +
                "[📦 무역품 보유 현황]\n";
+
+    if (user.unknownCargo > 0) {
+        body += "📦 미확인 교역품: " + user.unknownCargo + "상자 (변환 대기)\n" +
+                "💡 [출항] 시 적재량이 가장 많은 품목으로 자동 변환됩니다.\n\n";
+    }
     
     var availableItems = []; 
     // 1. 일반 화물: 유저 보유량(user.cargo)에서 현재 선택된 양(selC)을 뺀 나머지만 계산
@@ -16370,6 +16374,12 @@ function _prepareVoyage(user, replier, cfg, roomData) {
     for (var s in mySpec) {
         if (mySpec[s] > 0) { cargoList.push("⭐ " + s + ": " + mySpec[s] + "상자"); total += 1; }
     }
+
+    if (user.unknownCargo > 0) {
+        cargoList.push("📦 미확인 교역품: " + user.unknownCargo + "상자");
+        total += user.unknownCargo;
+    }
+
     if (user.rareSpecialties > 0) cargoList.push("• 💎 진귀한 보물: " + user.rareSpecialties + "개");
     
     if (total === 0 && cargoList.length === 0) {
@@ -16427,28 +16437,26 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     user.skipHealing = true;
 
     var unknownCount = Number(user.unknownCargo || 0);
-    if (unknownCount > 0 && Object.keys(selC).length > 0) {
+    if (unknownCount > 0) {
         var maxQty = -1;
         var maxGoodKey = "";
 
-        // 1. 배에 실린 일반 화물(selC) 중 가장 많은 품목 탐색
+        // 1. 배에 실린 일반 화물(selC) 중 최대 수량 품목 탐색
         for (var good in selC) {
-            if (selC[good] > maxQty) {
-                maxQty = selC[good];
+            var currentQty = Number(selC[good] || 0);
+            if (currentQty > maxQty) {
+                maxQty = currentQty;
                 maxGoodKey = good;
             }
         }
 
+        // 2. 변환 집행: 가장 많이 실린 품목이 있을 때만 작동
         if (maxGoodKey !== "") {
-            // 2. 가장 많은 품목으로 미확인 화물 전량 변환 및 적재
             selC[maxGoodKey] = (Number(selC[maxGoodKey]) || 0) + unknownCount;
+            user.unknownCargo = 0; // 유저 데이터 초기화
             
-            // 3. 유저의 미확인 화물 및 가방 원본 데이터 차감 (이미 실었으므로)
-            user.unknownCargo = 0;
-            
-            var transformMsg = "✨ [물자 변환 완료]: 미확인 교역품 " + unknownCount + "상자가 수량이 가장 많은 [" + maxGoodKey + "](으)로 변환되어 선적되었습니다.";
-            if (extraMsg) extraMsg += "\n" + transformMsg;
-            else extraMsg = transformMsg;
+            var transformMsg = "✨ [물자 변환]: 미확인 교역품 " + unknownCount + "상자가 수량이 가장 많은 [" + maxGoodKey + "](으)로 변환되어 선적되었습니다.";
+            extraMsg = extraMsg ? extraMsg + "\n" + transformMsg : transformMsg;
         }
     }
 

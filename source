@@ -18,6 +18,24 @@ var SHIP_ENHANCE_CONFIG = {
     COST:   100000                // 강화 1회 비용
 };
 
+var NOBLE_RANK_CONFIG = {
+    RANKS: [
+        { name: "평민", medals: 0, bonus: 0 },
+        { name: "남작", medals: 30, bonus: 0.1 },
+        { name: "자작", medals: 60, bonus: 0.2 },
+        { name: "백작", medals: 90, bonus: 0.3 },
+        { name: "후작", medals: 120, bonus: 0.4 },
+        { name: "공작", medals: 150, bonus: 0.5 }
+    ]
+};
+
+var TRADE_CONTRACT_CONFIG = {
+    INTERVAL_HOURS: 2,           // 2시간 간격
+    DURATION_MINS: 60,           // 1시간 지속
+    MIN_QTY: 20,                 // 최소 납품(성공) 기준
+    REWARD_MEDALS: [1, 2]        // 보상 훈장 랜덤 범위
+};
+
 // === [v17.3] 난파선 인양 시스템 설정 추가 ===
 var SCAVENGE_CONFIG = {
     RECOVERY_RATE: { min: 1.0, max: 1.0 }, // 손실분 중 100%를 난파선으로 박제
@@ -285,7 +303,9 @@ var USER_SCHEMA = [
     { key: 'hasNotifiedReward', default: false, type: 'boolean' },
     { key: 'durability', default: 100, type: 'number' }, // 선박 내구도 (0~100)
     { key: 'currentLoc', default: '무역 지부', type: 'string' }, // 현재 위치
-    { key: 'eldoradoUnlocked', default: false, type: 'boolean' } // 엘도라도 영구 해금 여부
+    { key: 'eldoradoUnlocked', default: false, type: 'boolean' }, // 엘도라도 영구 해금 여부
+    { key: 'royalMedals', default: 0, type: 'number' },
+    { key: 'nobleRank', default: 0, type: 'number' }
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -4409,6 +4429,60 @@ function _runSector16Logic(data, ctx) {
         ctx.isUpdated = true;
     }
 
+    /* 📜 도시 귀족 납품 계약 (Trade Contracts) 발생 엔진 */
+    try {
+        // 투자가능 시간(07~23) 내에서만 발생
+        if (currentHour >= 7 && currentHour <= 23) {
+            // 2시간 간격으로 이번 주기에 발생할 '랜덤 분' 결정 (데이터 유실 대비 undefined 체크)
+            if (currentHour % NOBLE_RANK_CONFIG.INTERVAL_HOURS === 0 && data.nextQuestMinute === undefined) {
+                data.nextQuestMinute = Math.floor(Math.random() * 60);
+            }
+
+            // 지정된 랜덤 시간이 되면 계약 생성
+            if (currentMin === data.nextQuestMinute && data.lastQuestHour !== currentHour) {
+                data.lastQuestHour = currentHour;
+                data.nextQuestMinute = undefined; // 다음 주기를 위해 초기화
+
+                var nations = ["포르투", "코콜라", "나폴리", "베라크루스", "킴벌리"];
+                var goods = ["식료품", "공업품", "공예품", "귀금속", "보석"];
+                
+                var targetNation = nations[Math.floor(Math.random() * nations.length)];
+                var targetGood = goods[Math.floor(Math.random() * goods.length)];
+                var targetQty = Math.floor(Math.random() * 81) + 20; // 20~100 랜덤
+                
+                mainRoomData.features.activeContract = {
+                    id: Date.now(),
+                    nation: targetNation,
+                    item: targetGood,
+                    qty: targetQty,
+                    startTime: Date.now(),
+                    endTime: Date.now() + (60 * 60 * 1000), // 1시간 제한
+                    active: true
+                };
+
+                var questMsg = "📜 [도시 귀족 긴급 납품 계약 발령]\n" +
+                               "━━━━━━━━━━━━━━━\n" +
+                               "📍 대상 항구: [" + targetNation + "]\n" +
+                               "📦 요청 품목: [" + targetGood + "]\n" +
+                               "🔢 희망 수량: " + targetQty + "상자 이상\n\n" +
+                               "🕒 마감 시간: " + new Date(mainRoomData.features.activeContract.endTime).toLocaleTimeString() + " 까지\n" +
+                               "🎁 계약 보상: 왕실 훈장 1~2개 + 시세 1.5배 보장\n" +
+                               "━━━━━━━━━━━━━━━\n" +
+                               "💡 20상자 이상만 실어 보내도 계약 이행으로 간주됩니다.";
+                
+                Api.replyRoom(ctx.targetRoom, questMsg);
+                ctx.isUpdated = true;
+            }
+        }
+        
+        // 만료된 계약 실시간 자동 비활성화
+        if (mainRoomData.features.activeContract && mainRoomData.features.activeContract.active) {
+            if (Date.now() > mainRoomData.features.activeContract.endTime) {
+                mainRoomData.features.activeContract.active = false;
+            }
+        }
+    } catch(e) { Log.error("Quest Scheduler Error: " + e); }
+
     /* [시스템] 5분 주기 오토세이브 & 부동산 시장 제어 */
     try {
                 if (currentMin % 5 === 0 && data.lastAutoSaveMin !== currentMin) {
@@ -8523,75 +8597,93 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         return true;
     }
 
-    // [수정] 기존의 단독 if를 'else if'로 연결하여 논리적 충돌 방지
+    // 기존의 단독 if를 'else if'로 연결하여 논리적 충돌 방지
     else if (state.type === 'trade_main') {
-        if (user.job && (choice === "2" || choice === "3" || choice === "5")) {
-            var jobTitle = (user.job === 'pirate' ? "해적" : "해군");
-            replier.reply(formatError(user, "상업 활동 제한", 
-                "현재 [" + jobTitle + "] 신분이므로 상업용 화물을 적재하거나 출항할 수 없습니다.\n" +
-                "조합 사무소에서 은퇴 후 이용하세요."));
-            return true; // 로직 중단
-        }
+        var choiceNum = parseInt(choice); // 입력받은 문자를 숫자로 변환
         var myPorts = util_getUserGovernorPorts(targetUid, roomData);
         var hasGov = myPorts.length > 0;
         var tradeCfg = SYSTEM_CONFIG.TRADE;
 
-        if (choice === "1") {
+        // [가드] 직업(해적/해군) 보유 시 상업 활동(출항, 현황조회, 적재) 제한
+        if (user.job && (choiceNum === 2 || choiceNum === 3 || choiceNum === 5)) {
+            var jobTitle = (user.job === 'pirate' ? "해적" : "해군");
+            replier.reply(formatError(user, "상업 활동 제한", 
+                "현재 [" + jobTitle + "] 신분이므로 상업용 화물을 적재하거나 출항할 수 없습니다.\n" +
+                "조합 사무소에서 은퇴 후 이용하세요."));
+            return true; 
+        }
+
+        // [고정 메뉴] 1~5번 항목 처리
+        if (choiceNum === 1) {
             _showTradeMarket(user, replier, roomData, tradeCfg);
             menuWaitState[targetUid] = { type: 'trade_market', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
-        } else if (choice === "2") {
+            return true;
+        } else if (choiceNum === 2) {
             if (user.voyage && user.voyage.active === true) {
                 _showVoyageStatus(user, replier, data, roomName); 
                 menuWaitState[targetUid] = { type: 'trade_status', time: Date.now(), originRoom: roomName };
                 return true;
             }
-
-            /* [v17.2] 자동 긴급 회항 시스템 적용 */
             var durability = Number(user.durability === undefined ? 100 : user.durability);
-            
             if (durability < 20) {
-                var emergencyMsg = "⚠️ 현재 내구도가 " + durability + "%로 매우 위험한 상태입니다.\n" +
-                                   "사고 예방을 위해 무역지부로 긴급회항 됩니다.";
-                
+                var emergencyMsg = "⚠️ 현재 내구도가 " + durability + "%로 매우 위험한 상태입니다.\n사고 예방을 위해 무역지부로 긴급회항 됩니다.";
                 _departVoyage(user, data, replier, roomName, "무역 지부", tradeCfg, {}, {}, null, 0, emergencyMsg);
                 delete menuWaitState[targetUid]; 
                 return true;
             }
-
-            // 내구도가 20% 이상일 때만 기존처럼 목적지 선택창으로 진입
             if (_prepareVoyage(user, replier, tradeCfg, roomData)) {
-                menuWaitState[targetUid] = { 
-                    type: 'trade_depart', 
-                    time: Date.now(), 
-                    depth: 2, 
-                    originRoom: state.originRoom || roomName 
-                };
+                menuWaitState[targetUid] = { type: 'trade_depart', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
             }
             return true;
-        } else if (choice === "3") {
+        } else if (choiceNum === 3) {
             _showVoyageStatus(user, replier, data, roomName);
             menuWaitState[targetUid] = { type: 'trade_status', time: Date.now(), originRoom: roomName };
-        } else if (choice === "4") {
+            return true;
+        } else if (choiceNum === 4) {
             _manageShip(user, replier, tradeCfg);
             menuWaitState[targetUid] = { type: 'trade_ship', time: Date.now(), depth: 2, originRoom: state.originRoom || roomName };
-        } else if (choice === "5") {
+            return true;
+        } else if (choiceNum === 5) {
             _showTradeShop(user, replier, roomData, tradeCfg);
             roomData.features.states.bankProcess[targetUid] = { 
                 type: 'shop_buy', time: Date.now(), extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } 
             };
             delete menuWaitState[targetUid];
-        } else if (choice === "6") {
-            if (hasGov) {
+            return true;
+        }
+
+        // [가변 메뉴] 6번 이후 동적 인식 엔진
+        var curIdx = 6;
+
+        // A. 총독 정산 판별
+        if (hasGov) {
+            if (choiceNum === curIdx) {
                 _showGovernorOffice(user, replier, roomData, myPorts);
-                menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), depth: 2, myPorts: myPorts, originRoom: state.originRoom || roomName };
-            } else {
-                _showJobEnlistmentMenu(user, replier, roomData, targetUid);
+                menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), myPorts: myPorts, originRoom: roomName };
+                return true;
             }
-        } else if (choice === "7" && hasGov) {
-            _showJobEnlistmentMenu(user, replier, roomData, targetUid);
-        } else {
-            if (msg.startsWith("/")) return false;
-            replier.reply(formatError(user, "번호 오류", "1~" + (hasGov ? 7 : 6) + "번 사이를 선택하세요."));
+            curIdx++; 
+        }
+
+        // B. 직업 메뉴 판별
+        if (choiceNum === curIdx) {
+            if (user.job === 'pirate') _showPirateMenu(user, replier, roomData, targetUid);
+            else if (user.job === 'navy') _showNavyMenu(user, replier, roomData, targetUid);
+            else _showJobEnlistmentMenu(user, replier, roomData, targetUid);
+            return true;
+        }
+        curIdx++; 
+
+        // C. 왕실 집무실 판별 (상인일 때만 노출)
+        if (!user.job && choiceNum === curIdx) {
+            _showRoyalOffice(user, replier, roomName, targetUid); 
+            return true;
+        }
+
+        // 예외 처리: 메뉴에 없는 번호 입력 시
+        if (!msg.startsWith("/")) {
+            var maxNum = user.job ? (curIdx - 1) : curIdx;
+            replier.reply(formatError(user, "번호 오류", "현재 메뉴에 표시된 번호(1~" + maxNum + ") 중 하나를 선택하세요."));
         }
         return true;
     }
@@ -13540,6 +13632,12 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
     if (msg === "/내정보") {
         var crTargetRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
         var cr = getCreditInfo(user.creditScore, crTargetRoom);
+        // 작위 정보 추출
+        var rankInfo = NOBLE_RANK_CONFIG.RANKS[user.nobleRank || 0];
+        var nobleUI = "🎖️ [왕실 작위]: " + rankInfo.name + " (훈장 " + (user.royalMedals || 0) + "개)\n" +
+                      "✨ 효과: 특산품 발견확률 +" + (rankInfo.bonus * 100).toFixed(0) + "%\n" +
+                      "━━━━━━━━━━━━━━━\n";
+
         var authInfo = "🎮 게임 인증: " + (user.gameAuthCount || 0) + "/2 (시즌)";
         
         var bankDebt = (user.loan && user.loan.debt) ? Math.floor(Number(user.loan.debt)) : 0;
@@ -15643,6 +15741,7 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         // [UI 개편] 요청하신 순서대로 레이아웃 재구성
         var menu = "📍 현재 위치: " + currentLocation + "\n" +
                    "🚢 보유 선박: " + shipLabel + " (Lv." + shipLevel + ")\n" +
+                   "🎖️ 작위: " + NOBLE_RANK_CONFIG.RANKS[user.nobleRank || 0].name + "\n" + // 작위 추가
                    "🛠️ 내구도: " + dIcon + " " + durability + "%\n" +
                    "📦 일반 교역품: " + currentGeneralCount + " / " + totalCapacity + " 칸\n" + 
                    "📦 특산품: " + currentSpecTypeCount + " / 5 종류\n" + 
@@ -15666,14 +15765,24 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         else jobLabel = "⚓ 조합 사무소 (전직)";
 
         // 슬롯 배치 (총독이면 6번에 정산, 7번에 직업 / 아니면 6번에 직업)
-        if (hasGov) {
-            menu += "\n6. 🏛️ 관세 정산 (총독)";
-            menu += "\n7. " + jobLabel;
-        } else {
-            menu += "\n6. " + jobLabel;
-        }
-        
-        replier.reply(formatCommand("⛵ 내리다 무역 지부", user, menu, "번호를 입력하세요."));
+        var curIdx = 6;
+        
+        // [케이스 1, 2] 총독일 때만 6번(또는 시작 번호)에 관세 정산 배치
+        if (hasGov) {
+            menu += "\n" + curIdx + ". 🏛️ 관세 정산 (총독)";
+            curIdx++;
+        }
+        
+        // [공통] 직업 라벨 배치 (상인이면 전직, 아니면 해당 직업 메뉴)
+        menu += "\n" + curIdx + ". " + jobLabel;
+        curIdx++;
+        
+        // [케이스 3] 직업이 없을 때(상인일 때)만 왕실 집무실 노출
+        if (!user.job) { 
+            menu += "\n" + curIdx + ". 🏰 왕실 집무실 (작위 수여)";
+        }
+
+        replier.reply(formatCommand("⛵ 내리다 무역 지부", user, menu, "번호를 입력하세요."));
 
         menuWaitState[targetUid] = { type: 'trade_main', time: Date.now(), depth: 1, originRoom: roomName };
         return true;

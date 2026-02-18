@@ -8641,11 +8641,13 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         return true;
     }
 
-    // 기존의 단독 if를 'else if'로 연결하여 논리적 충돌 방지
+    // 중첩 if문 제거 및 인덱스 매칭 로직 정밀화 (총독/직업/던전/왕실 순서 동기화)
     else if (state.type === 'trade_main') {
         var choiceNum = parseInt(choice); // 입력받은 문자를 숫자로 변환
+        
+        // [핵심] UI 렌더링 시점과 동일한 조건으로 총독 여부 재판단
         var myPorts = util_getUserGovernorPorts(targetUid, roomData);
-        var hasGov = myPorts.length > 0;
+        var hasGov = (myPorts && myPorts.length > 0);
         var tradeCfg = SYSTEM_CONFIG.TRADE;
 
         // [가드] 직업(해적/해군) 보유 시 상업 활동(출항, 현황조회, 적재) 제한
@@ -8657,16 +8659,12 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
             return true; 
         }
 
-        if (state.type === 'trade_main') {
-        var myPorts = util_getUserGovernorPorts(targetUid, roomData);
-        var hasGov = myPorts.length > 0;
-        var curIdx = 6;
-
-        // [v17.7.1] 직업 유무 판정 로직 최적화 (UI와 동일하게 적용)
+        // [v17.7.1] 가변 인덱스 매칭 엔진: UI 출력 순서와 1:1 대응
         var isJob = (user.job && user.job !== "null" && user.job !== null);
         var isMerchant = !isJob;
+        var curIdx = 6; // 가변 메뉴 시작 번호
 
-        // 1~5번 공통 고정 메뉴
+        // 1~5번 고정 메뉴 처리
         if (choiceNum === 1) { _showTradeMarket(user, replier, roomData, tradeCfg); menuWaitState[targetUid].type = 'trade_market'; return true; }
         if (choiceNum === 2) { 
             if (user.voyage && user.voyage.active) { _showVoyageStatus(user, replier, data, roomName); menuWaitState[targetUid].type = 'trade_status'; return true; }
@@ -8676,15 +8674,18 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         if (choiceNum === 4) { _manageShip(user, replier, tradeCfg); menuWaitState[targetUid].type = 'trade_ship'; return true; }
         if (choiceNum === 5) { _showTradeShop(user, replier, roomData, tradeCfg); bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } }; delete menuWaitState[targetUid]; return true; }
 
-        // [v17.7.1] 가변 인덱스 매칭 엔진: UI 출력 순서와 1:1 대응
-        
-        // 6번 (조건부: 총독)
+        // [가변 1] 총독 관세 정산 (조건부)
         if (hasGov) {
-            if (choiceNum === curIdx) { _showGovernorOffice(user, replier, roomData, myPorts); menuWaitState[targetUid].type = 'trade_governor_office'; return true; }
+            if (choiceNum === curIdx) { 
+                _showGovernorOffice(user, replier, roomData, myPorts); 
+                // 상태 변경 시 필요한 데이터(myPorts)를 세션에 함께 저장해야 안전함
+                menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), myPorts: myPorts }; 
+                return true; 
+            }
             curIdx++;
         }
         
-        // 7번 (항상 존재: 조합/본부)
+        // [가변 2] 직업/조합 메뉴 (항상 존재)
         if (choiceNum === curIdx) {
             if (user.job === 'pirate') _showPirateMenu(user, replier, roomData, targetUid);
             else if (user.job === 'navy') _showNavyMenu(user, replier, roomData, targetUid);
@@ -8693,17 +8694,19 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         }
         curIdx++;
 
-        // 8번 (항상 존재: 던전)
-        if (choiceNum === curIdx) { return _gameDungeonLogic(choice, user, data, replier, roomName, targetUid); }
+        // [가변 3] 던전 메뉴 (항상 존재) - 여기서 8번이 잡혀야 함
+        if (choiceNum === curIdx) { 
+            return _gameDungeonLogic(choice, user, data, replier, roomName, targetUid); 
+        }
         curIdx++;
 
-        // 9번 (조건부: 왕실 집무실 - 상인 전용)
+        // [가변 4] 왕실 집무실 (조건부: 상인 전용)
         if (isMerchant) {
             if (choiceNum === curIdx) { _showRoyalOffice(user, replier, roomName, targetUid); return true; }
             curIdx++;
         }
 
-        // [핵심 교정] 모든 조건 검사 후 남은 숫자가 choiceNum과 다를 경우에만 에러 출력
+        // [번호 오류 처리] 현재 표시된 최대 번호보다 큰 수 입력 시
         if (!isNaN(choiceNum) && choiceNum > 5) {
             var maxNum = curIdx - 1;
             replier.reply(formatError(user, "번호 오류", "현재 메뉴에 표시된 번호(1~" + maxNum + ") 중 하나를 선택하세요."));
@@ -8759,8 +8762,6 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요."));
        return true;
     }
-    return false;
-}
 
     else if (state.type === 'trade_raid_list') {
         // [방어] 메인방 데이터에 약탈 세션 저장소가 없는 경우 즉시 생성하여 크래시 방지

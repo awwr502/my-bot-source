@@ -8696,7 +8696,7 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
             return true;
         }
 
-        // [가변 메뉴] 6번 이후 동적 인식 엔진
+        // [가변 메뉴] 6번 이후 동적 인식 엔진 (UI와 동일한 로직 순서 준수)
         var curIdx = 6;
 
         // A. 총독 정산 판별
@@ -8729,14 +8729,15 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
             _showRoyalOffice(user, replier, roomName, targetUid);
             return true;
         }
+        // [v17.6 교정] 마지막 항목 체크 후에도 인덱스를 증가시켜 maxNum 정확도 확보
+        if (!user.job) curIdx++; 
 
-        // 예외 처리: 메뉴에 없는 번호 입력 시
-        if (!msg.startsWith("/")) {
-            var maxNum = user.job ? (curIdx - 1) : curIdx;
+        // 예외 처리: 숫자를 입력했으나 위 조건들에 걸리지 않은 경우 (1~5번 제외)
+        if (!msg.startsWith("/") && choiceNum > 5) {
+            var maxNum = curIdx - 1; // 최종 확정된 인덱스에서 1을 뺀 값이 실제 최대 번호
             replier.reply(formatError(user, "번호 오류", "현재 메뉴에 표시된 번호(1~" + maxNum + ") 중 하나를 선택하세요."));
+            return true;
         }
-        return true;
-    }
 
     /* [서브 상태 핸들러 로직군 - 전체 else if 연결] */
     else if (state.type === 'trade_job_enlist') { _handleJobJoin(choice, user, data, replier, roomName, targetUid); return true; }
@@ -15809,26 +15810,21 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         else if (user.job === 'navy') jobLabel = "👮 해군 본부 (토벌)";
         else jobLabel = "⚓ 조합 사무소 (전직)";
 
-        // 슬롯 배치 (총독이면 6번에 정산, 7번에 직업 / 아니면 6번에 직업)
+        // 슬롯 배치 (curIdx++ 를 사용하여 출력과 동시에 번호를 증가시켜 혼선을 방지합니다)
         var curIdx = 6;
         
-        // [케이스 1, 2] 총독일 때만 6번(또는 시작 번호)에 관세 정산 배치
+        // [케이스 1] 총독일 때만 관세 정산 배치
         if (hasGov) {
-            menu += "\n" + curIdx + ". 🏛️ 관세 정산 (총독)";
-            curIdx++;
+            menu += "\n" + (curIdx++) + ". 🏛️ 관세 정산 (총독)";
         }
         
-        // [공통] 직업 라벨 배치 (상인이면 전직, 아니면 해당 직업 메뉴)
-        menu += "\n" + curIdx + ". " + jobLabel;
-        curIdx++;
-        
-        // [v17.6] 해상 던전 입구 추가
-        menu += "\n" + curIdx + ". 🌀 심해의 균열 (던전)";
-        curIdx++;
+        // [공통] 직업/던전 배치 (무조건 순차 증가)
+        menu += "\n" + (curIdx++) + ". " + jobLabel;
+        menu += "\n" + (curIdx++) + ". 🌀 심해의 균열 (던전)";
 
-        // [케이스 3] 직업이 없을 때(상인일 때)만 왕실 집무실 노출
+        // [케이스 2] 상인일 때만 왕실 집무실 노출
         if (!user.job) { 
-            menu += "\n" + curIdx + ". 🏰 왕실 집무실 (작위 수여)";
+            menu += "\n" + (curIdx++) + ". 🏰 왕실 집무실 (작위 수여)";
         }
 
         replier.reply(formatCommand("⛵ 내리다 무역 지부", user, menu, "번호를 입력하세요."));

@@ -1763,16 +1763,15 @@ function util_autoClearTimeouts(data) {
                 var threshold = isMarineSession ? 60000 : 30000;
                 
                 if (startTime > 0 && (now - startTime > threshold)) {
-                    // [추가] 이번 주기에 이미 알림이 나간 UID라면 조용히 삭제만 진행
-                    if (notifiedInThisCycle[uid]) {
-                        delete q[uid];
-                        continue;
-                    }
-
+                    // [v18.5 보험 엔진 연결] 세션 종료 및 환불 여부 확인
                     var actualOrigin = entry.originRoom || rName;
-                    var u = null;
-                    if (data.rooms["내리다"] && data.rooms["내리다"].users[uid]) {
-                        u = data.rooms["내리다"].users[uid];
+                    var u = (data.rooms["내리다"] && data.rooms["내리다"].users[uid]) ? data.rooms["내리다"].users[uid] : null;
+                    
+                    // 삭제와 동시에 환불 정보를 가져옴 (보험금이 있다면 여기서 util_updatePoint 호출됨)
+                    var refundInfo = util_terminateSession(uid, u, data.rooms[rName], actualOrigin, qKey);
+
+                    if (notifiedInThisCycle[uid]) {
+                        continue;
                     }
 
                     if (u) {
@@ -1790,7 +1789,9 @@ function util_autoClearTimeouts(data) {
                                 // 생물 데이터 즉시 소각
                                 if (u.voyage) delete u.voyage.encounter;
                             } else {
-                                Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", "30초 이내에 응답이 없어 메뉴가 닫혔습니다."));
+                                // 환불 정보(refundInfo)가 있다면 기존 에러 메시지에 합산하여 출력
+                                var errorMsg = "30초 이내에 응답이 없어 메뉴가 닫혔습니다." + refundInfo;
+                                Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", errorMsg));
                             }
                             notifiedInThisCycle[uid] = true;
                         } catch(e) { Log.error("Timeout Notify Error: " + e); }
@@ -2895,6 +2896,35 @@ function util_formatSecurityLog(header, user, room, body, action) {
            body + "\n" +
            "━━━━━━━━━━━━━━━\n" +
            "🛡️ 조치: " + action;
+}
+
+/**
+ * [v18.5] 전역 세션 종료 및 자동 환불 엔진
+ * 기능: 특정 큐(qKey)의 세션을 삭제하며, cost(보험금)가 기록되어 있다면 즉시 환불 집행
+ * @return {String} 환불 발생 시 UI에 추가할 메시지 (없을 시 빈 문자열)
+ */
+function util_terminateSession(uid, user, roomData, roomName, qKey) {
+    if (!roomData || !roomData.features || !roomData.features.states) return "";
+    
+    var q = roomData.features.states[qKey];
+    if (!q || !q[uid]) return "";
+    
+    var entry = q[uid];
+    var refundMsg = "";
+    
+    // 세션에 cost(보험금)가 존재하고 유저 객체가 확인될 때만 환불 로직 가동
+    if (entry.cost && entry.cost > 0 && user) {
+        var mainRoom = globalData.rooms["내리다"]; // 자산은 항상 메인방 기준
+        util_updatePoint(user, mainRoom, entry.cost, "세션 중단 자동 환불", roomName);
+        refundMsg = "\n💰 지불 포인트 환불: +" + fp(entry.cost) + "P";
+        
+        // 중복 환불 방지를 위해 즉시 cost 초기화
+        entry.cost = 0; 
+    }
+    
+    // 물리적 세션 파기
+    delete q[uid];
+    return refundMsg;
 }
 
 function util_checkUserState(user, uid, roomName, isJobActivity) {
@@ -4121,6 +4151,10 @@ function runScheduler() {
                                                    
                                     // 1:1 세션 대기 상태 생성 (숫자 입력 받기 위함)
                                     if (!rObj.features.states.menuWait) rObj.features.states.menuWait = {};
+                                    if (rObj.features.states.menuWait[uid]) {
+                                        util_terminateSession(uid, u, rObj, r, 'menuWait');
+                                    }
+
                                     rObj.features.states.menuWait[uid] = { type: 'marine_encounter', time: Date.now(), originRoom: r };
                                     
                                     try { Api.replyRoom(r, alertMsg); } catch(e) {}
@@ -17074,7 +17108,7 @@ function _processShipEnhanceRoll(user, data, replier, roomName) {
     replier.reply(formatCommand("🏗️ 함선 초월 개조 결과", user, body, "번호를 입력하세요."));
     
     var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-    data.rooms[logicRoom].features.states.menuWait[user.uid] = { type: 'trade_enh_confirm', time: Date.now(), originRoom: roomName };
+    data.rooms[logicRoom].features.states.menuWait[user.uid] = { type: 'trade_enh_confirm', time: Date.now(), originRoom: roomName, cost: cost };
     safeSaveData(data, true);
 }
 
@@ -18403,7 +18437,7 @@ function _startBlackjackGame(user, data, replier, roomName, targetUid, betAmt) {
 
 
     // 메뉴 선택 상태로 전환
-    roomData.features.states.menuWait[targetUid] = { type: 'blackjack_action', time: Date.now() };
+    roomData.features.states.menuWait[targetUid] = { type: 'blackjack_action', time: Date.now(), cost: betAmt };
 
     var body = "🕴️ 딜러가 카드를 돌렸습니다.\n\n" +
                "🤖 딜러: [ ? ], [ " + dHand[1] + " ]\n" +

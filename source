@@ -9127,7 +9127,6 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         var nations = Object.keys(tradeCfg.NATIONS);
         var currentLoc = (user.currentLoc || "무역 지부").replace(/[\u200b-\u200d\ufeff]/g, "").trim();
         var durability = Number(user.durability === undefined ? 100 : user.durability);
-        var isBroken = (durability < 20 && currentLoc !== "무역 지부");
 
         // [핵심] UI와 동일하게 현재 항구를 제외한 '진짜 선택지' 리스트 생성
         var selectable = [];
@@ -9199,6 +9198,16 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
             var returnMsg = "🏠 모든 화물을 보존한 채 즉시 회항합니다.";
             _departVoyage(user, data, replier, roomName, destName, tradeCfg, {}, {}, null, 0, returnMsg);
             delete roomData.features.states.menuWait[targetUid];
+            return true;
+        }
+
+        // 내구도 20% 미만 시 일반 항구 출항 차단 가드
+        // 위에서 "무역 지부"는 이미 처리되어 종료되었으므로, 여기 도달한 것은 무역 지부가 아닌 다른 도시입니다.
+        if (durability < 20) {
+             var warnMsg = "🚨 [출항 불가: 선체 손상]\n━━━━━━━━━━━━━━━\n" +
+                           "현재 내구도가 " + durability + "%로 매우 위험한 상태입니다.\n" +
+                           "즉시 '무역 지부'로 복귀하여 수리를 진행하세요.";
+            replier.reply(formatError(user, "내구도 부족", warnMsg, "[0]번을 입력하여 복귀하세요."));
             return true;
         }
 
@@ -15878,6 +15887,12 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
                 return true;
             }
 
+            // 이미 무역 지부로 가고 있는 경우 회항 불필요
+            if (user.voyage.dest === "무역 지부") {
+                replier.reply(formatError(user, "회항 불가", "무역 지부로 귀항 중입니다."));
+                return true;
+            }
+
             var v = user.voyage;
             var tCost = 0;
             // 1. 적재 화물의 원가 계산 (세션 스냅샷 기준)
@@ -16386,15 +16401,6 @@ function _showTradeMarket(user, replier, roomData, cfg) {
 function _prepareVoyage(user, replier, cfg, roomData) {
     var durability = Number(user.durability === undefined ? 100 : user.durability);
     var currentLoc = user.currentLoc || "무역 지부";
-    
-    // 내구도 파손 체크
-    if (durability < 20 && currentLoc !== "무역 지부") {
-        var warnMsg = "🚨 [출항 불가: 선체 손상]\n━━━━━━━━━━━━━━━\n" +
-                      "현재 내구도가 " + durability + "%로 매우 위험한 상태입니다.\n" +
-                      "즉시 '무역 지부'로 복귀하여 수리를 진행하세요.";
-        replier.reply(formatError(user, "내구도 부족", warnMsg, "[0]번을 입력하여 복귀하세요."));
-        return;
-    }
 
     // 1. 내 화물 목록 작성
     var cargoList = []; var total = 0;

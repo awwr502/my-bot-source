@@ -17675,18 +17675,39 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     // [최종] 지급액 확정 = 원금(보존) + 모든 보정이 끝난 순이익
     var totalPayout = totalCost + finalNetProfit;
 
-    // 포인트 지급 및 국고 연동
-    util_updatePoint(user, economyRoomData, totalPayout, "무역 정산 완료 (원금+수익)", economyRoomName);
-
-    // 1. 현재 위치를 목적지 항구로 갱신 (무역 지부로 복귀하지 않고 현지 체류)
-    user.currentLoc = v.dest; 
+    // 1단계: 순수익(totalNetMargin)에 대해서만 세금 및 상환 로직 적용
+    var taxAmount_final = totalNetMargin > 0 ? Math.floor(totalNetMargin * autoTaxRate) : 0;
+    var afterTaxMargin_final = totalNetMargin - taxAmount_final;
     
-    // 2. 무역 횟수 누적 기록
-    util_setData(user, 'tradeCount', (user.tradeCount || 0) + 1, "무역 횟수 누적", roomName);
+    // 2단계: 총독 관세 및 호위비 차감
+    if (govTag && govInfo && govInfo.governorUid !== targetUid) {
+        var tariff_final = totalNetMargin > 0 ? Math.floor(totalNetMargin * 0.01) : 0;
+        afterTaxMargin_final -= tariff_final;
+    }
+    if (v.escortFee) afterTaxMargin_final -= v.escortFee;
+    
+    // 3단계: 신용 등급 배율 적용 (세후/차감후 마진에 적용)
+    var netEntitlement = Math.floor(afterTaxMargin_final * creditMult); 
+    var profitAfterRepay = netEntitlement;
+    var repayInfoMsg = "";
 
-    // 3. 국고 귀속 (세금 및 신용 차액) 확정 처리
-    if (taxAmount > 0) util_updateReserve(economyRoomData, taxAmount, "무역세 징수", economyRoomName);
-    if (creditLoss > 0) util_updateReserve(economyRoomData, creditLoss, "신용 등급 차등 수익 환수", economyRoomName);
+    // 4단계: 빚 상환 처리 (순수익 netEntitlement 구간에서만 집행)
+    if (netEntitlement > 0) {
+        var repayRes = processRepayment(user, netEntitlement, targetUid, roomName);
+        profitAfterRepay = Number(repayRes.actualGain);
+        repayInfoMsg = repayRes.repayMsg || "";
+    }
+
+    // 5단계: [중요] 최종 수령액 및 지급 변수 통일
+    // 최종 수령액 = 원가(totalCost) + 빚 상환 후 남은 순수익(profitAfterRepay)
+    var finalActualAmount = totalCost + profitAfterRepay;
+
+    // 6단계: 지갑 입금 집행 (단 1회만 호출하여 데이터 불일치 차단)
+    util_updatePoint(user, economyRoomData, finalActualAmount, "무역 정산 수익", economyRoomName);
+
+    // 7단계: 데이터 기록 및 위치 갱신
+    user.currentLoc = v.dest; 
+    util_setData(user, 'tradeCount', (user.tradeCount || 0) + 1, "무역 횟수 누적", roomName);
 
     // [v16.7] 7. 특산품 발견 및 진귀한 유물 판정
     var specialtyFound = "";

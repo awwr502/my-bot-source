@@ -20166,12 +20166,20 @@ function _processMarineAction(user, choice, data, replier, roomName) {
     var creature = MARINE_DB.find(function(c){ return c.id === enc.id; });
     if (!creature) return;
 
-    // [v18.1 버그 수정] 도감 배열 참조 공유(Memory Leak) 문제 해결
+    // [v18.4 핵심 가드] 타임아웃 2중 검증 (조우 후 60초 초과 시 로직 강제 종료)
+    // 스케줄러 알림과 별개로 액션 실행 시점에 시간을 다시 재서 1초라도 늦으면 차단합니다.
+    if (Date.now() - (enc.time || 0) > 60000) {
+        delete v.encounter;
+        var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+        if (data.rooms[logicRoom].features.states.menuWait) delete data.rooms[logicRoom].features.states.menuWait[user.uid];
+        replier.reply(formatError(user, "상황 종료", "생물이 이미 수면 아래로 사라진 상태입니다."));
+        return;
+    }
+
+    // [v18.1 버그 수정] 도감 배열 참조 공유 문제 해결
     if (!user.discoveredCreatures) {
         user.discoveredCreatures = [];
     } else {
-        // [핵심] 기존 배열을 .slice()로 얕은 복사하여, 스키마 기본값을 공유하던 연결 고리를 끊음
-        // 이제부터 이 유저의 도감은 독립적인 메모리 주소를 가집니다.
         user.discoveredCreatures = user.discoveredCreatures.slice();
     }
 
@@ -20185,15 +20193,17 @@ function _processMarineAction(user, choice, data, replier, roomName) {
     if (choice === "1") {
         msgTitle = "📸 해양 생물 관찰 완료";
         rewardP = Math.floor(creature.price * 0.3); // 포획가의 30%
-        msgBody = "안전한 거리에서 생태를 기록했습니다.\n";
+        // [v18.4] 생물 정보 추가
+        msgBody = "안전한 거리에서 [" + creature.rank + "] " + creature.name + "의 생태를 기록했습니다.\n";
     } 
     // 2. 포획하기 (낚시)
     else {
         msgTitle = "🎣 해양 생물 포획 성공";
         rewardP = creature.price;
-        msgBody = "치열한 사투 끝에 생물을 배 위로 끌어올렸습니다!\n";
+        // [v18.4] 생물 정보 추가
+        msgBody = "치열한 사투 끝에 [" + creature.rank + "] " + creature.name + "를 배 위로 끌어올렸습니다!\n";
         
-        // 내구도 감소 (등급별 차등: 일반5 / 희귀8 / 고대12 / 환상15)
+        // 내구도 감소 (등급별 차등)
         var duraLoss = 5;
         if (creature.rank === "희귀") duraLoss = 8;
         else if (creature.rank === "고대") duraLoss = 12;
@@ -20206,18 +20216,17 @@ function _processMarineAction(user, choice, data, replier, roomName) {
     // 도감 등록 처리
     if (isFirst) {
         user.discoveredCreatures.push(enc.id);
-        // 정렬 (ID순)
         user.discoveredCreatures.sort(function(a,b){return a-b;});
         msgBody += "✨ [신규 등록]: 도감에 정보가 저장되었습니다!";
     } else {
         msgBody += "📚 [중복 발견]: 이미 도감에 있는 생물입니다.";
-        rewardP = Math.floor(rewardP * 0.5); // 중복 시 보상 50% 반감
+        rewardP = Math.floor(rewardP * 0.5); 
     }
     
-    // 포인트 지급
+    // 포인트 지급 및 세션 정리
     util_updatePoint(user, data.rooms["내리다"], rewardP, "해양 생물 " + (choice==="1"?"관찰":"포획"), roomName);
     
-    delete user.voyage.encounter; // 세션 종료
+    delete v.encounter; 
     replier.reply(formatCommand(msgTitle, user, msgBody + "\n💰 획득: +" + fp(rewardP) + "P"));
     safeSaveData(data, true);
 }

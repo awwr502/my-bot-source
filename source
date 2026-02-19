@@ -16782,6 +16782,9 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
    // [v17.7.3] 출항 시점의 계약 정보 박제 (출발 시간 기준 판정의 핵심)
     var currentQuest = (roomData.features && roomData.features.activeContract) ? JSON.parse(JSON.stringify(roomData.features.activeContract)) : null;
 
+    // [v18.5] 조우 기록 승계 로직: 긴급 회항 후 재출항 시 중복 조우를 방지합니다.
+    var prevEncountered = (user.voyage && user.voyage.hasEncountered === true);
+
     // 데이터 패키징 (v.arrival에 최종 계산된 값 저장)
     user.voyage = {
         active: true, 
@@ -16789,7 +16792,7 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
         origin: user.currentLoc || "무역 지부",
         arrival: arrival, 
         startTime: Date.now(),
-        hasEncountered: false,
+        hasEncountered: prevEncountered, // 이전 항해 객체에서 기록을 가져옴
         contractSnapshot: currentQuest, // 현재 계약 정보를 스냅샷으로 보관
         // 기존 NATIONS 상수가 아닌 현재 방의 실시간 시세(tradeMarket)를 저장
         marketSnapshot: JSON.parse(JSON.stringify(roomData.features.tradeMarket || {})), 
@@ -17864,6 +17867,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         user.voyage = {
             active: true, dest: "무역 지부", origin: user.currentLoc,
             arrival: arrival_e, startTime: Date.now(),
+            hasEncountered: v.hasEncountered, // [v18.5] 자동 회항 중에도 상태 유지
             marketSnapshot: v.marketSnapshot, ecoMultSnapshot: v.ecoMultSnapshot,
             cargoSnapshot: {}, specialtySnapshot: {}, isProcessing: false
         };
@@ -17873,6 +17877,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                                "⏱️ 도착 예정: " + new Date(arrival_e).toLocaleTimeString();
     } else {
         v.active = false; 
+        v.hasEncountered = false; // [v18.5] 정산 성공 시에만 다음 항해를 위해 리셋
     }
 
     // 5. 최종 보고서 조립 (모든 변수가 확정된 상태)

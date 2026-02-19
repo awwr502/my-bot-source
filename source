@@ -17867,7 +17867,21 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     if (v.escortFee) afterTaxMargin -= v.escortFee;
     
     var finalNetProfit = Math.floor(afterTaxMargin * creditMult); 
-    var totalPayout = totalCost + finalNetProfit;
+    
+    // 빚 상환 처리 (수익이 0보다 클 때만)
+    var profitAfterRepay = finalNetProfit;
+    var repayInfo = "";
+    if (finalNetProfit > 0) {
+        var repayRes = processRepayment(user, finalNetProfit, targetUid, roomName);
+        profitAfterRepay = Number(repayRes.actualGain);
+        repayInfo = repayRes.repayMsg || "";
+    }
+
+    // 최종 지급액 = 100% 보존된 원금(totalCost) + 상환 후 남은 수익
+    var totalPayout = totalCost + profitAfterRepay;
+
+    // 실제 지갑 입금 처리
+    util_updatePoint(user, economyRoomData, totalPayout, "무역 정산 수익", economyRoomName);
 
     // 4. 긴급 회항 여부 체크 (계산 로직 종료 후 판정)
     var isEmergency = (user.durability < 20 && user.currentLoc !== "무역 지부");
@@ -17907,7 +17921,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                  (typeof pillageLog !== 'undefined' && pillageLog ? pillageLog.trim() + "\n" : "") +
                  (typeof escortLog !== 'undefined' && escortLog ? escortLog.trim() + "\n" : "") +
                  (typeof govTag !== 'undefined' && govTag ? govTag.trim() + "\n" : "") +
-                 (repayInfo ? "\n" + repayInfo.trim() : "") +
+                 (repayInfo ? repayInfo + "\n" : "") +
                  "\n" +
                  "🎊 최종 수령액: " + fp(totalPayout) + "P\n" +
                  "(신용 " + crInfo.label + " " + (creditMult * 100).toFixed(0) + "%지급)";

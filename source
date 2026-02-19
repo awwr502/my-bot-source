@@ -20098,7 +20098,7 @@ function _finishDungeon(user, data, replier, roomName, targetUid, isWin) {
 //==========섹터55==========
 
 /**
- * 해양 생물 도감 처리 엔진 v1.0
+ * [신설] 해양 생물 도감 처리 엔진 v1.1 (참조 공유 버그 수정판)
  * 기능: 생물 조우 액션 처리, 상세 도감 출력, 보상 지급
  */
 
@@ -20111,7 +20111,15 @@ function _processMarineAction(user, choice, data, replier, roomName) {
     var creature = MARINE_DB.find(function(c){ return c.id === enc.id; });
     if (!creature) return;
 
-    if (!user.discoveredCreatures) user.discoveredCreatures = [];
+    // [v18.1 버그 수정] 도감 배열 참조 공유(Memory Leak) 문제 해결
+    if (!user.discoveredCreatures) {
+        user.discoveredCreatures = [];
+    } else {
+        // [핵심] 기존 배열을 .slice()로 얕은 복사하여, 스키마 기본값을 공유하던 연결 고리를 끊음
+        // 이제부터 이 유저의 도감은 독립적인 메모리 주소를 가집니다.
+        user.discoveredCreatures = user.discoveredCreatures.slice();
+    }
+
     var isFirst = (user.discoveredCreatures.indexOf(enc.id) === -1);
     
     var rewardP = 0;
@@ -20161,7 +20169,13 @@ function _processMarineAction(user, choice, data, replier, roomName) {
 
 /* 2. 상세 도감 보기 (리스트) */
 function _showPediaDetail(user, replier) {
-    if (!user.discoveredCreatures) user.discoveredCreatures = [];
+    if (!user.discoveredCreatures) {
+        user.discoveredCreatures = [];
+    } else {
+        // [안전 가드] 조회 시에도 참조 분리 수행
+        user.discoveredCreatures = user.discoveredCreatures.slice();
+    }
+
     var list = [];
     
     // 100종 전체 순회하며 발견 여부 체크
@@ -20175,9 +20189,7 @@ function _showPediaDetail(user, replier) {
         }
     });
     
-    // 내용이 너무 길어지므로 50개씩 나눠서 출력하거나 요약본 출력
-    // 카톡 텍스트 제한 고려하여, 발견한 것만 모아서 보여주거나 페이징 필요
-    // 여기서는 간단하게 '발견한 목록'만 출력합니다.
+    // 발견한 목록만 필터링하여 출력 (너무 길어지는 것 방지)
     var foundList = [];
     MARINE_DB.forEach(function(c) {
         if (user.discoveredCreatures.indexOf(c.id) !== -1) {
@@ -20197,6 +20209,8 @@ function _showPediaDetail(user, replier) {
 
 /* 3. 수집률 보상 받기 */
 function _processPediaReward(user, data, replier, roomName) {
+    if (!user.discoveredCreatures) user.discoveredCreatures = [];
+    
     var collected = user.discoveredCreatures.length;
     var currentLevel = user.pediaRewardLevel || 0;
     var nextLevel = currentLevel + 1;
@@ -20239,17 +20253,18 @@ function _processPediaReward(user, data, replier, roomName) {
 
 /* === 도감 메인 UI 출력 함수 === */
 function _showMarinePediaUI(user, replier, data, roomName, targetUid) {
-    if (!user.discoveredCreatures) user.discoveredCreatures = [];
+    // [UI 호출 시에도 참조 분리]
+    if (!user.discoveredCreatures) {
+        user.discoveredCreatures = [];
+    } else {
+        user.discoveredCreatures = user.discoveredCreatures.slice();
+    }
+
     var total = 100;
     var current = user.discoveredCreatures.length;
     var pct = Math.floor((current / total) * 100);
     
-    // 진행바 생성
-    var barLen = 10;
-    var fill = Math.floor(pct / 10);
-    var bar = "[";
-    for(var i=0; i<barLen; i++) bar += (i < fill ? "▓" : "░");
-    bar += "]";
+    // [삭제됨] 진행바 생성 로직 제거 (barLen, fill, bar 변수 삭제)
 
     // 등급별 수집 현황 계산
     var counts = { "일반":0, "희귀":0, "고대":0, "환상":0 };
@@ -20269,7 +20284,8 @@ function _showMarinePediaUI(user, replier, data, roomName, targetUid) {
         if(rc) recentList.push("• " + rc.name + " (" + rc.rank + ")");
     }
 
-    var body = "📊 전체 수집률: " + bar + " " + pct + "% (" + current + " / 100)\n\n" +
+    // [수정됨] 출력 문구에서 'bar' 변수 제거
+    var body = "📊 전체 수집률: " + pct + "% (" + current + " / 100)\n\n" +
                "[등급별 수집 현황]\n" +
                "⚪ 일반: " + counts["일반"] + " / " + totals["일반"] + "\n" +
                "🔵 희귀: " + counts["희귀"] + " / " + totals["희귀"] + "\n" +
@@ -20284,7 +20300,7 @@ function _showMarinePediaUI(user, replier, data, roomName, targetUid) {
                
     replier.reply(formatCommand("📘 [내리다 해양 생물 도감]", user, body, "번호를 선택하세요."));
     
-    // 세션 전환 (이후 번호 선택은 섹터 23-4의 trade_pedia_main 타입에서 처리됨)
+    // 세션 전환
     var roomData = data.rooms[roomName] || data.rooms["내리다"];
     roomData.features.states.menuWait[targetUid] = { type: 'trade_pedia_main', time: Date.now(), originRoom: roomName };
 }

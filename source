@@ -1785,17 +1785,21 @@ function util_autoClearTimeouts(data) {
                 var threshold = isMarineSession ? 180000 : 30000;
                 
                 if (startTime > 0 && (now - startTime > threshold)) {
+                    // [v18.5 보험 엔진 연결] 세션 종료 및 환불 여부 확인
                     var actualOrigin = entry.originRoom || rName;
+                    var u = (data.rooms["내리다"] && data.rooms["내리다"].users[uid]) ? data.rooms["내리다"].users[uid] : null;
                     
+                    // 삭제와 동시에 환불 정보를 가져옴 (보험금이 있다면 여기서 util_updatePoint 호출됨)
+                    var refundInfo = util_terminateSession(uid, u, data.rooms[rName], actualOrigin, qKey);
+
                     if (notifiedInThisCycle[uid]) {
                         continue;
                     }
 
                     if (u) {
                         try {
-                            // [교정] entry.type 대신 미리 확정된 isMarineSession 변수를 사용하여 메시지 분기
-                            if (isMarineSession) {
-                                // 거대 생물 전용 타임아웃 메시지 (세션 파기 전 즉시 발송)
+                            if (entry.type === 'marine_encounter') {
+                                // 거대 생물 전용 타임아웃 메시지
                                 var timeoutMsg = "🌊 [상황 종료: 생물 소멸]\n" +
                                                  "━━━━━━━━━━━━━━━\n" +
                                                  getDisplayName(u) + "님\n" +
@@ -1804,13 +1808,10 @@ function util_autoClearTimeouts(data) {
                                                  "━━━━━━━━━━━━━━━\n" +
                                                  "💡 기회를 놓치셨습니다. 항해를 계속하세요.";
                                 Api.replyRoom(actualOrigin, timeoutMsg);
-                                
-                                // 생물 데이터 즉시 소각 및 세션 종료
+                                // 생물 데이터 즉시 소각
                                 if (u.voyage) delete u.voyage.encounter;
-                                util_terminateSession(uid, u, data.rooms[rName], actualOrigin, qKey);
                             } else {
-                                // 일반 세션: 삭제와 동시에 환불 정보를 가져옴
-                                var refundInfo = util_terminateSession(uid, u, data.rooms[rName], actualOrigin, qKey);
+                                // 환불 정보(refundInfo)가 있다면 기존 에러 메시지에 합산하여 출력
                                 var errorMsg = "30초 이내에 응답이 없어 메뉴가 닫혔습니다." + refundInfo;
                                 Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", errorMsg));
                             }
@@ -9073,18 +9074,21 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
             }
         }
         else if (choice === "7") {
+            // [7번: 암시장 이용] - 밀수품 적재를 위한 상점 세션 생성
             var smuggItems = SHOP_ITEMS.filter(function(it) { return it.cat === 7; });
             _showTradeShop(user, replier, roomData, tradeCfg, 7);
-            bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), originRoom: roomName, extra: { items: smuggItems } };
+            bankProcessState[targetUid] = { 
+                type: 'shop_buy', 
+                time: Date.now(), 
+                originRoom: roomName,
+                extra: { items: smuggItems } 
+            };
             delete menuWaitState[targetUid];
         }
         else if (choice === "8") {
-            _manageShip(user, replier, tradeCfg);
-            state.type = 'trade_ship'; // 세션 상태 변경
-        }
-        else if (choice === "9") {
-            _processPirateBail(user, data, replier, roomName, targetUid);
-        }
+            // [8번: 보석금 납부] - 기존 6번에서 8번으로 인덱스 밀림 반영
+            _processPirateBail(user, data, replier, roomName, targetUid);
+        }
         else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요."));
         return true;
     }
@@ -9527,12 +9531,9 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         else if (state.type === 'trade_ship') {
 
         // 1. 수리 키워드 최우선 판정 (cleanInput 사용)
-        if (cleanMsg.indexOf("수리") !== -1) {
-            var isRepairZone = (user.currentLoc === "무역 지부" || (user.job === 'pirate' && user.currentLoc === "나소"));
-            if (!isRepairZone) {
-                replier.reply(formatError(user, "수리 불가", "이곳은 수리 시설이 없는 외지 항구입니다.\n'무역 지부' 또는 '나소'에서 수리하세요."));
-                return true;
-            }
+        if (cleanInput.indexOf("수리") !== -1) {
+            return _gameTradeLogic(msg, user, data, replier, roomName, targetUid);
+        }
 
         // '강화' 키워드 입력 시 처리 (최우선 판정)
         if (msg === "강화") {
@@ -9774,7 +9775,7 @@ if (actualFeatures && actualFeatures.states) {
                 return;
             }
         }
-    }
+        }
 
     // 3. 통합 카지노 배팅 (채팅으로 '홀 5000' 등 입력 시)
     if (typeof _handleCasinoBet === 'function' && _handleCasinoBet(msg, user, data, replier, roomName, targetUid)) return;
@@ -16270,17 +16271,17 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
     if (state.type === 'trade_ship') {
         var input = msg.replace(/\s/g, "");
 
-        // [A] 수리 키워드 처리 (v16.9 수정)
+        // [A] 수리 키워드 처리 (v16.9 신규)
         if (cleanMsg.indexOf("수리") !== -1) {
-            // [v17.4] 해적은 나소에서, 상인은 무역 지부에서 수리 가능하도록 가드 수정
-            var canRepair = (user.currentLoc === "무역 지부" || (user.job === 'pirate' && user.currentLoc === "나소"));
-            
-            if (!canRepair) {
-                var repairGuide = (user.job === 'pirate') ? "'나소' 항구로 이동하여 수리하세요." : "'무역 지부'로 복귀하여 수리하세요.";
-                replier.reply(formatError(user, "수리 불가", "이곳은 수리 시설이 없는 항구입니다.\n" + repairGuide));
+            if (user.currentLoc !== "무역 지부") {
+                replier.reply(formatError(user, "수리 불가", "이곳은 수리 시설이 없는 외지 항구입니다.\n'무역 지부'로 복귀하여 수리하세요."));
                 return true;
             }
             var curDura = Number(user.durability === undefined ? 100 : user.durability);
+            if (curDura >= 100) {
+                replier.reply(formatSimple("🔧 수리 불필요", "이미 선박 상태가 최상(100%)입니다."));
+                return true;
+            }
             var ecobase = Math.floor(util_getEcoMultiplier(logicRoom) * 100);
             var repairCost = (100 - curDura) * (300 + ecobase);
             if (Number(user.point) < repairCost) {
@@ -16290,7 +16291,7 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             util_updatePoint(user, roomData, -repairCost, "선박 내구도 완전 수리", roomName);
             user.durability = 100;
             user.skipHealing = true;
-            replier.reply(formatCommand("🛠️ 선체 수리 완료", user, "나소의 기술자들이 배를 새것처럼 고쳤습니다!\n\n✨ 내구도: 100% 복구\n💰 소모 비용: -" + fp(repairCost) + "P", "내 잔액: " + fp(user.point) + "P"));
+            replier.reply(formatCommand("🛠️ 선체 수리 완료", user, "기술자들이 밤새 매달려 배를 새것처럼 고쳤습니다!\n\n✨ 내구도: 100% 복구\n💰 소모 비용: -" + fp(repairCost) + "P", "내 잔액: " + fp(user.point) + "P"));
             delete menuWaitState[targetUid];
             safeSaveData(data, true);
             return true;
@@ -17083,12 +17084,9 @@ function _manageShip(user, replier, cfg) {
     body += "━━━━━━━━━━━━━━━\n";
 
     // [v16.9] 수리 안내문 동적 삽입
-   if (durability < 100) {
-        var isRepairZone = (currentLoc === "무역 지부" || (user.job === 'pirate' && currentLoc === "나소"));
-        if (isRepairZone) {
-            var ecoTarget = (ALLOWED_ROOMS.indexOf(currentLoc) === -1) ? "내리다" : currentLoc;
-            var ecobase = Math.floor(util_getEcoMultiplier(ecoTarget) * 100);
-            
+    if (durability < 100) {
+        if (currentLoc === "무역 지부") {
+            var ecobase = Math.floor(util_getEcoMultiplier(currentLoc) * 100);
             var repairCost = (100 - durability) * (300 + ecobase);
             var repairDiscount = (user.pediaRewardLevel >= 1) ? 0.95 : 1.0;
             repairCost = Math.floor(repairCost * repairDiscount);
@@ -17100,7 +17098,7 @@ function _manageShip(user, replier, cfg) {
                     "👉 수리 진행: [수리] 입력\n\n";
         } else {
             body += "⚠️ [주의] 선체 파손 상태입니다.\n" +
-                    "수리는 '무역 지부' 또는 '나소'에서 가능합니다.\n\n";
+                    "수리는 '무역 지부'에서만 가능합니다.\n\n";
         }
     }
 
@@ -18906,15 +18904,14 @@ function _showPirateMenu(user, replier, roomData, targetUid) {
                "4. 💰 나소 정산소 (약탈금/보조금)\n" +
                "5. 📝 선박 이름변경권 : " + fp(price) + "P\n" +
                "6. ⛵ 밀수 무역 (출항 준비)\n" +
-               "7. 📦 암시장 이용 (밀수품 적재)\n" +
-               "8. 🛠️ 선박 관리 및 수리";
+               "7. 📦 암시장 이용 (밀수품 적재)";
 
     var now = Date.now();
     var isRestricted = (Number(user.jailReleaseTime || 0) > now || Number(user.pillageCooldownEndTime || 0) > now);
 
     if (isRestricted) {
         var bailAmount = SYSTEM_CONFIG.TRADE.JOBS.PIRATE.bailAmount;
-        menu += "\n9. 💸 보석금 납부 (" + fp(bailAmount) + "P / 즉시 석방)";
+        menu += "\n8. 💸 보석금 납부 (" + fp(bailAmount) + "P / 즉시 석방)";
     }
 
     menu += "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
@@ -19612,13 +19609,11 @@ function _handleCombatSelect(choice, user, data, replier, roomName, targetUid) {
 
 /* [핵심 엔진] 해상전투 집행 (Navy vs Pirate) */
 function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mode) {
-    var resultMsg = "⚔️ [해상 교전 결과 보고]\n━━━━━━━━━━━━━━━\n";
-
-        var mainRoom = data.rooms["내리다"];
-        var session = (mainRoom.features && mainRoom.features.activePillages) ? mainRoom.features.activePillages[victimUid] : null;
-        
-        // [보정] victim 객체 식별 로직 (참조 오류 해결 핵심)
-        var victim = null;
+    var mainRoom = data.rooms["내리다"];
+    var session = (mainRoom.features && mainRoom.features.activePillages) ? mainRoom.features.activePillages[victimUid] : null;
+    
+    // [보정] victim 객체 식별 로직 (참조 오류 해결 핵심)
+    var victim = null;
     if (victimUid && victimUid.indexOf("AI_BOT_") === -1) { // 유저 상인인 경우에만 검색
         for (var r in data.rooms) { 
             if (data.rooms[r].users && data.rooms[r].users[victimUid]) { 
@@ -19719,8 +19714,9 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
     
     var isNavyWin = (Math.random() * 100 < winChance);
 
-    resultMsg += "👮 해군: " + (isAINavy ? "AI 연합함대" : (isAICombat ? "AI 엘리트 해군" : navy.name)) + " (Lv." + nShip + ")\n" + 
-                 "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pShip + ")\n\n";
+    var resultMsg = "⚔️ [해상 교전 결과 보고]\n━━━━━━━━━━━━━━━\n" +
+                    "👮 해군: " + (isAINavy ? "AI 연합함대" : (isAICombat ? "AI 엘리트 해군" : navy.name)) + " (Lv." + nShip + ")\n" + 
+                    "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pShip + ")\n\n";
 
     if (isNavyWin) {
         var piratePenaltyMs = cfg.PIRATE.jailTime || 3600000; // cfg.JOBS 제거
@@ -19778,10 +19774,13 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         resultMsg += "🔥 [해군 승리] 해적선이 나포되었습니다!\n\n" +
                      "⚓ " + pirate.name + ": 약탈 금지 " + Math.floor(piratePenaltyMs / 60000) + "분 부과\n" +
                      ((isAICombat || isAINavy) ? "" : "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득");
-        } else { 
-        // 1. 해적 승리 (해군 패배) 로직 시작
+        } else {
+        // 해적 승리 (해군 패배) 로직 시작
+        
+        // 1. 습격 대상이 AI인지 여부 선행 판별 (유령 상단 및 고용된 AI 함대 포함)
         var isVictimAI = (victimUid && victimUid.indexOf("AI_BOT_") === 0);
 
+        // 2. [즉시 완료 분기] AI 상단 습격 시 3분 대기 없이 바로 정산
         if (isAICombat || isVictimAI) {
             var ecoMult = util_getEcoMultiplier("내리다");
             var vMargin = (Math.floor(Math.random() * 100001) + 100000) * ecoMult;
@@ -19790,17 +19789,21 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
             var pRate = pMin + (pMax - pMin) * (pShip - 1) / 9;
             var pAmt = Math.floor(vMargin * pRate);
 
+            // 정산 함수 호출 (데이터만 업데이트)
             if (typeof _processPillageSuccess === 'function') {
                 var vName = victim ? victim.name : "유령 상단";
                 _processPillageSuccess(victimUid, { pirateUid: pirate.uid, victimName: vName, forcedAmount: pAmt, forcedRate: pRate, isSilent: true }, data, roomName);
             }
             
+            // [통합] 교전 결과 보고서에 현상금 정보 추가
             resultMsg += "🏴‍☠️ [AI 상단 약탈 성공]\n" +
                          "해적 '" + pirate.name + "'이 유령 상단을 완벽히 제압했습니다!\n" +
                          "💰 이번 약탈 수익: +" + fp(pAmt) + "P (정산 대기)\n" +
                          "📈 적용 약탈률: " + (pRate * 100).toFixed(1) + "%\n" +
-                         "💀 누적 현상금: " + fp(pirate.currentBounty) + "P 돌파!";
-        } else {
+                         "💀 누적 현상금: " + fp(pirate.currentBounty) + "P 돌파!"; // <--- 현상금 라인 통합
+        }
+        // 실제 유저 상단 습격 시
+        else {
             var retreatMs = cfg.NAVY.retreatTime || 300000;
             var fameLoss = (mode === "INTERVENE") ? 20 : 10;
             var navyName = isAINavy ? "AI 연합함대" : (navy ? navy.name : "해군 호위함");
@@ -19811,28 +19814,34 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
             }
 
             pirate.infamy = (pirate.infamy || 0) + 5;
+
             resultMsg += "💀 [해적 승리] " + navyName + "가 패퇴했습니다!\n\n" +
                          (!isAINavy ? "📉 " + navyName + ": 명성 -" + fameLoss + "점 하락\n" : "") +
                          (!isAINavy ? "🩹 " + navyName + ": " + Math.floor(retreatMs/60000) + "분간 정비 돌입\n" : "");
 
             if (victim && victim.voyage) {
-                victim.voyage.escortUid = null;
+                victim.voyage.escortUid = null; // [2번] 호위 해제 (해군은 자유)
+                
+                // [1번] 해적이 이겼으므로 즉시 '약탈 진행 중' 상태로 전환
+                // 이 상태가 되면 _showRaidList 함수에서 자동으로 목록에서 제외됨
                 if (!mainRoom.features.activePillages) mainRoom.features.activePillages = {};
+                
+                // 해적 UID 확보
                 var pUid = pirate.uid || (mode === "ESCORT" ? navyOrPirate.uid : null);
                 
                 if (pUid) {
                     mainRoom.features.activePillages[victimUid] = {
-                        pirateUid: pUid,
-                        pirateName: pirate.name,
-                        startTime: Date.now(),
-                        room: roomName,
-                        isBattled: true
-                    };
-                    resultMsg += "\n⏳ [약탈 개시] 방어선이 무너져 즉시 약탈(3분)이 진행됩니다!";
-                }
-            }
-        }
-    }
+                        pirateUid: pUid,
+                        pirateName: pirate.name,
+                        startTime: Date.now(),
+                        room: roomName,
+                        isBattled: true // 이미 전투했으므로 추가 전투 불가
+                    };
+                    resultMsg += "\n⏳ [약탈 개시] 방어선이 무너져 즉시 약탈(3분)이 진행됩니다!";
+                }
+            }
+        }
+    }
 
     Api.replyRoom("내리다", resultMsg);
     safeSaveData(data, true);

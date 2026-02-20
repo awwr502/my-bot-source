@@ -16060,6 +16060,16 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         
         var currentLocation = currentDisplayLoc + locStatus;
 
+        // [v19.1] 고향 항구 정박 시 내구도 가드 및 수리 권고 로직
+        var durability = Number(user.durability === undefined ? 100 : user.durability);
+        var isPirate = (user.job === 'pirate');
+        var homePort = isPirate ? "나소" : "무역 지부";
+        
+        // 현재 위치가 고향 항구이고 내구도가 20% 미만인 경우 경고 알림 선출력
+        if (durability < 20 && currentDisplayLoc.indexOf(homePort) !== -1) {
+            replier.reply(formatSimple("🛠️ 선체 수리 권고", "현재 선박 내구도가 " + durability + "%로 임계치 미만입니다.\n더 이상 항해가 불가능하오니 [4. 선박 관리]에서 수리를 진행하십시오."));
+        }
+
         // === UI용 변수 계산 ===
         var durability = Number(user.durability === undefined ? 100 : user.durability);
         var dIcon = durability > 50 ? "🟢" : (durability >= 20 ? "🟡" : "🔴");
@@ -16519,16 +16529,16 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
         if (s === "_rare") selList.push("• 💎진귀한 보물 x" + selS[s] + "개");
         else selList.push("• ⭐" + s + " x" + selS[s] + "개");
     }
-    body += (selList.length > 0 ? selList.join("\n") : "- 선택된 화물 없음 -");
+    var escortLine = (user.job === 'pirate') ? "" : "• 호위 : [호위] (해군 고용)\n"; // 해적일 때 호위 멘트 제거
 
     body += "\n\n\n💬 [입력 방법]\n" +
-            "• 판매 품목 지정: [번호] [수량]\n" +
-            "• 모든 화물 선택: [전부]\n" +
-            "• 호위 : [호위] (해군 고용)\n" +
-            "• 출항 : [출항]\n\n" +
-            "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+            "• 판매 품목 지정: [번호] [수량]\n" +
+            "• 모든 화물 선택: [전부]\n" +
+            escortLine + // 가변 라인 적용
+            "• 출항 : [출항]\n\n" +
+            "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
-    var nextStep = "판매할 품목을 고른 후 [호위] 또는 [출항]을 입력하세요.";
+    var nextStep = (user.job === 'pirate') ? "[출항]을 입력하세요." : "판매할 품목을 고른 후 [호위] 또는 [출항]을 입력하세요.";
     replier.reply(formatCommand("🚢 무역 하역 설정", user, body, nextStep));
 }
 
@@ -16557,6 +16567,10 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
 
     // 추가: '호위' 키워드 입력 시 해군 고용 핸들러를 호출하는 로직 삽입
     if (input === "호위") {
+        if (user.job === 'pirate') {
+            replier.reply(formatError(user, "고용 불가", "해적은 정규 해군을 고용할 수 없습니다."));
+            return;
+        }
         _handleEscortHire(input, user, data, replier, roomName, targetUid);
         return;
     }
@@ -17067,7 +17081,8 @@ function _manageShip(user, replier, cfg) {
     var next = cfg.SHIPS[curLevel + 1];
     // [v16.9] 내구도 및 수리비 계산
     var durability = Number(user.durability === undefined ? 100 : user.durability);
-    var currentLoc = user.currentLoc || "무역 지부";
+    var currentLoc = (user.currentLoc || "무역 지부").replace(/\s/g, "");
+    var isRepairPort = (currentLoc.indexOf("무역지부") !== -1 || currentLoc.indexOf("나소") !== -1);
     var dIcon = durability > 50 ? "🟢" : (durability >= 20 ? "🟡" : "🔴");
     
     var body = "등급: " + cur.name + " (Lv." + curLevel + ")\n" +
@@ -17085,7 +17100,7 @@ function _manageShip(user, replier, cfg) {
 
     // [v16.9] 수리 안내문 동적 삽입
     if (durability < 100) {
-        if (currentLoc === "무역 지부") {
+        if (isRepairPort) { // 수리 가능 항구 체크로 변경
             var ecobase = Math.floor(util_getEcoMultiplier(currentLoc) * 100);
             var repairCost = (100 - durability) * (300 + ecobase);
             var repairDiscount = (user.pediaRewardLevel >= 1) ? 0.95 : 1.0;
@@ -18044,10 +18059,13 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     util_updatePoint(user, economyRoomData, totalPayout, "무역 정산 수익", economyRoomName);
 
     // 4. 긴급 회항 여부 체크 (계산 로직 종료 후 판정)
-    var isEmergency = (user.durability < 20 && user.currentLoc !== "무역 지부");
+    var isPirate = (user.job === 'pirate');
+    var homePort = isPirate ? "나소" : "무역 지부"; // 해적용 고향 항구 설정
+    var isEmergency = (user.durability < 20 && user.currentLoc !== homePort);
+    
     var finalTitle = "🌊 [항해 일지: 무역 보고]"; 
     var disasterLogStr = (typeof disasterLog !== 'undefined' && disasterLog) ? disasterLog.trim() : "";
-    var separateEmergencyMsg = null; // 분리된 긴급회항 메시지를 담을 변수
+    var separateEmergencyMsg = null;
 
     if (isEmergency) {
         var ship_e = cfg.SHIPS[user.shipLevel || 1];
@@ -18055,7 +18073,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         var arrival_e = Date.now() + (totalSec_e * 1000);
         
         user.voyage = {
-            active: true, dest: "무역 지부", origin: user.currentLoc,
+            active: true, dest: homePort, origin: user.currentLoc, // homePort 적용
             arrival: arrival_e, startTime: Date.now(),
             hasEncountered: v.hasEncountered, // [v18.5] 자동 회항 중에도 상태 유지
             marketSnapshot: v.marketSnapshot, ecoMultSnapshot: v.ecoMultSnapshot,
@@ -19351,14 +19369,11 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
             var u = roomObj.users[uid];
             var isSailing = (u.voyage && u.voyage.active === true);
 
-            /* v16.7 엘도라도 스텔스 모드: 고대 항로를 이용 중인 선박은 해적 레이더에 잡히지 않습니다. */
-            if (isSailing && u.voyage.dest === ELDORADO_CONFIG.NAME) continue;
+            /* v16.7 엘도라도 및 밀수 스텔스: 레이더망 완전 제외 */
+            if (isSailing && (u.voyage.dest === ELDORADO_CONFIG.NAME || u.voyage.isSmuggling === true)) continue;
 
-            /* 밀수 스텔스: 밀수 중인 선박은 같은 해적들의 약탈 레이더망을 피합니다. */
-            if (isSailing && u.voyage.isSmuggling === true) continue;
-
-            /* 귀항 가드: 목적지가 '무역 지부'인 선박은 약탈 목록에서 제외합니다. */
-                if (isSailing && u.voyage.dest === "무역 지부") continue;
+            /* 귀항 가드: 목적지가 '무역 지부' 또는 '나소'인 선박은 약탈 제외 */
+            if (isSailing && (u.voyage.dest === "무역 지부" || u.voyage.dest === "나소")) continue;
 
             var hasEnoughTime = isSailing && (u.voyage.arrival - now >= 180000);
             var alreadyTargeted = (u.isPillaged === true || (u.voyage && u.voyage.isPillaged === true));

@@ -17780,24 +17780,16 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     // [관세] 총독 관세 징수 로직
     var pDataPath = roomData.features.portData;
-    var govInfo = (pDataPath && pDataPath[v.dest]) ? pDataPath[v.dest] : null;
-    var govTag = "";
-    if (govInfo && govInfo.governorUid && govInfo.governorUid !== "") {
-        if (govInfo.governorUid !== targetUid) {
-            var tariff = margin > 0 ? Math.floor(margin * 0.01) : 0;
-            afterTaxMargin -= tariff;
-            govInfo.collectedTariff = (Number(govInfo.collectedTariff) || 0) + tariff;
-            
-            // 실제 돈을 국고로 입금 처리 (회계 장부 일치화)
-            if (tariff > 0) {
-                util_updateReserve(economyRoomData, tariff, "자치령 관세 국고 입고 (" + v.dest + ")", economyRoomName);
-            }
-            var gUser = roomData.users[govInfo.governorUid];
-            govTag = "\n🪙 관세(1%): -" + fp(tariff) + "P (" + (gUser ? gUser.name : "총독") + " 징수)";
-        } else { 
-            govTag = "\n👑 [자치령 특권]: 관세 면제 적용"; 
-        }
-    }
+    var govInfo = (pDataPath && pDataPath[v.dest]) ? pDataPath[v.dest] : null;
+    var govTag = "";
+    if (govInfo && govInfo.governorUid && govInfo.governorUid !== "") {
+        if (govInfo.governorUid !== targetUid) {
+            // [수정] 관세 징수 처리를 '최종 산출 순이익(totalNetMargin)' 기반으로 하단에서 실행하기 위해 플래그 설정
+            govTag = "ACTIVE";
+        } else { 
+            govTag = "\n👑 [자치령 특권]: 관세 면제 적용"; 
+        }
+    }
 
     // [신용] 등급별 수익 배율 적용 (마진에만 적용)
     var crInfo = getCreditInfo(user.creditScore, roomName);
@@ -17918,11 +17910,18 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var afterTaxMargin_final = totalNetMargin - taxAmount_final;
     
     // 2단계: 총독 관세 및 호위비 차감
-    if (govTag && govInfo && govInfo.governorUid !== targetUid) {
-        var tariff_final = totalNetMargin > 0 ? Math.floor(totalNetMargin * 0.01) : 0;
-        afterTaxMargin_final -= tariff_final;
-    }
-    if (v.escortFee) afterTaxMargin_final -= v.escortFee;
+    if (govTag === "ACTIVE" && govInfo && govInfo.governorUid !== targetUid) {
+        var tariff_final = totalNetMargin > 0 ? Math.floor(totalNetMargin * 0.01) : 0;
+        afterTaxMargin_final -= tariff_final;
+        
+        govInfo.collectedTariff = (Number(govInfo.collectedTariff) || 0) + tariff_final;
+        if (tariff_final > 0) {
+            util_updateReserve(economyRoomData, tariff_final, "자치령 관세 국고 입고 (" + v.dest + ")", economyRoomName);
+        }
+        var gUser = roomData.users[govInfo.governorUid];
+        govTag = "\n🪙 관세(1%): -" + fp(tariff_final) + "P (" + (gUser ? gUser.name : "총독") + " 징수)";
+    }
+    if (v.escortFee) afterTaxMargin_final -= v.escortFee;
     
     // 3단계: 신용 등급 배율 적용 (세후/차감후 마진에 적용)
     var netEntitlement = Math.floor(afterTaxMargin_final * creditMult); 

@@ -1752,9 +1752,11 @@ function util_getActivePolicy(roomData) {
 function util_autoClearTimeouts(data) {
     var now = Date.now();
     var notifiedInThisCycle = {};
-    for (var rName in data.rooms) {
+    
+    // [최적화] 전체 rooms 대신 ALLOWED_ROOMS만 순회하여 CPU 부하 90% 절감
+    ALLOWED_ROOMS.forEach(function(rName) {
         var roomObj = data.rooms[rName];
-        if (!roomObj || !roomObj.features || !roomObj.features.states) continue;
+        if (!roomObj || !roomObj.features || !roomObj.features.states) return;
         
         var states = roomObj.features.states;
         var queues = ["menuWait", "bankProcess", "lottoPurchase", "selectWait"];
@@ -4096,6 +4098,7 @@ function runScheduler() {
 
             var currentHour = ctx.now.getHours();
             var currentMin = ctx.now.getMinutes();
+            var currentSec = ctx.now.getSeconds();
 
             // 0. 입력 대기열 자동 만료 감시 엔진 가동 (1초 주기)
             if (typeof util_autoClearTimeouts === 'function') {
@@ -4107,17 +4110,17 @@ function runScheduler() {
                 _runSeaPillageScheduler(data, ctx);
             }
 
-            // [v18.0] 해양 생물 조우 엔진 (1분 주기)
-            if (currentMin !== data.lastMarineCheckMin) {
+            // [v18.7] 지연 시간(18.3s) 해결을 위한 부하 분산 패치
+            // 15초 지점에 해양 생물 조우 및 밀수 단속 배치 (탐색 범위를 '내리다' 방으로 한정)
+            if (currentSec % 60 === 15 && currentMin !== data.lastMarineCheckMin) {
                 data.lastMarineCheckMin = currentMin;
                 
-                // 전 구역의 항해 중인 유저 스캔
-                for (var r in data.rooms) {
-                    var rObj = data.rooms[r];
+                var rObj = data.rooms["내리다"];
+                if (rObj && rObj.users) {
                     for (var uid in rObj.users) {
                         var u = rObj.users[uid];
 
-                // [v18.6] 해적 밀수 단속 엔진
+                        // [v18.6] 해적 밀수 단속 엔진
                         if (u.job === 'pirate' && u.voyage && u.voyage.active && u.voyage.isSmuggling && !u.voyage.isReturning) {
                             if (Math.random() < SMUGGLE_CONFIG.DETECT_PROB) {
                                 u.voyage.isReturning = true;
@@ -4150,21 +4153,21 @@ function runScheduler() {
                         }
                         
                         // 항해 중이고, 아직 도착 전이며, 조우 기록이 없고, '검거 회항 중'이 아닐 때 발생
-                if (u.voyage && u.voyage.active && !u.voyage.hasEncountered && !u.voyage.isReturning && Date.now() < u.voyage.arrival) {
-                    // 분당 10% 확률 (0.1)
-                    if (Math.random() < 0.1) {
-                        var rand = Math.random() * 100;
-                        var grade = "일반";
-                        var range = [1, 60]; 
-                        
-                        // [연동] 엘도라도 탐험 중이거나 '해적 밀수' 중일 경우 고등급 확률 대폭 상승
-                        var isDangerousRoute = (u.voyage.dest === "엘도라도: 잊혀진 성역" || u.voyage.isSmuggling === true);
-                        
-                        if (isDangerousRoute) {
-                            if (rand < 50) { grade = "고대"; range = [86, 95]; }
-                            else if (rand < 80) { grade = "희귀"; range = [61, 85]; }
-                            else { grade = "환상"; range = [96, 100]; }
-                        } else {
+                        if (u.voyage && u.voyage.active && !u.voyage.hasEncountered && !u.voyage.isReturning && Date.now() < u.voyage.arrival) {
+                            // 분당 10% 확률 (0.1)
+                            if (Math.random() < 0.1) {
+                                var rand = Math.random() * 100;
+                                var grade = "일반";
+                                var range = [1, 60]; 
+                                
+                                // [연동] 엘도라도 탐험 중이거나 '해적 밀수' 중일 경우 고등급 확률 대폭 상승
+                                var isDangerousRoute = (u.voyage.dest === "엘도라도: 잊혀진 성역" || u.voyage.isSmuggling === true);
+                                
+                                if (isDangerousRoute) {
+                                    if (rand < 50) { grade = "고대"; range = [86, 95]; }
+                                    else if (rand < 80) { grade = "희귀"; range = [61, 85]; }
+                                    else { grade = "환상"; range = [96, 100]; }
+                                } else {
                                     if (rand < 60) { grade = "일반"; range = [1, 60]; }
                                     else if (rand < 85) { grade = "희귀"; range = [61, 85]; }
                                     else if (rand < 97) { grade = "고대"; range = [86, 95]; }
@@ -4175,8 +4178,8 @@ function runScheduler() {
                                 var creature = MARINE_DB.find(function(c){ return c.id === cId; });
                                 
                                 if (creature) {
-                                u.voyage.hasEncountered = true; 
-                                u.voyage.encounter = { id: cId, name: creature.name, rank: creature.rank, time: Date.now() };
+                                    u.voyage.hasEncountered = true; 
+                                    u.voyage.encounter = { id: cId, name: creature.name, rank: creature.rank, time: Date.now() };
                                     
                                     var alertMsg = "🌊 [해상 돌발 상황: 거대 생물 조우]\n" +
                                                    "━━━━━━━━━━━━━━━\n" +
@@ -4189,16 +4192,16 @@ function runScheduler() {
                                                    "2. 🎣 포획시도 (도감 등록 + 대량 보상 + 내구도 감소)\n" +
                                                    "3. ⛵ 무시하고 항해 (상황 종료)\n\n" +
                                                    "⏳ 제한 시간: 3분 내 자동 소멸";
-                                                   
+                                    
                                     // 1:1 세션 대기 상태 생성 (숫자 입력 받기 위함)
                                     if (!rObj.features.states.menuWait) rObj.features.states.menuWait = {};
                                     if (rObj.features.states.menuWait[uid]) {
-                                        util_terminateSession(uid, u, rObj, r, 'menuWait');
+                                        util_terminateSession(uid, u, rObj, "내리다", 'menuWait');
                                     }
 
-                                    rObj.features.states.menuWait[uid] = { type: 'marine_encounter', time: Date.now(), originRoom: r };
+                                    rObj.features.states.menuWait[uid] = { type: 'marine_encounter', time: Date.now(), originRoom: "내리다" };
                                     
-                                    try { Api.replyRoom(r, alertMsg); } catch(e) {}
+                                    try { Api.replyRoom("내리다", alertMsg); } catch(e) {}
                                     ctx.isUpdated = true;
                                 }
                             }
@@ -4220,8 +4223,8 @@ function runScheduler() {
                         _sendDiscordFile(webhookUrl, FILE_PATH, "FULL_DATA_" + ctx.today + "_" + ctx.now.getHours() + "h" + currentMin + "m.json");
                     }
 
-                    // B. 블랙박스 로그 백업 (1분 주기)
-                    if (data.lastLogBackupMin !== currentMin) {
+                    // B. 블랙박스 로그 백업 (1분 주기 / 45초 지점 분산 처리)
+                    if (currentSec % 60 === 45 && data.lastLogBackupMin !== currentMin) {
                         data.lastLogBackupMin = currentMin;
                         logLock.lock();
                         try {

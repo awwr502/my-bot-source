@@ -1785,21 +1785,17 @@ function util_autoClearTimeouts(data) {
                 var threshold = isMarineSession ? 180000 : 30000;
                 
                 if (startTime > 0 && (now - startTime > threshold)) {
-                    // [v18.5 보험 엔진 연결] 세션 종료 및 환불 여부 확인
                     var actualOrigin = entry.originRoom || rName;
-                    var u = (data.rooms["내리다"] && data.rooms["내리다"].users[uid]) ? data.rooms["내리다"].users[uid] : null;
                     
-                    // 삭제와 동시에 환불 정보를 가져옴 (보험금이 있다면 여기서 util_updatePoint 호출됨)
-                    var refundInfo = util_terminateSession(uid, u, data.rooms[rName], actualOrigin, qKey);
-
                     if (notifiedInThisCycle[uid]) {
                         continue;
                     }
 
                     if (u) {
                         try {
-                            if (entry.type === 'marine_encounter') {
-                                // 거대 생물 전용 타임아웃 메시지
+                            // [교정] entry.type 대신 미리 확정된 isMarineSession 변수를 사용하여 메시지 분기
+                            if (isMarineSession) {
+                                // 거대 생물 전용 타임아웃 메시지 (세션 파기 전 즉시 발송)
                                 var timeoutMsg = "🌊 [상황 종료: 생물 소멸]\n" +
                                                  "━━━━━━━━━━━━━━━\n" +
                                                  getDisplayName(u) + "님\n" +
@@ -1808,10 +1804,13 @@ function util_autoClearTimeouts(data) {
                                                  "━━━━━━━━━━━━━━━\n" +
                                                  "💡 기회를 놓치셨습니다. 항해를 계속하세요.";
                                 Api.replyRoom(actualOrigin, timeoutMsg);
-                                // 생물 데이터 즉시 소각
+                                
+                                // 생물 데이터 즉시 소각 및 세션 종료
                                 if (u.voyage) delete u.voyage.encounter;
+                                util_terminateSession(uid, u, data.rooms[rName], actualOrigin, qKey);
                             } else {
-                                // 환불 정보(refundInfo)가 있다면 기존 에러 메시지에 합산하여 출력
+                                // 일반 세션: 삭제와 동시에 환불 정보를 가져옴
+                                var refundInfo = util_terminateSession(uid, u, data.rooms[rName], actualOrigin, qKey);
                                 var errorMsg = "30초 이내에 응답이 없어 메뉴가 닫혔습니다." + refundInfo;
                                 Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", errorMsg));
                             }

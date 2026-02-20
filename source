@@ -36,6 +36,13 @@ var TRADE_CONTRACT_CONFIG = {
     REWARD_MEDALS: [1, 2]        // 보상 훈장 랜덤 범위
 };
 
+var SMUGGLE_CONFIG = {
+    BASE_PRICE: 10000,           // 밀수품 기초 원가
+    PROFIT_MULT: 2.5,            // 밀수 성공 시 수익률 (2.5배)
+    DETECT_PROB: 0.026,          // 분당 해군 적발 확률 (2.6%)
+    NATIONS: ["나소", "포트로얄"]  // 밀수 전용 항로
+};
+
 // === [v17.3] 난파선 인양 시스템 설정 추가 ===
 var SCAVENGE_CONFIG = {
     RECOVERY_RATE: { min: 1.0, max: 1.0 }, // 손실분 중 100%를 난파선으로 박제
@@ -1512,8 +1519,12 @@ var SHOP_ITEMS = [
     { id: 102, name: "공예품 상자", icon: "🏺", price: 20000, effect: "trade_cargo", value: "공예품", cat: 6 },
     { id: 104, name: "귀금속 상자", icon: "🪙", price: 25000, effect: "trade_cargo", value: "귀금속", cat: 6 },
     { id: 105, name: "보석 상자", icon: "💎", price: 30000, effect: "trade_cargo", value: "보석", cat: 6 },
-    { id: 106, name: "선박 이름변경권", icon: "📝", price: 500000, effect: "ship_rename", cat: 6 }
+    { id: 106, name: "선박 이름변경권", icon: "📝", price: 500000, effect: "ship_rename", cat: 6 },
+    { id: 107, name: "밀수품 상자", icon: "📦", price: 10000, effect: "trade_cargo", value: "밀수품", cat: 7 }
 ];
+
+/* 상점 카테고리 정의 업데이트 */
+SHOP_CATEGORIES[7] = "🏴‍☠️ 암시장 (해적 전용)";
 
 /* [신규] 랜덤 아이콘 박스 상세 구성 및 확률 설정 */
 var RANDOM_BOX_CONFIG = {
@@ -4105,6 +4116,38 @@ function runScheduler() {
                     var rObj = data.rooms[r];
                     for (var uid in rObj.users) {
                         var u = rObj.users[uid];
+
+                // [v18.6] 해적 밀수 단속 엔진
+                        if (u.job === 'pirate' && u.voyage && u.voyage.active && u.voyage.isSmuggling && !u.voyage.isReturning) {
+                            if (Math.random() < SMUGGLE_CONFIG.DETECT_PROB) {
+                                u.voyage.isReturning = true;
+
+                                // 현재까지 항해한 시간(now - startTime)을 구해서
+                                // 그만큼을 현재 시각(now)에 더해 도착 예정 시각을 재설정
+                                var sailedTime = Date.now() - u.voyage.startTime;
+                                u.voyage.arrival = Date.now() + sailedTime;
+                                
+                                // 화물 압수 및 목적지 변경
+                                u.voyage.cargoSnapshot = {};
+                                u.voyage.specialtySnapshot = {};
+                                u.voyage.dest = u.voyage.origin;
+                                
+                                // 2. 강제 회항 (항해한 시간만큼 추가 소요)
+                                var elapsed = Date.now() - u.voyage.startTime;
+                                u.voyage.arrival = Date.now() + elapsed;
+                                u.voyage.dest = u.voyage.origin; // 목적지를 출발지로 변경
+                                
+                                var alertMsg = "🚨 [해군 긴급 검문 적발]\n" +
+                                               "━━━━━━━━━━━━━━━\n" +
+                                               "[" + u.name + "] 님의 선박이 밀수 도중\n" +
+                                               "정규 해군 순찰함에 적발되었습니다!\n\n" +
+                                               "❌ 조치: 모든 밀수품 전량 압수\n" +
+                                               "⚓ 상황: 출발지로 강제 압송 중\n" +
+                                               "━━━━━━━━━━━━━━━\n" +
+                                               "💡 예상 도착: " + new Date(u.voyage.arrival).toLocaleTimeString();
+                                Api.replyRoom(u.voyage.originRoom || "내리다", alertMsg);
+                            }
+                        }
                         
                         // 항해 중이고, 아직 도착 전이며, 이번 항해에서 아직 생물을 만나지 않음
                         if (u.voyage && u.voyage.active && !u.voyage.hasEncountered && Date.now() < u.voyage.arrival) {
@@ -8129,14 +8172,16 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
                 };
                 
                 // [수정] 위에서 계산한 cargoStatusLine을 정보창에 포함
+                var shopTitle = SHOP_CATEGORIES[item.cat] || "상점";
                 var quantityInfo = "구매하실 [" + item.name + "]의 수량을 입력해주세요.\n\n" +
                                    cargoStatusLine +
                                    "💵 개당 가격: " + fp(itemPrice) + "P" + discountTag + "\n" +
                                    "💰 보유 포인트: " + fp(user.point) + "P" +
-                                   ticketStatusLine + // [반영] 이용권 정보 추가
+                                   ticketStatusLine + 
                                    SHOP_NAV;
 
-                replier.reply(formatCommand("🔢 수량 입력", user, quantityInfo, "취소: [취소]"));
+                replier.reply(formatCommand("🔢 " + shopTitle + " 수량 입력", user, quantityInfo, "취소: [취소]"));
+                return true;
             } else {
                 /* 단권 구매 로직 */
                 var finalPrice = getItemPrice(item, user, roomName);
@@ -8998,7 +9043,27 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
                 replier.reply(formatCommand("📝 선박 이름 변경", user, renameBody, "취소: [취소]"));
             }
         }
-        else if (choice === "6") _processPirateBail(user, data, replier, roomName, targetUid); // 보석금 납부
+        else if (choice === "6") {
+            // [6번: 밀수 무역 시작] - 무역 메인 로직으로 이동
+            delete menuWaitState[targetUid];
+            _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
+        }
+        else if (choice === "7") {
+            // [7번: 암시장 이용] - 밀수품 적재 상점 호출
+            var smuggItems = SHOP_ITEMS.filter(function(it) { return it.cat === 7; });
+            _showTradeShop(user, replier, roomData, tradeCfg, 7);
+            bankProcessState[targetUid] = { 
+                type: 'shop_buy', 
+                time: Date.now(), 
+                originRoom: roomName,
+                extra: { items: smuggItems } 
+            };
+            delete menuWaitState[targetUid];
+        }
+        else if (choice === "8") {
+            // [8번: 보석금 납부] - 기존 6번 로직 이동
+            _processPirateBail(user, data, replier, roomName, targetUid);
+        }
         else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요."));
         return true;
     }
@@ -15200,6 +15265,7 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
         menuWaitState[targetUid] = { type: 'shop_category', time: Date.now(), originRoom: roomName };
         var categoryList = [];
         for (var id in SHOP_CATEGORIES) {
+            if (id == 7) continue;
             categoryList.push(id + ". " + SHOP_CATEGORIES[id]);
         }
         var shopMenu = "원하시는 카테고리 번호를 입력하세요.\n\n" + categoryList.join("\n") + "\n\n❎취소";
@@ -16218,15 +16284,19 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
  * 🚢 무역 물품 전용 상점 출력 함수 (전역 스코프로 이동)
  * 목적: 스코프 오류(ReferenceError)를 해결하고 무역 상점 UI를 안정적으로 출력합니다.
  */
-function _showTradeShop(user, replier, roomData, cfg) {
-    var filtered = SHOP_ITEMS.filter(function(it) { return it.cat === 6; });
+function _showTradeShop(user, replier, roomData, cfg, catId) {
+    var targetCat = catId || 6;
+    var filtered = SHOP_ITEMS.filter(function(it) { return it.cat === targetCat; });
+    var logicRoom = (roomData && roomData.name) || "내리다";
+
     var list = filtered.map(function(item, i) {
-        var price = getItemPrice(item, user, "내리다");
+        var price = getItemPrice(item, user, logicRoom);
         return (i + 1) + ". " + item.icon + " " + item.name + " : " + fp(price) + "P";
     });
     
+    var title = (targetCat === 7) ? "🏴‍☠️ 나소 암시장 (밀수품 적재)" : "🛒 무역 물품 적재 센터";
     var body = list.join("\n") + "\n\n💰 보유 포인트: " + fp(user.point) + "P\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
-    replier.reply(formatCommand("🛒 무역 물품 적재 센터", user, body, "구매할 번호를 입력하세요."));
+    replier.reply(formatCommand(title, user, body, "구매할 번호를 입력하세요."));
 }
 
 /**
@@ -16498,7 +16568,7 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
             replier.reply(formatError(user, "출항 불가", "판매할 화물을 최소 1개 이상 선택해야 합니다."));
             return;
         }
-        _departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec);
+        _departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec, state.escortUid, state.escortFee, null, state.isSmuggling);   
         if (data.rooms[roomName].features.states.menuWait) delete data.rooms[roomName].features.states.menuWait[targetUid];
         if (data.rooms["내리다"].features.states.menuWait) delete data.rooms["내리다"].features.states.menuWait[targetUid];
         return;
@@ -16619,6 +16689,20 @@ function _showTradeMarket(user, replier, roomData, cfg) {
 function _prepareVoyage(user, replier, cfg, roomData) {
     var durability = Number(user.durability === undefined ? 100 : user.durability);
     var currentLoc = user.currentLoc || "무역 지부";
+    var isPirate = (user.job === 'pirate');
+
+    // [v18.6] 해적 전용 출항지 선택지
+    if (isPirate) {
+        var dest = (currentLoc === "나소") ? "포트로얄" : "나소";
+        var nStr = "1. 🚢 " + dest + " (밀수 항로)\n";
+        nStr += "\n━━━━━━━━━━━━━━━\n" +
+                "💡 해군은 항시 당신을 지켜보고 있습니다.\n" +
+                "적발 시 모든 물건을 잃고 회항합니다.\n\n" +
+                "↩️ 뒤로 / ❎취소";
+        replier.reply(formatCommand("🏴‍☠️ 밀수 출항 준비", user, nStr, "번호를 입력하세요."));
+        roomData.features.states.menuWait[user.uid] = { type: 'trade_depart', isSmuggling: true, dest: dest, time: Date.now() };
+        return true;
+    }
 
     // 1. 내 화물 목록 작성
     var cargoList = []; var total = 0;
@@ -16779,6 +16863,7 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
         origin: user.currentLoc || "무역 지부",
         arrival: arrival, 
         startTime: Date.now(),
+        isSmuggling: !!isSmuggling,
         hasEncountered: prevEncountered, // 이전 항해 객체에서 기록을 가져옴
         contractSnapshot: currentQuest, // 현재 계약 정보를 스냅샷으로 보관
         // 기존 NATIONS 상수가 아닌 현재 방의 실시간 시세(tradeMarket)를 저장
@@ -17277,6 +17362,32 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             Api.replyRoom("내리다", formatCommand("⚓ 입항 대기 (지불 정지)", user, bankMsg, "해제 기준: 국고 50% 복구"));
             safeSaveData(data, false);
             return;
+        }
+
+        if (v.isSmuggling) {
+            var sQty = Number(v.cargoSnapshot["밀수품"] || 0);
+            if (v.isReturning) {
+                replier.reply(formatError(user, "밀수 정산 실패", "해군 검문에 적발되어 모든 밀수품을 압수당했습니다."));
+            } else if (sQty <= 0) {
+                replier.reply(formatError(user, "밀수 정산 실패", "배에 실린 밀수품 상자가 없습니다."));
+            } else {
+                var ecoMult = util_getEcoMultiplier(economyRoomName);
+                var unitPrice = (SMUGGLE_CONFIG.BASE_PRICE + (ecoMult * 1000));
+                var totalRev = Math.floor(unitPrice * sQty * SMUGGLE_CONFIG.PROFIT_MULT);
+                
+                util_updatePoint(user, economyRoomData, totalRev, "밀수 성공 수익", economyRoomName);
+                user.infamy = (user.infamy || 0) + (sQty * 2); 
+                
+                var smuggleBody = "📍 도착지: " + v.dest + "\n" +
+                                  "📦 품목: 밀수품 x" + sQty + "상자\n" +
+                                  "💰 최종 수익: +" + fp(totalRev) + "P (2.5배)\n" +
+                                  "💀 악명 상승: +" + (sQty * 2) + "점";
+                replier.reply(formatCommand("🏴‍☠️ 밀수 거래 성공", user, smuggleBody, "내 잔액: " + fp(user.point) + "P"));
+            }
+            v.active = false;
+            v.isProcessing = false;
+            safeSaveData(data, true);
+            return; // 밀수 정산이 끝났으므로 하단의 일반 무역 로직 실행 차단
         }
 
         v.isAlerted = false; // 8. 정산 프로세스 상태 초기화
@@ -18730,19 +18841,20 @@ function _showPirateMenu(user, replier, roomData, targetUid) {
     var renameItem = SHOP_ITEMS.filter(function(it){ return it.id === 106; })[0];
     var price = getItemPrice(renameItem, user, "내리다");
 
-    var menu = "1. 🔭 약탈 대상 물색 (레이더)\n" +
+    var menu = "1.  telescope 약탈 대상 물색 (레이더)\n" +
                "2. 💀 내 악명 상세 조회\n" +
                "3. 📜 해적단 은퇴 (면죄부 구입)\n" +
                "4. 💰 나소 정산소 (약탈금/보조금)\n" +
-               "5. 📝 선박 이름변경권 : " + fp(price) + "P";
+               "5. 📝 선박 이름변경권 : " + fp(price) + "P\n" +
+               "6. ⛵ 밀수 무역 (출항 준비)\n" +
+               "7. 📦 암시장 이용 (밀수품 적재)";
 
     var now = Date.now();
-    var isJailed = Number(user.jailReleaseTime || 0) > now;
-    var isCooling = Number(user.pillageCooldownEndTime || 0) > now;
+    var isRestricted = (Number(user.jailReleaseTime || 0) > now || Number(user.pillageCooldownEndTime || 0) > now);
 
-    if (isJailed || isCooling) {
+    if (isRestricted) {
         var bailAmount = SYSTEM_CONFIG.TRADE.JOBS.PIRATE.bailAmount;
-        menu += "\n6. 💸 보석금 납부 (" + fp(bailAmount) + "P / 즉시 석방)";
+        menu += "\n8. 💸 보석금 납부 (" + fp(bailAmount) + "P / 즉시 석방)";
     }
 
     menu += "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";

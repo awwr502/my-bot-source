@@ -8166,7 +8166,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
                 var itemPrice = getItemPrice(item, user, roomName); 
                 var discountTag = (user.title === "수집대마왕") ? " 🏵️수집대마왕 혜택(15%할인)" : "";
 
-                // [추가] 무역 물품일 경우에만 선적 현황 계산 (삭제 금지, 추가만 하세요)
+                // 무역 물품일 경우에만 선적 현황 계산 (삭제 금지, 추가만 하세요)
                 var cargoStatusLine = "";
                 if (item.effect === "trade_cargo") {
                     var tradeCfg = SYSTEM_CONFIG.TRADE;
@@ -8174,6 +8174,10 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
                     var totalCap = shipCfg.capacity + (user.enhLimit || 0); 
                     var currentCount = 0;
                     for (var k in (user.cargo || {})) currentCount += Number(user.cargo[k] || 0);
+                    
+                    // 미확인 교역품 수량 합산
+                    currentCount += Number(user.unknownCargo || 0);
+                    
                     cargoStatusLine = "📦 현재: " + currentCount + " / " + totalCap + "칸\n";
                 }
 
@@ -10467,6 +10471,8 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         for (var key in (user.cargo || {})) {
             currentCargoCount += Number(user.cargo[key] || 0);
         }
+        // 미확인 교역품 수량 합산
+        currentCargoCount += Number(user.unknownCargo || 0);
 
         // 공간 부족 체크 (기본용량 -> 강화 합산용량으로 교체)
         if (currentCargoCount + qty > totalCap) {
@@ -16104,6 +16110,8 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             }
             if (q > 0) currentGeneralCount += q;
         }
+        // 미확인 교역품은 항해 중이 아니면 100% 창고/배에 있으므로 그대로 합산
+        currentGeneralCount += Number(user.unknownCargo || 0);
 
         // 2. 특산품 잔여 종류 계산 (항해 중인 종류 제외)
         for (var s in (user.specialties || {})) {
@@ -16475,11 +16483,6 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
     var currentLoc = user.currentLoc || "무역 지부";
     var body = "📍 목적지: [" + dest + "]\n\n" +
                "[📦 무역품 보유 현황]\n";
-
-    if (user.unknownCargo > 0) {
-        body += "📦 미확인 교역품: " + user.unknownCargo + "상자 (변환 대기)\n" +
-                "💡 [출항] 시 적재량이 가장 많은 품목으로 자동 변환됩니다.\n\n";
-    }
     
     var availableItems = []; 
     // 1. 일반 화물: 유저 보유량(user.cargo)에서 현재 선택된 양(selC)을 뺀 나머지만 계산
@@ -16536,9 +16539,17 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
     body += "\n[✅ 선박 적재 완료]\n";
     var selList = [];
     for (var c in selC) selList.push("• " + c + " x" + selC[c] + "상자");
+    // 미확인 교역품 표시
+    if (Number(user.unknownCargo || 0) > 0) {
+        selList.push("• 📦미확인 교역품 x" + user.unknownCargo + "상자 (출항 시 변환)");
+    }
+    
     for (var s in selS) {
-        if (s === "_rare") selList.push("• 💎진귀한 보물 x" + selS[s] + "개");
-        else selList.push("• ⭐" + s + " x" + selS[s] + "개");
+        if (s === "_rare") {
+            if (selS[s] > 0) selList.push("• 💎진귀한 보물 x" + selS[s] + "개");
+        } else {
+            if (selS[s] > 0) selList.push("• ⭐" + s + " x" + selS[s] + "개");
+        }
     }
 
     if (selList.length > 0) {
@@ -16636,7 +16647,7 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
             }
         }
      
-        var hasCargo = Object.keys(state.selCargo).length > 0 || Object.keys(state.selSpec).length > 0;
+        var hasCargo = Object.keys(state.selCargo).length > 0 || Object.keys(state.selSpec).length > 0 || Number(user.unknownCargo || 0) > 0;
         if (!hasCargo) {
             replier.reply(formatError(user, "출항 불가", "판매할 화물을 최소 1개 이상 선택해야 합니다."));
             return;
@@ -16883,6 +16894,16 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
             user.unknownCargo = 0; // 유저 데이터 초기화
             
             var transformMsg = "✨ [물자 변환]: 미확인 교역품 " + unknownCount + "상자가 수량이 가장 많은 [" + maxGoodKey + "](으)로 변환되어 선적되었습니다.";
+            extraMsg = extraMsg ? extraMsg + "\n" + transformMsg : transformMsg;
+        } else {
+            // 실린 일반 화물이 아예 없는 경우 (미확인만 싣고 출항한 경우)
+            // 목적지의 선호품(Favorite)으로 자동 변환하여 증발 방지
+            var destFav = (cfg.NATIONS[dest] && cfg.NATIONS[dest].favorite) ? cfg.NATIONS[dest].favorite : "식료품";
+            if (destFav === "NONE" || destFav === "N/A") destFav = "식료품"; 
+            
+            selC[destFav] = unknownCount;
+            user.unknownCargo = 0;
+            var transformMsg = "✨ [물자 변환]: 선적된 일반 화물이 없어 미확인 교역품 " + unknownCount + "상자가 목적지 선호품인 [" + destFav + "](으)로 자동 변환되었습니다.";
             extraMsg = extraMsg ? extraMsg + "\n" + transformMsg : transformMsg;
         }
     }

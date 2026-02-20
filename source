@@ -9085,8 +9085,11 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
             };
             delete menuWaitState[targetUid];
         }
-        else if (choice === "8") {
-            // [8번: 보석금 납부] - 기존 6번에서 8번으로 인덱스 밀림 반영
+            else if (choice === "8") {
+            _manageShip(user, replier, tradeCfg);
+            menuWaitState[targetUid].type = 'trade_ship';
+        }
+        else if (choice === "9") {
             _processPirateBail(user, data, replier, roomName, targetUid);
         }
         else replier.reply(formatError(user, "번호 오류", "올바른 번호를 선택하세요."));
@@ -9531,9 +9534,12 @@ if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false
         else if (state.type === 'trade_ship') {
 
         // 1. 수리 키워드 최우선 판정 (cleanInput 사용)
-        if (cleanInput.indexOf("수리") !== -1) {
-            return _gameTradeLogic(msg, user, data, replier, roomName, targetUid);
-        }
+        if (cleanMsg.indexOf("수리") !== -1) {
+            var isRepairZone = (user.currentLoc === "무역 지부" || (user.job === 'pirate' && user.currentLoc === "나소"));
+            if (!isRepairZone) {
+                replier.reply(formatError(user, "수리 불가", "이곳은 수리 시설이 없는 외지 항구입니다.\n'무역 지부' 또는 '나소'에서 수리하세요."));
+                return true;
+            }
 
         // '강화' 키워드 입력 시 처리 (최우선 판정)
         if (msg === "강화") {
@@ -17084,9 +17090,13 @@ function _manageShip(user, replier, cfg) {
     body += "━━━━━━━━━━━━━━━\n";
 
     // [v16.9] 수리 안내문 동적 삽입
-    if (durability < 100) {
-        if (currentLoc === "무역 지부") {
-            var ecobase = Math.floor(util_getEcoMultiplier(currentLoc) * 100);
+   if (durability < 100) {
+       var isRepairZone = (currentLoc === "무역 지부" || (user.job === 'pirate' && currentLoc === "나소"));
+        if (isRepairZone) {
+            // "나소"나 "무역 지부"는 장소명이므로 경제 지표는 메인방("내리다") 기준으로 호출
+            var ecoTarget = (ALLOWED_ROOMS.indexOf(currentLoc) === -1) ? "내리다" : currentLoc;
+            var ecobase = Math.floor(util_getEcoMultiplier(ecoTarget) * 100);
+            
             var repairCost = (100 - durability) * (300 + ecobase);
             var repairDiscount = (user.pediaRewardLevel >= 1) ? 0.95 : 1.0;
             repairCost = Math.floor(repairCost * repairDiscount);
@@ -18905,13 +18915,14 @@ function _showPirateMenu(user, replier, roomData, targetUid) {
                "5. 📝 선박 이름변경권 : " + fp(price) + "P\n" +
                "6. ⛵ 밀수 무역 (출항 준비)\n" +
                "7. 📦 암시장 이용 (밀수품 적재)";
+               "8. 🛠️ 선박 관리 및 수리";
 
     var now = Date.now();
     var isRestricted = (Number(user.jailReleaseTime || 0) > now || Number(user.pillageCooldownEndTime || 0) > now);
 
     if (isRestricted) {
         var bailAmount = SYSTEM_CONFIG.TRADE.JOBS.PIRATE.bailAmount;
-        menu += "\n8. 💸 보석금 납부 (" + fp(bailAmount) + "P / 즉시 석방)";
+        menu += "\n9. 💸 보석금 납부 (" + fp(bailAmount) + "P / 즉시 석방)";
     }
 
     menu += "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";

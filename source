@@ -3469,9 +3469,10 @@ function processPoliceResult(roomName, thiefUid, victimUid) {
     util_setData(thief, 'jailReleaseTime', Date.now() + jailTime, "도둑질 체포 징역", roomName);
     
     var msg = "🚨 [경찰 출동]\n대상: " + getDisplayName(thief) + "\n내용: 도둑질 현행범 체포\n벌금: -" + fp(cashFine) + "P / 징역 1시간" + loanMsg + "\n내 잔액: " + fp(thief.point) + "P";
-    Api.replyRoom(roomName, formatAdmin("🚓 체포 완료", msg));
-    safeSaveData(data);
-}
+    Api.replyRoom("내리다", formatAdmin("🚓 체포 완료", msg));
+    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+        replier.reply("📡 도둑질 체포 결과가 메인방('내리다')에 타전되었습니다.");
+    }
 
 /* 도둑질 성공 결과 처리 함수 (중앙은행 연동 및 방별 격리 보정) */
 function processTheftResult(roomName, thiefUid, victimUid) {
@@ -3536,8 +3537,10 @@ function processTheftResult(roomName, thiefUid, victimUid) {
     if (activeThefts[victimUid]) delete activeThefts[victimUid]; 
     
     var content = "🕵️ 도둑질 성공!\n" + getDisplayName(victim) + "님의 지갑에서\n" + fp(stealAmount) + "P를 훔쳤습니다!" + res.repayMsg + plunderArtifact;
-    // [수정] 도둑질 결과에 보유 포인트 표시 추가
-    Api.replyRoom(roomName, formatCommand("💰 도둑질 결과", thief, content, "내 잔액: " + fp(thief.point) + "P"));
+    Api.replyRoom("내리다", formatCommand("💰 도둑질 결과", thief, content, "내 잔액: " + fp(thief.point) + "P"));
+    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+        replier.reply("📡 도둑질 성공 결과가 메인방('내리다')에 타전되었습니다.");
+    }
     safeSaveData(data);
 }
 
@@ -7905,12 +7908,6 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
     var types = ['shop_buy', 'shop_quantity', 'ship_rename_input', 'ship_rename_confirm', 'trade_invest_amount', 'trade_invest_confirm', 'trade_cargo_done'];
     if (types.indexOf(state.type) === -1) return false;
 
-    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
-        delete bankProcessState[targetUid];
-        replier.reply("🚫 [기능 제한]\n상점 및 선박 관리 기능은 단체방('내리다')에서만 가능합니다.");
-        return true;
-    }
-
     // 무역 상점(카테고리 6) 여부를 100% 식별하는 지능형 플래그
     var isTradeFlow = (function() {
         if (state.extra && state.extra.item && state.extra.item.cat === 6) return true;
@@ -8809,21 +8806,6 @@ var bankProcessState = (roomData && roomData.features) ? roomData.features.state
 
 // 핵심 데이터 로드 실패 시 숫자 로직 진입 방지
 if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false;
-
-
-    // 1. 1:1 채팅방 기능 제한 가드
-
-    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
-
-        if (state.type.startsWith('trade_') || state.type.startsWith('shop_')) {
-
-            delete menuWaitState[targetUid];
-
-            replier.reply("🚫 [기능 제한]\n무역 및 상점 관리 기능은 단체방('내리다')에서만 가능합니다.\n\n✅ 1:1 가능: 카지노, 은행, 내정보");
-
-            return true;
-        }
-    }
 
     // [계층형 뒤로가기 통합 핸들러]
    if (msg === "뒤로" || msg === "↩️ 뒤로") {
@@ -10666,6 +10648,12 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         }
 
         replier.reply(formatCommand(mData.title, user, body + "\n\n\"" + mData.desc + "\"", "내 잔액: " + fp(user.point) + "P"));
+        if (resSummary.highestIdx >= 4) {
+            var broadcastTitle = "🎉 [전역 알림: 전설의 발견]";
+            var iconName = resSummary.newIcons.length > 0 ? resSummary.newIcons[0] : "중복 아이템";
+            var broadcastMsg = "[" + user.name + "]님이 랜덤박스에서\n" + RANDOM_BOX_CONFIG.PROBS[resSummary.highestIdx].icon + " [" + RANDOM_BOX_CONFIG.PROBS[resSummary.highestIdx].grade + "] 등급을 뽑았습니다!\n\n" + iconName;
+            Api.replyRoom("내리다", formatCommand(broadcastTitle, null, broadcastMsg));
+        }
         checkCollectionMaster();
     } 
     
@@ -14860,7 +14848,10 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
         delete activeThefts[targetUid];
         
         var resContent = "🚨 [현행범 체포]\n대상: " + getDisplayName(thief) + "\n결과: -" + fp(cashFine) + "P 차감 / 징역 1시간" + loanMsg + "\n내 잔액: " + fp(thief.point) + "P";
-        replier.reply(formatAdmin("🚓 체포 완료", resContent));
+        Api.replyRoom("내리다", formatAdmin("🚓 체포 완료", resContent));
+        if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+            replier.reply("📡 체포 결과가 메인방('내리다')에 타전되었습니다.");
+        }
         safeSaveData(data);
         return true;
     }
@@ -15264,10 +15255,6 @@ function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
  * 설명: 폐쇄형 순환 경제 연동 - 출석 보상을 중앙은행 금고에서 지급합니다.
  */
 function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
-    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
-        replier.reply("🚫 [기능 제한]\n상점 및 출석체크는 단체방('내리다')에서만 가능합니다.\n\n✅ 1:1 가능: 카지노, 은행, 내정보");
-        return true;
-    }
 
     var roomData = data.rooms[roomName];
     if (!roomData || !roomData.features) return false;
@@ -19626,6 +19613,9 @@ function _handlePillageSelect(choice, user, data, replier, roomName, targetUid) 
                        "⚔️ 해군 본부는 즉시 토벌대를 파견하십시오!";
         
         Api.replyRoom("내리다", alertMsg);
+        if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+            replier.reply("📡 약탈 개시 경보가 메인방('내리다')에 타전되었습니다.");
+        }
     }
     
     delete roomData.features.states.menuWait[targetUid];
@@ -20558,7 +20548,10 @@ function _processMarineAction(user, choice, data, replier, roomName) {
     util_updatePoint(user, data.rooms["내리다"], rewardP, "해양 생물 " + (choice==="1"?"관찰":"포획"), roomName);
     
     delete v.encounter; 
-    replier.reply(formatCommand(msgTitle, user, msgBody + "\n💰 획득: +" + fp(rewardP) + "P"));
+    Api.replyRoom("내리다", formatCommand(msgTitle, user, msgBody + "\n💰 획득: +" + fp(rewardP) + "P"));
+    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
+        replier.reply("📡 해양 생물 조우 결과가 메인방('내리다')에 보고되었습니다.");
+    }
     safeSaveData(data, true);
 }
 

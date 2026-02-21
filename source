@@ -2684,6 +2684,8 @@ function getItemPrice(item, user, roomName) {
 
     // 기초가(Base) 설정: 무역 물품일 경우 섹터 1의 상수를 우선 참조
     var rawPrice = Number(item.price);
+    var basePrice = 0; // 변수 초기화 위치 교정
+
     if (item.effect === "trade_cargo" && item.value) {
         var tradeCfg = SYSTEM_CONFIG.TRADE;
         rawPrice = (tradeCfg.GOODS_COST && tradeCfg.GOODS_COST[item.value]) ? tradeCfg.GOODS_COST[item.value] : rawPrice;
@@ -2695,12 +2697,13 @@ function getItemPrice(item, user, roomName) {
             var localRate = market[curLoc].rates[item.value] || 1.0;
             rawPrice = Math.floor(rawPrice * localRate);
         }
+        
+        // [패치] 무역품은 전역 물가(multiplier) 및 지니누진세를 면제하고 순수 시세만 적용
+        basePrice = rawPrice;
+    } else {
+        // 무역품 외 일반 상점 아이템은 물가, 지니계수, 정부정책 모두 정상 적용
+        basePrice = Math.floor(rawPrice * multiplier * giniCorr.tax * (pol.shopPriceMult || 1.0));
     }
-
-    var basePrice = Math.floor(rawPrice * multiplier * giniCorr.tax * (pol.shopPriceMult || 1.0));
-
-    // 최종 기본가 산출: (원가 * 물가배율 * 지니누진세)
-    var basePrice = Math.floor(rawPrice * multiplier * giniCorr.tax);
 
     // [v18.0] 도감 100% 보상 (포세이돈): 무역품 구매 25% 할인
     if (user.pediaRewardLevel >= 5 && item.cat === 6) { // cat 6 = 무역물품
@@ -17609,8 +17612,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             } else if (sQty <= 0) {
                 replier.reply(formatError(user, "밀수 정산 실패", "배에 실린 밀수품 상자가 없습니다."));
             } else {
-                var ecoMult = util_getEcoMultiplier(economyRoomName);
-                var unitPrice = (SMUGGLE_CONFIG.BASE_PRICE + (ecoMult * 1000));
+                var unitPrice = SMUGGLE_CONFIG.BASE_PRICE;
                 var totalRev = Math.floor(unitPrice * sQty * SMUGGLE_CONFIG.PROFIT_MULT);
                 
                 util_updatePoint(user, economyRoomData, totalRev, "밀수 성공 수익", economyRoomName);

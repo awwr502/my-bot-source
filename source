@@ -8337,50 +8337,52 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
  * [시스템] 항구 투자 및 총독지 초기화 최종 처리 엔진
  */
 function _finalizeHarborInvestment(user, data, replier, roomName, targetUid, dest, amt, oldPorts) {
-    var roomData = data.rooms[roomName];
-    var pData = roomData.features.portData[dest];
-    var cfg = SYSTEM_CONFIG.TRADE.INVEST;
-    var oldGovUid = pData.governorUid;
-    var oldLevel = pData.level;
-    var bankProcessState = roomData.features.states.bankProcess;
+    var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var economyRoomData = data.rooms[economyRoomName];
+    var pData = economyRoomData.features.portData[dest];
+    var cfg = SYSTEM_CONFIG.TRADE.INVEST;
+    var oldGovUid = pData.governorUid;
+    var oldLevel = pData.level;
+    
+    // 상태 해제는 실제 명령어를 친 방(1:1방 포함) 기준으로 수행
+    var bankProcessState = data.rooms[roomName].features.states.bankProcess;
+    if (bankProcessState && bankProcessState[targetUid]) delete bankProcessState[targetUid];
 
-    if (bankProcessState && bankProcessState[targetUid]) delete bankProcessState[targetUid];
+    // 1. 포인트 게이트웨이 정산 (메인방 자산 참조)
+    util_updatePoint(user, economyRoomData, -amt, "항구 투자: " + dest, roomName);
 
-    // 1. 포인트 게이트웨이 정산
-    util_updatePoint(user, roomData, -amt, "항구 투자: " + dest, roomName);
+    // 2. 투자액 및 레벨 반영
+    if (!pData.userInvests) pData.userInvests = {};
+    pData.userInvests[targetUid] = (pData.userInvests[targetUid] || 0) + amt;
+    pData.totalInvest += amt;
+    pData.level = Math.min(cfg.MAX_LEVEL, Math.floor(pData.totalInvest / cfg.LEVEL_UP_STEP) + 1);
 
-    // 2. 투자액 및 레벨 반영
-    if (!pData.userInvests) pData.userInvests = {};
-    pData.userInvests[targetUid] = (pData.userInvests[targetUid] || 0) + amt;
-    pData.totalInvest += amt;
-    pData.level = Math.min(cfg.MAX_LEVEL, Math.floor(pData.totalInvest / cfg.LEVEL_UP_STEP) + 1);
+    // 3. [핵심] 총독 교체 및 기존 도시 초기화 (후순위 우선)
+    var isGovChanged = false;
+    var govReason = "";
+    var currentMaxInvest = (oldGovUid && pData.userInvests[oldGovUid]) ? pData.userInvests[oldGovUid] : 0;
 
-    // 3. [핵심] 총독 교체 및 기존 도시 초기화 (후순위 우선)
-    var isGovChanged = false;
-    var govReason = "";
-    var currentMaxInvest = (oldGovUid && pData.userInvests[oldGovUid]) ? pData.userInvests[oldGovUid] : 0;
+    if (pData.userInvests[targetUid] > currentMaxInvest) {
+        if (oldPorts && oldPorts.length > 0) {
+            oldPorts.forEach(function(pName) {
+                if (economyRoomData.features.portData[pName]) {
+                    economyRoomData.features.portData[pName].governorUid = ""; 
+                }
+            });
+            govReason = "\n\n✨ [직위 이전]\n기존 항구의 총독직을 사임하고\n새로운 자치령 '" + dest + "'의 총독으로 부임했습니다!";
+        }
+        pData.governorUid = targetUid;
+        if (oldGovUid !== targetUid) isGovChanged = true;
+    }
 
-    if (pData.userInvests[targetUid] > currentMaxInvest) {
-        if (oldPorts && oldPorts.length > 0) {
-            oldPorts.forEach(function(pName) {
-                if (roomData.features.portData[pName]) {
-                    roomData.features.portData[pName].governorUid = ""; 
-                }
-            });
-            govReason = "\n\n✨ [직위 이전]\n기존 항구의 총독직을 사임하고\n새로운 자치령 '" + dest + "'의 총독으로 부임했습니다!";
-        }
-        pData.governorUid = targetUid;
-        if (oldGovUid !== targetUid) isGovChanged = true;
-    }
+    var resMsg = dest + " 항구에 " + fp(amt) + "P를 투자했습니다!\n\n" +
+                 "📊 " + dest + " 발전도: Lv." + oldLevel + " ➔ Lv." + pData.level + "\n" +
+                 "📈 선호품 매입 보너스: +" + (pData.level - 1) + "%\n" + govReason;
 
-    var resMsg = dest + " 항구에 " + fp(amt) + "P를 투자했습니다!\n\n" +
-                 "📊 " + dest + " 발전도: Lv." + oldLevel + " ➔ Lv." + pData.level + "\n" +
-                 "📈 선호품 매입 보너스: +" + (pData.level - 1) + "%" + govReason;
-
-    if (isGovChanged && govReason === "") {
-        var oldName = (oldGovUid && roomData.users[oldGovUid]) ? roomData.users[oldGovUid].name : "공석";
-        resMsg += "\n\n🎊 [작위 수여]\n" + user.name + "님이 " + oldName + "을 밀어내고\n" + dest + "의 새로운 [총독]이 되었습니다!";
-    }
+    if (isGovChanged && govReason === "") {
+        var oldName = (oldGovUid && economyRoomData.users[oldGovUid]) ? economyRoomData.users[oldGovUid].name : "공석";
+        resMsg += "\n\n🎊 [작위 수여]\n" + user.name + "님이 " + oldName + "을 밀어내고\n" + dest + "의 새로운 [총독]이 되었습니다!";
+    }
 
     replier.reply(formatCommand("🏗️ 항구 투자 완료", user, resMsg, "내 잔액: " + fp(user.point) + "P"));
     user.skipHealing = true;
@@ -17065,19 +17067,20 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
 
 /* 📦 항해 현황판 (호위함 표시 추가) */
 function _showVoyageStatus(user, replier, data, roomName) {
-    var msg = "";
-    if (!user.voyage || user.voyage.active !== true) {
-        var emptyBody = "현재 운항 중인 선박이 없습니다.\n무역 물자를 싣고 넓은 바다로 나가보세요!\n\n" +
-                        "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
-        replier.reply(formatCommand("📦 항해 현황", user, emptyBody, "출항 준비: [2]번 메뉴를 선택하세요."));
-        return;
-    }
-    var v = user.voyage;
-    var remain = (v.arrival || 0) - Date.now();
-    var cfg = SYSTEM_CONFIG.TRADE;
+    var msg = "";
+    if (!user.voyage || user.voyage.active !== true) {
+        var emptyBody = "현재 운항 중인 선박이 없습니다.\n무역 물자를 싣고 넓은 바다로 나가보세요!\n\n" +
+                        "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+        replier.reply(formatCommand("📦 항해 현황", user, emptyBody, "출항 준비: [2]번 메뉴를 선택하세요."));
+        return;
+    }
+    var v = user.voyage;
+    var remain = (v.arrival || 0) - Date.now();
+    var cfg = SYSTEM_CONFIG.TRADE;
 
-    // roomData 변수 선언 추가
-    var roomData = data.rooms[roomName] || data.rooms["내리다"];
+    // roomData 변수 선언 추가 (메인방 고정 참조로 교체)
+    var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var roomData = data.rooms[economyRoomName];
     
     // [v15.9] 현황판 강화 수치 연동
     var shipCapacity = cfg.SHIPS[user.shipLevel || 1].capacity + (user.enhLimit || 0);
@@ -17820,19 +17823,18 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     // [확정] 마진이 이득(>0)일 때만 세금 계산, 손실 시 0P 처리
     taxAmount = margin > 0 ? Math.floor(margin * autoTaxRate) : 0;
-    var taxPercentText = (autoTaxRate * 100).toFixed(1);
-    var afterTaxMargin = margin - taxAmount;
+    var taxPercentText = (autoTaxRate * 100).toFixed(1);
+    var afterTaxMargin = margin - taxAmount;
 
-    // [관세] 총독 관세 징수 로직
-    var pDataPath = roomData.features.portData;
+    // [관세] 총독 관세 징수 로직 (1:1방 연동 버그 수정)
+    var pDataPath = economyRoomData.features.portData; // 메인방(내리다) 데이터 강제 참조
     var govInfo = (pDataPath && pDataPath[v.dest]) ? pDataPath[v.dest] : null;
     var govTag = "";
     if (govInfo && govInfo.governorUid && govInfo.governorUid !== "") {
         if (govInfo.governorUid !== targetUid) {
-            // [수정] 관세 징수 처리를 '최종 산출 순이익(totalNetMargin)' 기반으로 하단에서 실행하기 위해 플래그 설정
             govTag = "ACTIVE";
-        } else { 
-            govTag = "\n👑 [자치령 특권]: 관세 면제 적용"; 
+        } else { 
+            govTag = "\n👑 [자치령 특권]: 관세 면제 적용"; 
         }
     }
 
@@ -18141,7 +18143,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         if (tariffAmt > 0) {
             util_updateReserve(economyRoomData, tariffAmt, "자치령 관세 국고 입고 (" + v.dest + ")", economyRoomName);
         }
-        var gUser = roomData.users[govInfo.governorUid];
+        var gUser = economyRoomData.users[govInfo.governorUid]; // 메인방(내리다)에서 총독 닉네임 참조
         govTag = "\n🪙 관세(1%): -" + fp(tariffAmt) + "P (" + (gUser ? gUser.name : "총독") + " 징수)";
     } else if (govTag !== "") {
         govTag = "\n👑 [자치령 특권]: 관세 면제 적용";
@@ -20222,8 +20224,8 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
             var efficientMargin = Math.floor(margin * shipEff);
 
             // 2. 항구 발전도 보너스 계산 (기존 로직 유지, 수식 정리)
-            var pInfo = (data.rooms[roomName].features.portData && data.rooms[roomName].features.portData[v.dest]) ? data.rooms[roomName].features.portData[v.dest] : { level: 1 };
-            var pBonus = efficientMargin > 0 ? Math.floor(efficientMargin * (pInfo.level - 1) * 0.01) : 0;
+            var pInfo = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : { level: 1 };
+            var pBonus = efficientMargin > 0 ? Math.floor(efficientMargin * (pInfo.level - 1) * 0.01) : 0;
             
             // 3. 최종 세전 순이익 합산
             var totalNetMargin = efficientMargin + pBonus;

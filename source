@@ -4902,15 +4902,14 @@ function _runSector16Logic(data, ctx) {
         }
     } catch (e) { Log.error("Landmark Engine Error: " + e); }
 
-    /* 무역 시스템 1시간 주기 순환 시세 변동 엔진 */
+    /* 무역 시스템 20시간 주기 순환 시세 변동 엔진 */
     /**
-     * 기능: 매시 30분 정각에 5개국의 선호/기피 품목을 '순환 매칭' 방식으로 교체 (1시간 주기)
-     * 규칙: 자국 생산 품목은 절대 선호/기피에 포함되지 않음 (수입 필요성 강조)
+     * 기능: 매시 00, 20, 40분에 5개국의 실물 재고를 증감시키고 시세를 갱신
      */
     try {
         var tradeCfg = SYSTEM_CONFIG.TRADE;
-        if (currentMin === 30 && data.lastTradeUpdateHour !== currentHour) {
-            data.lastTradeUpdateHour = currentHour;
+        if (currentMin % 20 === 0 && data.lastTradeUpdateMin !== currentMin) {
+            data.lastTradeUpdateMin = currentMin; // Hour 대신 Min으로 기록
             
             if (!mainRoomData.features.tradeMarket) mainRoomData.features.tradeMarket = {};
             
@@ -4967,11 +4966,36 @@ function _runSector16Logic(data, ctx) {
                 };
             }
 
-            var tradeNotice = "⚙️ [내리다 무역 지부 공보]\n━━━━━━━━━━━━━━━\n" +
-                              "🌍 세계 교역 시세가 변동되었습니다!\n" +
-                              "각 항구의 물가(%)가 갱신되었으니 시세표를 확인하세요.\n" +
+            var pData = mainRoomData.features.portData || {};
+            var goodsIcons = { "식료품":"🍎", "공업품":"⚙️", "공예품":"🏺", "귀금속":"🪙", "보석":"💎" };
+            var goodsOrder = ["식료품", "공업품", "공예품", "귀금속", "보석"];
+            
+            var noticeLines = [];
+            for (var i = 0; i < nations.length; i++) {
+                var n = nations[i];
+                var nInfo = mainRoomData.features.tradeMarket[n];
+                var pInfo = pData[n] || { level: 1, governorUid: "" };
+                
+                var govName = "공석";
+                if (pInfo.governorUid && mainRoomData.users[pInfo.governorUid]) {
+                    govName = "👑" + mainRoomData.users[pInfo.governorUid].name;
+                }
+
+                var rateLine = "";
+                goodsOrder.forEach(function(gKey) {
+                    var rate = (nInfo.rates && nInfo.rates[gKey]) ? nInfo.rates[gKey] : 1.0;
+                    var pct = Math.round(rate * 100);
+                    rateLine += goodsIcons[gKey] + pct + "% ";
+                });
+
+                noticeLines.push("📍 " + (i + 1) + ". " + n + " [Lv." + pInfo.level + "]\n" +
+                                 rateLine.trim() + "\n" +
+                                 "(👤 총독: " + govName + ")");
+            }
+
+            var tradeNotice = "🌍 세계 무역 시세표 (갱신: 20분)\n" +
                               "━━━━━━━━━━━━━━━\n" +
-                              "💡 확인: [/무역] ➔ 1. 세계 시세 리포트";
+                              noticeLines.join("\n\n");
             
             Api.replyRoom(ctx.targetRoom, tradeNotice);
             ctx.isUpdated = true;
@@ -16803,10 +16827,9 @@ function _showTradeMarket(user, replier, roomData, cfg) {
     var h = new Date().getHours();
     var investStatus = (h >= 7) ? "🟢 투자 가능" : "🔴 투자 마감";
 
-    var header = "🌍 세계 무역 시세표 (갱신: 1시간)\n" +
+    var header = "🌍 세계 무역 시세표 (갱신: 20분)\n" +
                  "━━━━━━━━━━━━━━━\n" +
-                 getDisplayName(user) + "님\n" +
-                 "(기준 100% / 🔥폭등 ❄️폭락)\n\n";
+                 getDisplayName(user) + "님\n";
 
     var list = [];
     var idx = 1;

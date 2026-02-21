@@ -1761,6 +1761,7 @@ function util_getActivePolicy(roomData) {
 function util_autoClearTimeouts(data) {
     var now = Date.now();
     var notifiedInThisCycle = {};
+    var isChanged = false; // [신규] 변경 발생 여부 추적
     
     // [최적화] 전체 rooms 대신 ALLOWED_ROOMS만 순회하여 CPU 부하 90% 절감
     ALLOWED_ROOMS.forEach(function(rName) {
@@ -1775,6 +1776,10 @@ function util_autoClearTimeouts(data) {
             if (!q) return;
             for (var uid in q) {
                 var entry = q[uid];
+                
+                // [안전 가드] 이미 타임아웃 처리된 좀비 세션이면 무시
+                if (entry._isExpired) continue; 
+
                 var startTime = entry.time || entry.timestamp || 0;
                 
                 // [v18.3 핵심] 유저 데이터(voyage.encounter)를 직접 확인하여 마스터 권한 부여
@@ -1785,18 +1790,17 @@ function util_autoClearTimeouts(data) {
                 var threshold = isMarineSession ? 180000 : 30000;
                 
                 if (startTime > 0 && (now - startTime > threshold)) {
+                    // [좀비 부활 방지] 사망 선고 플래그 박기
+                    entry._isExpired = true; 
+                    isChanged = true;
+
                     // [v18.5 보험 엔진 연결] 세션 종료 및 환불 여부 확인
                     var actualOrigin = entry.originRoom || rName;
-                    var u = (data.rooms["내리다"] && data.rooms["내리다"].users[uid]) ? data.rooms["내리다"].users[uid] : null;
                     
-                    // 삭제와 동시에 환불 정보를 가져옴 (보험금이 있다면 여기서 util_updatePoint 호출됨)
+                    // 삭제와 동시에 환불 정보를 가져옴
                     var refundInfo = util_terminateSession(uid, u, data.rooms[rName], actualOrigin, qKey);
 
-                    if (notifiedInThisCycle[uid]) {
-                        continue;
-                    }
-
-                    if (u) {
+                    if (!notifiedInThisCycle[uid] && u) {
                         try {
                             if (entry.type === 'marine_encounter') {
                                 // 거대 생물 전용 타임아웃 메시지
@@ -1830,6 +1834,11 @@ function util_autoClearTimeouts(data) {
             }
         });
     });
+
+    // [중복 억제 핵심] 세션이 하나라도 파기되었다면 즉시 물리 저장하여 롤백에 의한 부활을 원천 차단
+    if (isChanged && typeof safeSaveData === 'function') {
+        safeSaveData(data, true);
+    }
 }
 
 /**

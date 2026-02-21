@@ -1113,30 +1113,31 @@ function getDatabase() {
                 nickHistory: {}, adminLogs: [], economyDamping: 0.5,
                 lastDailyReset: "", isRecovering: false, nameToIdCache: {}
             };
-        } else {
-            var content = FileStream.read(FILE_PATH);
-            if (!content) throw new Error("Empty File");
-            initialData = JSON.parse(content);
-        }
-        if (!initialData.rooms) initialData.rooms = {};
-
-        // 2. 개별 방 데이터 파일(.json)들을 찾아 합치기
-        var dataDir = new java.io.File(BASE_DIR);
-        var files = dataDir.listFiles();
-        if (files) {
-            for (var i = 0; i < files.length; i++) {
-                var fName = files[i].getName();
-                if (fName.indexOf("room_") === 0 && fName.endsWith(".json")) {
-                    var rName = fName.replace("room_", "").replace(".json", "");
-                    try {
-                        var roomContent = FileStream.read(files[i].getAbsolutePath());
-                        if (roomContent) {
-                            initialData.rooms[rName] = JSON.parse(roomContent);
-                        }
-                    } catch(e) { Log.error("📂 " + rName + " 방 분할 데이터 로드 실패: " + e); }
-                }
-            }
-        }
+       } else {
+            var content = FileStream.read(FILE_PATH);
+            if (!content) throw new Error("Empty File");
+            initialData = JSON.parse(content);
+        }
+        
+        // [추가] 방 데이터 구조 강제 실체화 및 분할 파일 검색 합치기
+        if (!initialData.rooms) initialData.rooms = {};
+        var dataDir = new java.io.File(BASE_DIR);
+        var files = dataDir.listFiles();
+        if (files) {
+            for (var i = 0; i < files.length; i++) {
+                var fName = files[i].getName();
+                // "room_방이름.json" 형태의 파일만 식별하여 rooms 객체에 병합
+                if (fName.indexOf("room_") === 0 && fName.endsWith(".json")) {
+                    var rName = fName.replace("room_", "").replace(".json", "");
+                    try {
+                        var roomContent = FileStream.read(files[i].getAbsolutePath());
+                        if (roomContent) {
+                            initialData.rooms[rName] = JSON.parse(roomContent);
+                        }
+                    } catch(e) { Log.error("📂 " + rName + " 분할 데이터 로드 결함: " + e); }
+                }
+            }
+        }
 
         recoverFromJournal(initialData);
 
@@ -1309,23 +1310,27 @@ function safeSaveData(data, isForceBackup) {
         var roomCount = Object.keys(data.rooms || {}).length;
         if (roomCount === 0) throw new Error("저장 거부: 방(rooms) 객체가 비어있습니다.");
 
-        var DB_DATA = null;
-        try {
-            var dbFile = new java.io.File(FILE_PATH);
-            if (dbFile.exists()) {
-                var dbContent = FileStream.read(FILE_PATH);
-                if (dbContent) DB_DATA = JSON.parse(dbContent);
-            }
-        } catch(e) { Log.error("DB Read for Healing Fail: " + e); }
-
         for (var rName in data.rooms) {
             var room = data.rooms[rName];
+            
+            // 검역용 기준 데이터 로드 (메인 파일이 아닌 각 방의 개별 파일을 실시간 조회)
+            var safeRoomRef = null;
+            var rFile = new java.io.File(BASE_DIR + "room_" + rName + ".json");
+            if (rFile.exists()) {
+                try { 
+                    var rContent = FileStream.read(rFile.getAbsolutePath());
+                    if (rContent) safeRoomRef = JSON.parse(rContent); 
+                } catch(e) { Log.error(rName + " 검역 참조 실패: " + e); }
+            }
+
             for (var uid in room.users) {
                 var u = room.users[uid];
                 if (u.skipHealing === true) continue; 
 
-                if (DB_DATA && DB_DATA.rooms[rName] && DB_DATA.rooms[rName].users[uid]) {
-                    var safeU = DB_DATA.rooms[rName].users[uid];
+                // 분할된 기준 데이터(safeRoomRef)가 존재할 때만 무결성 수술 진행
+                if (safeRoomRef && safeRoomRef.users && safeRoomRef.users[uid]) {
+                    var safeU = safeRoomRef.users[uid];
+
                     var isFieldHealed = false;
 
                     // [수정] 파일(safeU)이 초기화된 상태일 경우, 메모리(u)의 데이터를 덮어씌우지 않도록 가드 추가

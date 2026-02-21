@@ -17137,18 +17137,6 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     // [v15.9.3] 초 단위 정밀 계산 엔진 도입
     var baseTimeSec = (60 * ship.speedMult) * 60; // 기본 항해 시간 (초)
     var enhSec = Number(user.enhTime || 0);       // 초월 강화 보정 (초)
-
-    // 고향 항구(무역 지부/나소)로 회항 시 소요 시간 특별 단축 로직
-    var isPirateReq = (user.job === 'pirate');
-    var homePortReq = isPirateReq ? "나소" : "무역 지부";
-
-    if (dest === homePortReq) {
-        // [옵션 1] 회항 시 배의 속도와 무관하게 "무조건 5분(300초)"으로 고정하고 싶을 때:
-        baseTimeSec = 900; 
-
-        // [옵션 2] 원래 걸리는 시간의 "절반(50%)"만 걸리게 하고 싶을 때:
-        // baseTimeSec = baseTimeSec * 0.5;
-    }
     
     // 1단계: 기본 시간 + 강화 보정 합산
     var totalSec = baseTimeSec + enhSec;
@@ -18296,16 +18284,26 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     if (isEmergency) {
         var ship_e = cfg.SHIPS[user.shipLevel || 1];
-        var totalSec_e = 900; 
-        var arrival_e = Date.now() + (totalSec_e * 1000);
-        
-        user.voyage = {
-            active: true, dest: homePort, origin: user.currentLoc,
-            arrival: arrival_e, startTime: Date.now(),
-            hasEncountered: v.hasEncountered,
-            marketSnapshot: v.marketSnapshot, ecoMultSnapshot: v.ecoMultSnapshot,
-            cargoSnapshot: {}, specialtySnapshot: {}, isProcessing: false
-        };
+        var baseTime_e = (60 * ship_e.speedMult) * 60;
+        var totalSec_e = baseTime_e + Number(user.enhTime || 0);
+        
+        // 정부 정책 배율 적용
+        if (pol.tradeSpeedMult) totalSec_e *= pol.tradeSpeedMult;
+        
+        // 순풍 확률 판정 (10%)
+        var isSmooth_e = Math.random() < 0.1;
+        if (isSmooth_e) totalSec_e *= 0.8;
+        
+        var arrival_e = Date.now() + (totalSec_e * 1000);
+        
+        user.voyage = {
+            active: true, dest: homePort, origin: user.currentLoc,
+            arrival: arrival_e, startTime: Date.now(),
+            hasEncountered: v.hasEncountered,
+            marketSnapshot: v.marketSnapshot, ecoMultSnapshot: v.ecoMultSnapshot,
+            cargoSnapshot: {}, specialtySnapshot: {}, isProcessing: false,
+            isSmooth: isSmooth_e // 순풍 상태 저장
+        };
 
         separateEmergencyMsg = "⚠️ 현재 내구도가 " + user.durability + "%로 매우 위험한 상태입니다.\n" +
                                "사고 예방을 위해 무역지부로 긴급회항 됩니다.\n" +

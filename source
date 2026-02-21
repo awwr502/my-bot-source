@@ -2678,6 +2678,14 @@ function getItemPrice(item, user, roomName) {
     if (item.effect === "trade_cargo" && item.value) {
         var tradeCfg = SYSTEM_CONFIG.TRADE;
         rawPrice = (tradeCfg.GOODS_COST && tradeCfg.GOODS_COST[item.value]) ? tradeCfg.GOODS_COST[item.value] : rawPrice;
+        
+        // [양방향 시세 적용] 매입 시 현재 정박 중인 항구의 개별 시세 반영
+        var curLoc = user.currentLoc || "무역 지부";
+        var market = data.rooms[logicRoom].features.tradeMarket;
+        if (curLoc !== "무역 지부" && curLoc !== "나소" && curLoc !== "엘도라도: 잊혀진 성역" && market && market[curLoc] && market[curLoc].rates) {
+            var localRate = market[curLoc].rates[item.value] || 1.0;
+            rawPrice = Math.floor(rawPrice * localRate);
+        }
     }
 
     var basePrice = Math.floor(rawPrice * multiplier * giniCorr.tax * (pol.shopPriceMult || 1.0));
@@ -17106,7 +17114,8 @@ function _showVoyageStatus(user, replier, data, roomName) {
         var mult = (v.marketSnapshot[v.dest] && v.marketSnapshot[v.dest].rates && v.marketSnapshot[v.dest].rates[g]) 
                    ? v.marketSnapshot[v.dest].rates[g] : 1.0;
         
-        tRev += Math.floor(myPurchasePrice * mult * qty);
+        var baseTargetCost = cfg.GOODS_COST[g] || 10000;
+        tRev += Math.floor(baseTargetCost * mult * qty);
     }
 
     var sSnap = v.specialtySnapshot || {};
@@ -17648,8 +17657,9 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
         // 3. 최종 매출 및 보너스 계산
         if (multiplier > 0) {
-            var baseEarn = Math.floor(myPurchasePrice * multiplier * settledCount);
-            var baseMargin = baseEarn - itemCost; 
+            var baseTargetCost = cfg.GOODS_COST[good] || 10000;
+            var baseEarn = Math.floor(baseTargetCost * multiplier * settledCount);
+            var baseMargin = baseEarn - itemCost; // 순수익 = 총 매출 - 총 매입원가(평단가 기준)
             
             // 항구 발전 레벨 보너스
             var pInfo = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : { level: 1 };
@@ -20049,8 +20059,9 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
                 var isPremium = (quest && v.startTime >= quest.startTime && v.startTime <= quest.endTime && v.dest === quest.nation && g === quest.item);
                 var mult = isPremium ? 1.5 : ((g === nSnap.favorite) ? rateInfo.pref : (g === nSnap.hate ? rateInfo.hate : rateInfo.norm));
                 
+                var baseTargetCost = cfg.GOODS_COST[g] || 10000;
                 tCost += (myPurchasePrice * qty);
-                tRev += Math.floor(myPurchasePrice * mult * qty);
+                tRev += Math.floor(baseTargetCost * mult * qty);
             }
             // 특산품 매출/원가 계산
             for (var s in sSnap) {

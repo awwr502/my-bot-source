@@ -449,6 +449,14 @@ var TRADE_RELATION = {
     "킴벌리": { produce: "보석", set: "다이아몬드" }
 };
 
+var SYNERGY_RELATION = {
+    "포르투": "공업품",    // 농기구 보급 ➔ 식료품 생산 증대
+    "코콜라": "공예품",    // 정밀 도안 보급 ➔ 공업품 생산 증대
+    "나폴리": "보석",      // 장식 보석 보급 ➔ 공예품 생산 증대
+    "베라크루스": "식료품", // 광부 식량 보급 ➔ 귀금속 채굴 증대
+    "킴벌리": "귀금속"     // 세공 금속 보급 ➔ 보석 생산 증대
+};
+
 /**
  * [Gemini 요청 사항] 방별 독립화를 위한 데이터 템플릿
  * 설명: 아래의 구조가 각 방(Room)이 생성될 때마다 독립적으로 복제되어 할당됩니다.
@@ -4948,7 +4956,15 @@ function _runSector16Logic(data, ctx) {
 
                     // 1. 도시의 기본 생산 및 자연 소비
                     if (TRADE_RELATION[nName].produce === gName) {
-                        currentStock += 150; // 자국 생산품 기본 생산
+                        var baseProd = 150;
+                        var synergyBonus = 0;
+                        
+                        // 시너지 재료가 공급되었다면 재료 10개당 제품 5개 추가 생산 (최대 +300개)
+                        if (pData.synergyStack > 0) {
+                            synergyBonus = Math.min(300, Math.floor(pData.synergyStack * 0.5));
+                            pData.synergyStack = 0; // 생산에 소모되었으므로 초기화
+                        }
+                        currentStock += (baseProd + synergyBonus);
                     } else {
                         currentStock -= (Math.floor(Math.random() * 71) + 50); // 타국 물품 자연 소비 (50~120)
                     }
@@ -17793,6 +17809,12 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                 if (!pInfoTarget.inventory) pInfoTarget.inventory = {"식료품":10000, "공업품":10000, "공예품":10000, "귀금속":10000, "보석":10000};
                 if (pInfoTarget.inventory[good] !== undefined) {
                     pInfoTarget.inventory[good] = Number(pInfoTarget.inventory[good]) + settledCount;
+
+                    // 판매한 물건이 항구의 시너지 재료라면 생산 스택 증가
+                    if (SYNERGY_RELATION[v.dest] === good) {
+                        pInfoTarget.synergyStack = (Number(pInfoTarget.synergyStack) || 0) + settledCount;
+                    }
+
                     util_refreshMarketRate(economyRoomData, v.dest, good);
                 }
             }

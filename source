@@ -4938,16 +4938,23 @@ function _runSector16Logic(data, ctx) {
             var nations = ["포르투", "코콜라", "나폴리", "베라크루스", "킴벌리"];
             var goods = ["식료품", "공업품", "공예품", "귀금속", "보석"];
             
-            for (var i = 0; i < nations.length; i++) {
-                var nName = nations[i];
-                var rates = {}; // { "식료품": 1.05, "공업품": 0.90 ... }
-                
-                // 기존 방 데이터 안전 연동 가드
-                var pData = mainRoomData.features.portData[nName];
-                if (pData && !pData.inventory) {
-                    pData.inventory = {"식료품":10000, "공업품":10000, "공예품":10000, "귀금속":10000, "보석":10000};
-                }
-                var inv = pData ? pData.inventory : {"식료품":10000, "공업품":10000, "공예품":10000, "귀금속":10000, "보석":10000};
+            // 20분마다 1개의 항구를 무작위로 선정하여 특산품 대유행(Boom) 상태 부여
+            var boomNation = nations[Math.floor(Math.random() * nations.length)];
+
+            for (var i = 0; i < nations.length; i++) {
+                var nName = nations[i];
+                var rates = {}; // { "식료품": 1.05, "공업품": 0.90 ... }
+                
+                // 기존 방 데이터 안전 연동 가드
+                var pData = mainRoomData.features.portData[nName];
+                if (pData && !pData.inventory) {
+                    pData.inventory = {"식료품":10000, "공업품":10000, "공예품":10000, "귀금속":10000, "보석":10000};
+                }
+                
+                // 유행 상태 갱신 (선정된 항구만 true, 나머지는 false)
+                if (pData) pData.specialtyBoom = (nName === boomNation);
+                
+                var inv = pData ? pData.inventory : {"식료품":10000, "공업품":10000, "공예품":10000, "귀금속":10000, "보석":10000};
 
                 for (var j = 0; j < goods.length; j++) {
                     var gName = goods[j];
@@ -5032,11 +5039,14 @@ function _runSector16Logic(data, ctx) {
                 var producedGood = TRADE_RELATION[n].produce;
                 var currentRate = (nInfo.rates && nInfo.rates[producedGood]) ? nInfo.rates[producedGood] : 1.0;
 
-                if (pInfo.synergyStack > 0) portStatusTag = " ✨공정가속"; // 시너지 발동 시
-                else if (currentRate <= 0.80) portStatusTag = " 📉공급과잉"; // 폭락 시
-                else if (currentRate >= 1.20) portStatusTag = " 🔥공급부족"; // 폭등 시
-                
-                var govName = "공석";
+                if (pInfo.synergyStack > 0) portStatusTag += " ✨공정가속";
+                else if (currentRate <= 0.80) portStatusTag += " 📉공급과잉";
+                else if (currentRate >= 1.20) portStatusTag += " 🔥공급부족";
+
+                // 특산품 대유행 태그 추가 (기존 태그 옆에 이어서 붙음)
+                if (pInfo.specialtyBoom) portStatusTag += " 🎊특산품유행";
+
+        var govName = "공석";
                 if (pInfo.governorUid && mainRoomData.users[pInfo.governorUid]) {
                     govName = "👑" + mainRoomData.users[pInfo.governorUid].name;
                 }
@@ -16928,7 +16938,7 @@ function _showTradeMarket(user, replier, roomData, cfg) {
 
     for (var n in cfg.NATIONS) { 
         var nInfo = market[n];
-        var pInfo = pData[n] || { level: 1, totalInvest: 0, governorUid: "" };
+        var pInfo = pData[n] || { level: 1, totalInvest: 0, governorUid: "", synergyStack: 0 };
         
         var govName = "공석";
         if (pInfo.governorUid && roomData.users[pInfo.governorUid]) {
@@ -16940,9 +16950,12 @@ function _showTradeMarket(user, replier, roomData, cfg) {
         var producedGood = TRADE_RELATION[n].produce;
         var currentRate = (nInfo.rates && nInfo.rates[producedGood]) ? nInfo.rates[producedGood] : 1.0;
 
-        if (pInfo.synergyStack > 0) portStatusTag = " ✨공정가속"; // 유저 공급 시너지 발동 시
-        else if (currentRate <= 0.80) portStatusTag = " 📉공급과잉"; // 재고 과다로 인한 가격 폭락 시
-        else if (currentRate >= 1.20) portStatusTag = " 🔥공급부족"; // 재고 부족으로 인한 가격 폭등 시
+        if (pInfo.synergyStack > 0) portStatusTag += " ✨공정가속";
+        else if (currentRate <= 0.80) portStatusTag += " 📉공급과잉";
+        else if (currentRate >= 1.20) portStatusTag += " 🔥공급부족";
+
+        // 특산품 대유행 태그 추가 (기존 태그 옆에 이어서 붙음)
+        if (pInfo.specialtyBoom) portStatusTag += " 🎊특산품유행";
 
         // 2. [시세 요약] 스마트 아이콘(✅)을 활용한 한 줄 요약 생성
         var rateLine = "";
@@ -17882,18 +17895,24 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         // 1. 해당 특산품 품목군(parentGood)의 현재 시세(Rate)를 스냅샷에서 로드
         var parentRate = (nInfo.rates && nInfo.rates[parentGood]) ? nInfo.rates[parentGood] : 1.0;
 
+        // [신규] 목적지 항구의 특산품 대유행 여부 확인
+        var pInfoTarget = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : null;
+        var isBoom = (pInfoTarget && pInfoTarget.specialtyBoom === true);
+
         // 2. 자국 생산물(수출 금지) 체크: 생산지와 판매지가 같으면 매입 거부
         if (parentGood === producedByDest) { 
             sMult = 0; 
             totalCost -= currentItemCost; // 원금 회수 처리
             disasterLog += "\n🚫 [통관 거부]: 자국 특산품 '" + sName + "'은 매입이 거부되어 반환되었습니다.";
         } 
-        // 3. 정상 판매: [현재 시세] x [특산품 프리미엄 배율(2.0)] 적용
+        // 3. 정상 판매: [현재 시세] x [유행 배율 2.5배 or 기본 2.0배] 적용
         else {
-            sMult = parentRate * cfg.SPECIALTY_PROFIT; 
+            var premiumMult = isBoom ? 2.5 : cfg.SPECIALTY_PROFIT; // 대유행 시 2.5배, 평소 2.0배
+            sMult = parentRate * premiumMult; 
             
             // 시세 상태에 따른 로그 태그 설정
-            if (parentRate >= 1.15) sTag = "🔥 [수요폭발]";
+            if (isBoom) sTag = "🎊 [대유행]";
+            else if (parentRate >= 1.15) sTag = "🔥 [수요폭발]";
             else if (parentRate <= 0.85) sTag = "❄️ [공급과잉]";
             else sTag = "⭐";
         }

@@ -18066,148 +18066,222 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             disasterLog += "\n" + ev.msg + " (-" + fp(loss) + "P)";
 
         } else if (triggeredDisaster === "SCURVY") {
-            var medFee = ev.flatPenalty || 20000;
-            totalNetMargin -= medFee;
-            disasterLog += "\n" + ev.msg + " (-" + fp(medFee) + "P)";
-        }
-    }
+            var medFee = ev.flatPenalty || 20000;
+            totalNetMargin -= medFee;
+            disasterLog += "\n" + ev.msg + " (-" + fp(medFee) + "P)";
+        }
+    }
 
-    // [v17.3] 포인트형 유실물 박제 로직 (소실액 100% 확정 기록)
-    // 모든 차감 변수(repairFee, pillageLoss, loss)의 최종값을 합산하여 기록합니다.
-    totalPointLoss = Number(repairFee || 0) + Number(pillageLoss || 0) + Number(loss || 0);
+    // 3. 무역세 및 총독 관세(최종 산출 순이익 기준 1%) 차감 연산
+    taxAmount = totalNetMargin > 0 ? Math.floor(totalNetMargin * autoTaxRate) : 0;
+    var afterTaxMargin = totalNetMargin - taxAmount;
+    
+    if (govTag === "ACTIVE" && govInfo && govInfo.governorUid !== targetUid) {
+        var tariffAmt = totalNetMargin > 0 ? Math.floor(totalNetMargin * 0.01) : 0;
+        afterTaxMargin -= tariffAmt;
+        
+        govInfo.collectedTariff = (Number(govInfo.collectedTariff) || 0) + tariffAmt;
+        if (tariffAmt > 0) {
+            util_updateReserve(economyRoomData, tariffAmt, "자치령 관세 국고 입고 (" + v.dest + ")", economyRoomName);
+        }
+        var gUser = roomData.users[govInfo.governorUid];
+        govTag = "\n🪙 관세(1%): -" + fp(tariffAmt) + "P (" + (gUser ? gUser.name : "총독") + " 징수)";
+    } else if (govTag !== "") {
+        govTag = "\n👑 [자치령 특권]: 관세 면제 적용";
+    }
 
-    if (totalPointLoss > 0) {
-        var rKey = (v.origin || "무역 지부") + "-" + v.dest;
-        
-        // 1. 해당 항로의 난파선 저장소가 없으면 생성
-        if (!data.shipwrecks[rKey]) data.shipwrecks[rKey] = [];
-        
-        // 2. 통합 손실액을 하나의 난파선 객체로 박제 (type: POINT)
-        data.shipwrecks[rKey].push({ 
-            type: "POINT", 
-            amt: totalPointLoss, 
-            victim: user.name, 
-            time: Date.now() 
-        });
-        
-        // 3. 무결성 유지: 한 항로당 최대 10개까지만 보존 (오래된 데이터 자동 소각)
-        if (data.shipwrecks[rKey].length > 10) data.shipwrecks[rKey].shift();
-        
-        Log.info("⚓ [Shipwreck] " + rKey + " 항로에 " + fp(totalPointLoss) + "P 규모 난파선 생성");
-    }
+    // 4. 호위 비용 차감
+    if (v.escortFee) afterTaxMargin -= v.escortFee;
 
-    // 3. 최종 세금 및 실지급액 확정
-    taxAmount = totalNetMargin > 0 ? Math.floor(totalNetMargin * autoTaxRate) : 0;
-    var afterTaxMargin = totalNetMargin - taxAmount;
-    if (govTag && govInfo && govInfo.governorUid !== targetUid) {
-        var tariff = totalNetMargin > 0 ? Math.floor(totalNetMargin * 0.01) : 0;
-        afterTaxMargin -= tariff;
-    }
-    if (v.escortFee) afterTaxMargin -= v.escortFee;
-    
-    var finalNetProfit = Math.floor(afterTaxMargin * creditMult); 
-    
-    // 빚 상환 처리 (수익이 0보다 클 때만)
-    var profitAfterRepay = finalNetProfit;
-    var repayInfo = "";
-    if (finalNetProfit > 0) {
-        var repayRes = processRepayment(user, finalNetProfit, targetUid, roomName);
-        profitAfterRepay = Number(repayRes.actualGain);
-        repayInfo = repayRes.repayMsg || "";
-    }
+    // 5. 신용 등급 배율 적용 (최종 베이스 마진)
+    var finalNetProfit = Math.floor(afterTaxMargin * creditMult); 
 
-    // 최종 지급액 = 100% 보존된 원금(totalCost) + 상환 후 남은 수익
-    var totalPayout = totalCost + profitAfterRepay;
+    // 6. [정부 정책 연동] 의회 가결 안건에 따른 수익 삭감
+    if (finalNetProfit > 0) {
+        if (pol.tradeIncomeTax) {
+            var specialTax = Math.floor(finalNetProfit * pol.tradeIncomeTax);
+            finalNetProfit -= specialTax;
+            util_updateReserve(economyRoomData, specialTax, "의회 무역 특별세 징수", economyRoomName);
+        }
+        if (pol.allProfitTax) {
+            var welfareTax = Math.floor(finalNetProfit * pol.allProfitTax);
+            finalNetProfit -= welfareTax;
+            util_updateReserve(economyRoomData, welfareTax, "의회 복지 기금 징수", economyRoomName);
+        }
+        if (pol.globalRewardMult) {
+            finalNetProfit = Math.floor(finalNetProfit * pol.globalRewardMult);
+        }
+        if (pol.workMult) {
+            finalNetProfit = Math.floor(finalNetProfit * pol.workMult);
+        }
+    }
 
-    // 실제 지갑 입금 처리
-    util_updatePoint(user, economyRoomData, totalPayout, "무역 정산 수익", economyRoomName);
+    // 7. 해적 약탈 정산
+    if ((user.isPillaged === true || v.isPillaged === true) && v.pirateUid) {
+        var pirateObj = null;
+        for (var r in data.rooms) { if (data.rooms[r].users[v.pirateUid]) { pirateObj = data.rooms[r].users[v.pirateUid]; break; } }
+        
+        if (pirateObj) {
+            var pMin = cfg.JOBS.PIRATE.pillageRateMin || 0.3;
+            var pMax = cfg.JOBS.PIRATE.pillageRateMax || 0.5;
+            var pLevel = pirateObj.shipLevel || 1;
+            var pRate = v.pillageRateSnapshot || (pMin + (pMax - pMin) * (pLevel - 1) / 9);
+            
+            pillageLoss = finalNetProfit > 0 ? Math.floor(finalNetProfit * pRate) : 0;
+            
+            if (pillageLoss > 0) {
+                finalNetProfit -= pillageLoss;
+                pirateObj.claimableReward = (Number(pirateObj.claimableReward) || 0) + pillageLoss;
+                pirateObj.hasNotifiedReward = false;
+                pillageLog = "\n🏴‍☠️ [약탈 피해]: 수익의 " + (pRate * 100).toFixed(1) + "%(-" + fp(pillageLoss) + "P)가 해적에게 강탈됨";
+                pirateObj.currentBounty = 0; 
+            }
+        }
+    }
 
-    // 4. 긴급 회항 여부 체크 (계산 로직 종료 후 판정)
-    var isPirate = (user.job === 'pirate');
-    var homePort = isPirate ? "나소" : "무역 지부"; // 해적용 고향 항구 설정
-    var isEmergency = (user.durability < 20 && user.currentLoc !== homePort);
-    
-    var finalTitle = "🌊 [항해 일지: 무역 보고]"; 
-    var disasterLogStr = (typeof disasterLog !== 'undefined' && disasterLog) ? disasterLog.trim() : "";
-    var separateEmergencyMsg = null;
+    // 8. 해군 호위세 차등 분배
+    if (v.escortFee && v.escortFee > 0) {
+        var localNavies = [];
+        var totalNavyLevels = 0;
+        var currentRoomObj = data.rooms[roomName];
+        if (currentRoomObj && currentRoomObj.users) {
+            for (var uId in currentRoomObj.users) {
+                var u = currentRoomObj.users[uId];
+                if (u.job === 'navy' && uId !== targetUid) {
+                    localNavies.push(u);
+                    totalNavyLevels += (u.shipLevel || 1);
+                }
+            }
+        }
+        if (localNavies.length > 0) {
+            localNavies.forEach(function(n) {
+                var weight = (n.shipLevel || 1) / totalNavyLevels;
+                var perNavyReward = Math.floor(v.escortFee * weight);
+                n.claimableReward = (Number(n.claimableReward) || 0) + perNavyReward;
+                n.hasNotifiedReward = false;
+                n.fame = (n.fame || 0) + 2; 
+            });
+            escortLog = "\n🛡️ 호위 비용: -" + fp(v.escortFee) + "P";
+        } else {
+            util_updateReserve(economyRoomData, v.escortFee, "AI 호위 수수료 국고 환수", economyRoomName);
+            escortLog = "\n🛡️ 호위 비용: -" + fp(v.escortFee) + "P (국고 귀속)";
+        }
+    }
 
-    if (isEmergency) {
-        var ship_e = cfg.SHIPS[user.shipLevel || 1];
-        var totalSec_e = 900; // 무조건 5분 고정
-        var arrival_e = Date.now() + (totalSec_e * 1000);
-        
-        user.voyage = {
-            active: true, dest: homePort, origin: user.currentLoc, // homePort 적용
-            arrival: arrival_e, startTime: Date.now(),
-            hasEncountered: v.hasEncountered, // [v18.5] 자동 회항 중에도 상태 유지
-            marketSnapshot: v.marketSnapshot, ecoMultSnapshot: v.ecoMultSnapshot,
-            cargoSnapshot: {}, specialtySnapshot: {}, isProcessing: false
-        };
+    // 9. 폭풍우 수리비 차감
+    var repairFee = 0;
+    if (triggeredDisaster === "STORM") {
+        repairFee = Math.floor(Math.abs(finalNetProfit) * 0.01 + 100);
+        finalNetProfit -= repairFee;
+        disasterLog += "\n🌊 [폭풍우]: 선체 파손 수리비 " + fp(repairFee) + "P 지출";
+    }
 
-        separateEmergencyMsg = "⚠️ 현재 내구도가 " + user.durability + "%로 매우 위험한 상태입니다.\n" +
-                               "사고 예방을 위해 무역지부로 긴급회항 됩니다.\n" +
-                               "⏱️ 도착 예정: " + new Date(arrival_e).toLocaleTimeString();
-    } else {
-        v.active = false; 
-        v.hasEncountered = false; // [v18.5] 정산 성공 시에만 다음 항해를 위해 리셋
-    }
+    // 10. 유실물(난파선) 박제 로직 (소실액 100% 확정 기록)
+    var totalPointLoss = Number(repairFee || 0) + Number(pillageLoss || 0) + Number(loss || 0);
+    if (totalPointLoss > 0) {
+        var rKey = (v.origin || "무역 지부") + "-" + v.dest;
+        if (!data.shipwrecks[rKey]) data.shipwrecks[rKey] = [];
+        data.shipwrecks[rKey].push({ type: "POINT", amt: totalPointLoss, victim: user.name, time: Date.now() });
+        if (data.shipwrecks[rKey].length > 10) data.shipwrecks[rKey].shift();
+    }
 
-    // 5. 최종 보고서 조립 (모든 변수가 확정된 상태)
-    var report = "📍 목적지: " + v.dest + " (" + cargoSummary.join(", ") + ")\n\n" +
-                 "💰 무역 원금: " + fp(totalCost) + "P\n" +
-                 "📈 상품 판매 이익: +" + fp(efficientMargin) + "P\n" +
-                 "🏗️ 발전도 보너스: +" + fp(pBonusTotal) + "P\n" +
-                 "💵 최종 산출 순이익: " + fp(totalNetMargin) + "P" + (typeof seaKingTag !== 'undefined' ? seaKingTag : "") + (typeof enhProfitTag !== 'undefined' ? enhProfitTag : "") + "\n" +
-                 (disasterLogStr ? disasterLogStr + "\n" : "") +
-                 "⚖️ 무역세(" + (typeof taxPercentText !== 'undefined' ? taxPercentText : "0.0") + "%): -" + fp(taxAmount) + "P" + (typeof taxBenefitTag !== 'undefined' ? taxBenefitTag : "") + "\n" +
-                 (typeof pillageLog !== 'undefined' && pillageLog ? pillageLog.trim() + "\n" : "") +
-                 (typeof escortLog !== 'undefined' && escortLog ? escortLog.trim() + "\n" : "") +
-                 (typeof govTag !== 'undefined' && govTag ? govTag.trim() + "\n" : "") +
-                 (repayInfo ? repayInfo + "\n" : "") +
-                 "\n" +
-                 "🎊 최종 수령액: " + fp(totalPayout) + "P\n" +
-                 "(신용 " + crInfo.label + " " + (creditMult * 100).toFixed(0) + "%지급)";
+    // 11. 빚 상환 처리 및 최종 수령액 도출
+    var profitAfterRepay = finalNetProfit;
+    var repayInfo = "";
+    if (finalNetProfit > 0) {
+        var repayRes = processRepayment(user, finalNetProfit, targetUid, roomName);
+        profitAfterRepay = Number(repayRes.actualGain);
+        repayInfo = repayRes.repayMsg || "";
+    }
 
-    // 6. 특산품/지도 획득 메시지 추가
-    if (typeof specialtyFound !== 'undefined' && specialtyFound) report += "\n" + specialtyFound.trim();
-    if (typeof mapLootMsg !== 'undefined' && mapLootMsg) report += "\n" + mapLootMsg.trim();
+    var totalPayout = totalCost + profitAfterRepay;
+    util_updatePoint(user, economyRoomData, totalPayout, "무역 정산 수익", economyRoomName);
 
-    // 7. 세션 해제 및 전송
-    v.isProcessing = false; 
-    user.skipHealing = true;
+    // 12. 상태 및 위치 갱신
+    user.currentLoc = v.dest; 
+    util_setData(user, 'tradeCount', (user.tradeCount || 0) + 1, "무역 횟수 누적", roomName);
 
-    // 1차 메시지 전송 (무역 결과)
-    var resultMsg = formatCommand(finalTitle, user, report + "\n", "누적 무역 " + user.tradeCount + "회 / 잔액 " + fp(user.point) + "P");
-    Api.replyRoom("내리다", resultMsg);
-    
-    // 2차 메시지 전송 (긴급 회항 알림이 있을 경우에만)
-    if (separateEmergencyMsg) {
-        // 약간의 딜레이 후 전송하면 더 자연스럽지만, 동기 처리를 위해 즉시 전송합니다.
-        var emergMsg = formatCommand("🌊 [무역 긴급 회항]", user, separateEmergencyMsg, "누적 무역 " + user.tradeCount + "회");
-        Api.replyRoom("내리다", emergMsg);
-    }
-    
-    safeSaveData(data, true);
+    // 13. 긴급 회항 여부 판독
+    var isPirate = (user.job === 'pirate');
+    var homePort = isPirate ? "나소" : "무역 지부";
+    var isEmergency = (user.durability < 20 && user.currentLoc !== homePort);
+    
+    var finalTitle = "🌊 [항해 일지: 무역 보고]"; 
+    var disasterLogStr = (typeof disasterLog !== 'undefined' && disasterLog) ? disasterLog.trim() : "";
+    var separateEmergencyMsg = null;
 
-    /* [v16.5] 무역 횟수 기반 작위 수여 시스템 */
-    var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
-    var tCount = Number(user.tradeCount || 0);
+    if (isEmergency) {
+        var ship_e = cfg.SHIPS[user.shipLevel || 1];
+        var totalSec_e = 900; 
+        var arrival_e = Date.now() + (totalSec_e * 1000);
+        
+        user.voyage = {
+            active: true, dest: homePort, origin: user.currentLoc,
+            arrival: arrival_e, startTime: Date.now(),
+            hasEncountered: v.hasEncountered,
+            marketSnapshot: v.marketSnapshot, ecoMultSnapshot: v.ecoMultSnapshot,
+            cargoSnapshot: {}, specialtySnapshot: {}, isProcessing: false
+        };
 
-    if (tCount >= 200) {
-        util_checkAndAwardTitle(user, rStub, "해상왕", 5104, "🔱", "내리다 해운 연합", "누적 무역 200회", "[장착 효과]: 항해 중 발생하는 모든 재해(디버프) 확률이 50% 상시 감소합니다.", roomName);
-    } else if (tCount >= 150) {
-        util_checkAndAwardTitle(user, rStub, "대항해사", 5103, "🚢", "내리다 해운 연합", "누적 무역 150회", "이제 거친 파도도 당신의 앞길을 막을 수 없습니다.", roomName);
-    } else if (tCount >= 100) {
-        util_checkAndAwardTitle(user, rStub, "항해사", 5102, "🧭", "내리다 해운 연합", "누적 무역 100회", "능숙한 솜씨로 함대를 지휘하는 법을 깨달았습니다.", roomName);
-    } else if (tCount >= 50) {
-        util_checkAndAwardTitle(user, rStub, "견습선원", 5101, "⚓", "내리다 해운 연합", "누적 무역 50회", "바다의 짠내에 익숙해진 당신, 진정한 뱃사람으로 거듭납니다.", roomName);
-    }
+        separateEmergencyMsg = "⚠️ 현재 내구도가 " + user.durability + "%로 매우 위험한 상태입니다.\n" +
+                               "사고 예방을 위해 무역지부로 긴급회항 됩니다.\n" +
+                               "⏱️ 도착 예정: " + new Date(arrival_e).toLocaleTimeString();
+    } else {
+        v.active = false; 
+        v.hasEncountered = false; 
+    }
 
-    v.isProcessing = false; 
-    user.skipHealing = true;
-    safeSaveData(data, true);
+    // 14. UI 출력 조립 및 전송
+    var report = "📍 목적지: " + v.dest + " (" + cargoSummary.join(", ") + ")\n\n" +
+                 "💰 무역 원금: " + fp(totalCost) + "P\n" +
+                 "📈 상품 판매 이익: +" + fp(efficientMargin) + "P\n" +
+                 "🏗️ 발전도 보너스: +" + fp(pBonusTotal) + "P\n" +
+                 "💵 최종 산출 순이익: " + fp(totalNetMargin) + "P" + (typeof seaKingTag !== 'undefined' ? seaKingTag : "") + (typeof enhProfitTag !== 'undefined' ? enhProfitTag : "") + "\n" +
+                 (disasterLogStr ? disasterLogStr + "\n" : "") +
+                 "⚖️ 무역세(" + (typeof taxPercentText !== 'undefined' ? taxPercentText : "0.0") + "%): -" + fp(taxAmount) + "P" + (typeof taxBenefitTag !== 'undefined' ? taxBenefitTag : "") + "\n" +
+                 (typeof pillageLog !== 'undefined' && pillageLog ? pillageLog.trim() + "\n" : "") +
+                 (typeof escortLog !== 'undefined' && escortLog ? escortLog.trim() + "\n" : "") +
+                 (typeof govTag !== 'undefined' && govTag ? govTag.trim() + "\n" : "") +
+                 (repayInfo ? repayInfo + "\n" : "") +
+                 "\n" +
+                 "🎊 최종 수령액: " + fp(totalPayout) + "P\n" +
+                 "(신용 " + crInfo.label + " " + (creditMult * 100).toFixed(0) + "%지급)";
 
-    } catch (e) { 
+    if (typeof specialtyFound !== 'undefined' && specialtyFound) report += "\n" + specialtyFound.trim();
+    if (typeof mapLootMsg !== 'undefined' && mapLootMsg) report += "\n" + mapLootMsg.trim();
+
+    v.isProcessing = false; 
+    user.skipHealing = true;
+
+    var resultMsg = formatCommand(finalTitle, user, report + "\n", "누적 무역 " + user.tradeCount + "회 / 잔액 " + fp(user.point) + "P");
+    Api.replyRoom("내리다", resultMsg);
+    
+    if (separateEmergencyMsg) {
+        var emergMsg = formatCommand("🌊 [무역 긴급 회항]", user, separateEmergencyMsg, "누적 무역 " + user.tradeCount + "회");
+        Api.replyRoom("내리다", emergMsg);
+    }
+    
+    safeSaveData(data, true);
+
+    /* [v16.5] 무역 횟수 기반 작위 수여 시스템 */
+    var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
+    var tCount = Number(user.tradeCount || 0);
+
+    if (tCount >= 200) {
+        util_checkAndAwardTitle(user, rStub, "해상왕", 5104, "🔱", "내리다 해운 연합", "누적 무역 200회", "[장착 효과]: 항해 중 발생하는 모든 재해(디버프) 확률이 50% 상시 감소합니다.", roomName);
+    } else if (tCount >= 150) {
+        util_checkAndAwardTitle(user, rStub, "대항해사", 5103, "🚢", "내리다 해운 연합", "누적 무역 150회", "이제 거친 파도도 당신의 앞길을 막을 수 없습니다.", roomName);
+    } else if (tCount >= 100) {
+        util_checkAndAwardTitle(user, rStub, "항해사", 5102, "🧭", "내리다 해운 연합", "누적 무역 100회", "능숙한 솜씨로 함대를 지휘하는 법을 깨달았습니다.", roomName);
+    } else if (tCount >= 50) {
+        util_checkAndAwardTitle(user, rStub, "견습선원", 5101, "⚓", "내리다 해운 연합", "누적 무역 50회", "바다의 짠내에 익숙해진 당신, 진정한 뱃사람으로 거듭납니다.", roomName);
+    }
+
+    v.isProcessing = false; 
+    user.skipHealing = true;
+    safeSaveData(data, true);
+
+    } catch (e) {
         // 9. [에러 복구]: 로직 중간에 에러 발생 시 잠금을 해제하여 다음 채팅 때 재시도 가능케 함
         v.isProcessing = false; 
         var errHeader = "Trade Error: " + (user.name || "알수없음") + " 정산 실패";

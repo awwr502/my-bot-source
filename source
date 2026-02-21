@@ -5026,6 +5026,15 @@ function _runSector16Logic(data, ctx) {
                 var n = nations[i];
                 var nInfo = mainRoomData.features.tradeMarket[n];
                 var pInfo = pData[n] || { level: 1, governorUid: "" };
+
+                // 1. [상태 판별 로직] 가독성을 위해 짧은 키워드로 조립
+                var portStatusTag = "";
+                var producedGood = TRADE_RELATION[n].produce;
+                var currentRate = (nInfo.rates && nInfo.rates[producedGood]) ? nInfo.rates[producedGood] : 1.0;
+
+                if (pInfo.synergyStack > 0) portStatusTag = " ✨공정가속"; // 시너지 발동 시
+                else if (currentRate <= 0.80) portStatusTag = " 📉공급과잉"; // 폭락 시
+                else if (currentRate >= 1.20) portStatusTag = " 🔥공급부족"; // 폭등 시
                 
                 var govName = "공석";
                 if (pInfo.governorUid && mainRoomData.users[pInfo.governorUid]) {
@@ -5036,7 +5045,9 @@ function _runSector16Logic(data, ctx) {
                 goodsOrder.forEach(function(gKey) {
                     var rate = (nInfo.rates && nInfo.rates[gKey]) ? nInfo.rates[gKey] : 1.0;
                     var pct = Math.round(rate * 100);
-                    rateLine += goodsIcons[gKey] + pct + "% ";
+                    // 자국 생산품(producedGood)이면서 시세가 낮을 때 강조 아이콘 표시
+                    var deco = (gKey === producedGood && rate <= 0.85) ? "✅" : goodsIcons[gKey];
+                    rateLine += deco + pct + "% ";
                 });
 
                 noticeLines.push("📍 " + (i + 1) + ". " + n + " [Lv." + pInfo.level + "]\n" +
@@ -5046,7 +5057,9 @@ function _runSector16Logic(data, ctx) {
 
             var tradeNotice = "🌍 세계 무역 시세표 (갱신: 20분)\n" +
                               "━━━━━━━━━━━━━━━\n" +
-                              noticeLines.join("\n\n");
+                              noticeLines.join("\n\n") + "\n" +
+                              "━━━━━━━━━━━━━━━\n" +
+                              "💡 ✅아이콘은 해당 항구의 특화 매입 품목입니다.";
             
             Api.replyRoom(ctx.targetRoom, tradeNotice);
             ctx.isUpdated = true;
@@ -16922,21 +16935,29 @@ function _showTradeMarket(user, replier, roomData, cfg) {
             govName = "👑" + roomData.users[pInfo.governorUid].name;
         }
 
-        // [핵심] 시세 한 줄 요약 (아이콘 + 퍼센트만 깔끔하게)
-        var goodsIcons = { "식료품":"🍎", "공업품":"⚙️", "공예품":"🏺", "귀금속":"🪙", "보석":"💎" };
-        var goodsOrder = ["식료품", "공업품", "공예품", "귀금속", "보석"];
-        var rateLine = "";
+       // 1. [상태 판별] 항구의 생산 현황 및 시장 심리 분석
+        var portStatusTag = "";
+        var producedGood = TRADE_RELATION[n].produce;
+        var currentRate = (nInfo.rates && nInfo.rates[producedGood]) ? nInfo.rates[producedGood] : 1.0;
 
+        if (pInfo.synergyStack > 0) portStatusTag = " ✨공정가속"; // 유저 공급 시너지 발동 시
+        else if (currentRate <= 0.80) portStatusTag = " 📉공급과잉"; // 재고 과다로 인한 가격 폭락 시
+        else if (currentRate >= 1.20) portStatusTag = " 🔥공급부족"; // 재고 부족으로 인한 가격 폭등 시
+
+        // 2. [시세 요약] 스마트 아이콘(✅)을 활용한 한 줄 요약 생성
+        var rateLine = "";
         goodsOrder.forEach(function(gKey) {
             var rate = (nInfo.rates && nInfo.rates[gKey]) ? nInfo.rates[gKey] : 1.0;
             var pct = Math.round(rate * 100);
-
-            // 상태 아이콘이 있을 때만 pct 뒤에 붙여서 가독성 확보
-            rateLine += goodsIcons[gKey] + pct + "% ";
+            
+            // 특화 매입 품목(85% 이하)인 경우 ✅ 아이콘으로 강조 처리
+            var deco = (gKey === producedGood && rate <= 0.85) ? "✅" : goodsIcons[gKey];
+            rateLine += deco + pct + "% ";
         });
 
-        var entry = "📍 " + idx + ". " + n + " [Lv." + pInfo.level + "]\n" +
-                    rateLine + "\n" +
+        // 3. [출력 조립] 깔끔하고 압축된 레이아웃 구성
+        var entry = "📍 " + idx + ". " + n + " [Lv." + pInfo.level + "]" + portStatusTag + "\n" +
+                    rateLine.trim() + "\n" +
                     "(👤 총독: " + govName + ")";
         list.push(entry);
         idx++;

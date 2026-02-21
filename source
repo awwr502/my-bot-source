@@ -4943,30 +4943,52 @@ function _runSector16Logic(data, ctx) {
                 for (var j = 0; j < goods.length; j++) {
                     var gName = goods[j];
                     
-                    // [실물 재고 증감 로직] 자국 생산품은 증가, 타국 물품은 자동 소비
-                    if (TRADE_RELATION[nName].produce === gName) {
-                        inv[gName] = Math.min(6000, Number(inv[gName] || 0) + 150); // 생산 1500 -> 150
+                    var currentStock = Number(inv[gName] || 0);
+
+                    // 1. 도시의 기본 생산 및 자연 소비
+                    if (TRADE_RELATION[nName].produce === gName) {
+                        currentStock += 150; // 자국 생산품 기본 생산
                     } else {
-                        inv[gName] = Math.max(200, Number(inv[gName] || 0) - (Math.floor(Math.random() * 71) + 50));
+                        currentStock -= (Math.floor(Math.random() * 71) + 50); // 타국 물품 자연 소비 (50~120)
                     }
 
-                    // 1. 시장 노이즈 반영 (기본 등락폭을 ±8%로 축소하여 재고 분석의 중요도 강화)
+                    // 2. 🤖 [가상 상단(AI) 거시 경제 개입 엔진]
+                    // 유저 거래량이 적어 경제가 고이는 것을 방지하기 위해 AI 상단이 물량을 조절합니다.
+                    if (currentStock > 2800) {
+                        // 📉 [공급 과잉 상태]: 시세가 바닥일 때 AI 거상들이 헐값에 물건을 대량으로 싹쓸이합니다.
+                        var aiBuyOut = Math.floor(Math.random() * 400) + 200; // 200 ~ 600상자 대량 매입(증발)
+                        currentStock -= aiBuyOut;
+                    } 
+                    else if (currentStock < 1200) {
+                        // 📈 [공급 부족 상태]: 시세가 폭등했을 때 AI 상단이 비싼 값에 물건을 대량으로 풀고 갑니다.
+                        var aiSupply = Math.floor(Math.random() * 200) + 100; // 100 ~ 300상자 대량 보급
+                        currentStock += aiSupply;
+                    } 
+                    else {
+                        // ⚖️ [평형 상태]: 평소에도 AI 상인들이 소규모로 지속적인 거래 노이즈를 발생시킵니다.
+                        var aiNoise = Math.floor(Math.random() * 161) - 80; // -80 ~ +80상자 변동
+                        currentStock += aiNoise;
+                    }
+
+                    // 최종 재고 저장 (최소 200, 최대 6000 캡 적용)
+                    inv[gName] = Math.max(200, Math.min(6000, currentStock));
+
+                    // 3. 시장 노이즈 반영 (기본 등락폭을 ±8%로 축소하여 재고 분석의 중요도 강화)
                     var baseRate = 0.92 + (Math.random() * 0.16); 
                     if (TRADE_RELATION[nName].produce === gName) {
                         // 자국 생산품은 추가로 5%~10% 더 저렴하게 설정 (매입 최적화)
                         baseRate -= (Math.random() * 0.05 + 0.05); 
                     }
 
-                    // 2. 실물 재고 비례 계수 적용 (수요-공급 역비례 공식)
-                    var currentInv = Math.max(200, inv[gName]); 
-                    var scarcityMult = 2000 / currentInv; // 기준량 1만 -> 2000
+                    // 4. 실물 재고 비례 계수 적용 (기준량 2000)
+                    var scarcityMult = 2000 / inv[gName]; 
                     
-                    // [수정] 과도한 폭등/폭락을 막기 위해 희소성 계수 범위를 0.8 ~ 1.5로 제한
+                    // 과도한 폭등/폭락을 막기 위해 희소성 계수 범위를 0.8 ~ 1.5로 제한
                     scarcityMult = Math.max(0.8, Math.min(1.5, scarcityMult)); 
                     
                     var finalRate = baseRate * scarcityMult;
 
-                    // 3. [최종 시세 상/하한선] 75% ~ 140% 로 제한하여 엘도라도의 특수성 보존
+                    // 5. [최종 시세 상/하한선] 75% ~ 140% 로 제한
                     finalRate = Math.max(0.75, Math.min(1.40, finalRate));
                     rates[gName] = Number(finalRate.toFixed(2));
                 }

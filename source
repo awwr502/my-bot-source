@@ -1103,9 +1103,10 @@ function getDatabase() {
             return globalData;
         }
 
-        var file = new java.io.File(FILE_PATH);
+       var file = new java.io.File(FILE_PATH);
         var initialData;
         
+        // 1. 메인 설정 파일(시스템 데이터) 로드
         if (!file.exists()) {
             initialData = {
                 rooms: {}, admins: ["관리자"], botActive: true,
@@ -1116,6 +1117,25 @@ function getDatabase() {
             var content = FileStream.read(FILE_PATH);
             if (!content) throw new Error("Empty File");
             initialData = JSON.parse(content);
+        }
+        if (!initialData.rooms) initialData.rooms = {};
+
+        // 2. 개별 방 데이터 파일(.json)들을 찾아 합치기
+        var dataDir = new java.io.File(BASE_DIR);
+        var files = dataDir.listFiles();
+        if (files) {
+            for (var i = 0; i < files.length; i++) {
+                var fName = files[i].getName();
+                if (fName.indexOf("room_") === 0 && fName.endsWith(".json")) {
+                    var rName = fName.replace("room_", "").replace(".json", "");
+                    try {
+                        var roomContent = FileStream.read(files[i].getAbsolutePath());
+                        if (roomContent) {
+                            initialData.rooms[rName] = JSON.parse(roomContent);
+                        }
+                    } catch(e) { Log.error("📂 " + rName + " 방 분할 데이터 로드 실패: " + e); }
+                }
+            }
         }
 
         recoverFromJournal(initialData);
@@ -1429,48 +1449,33 @@ function _performPhysicalSave(data, isForceBackup) {
                 isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
                 if (!isAcquired) return;
 
-                // [v16.0 지능형 소각 엔진 적용] 저장 직전 데이터 전수 검역
-                if (typeof util_fastClean === 'function') {
-                    util_fastClean(data, 0);
+                // [v16.0 지능형 소각 엔진 적용]
+                if (typeof util_fastClean === 'function') util_fastClean(data, 0);
+
+                // 1. [핵심] 방 데이터를 개별 파일로 분산 저장 (램 부하 분산)
+                for (var rName in data.rooms) {
+                    var roomData = data.rooms[rName];
+                    var roomFileName = BASE_DIR + "room_" + rName + ".json";
+                    // 전체가 아닌 해당 방의 데이터만 stringify 하므로 램 사용량이 급감함
+                    FileStream.write(roomFileName, JSON.stringify(roomData));
                 }
 
-                var content = JSON.stringify(data);
-                var check = JSON.parse(content);
-                if (!check || !check.rooms) throw new Error("데이터 구조 불완전 (rooms 누락)");
-
-                var targetPath = FILE_PATH;
-                var tempPath = FILE_PATH + ".tmp";
-                
-                FileStream.write(tempPath, content);
-                var tempFile = new java.io.File(tempPath);
-
-                if (tempFile.exists() && tempFile.length() > 0) {
-                    var orgFile = new java.io.File(targetPath);
-                    if (orgFile.exists()) orgFile.delete();
-                    tempFile.renameTo(orgFile);
-
-                    for (var r in data.rooms) {
-                        if (!data.rooms[r].users) continue;
-                        for (var id in data.rooms[r].users) {
-                            data.rooms[r].users[id].skipHealing = false;
-                        }
-                    }
+                // 2. 시스템 공통 설정만 메인 파일에 저장
+                var systemSnapshot = {};
+                for (var key in data) {
+                    if (key !== 'rooms') systemSnapshot[key] = data[key];
                 }
+                FileStream.write(FILE_PATH, JSON.stringify(systemSnapshot));
 
-                // [신규] 3세대 순환 백업 엔진 (Rotation Backup)
+                // 3. 백업 시에만 전체 통합본 저장 (선택 사항)
                 if (isForceBackup) {
                     if (data._backupCycle === undefined) data._backupCycle = 1;
-                    var cycle = data._backupCycle;
-                    
-                    var backupPath = BACKUP_DIR + "stable_backup_" + cycle + ".json";
-                    FileStream.write(backupPath, content);
-                    
-                    // 다음 저장을 위해 사이클 갱신 (1 -> 2 -> 3 -> 1)
-                    data._backupCycle = (cycle % 3) + 1;
-                    // Log.info("💾 [Backup] 슬롯 " + cycle + "번에 백업 완료.");
+                    var cycle = (data._backupCycle % 3) + 1;
+                    FileStream.write(BACKUP_DIR + "stable_backup_" + cycle + ".json", JSON.stringify(data));
+                    data._backupCycle = cycle;
                 }
                 
-                content = null; 
+                java.lang.System.gc(); 
             } catch (e) {
                 Log.error("Async Save Fail: " + e.message);
                 try { Api.replyRoom("베릭방", "🚨 [시스템 비상] 저장 마비: " + e.message); } catch (err) {}

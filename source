@@ -18135,18 +18135,27 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     taxAmount = totalNetMargin > 0 ? Math.floor(totalNetMargin * autoTaxRate) : 0;
     var afterTaxMargin = totalNetMargin - taxAmount;
     
-    if (govTag === "ACTIVE" && govInfo && govInfo.governorUid !== targetUid) {
-        var tariffAmt = totalNetMargin > 0 ? Math.floor(totalNetMargin * 0.01) : 0;
-        afterTaxMargin -= tariffAmt;
-        
-        govInfo.collectedTariff = (Number(govInfo.collectedTariff) || 0) + tariffAmt;
-        if (tariffAmt > 0) {
-            util_updateReserve(economyRoomData, tariffAmt, "자치령 관세 국고 입고 (" + v.dest + ")", economyRoomName);
+    // [통합 관세 정산 엔진] 상단에서 꼬인 플래그(govTag)를 완전히 무시하고 여기서 메인방 데이터를 직결하여 완벽 계산
+    var govTagStr = ""; 
+    var pDataPath = economyRoomData.features.portData;
+    var mainGovInfo = (pDataPath && pDataPath[v.dest]) ? pDataPath[v.dest] : null;
+
+    if (mainGovInfo && mainGovInfo.governorUid && mainGovInfo.governorUid !== "") {
+        if (mainGovInfo.governorUid === targetUid) {
+            // 본인이 진짜 총독인 경우: 관세 면제
+            govTagStr = "\n👑 [자치령 특권]: 관세 면제 적용";
+        } else {
+            // 타인이 총독인 경우: 최종 순이익의 1% 징수
+            var tariffAmt = totalNetMargin > 0 ? Math.floor(totalNetMargin * 0.01) : 0;
+            afterTaxMargin -= tariffAmt;
+            
+            mainGovInfo.collectedTariff = (Number(mainGovInfo.collectedTariff) || 0) + tariffAmt;
+            if (tariffAmt > 0) {
+                util_updateReserve(economyRoomData, tariffAmt, "자치령 관세 국고 입고 (" + v.dest + ")", economyRoomName);
+            }
+            var gUser = economyRoomData.users[mainGovInfo.governorUid];
+            govTagStr = "\n🪙 관세(1%): -" + fp(tariffAmt) + "P (" + (gUser ? gUser.name : "총독") + " 징수)";
         }
-        var gUser = economyRoomData.users[govInfo.governorUid]; // 메인방(내리다)에서 총독 닉네임 참조
-        govTag = "\n🪙 관세(1%): -" + fp(tariffAmt) + "P (" + (gUser ? gUser.name : "총독") + " 징수)";
-    } else if (govTag !== "") {
-        govTag = "\n👑 [자치령 특권]: 관세 면제 적용";
     }
 
     // 4. 호위 비용 차감

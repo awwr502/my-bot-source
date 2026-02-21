@@ -3424,7 +3424,7 @@ function util_getUserGovernorPorts(targetUid, roomData) {
 }
 
 /**
- * [추가] 항구 발전 보너스 계산기
+ * 항구 발전 보너스 계산기
  */
 function util_getPortLevelBonus(portName, roomData) {
     if (!roomData || !roomData.features || !roomData.features.portData || !roomData.features.portData[portName]) return 0;
@@ -3433,6 +3433,38 @@ function util_getPortLevelBonus(portName, roomData) {
 
     // (레벨 - 1) * 1% 보너스 적용
     return (level - 1) * (cfg.BONUS_PER_LEVEL || 0.01);
+}
+
+/**
+ * 거래 발생 후 항구의 재고 비례 시세를 즉시 갱신합니다.
+ * @param {Object} roomData - 해당 방 데이터
+ * @param {String} portName - 항구 이름
+ * @param {String} goodName - 품목 이름
+ */
+function util_refreshMarketRate(roomData, portName, goodName) {
+    if (!roomData.features.tradeMarket || !roomData.features.tradeMarket[portName]) return;
+    if (!roomData.features.portData || !roomData.features.portData[portName]) return;
+
+    var market = roomData.features.tradeMarket[portName];
+    var inv = roomData.features.portData[portName].inventory;
+    if (!inv || inv[goodName] === undefined) return;
+
+    // 1. 현재 재고 확인 및 희소성 계수 계산 (1만개 기준)
+    var currentInv = Math.max(500, Number(inv[goodName]));
+    var scarcityMult = 10000 / currentInv;
+    scarcityMult = Math.max(0.8, Math.min(1.5, scarcityMult));
+
+    // 2. 기존 마켓의 기본 흐름(baseRate) 유지하며 재고 비율만 즉시 반영
+    // (기존 시세 / 이전 scarcityMult)를 통해 순수 baseRate를 역산하거나, 
+    // 여기서는 직관적으로 1.0(평형) 기준으로 실시간 변동치를 주입합니다.
+    var baseRate = 1.0; 
+    if (TRADE_RELATION[portName] && TRADE_RELATION[portName].produce === goodName) baseRate = 0.9;
+
+    var newRate = baseRate * scarcityMult;
+
+    // 3. 시세 제한선(75% ~ 140%) 적용 후 시세표 업데이트
+    newRate = Math.max(0.75, Math.min(1.40, newRate));
+    market.rates[goodName] = Number(newRate.toFixed(2));
 }
 
 //==========섹터12==========
@@ -10491,6 +10523,7 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
                 return;
             }
             pData.inventory[goodsType] = currentStock - qty; // 재고 차감 반영
+            util_refreshMarketRate(roomData, currentLoc, goodsType);
         }
 
         // 항해 중이 아님이 확인된 이 시점에 실제 결제 진행
@@ -17694,6 +17727,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                 if (!pInfoTarget.inventory) pInfoTarget.inventory = {"식료품":10000, "공업품":10000, "공예품":10000, "귀금속":10000, "보석":10000};
                 if (pInfoTarget.inventory[good] !== undefined) {
                     pInfoTarget.inventory[good] = Number(pInfoTarget.inventory[good]) + settledCount;
+                    util_refreshMarketRate(economyRoomData, v.dest, good);
                 }
             }
 

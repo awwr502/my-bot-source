@@ -4225,6 +4225,11 @@ function runScheduler() {
                 _runSeaPillageScheduler(data, ctx);
             }
 
+            // AI 다국적 상단 실시간 무역 엔진 가동
+            if (typeof _runAITradeScheduler === 'function') {
+                _runAITradeScheduler(data, ctx);
+            }
+
             // [v18.7] 지연 시간(18.3s) 해결을 위한 부하 분산 패치
             // 15초 지점에 해양 생물 조우 및 밀수 단속 배치 (탐색 범위를 '내리다' 방으로 한정)
             if (currentSec % 60 === 15 && currentMin !== data.lastMarineCheckMin) {
@@ -4592,6 +4597,97 @@ function _runSeaPillageScheduler(data, ctx) {
         }
         if (purgeCount > 0) {
             Log.info("[System] 장기 미활동 직업군 " + purgeCount + "명 정리 완료.");
+            ctx.isUpdated = true;
+        }
+    }
+}
+
+// 🚢 AI 다국적 상단 엔진 (Real Entity Trade)
+function _runAITradeScheduler(data, ctx) {
+    var mainRoom = data.rooms["내리다"];
+    if (!mainRoom || !mainRoom.users) return;
+
+    var aiNames = ["영국 왕립 무역선", "네덜란드 동인도 회사", "스페인 무적함대 상단", "포르투갈 인도 함대", "프랑스 해운 조합"];
+    var nations = ["포르투", "코콜라", "나폴리", "베라크루스", "킴벌리"];
+    var goods = ["식료품", "공업품", "공예품", "귀금속", "보석"];
+
+    for (var i = 0; i < 5; i++) {
+        var aiUid = "AI_BOT_" + i;
+        var aiUser = mainRoom.users[aiUid];
+
+        // 1. AI 계정 영구 상주화 (1~3레벨 상인 스펙 부여)
+        if (!aiUser) {
+            aiUser = {
+                uid: aiUid, name: "🚢 " + aiNames[i], point: 10000000, bank: 0,
+                job: null, shipLevel: Math.floor(Math.random() * 3) + 1, 
+                enhLimit: Math.floor(Math.random() * 5), 
+                enhTime: -Math.floor(Math.random() * 10),
+                currentLoc: nations[i],
+                cargo: {}, specialties: {},
+                voyage: { active: false }
+            };
+            mainRoom.users[aiUid] = aiUser;
+        }
+
+        // 2. 항해 중이 아닐 때 (정박 중) -> 화물 매입 및 출항
+        if (!aiUser.voyage || aiUser.voyage.active === false) {
+            var pData = (mainRoom.features.portData && mainRoom.features.portData[aiUser.currentLoc]) ? mainRoom.features.portData[aiUser.currentLoc] : null;
+            var buyGood = goods[Math.floor(Math.random() * goods.length)];
+            var buyQty = (aiUser.shipLevel === 1 ? 15 : (aiUser.shipLevel === 2 ? 30 : 45)) + (aiUser.enhLimit || 0);
+
+            // [실물 경제] 출발지 항구 재고 차감 (매입으로 인한 시세 상승 효과)
+            if (pData && pData.inventory && aiUser.currentLoc !== "무역 지부" && aiUser.currentLoc !== "나소") {
+                var curStock = Number(pData.inventory[buyGood] || 2000);
+                if (curStock >= buyQty) {
+                    pData.inventory[buyGood] = curStock - buyQty;
+                    if (typeof util_refreshMarketRate === 'function') util_refreshMarketRate(mainRoom, aiUser.currentLoc, buyGood);
+                }
+            }
+
+            var dests = nations.filter(function(n) { return n !== aiUser.currentLoc; });
+            var dest = dests[Math.floor(Math.random() * dests.length)];
+            
+            var shipCfg = SYSTEM_CONFIG.TRADE.SHIPS[aiUser.shipLevel] || { speedMult: 1.0 };
+            var baseTimeSec = (60 * shipCfg.speedMult) * 60;
+            var totalSec = baseTimeSec + Number(aiUser.enhTime || 0);
+            
+            var cargoSnap = {};
+            cargoSnap[buyGood] = buyQty;
+
+            aiUser.voyage = {
+                active: true, dest: dest, origin: aiUser.currentLoc,
+                arrival: Date.now() + (totalSec * 1000),
+                startTime: Date.now(),
+                cargoSnapshot: cargoSnap, specialtySnapshot: {},
+                // 50% 확률로 AI 해군 호위 (레벨 5~9)
+                escortUid: (Math.random() < 0.5) ? "AI_NAVY_ELITE" : null, 
+                escortLevel: Math.floor(Math.random() * 5) + 5 
+            };
+            aiUser.currentLoc = dest;
+            ctx.isUpdated = true;
+        }
+
+        // 3. 목적지 도착 -> 화물 매각 및 정산
+        if (aiUser.voyage && aiUser.voyage.active === true && Date.now() >= aiUser.voyage.arrival) {
+            var v = aiUser.voyage;
+            var pDataTarget = (mainRoom.features.portData && mainRoom.features.portData[v.dest]) ? mainRoom.features.portData[v.dest] : null;
+
+            // [실물 경제] 도착지 항구에 화물 공급 (매각으로 인한 시세 하락 효과)
+            if (pDataTarget && pDataTarget.inventory && v.dest !== "무역 지부" && v.dest !== "나소") {
+                for (var g in v.cargoSnapshot) {
+                    var qty = Number(v.cargoSnapshot[g] || 0);
+                    // 해적에게 약탈당한 경우 물건을 뺏겼으므로 시장에 풀리는 양이 절반으로 깎임
+                    if (v.isPillaged) qty = Math.floor(qty * 0.5);
+
+                    if (qty > 0) {
+                        pDataTarget.inventory[g] = (Number(pDataTarget.inventory[g]) || 2000) + qty;
+                        if (typeof util_refreshMarketRate === 'function') util_refreshMarketRate(mainRoom, v.dest, g);
+                    }
+                }
+            }
+            aiUser.voyage.active = false;
+            aiUser.voyage.isPillaged = false;
+            aiUser.isPillaged = false;
             ctx.isUpdated = true;
         }
     }
@@ -5017,27 +5113,13 @@ function _runSector16Logic(data, ctx) {
                         }
                         currentStock += (baseProd + synergyBonus);
                     } else {
-                        // [수정] 자연 소비량 완화: 50~120 -> 20~60으로 줄여 급격한 재고 고갈 방지
+                        // 자연 소비량 완화: 50~120 -> 20~60으로 줄여 급격한 재고 고갈 방지
                         currentStock -= (Math.floor(Math.random() * 41) + 20); 
                     }
 
-                    // [신규] 재고 회복력(Elasticity): 모든 물품은 기준선(2000)으로 회귀하려는 성질을 가짐
+                    // 재고 회복력(Elasticity): 모든 물품은 기준선(2000)으로 회귀하려는 성질을 가짐
                     var baseline = 2000;
                     currentStock = currentStock + (baseline - currentStock) * 0.15; // 15% 복원력
-
-                    // 2. 🤖 [가상 상단(AI) 거시 경제 개입 엔진] (양방향 완화)
-                    if (currentStock > 2800) {
-                        // 공급 과잉: 소량 매입 (과도한 증발 방지)
-                        currentStock -= (Math.floor(Math.random() * 200) + 100); 
-                    } 
-                    else if (currentStock < 1200) {
-                        // 공급 부족: 대량 보급 (시세 안정화)
-                        currentStock += (Math.floor(Math.random() * 300) + 150); 
-                    } 
-                    else {
-                        // 평형 상태: 노이즈
-                        currentStock += (Math.floor(Math.random() * 161) - 80); 
-                    }
 
                     // 최종 재고 저장 (최소 500으로 상향하여 140% 영구 고정 방지)
                     inv[gName] = Math.max(500, Math.min(6000, currentStock));
@@ -5048,7 +5130,7 @@ function _runSector16Logic(data, ctx) {
                         baseRate -= (Math.random() * 0.05 + 0.05); 
                     }
 
-                    // 4. [수정] 실물 재고 비례 계수 적용 (시세 완충 공식)
+                    // 4. 실물 재고 비례 계수 적용 (시세 완충 공식)
                     // 단순 반비례가 아닌 완충 지수를 넣어 시세가 미친듯이 튀는 것을 막음
                     var scarcityMult = 1 + ((baseline - inv[gName]) / baseline) * 0.4;
                     
@@ -5237,6 +5319,18 @@ function _runSector16Logic(data, ctx) {
         // B. 배팅 마감 알림
         if (currentMin === 50 && !racingData.isDeadlineNotified) {
             if (currentHour >= rConf.OPEN_HOUR && currentHour <= rConf.CLOSE_HOUR) {
+            // 귀족 세력의 AI 배팅 펌핑 (중앙은행 재원 활용)
+                var mainRoom = data.rooms[ctx.targetRoom];
+                if (mainRoom && mainRoom.bankReserve > 100000) {
+                    var pumpAmt = Math.floor(mainRoom.bankReserve * 0.05); // 국고의 5% 투입
+                    if (pumpAmt > 300000) pumpAmt = 300000; // 최대 30만P 제한
+                    if (pumpAmt >= rConf.MIN_BET) {
+                        util_updateReserve(mainRoom, -pumpAmt, "귀족 경마 배팅 출자", ctx.targetRoom);
+                        racingData.totalPool += pumpAmt;
+                        var targetHorse = Math.floor(Math.random() * 5) + 1; // 1~5번 말 중 랜덤
+                        racingData.bets["AI_NOBLE_1"] = { uid: "AI_NOBLE_1", horseId: targetHorse, amount: pumpAmt, name: "👑 익명의 귀족" };
+                    }
+                }
                 racingData.isOperating = true; 
                 racingData.isDeadlineNotified = true;
                 var deadlineMsg = "📢 [경마 배팅 마감 알림]\n━━━━━━━━━━━━━━━\n제 " + racingData.round + "회차 배팅이 종료되었습니다!\n\n🏦 최종 집계 포인트: " + fp(racingData.totalPool) + "P\n🏁 우승마 판독 및 정산 진행 중...\n━━━━━━━━━━━━━━━\n🏇 잠시 후 정각(00분)에 결과가 발표됩니다!";
@@ -6103,6 +6197,14 @@ function _runSector18Logic(data, ctx) {
         if (!data.lotto_flags) data.lotto_flags = {};
         if (data.lotto_flags.lastCloseNotify !== ctx.today) {
             data.lotto_flags.lastCloseNotify = ctx.today;
+
+            // 로또 잭팟 AI 펌핑 (국가 복권 위원회 보조금)
+            if (mainRoomData && mainRoomData.bankReserve > 300000) {
+                var lottoPump = Math.floor(mainRoomData.bankReserve * 0.1); // 국고 10% 투입
+                if (lottoPump > 1000000) lottoPump = 1000000; // 최대 100만P 제한
+                util_updateReserve(mainRoomData, -lottoPump, "국가 로또 잭팟 보조금", ctx.targetRoom);
+                data.lotto_jackpot_pool = (Number(data.lotto_jackpot_pool) || 0) + lottoPump;
+            }
 
             // [핵심] 모든 방의 판매금(dailyPool)을 합산하여 총액 계산
             var totalDailyPool = 0;
@@ -19876,57 +19978,9 @@ function _showRaidList(user, replier, data, roomName, targetUid) {
             var isUnderAttack = (currentPillages && currentPillages[uid]); 
 
             if (hasEnoughTime && !alreadyTargeted && !isUnderAttack && uid !== targetUid) {
-                sailingUsers.push({ uid: uid, data: u, roomName: r, isAI: false });
+                var isBot = (uid.indexOf("AI_BOT_") === 0);
+                sailingUsers.push({ uid: uid, data: u, roomName: r, isAI: isBot });
             }
-        }
-    }
-
-    // 유저 상인이 5명 미만일 경우 부족한 만큼 AI 상인(유령 상단) 생성
-    if (sailingUsers.length < 5) {
-        var aiNames = ["동방무역선", "서방연합함대", "제국 운송선", "황금도시 상단", "북해 무역협회"];
-        var aiDests = ["포르투", "코콜라", "나폴리", "베라크루스", "킴벌리"];
-        
-        // 이름 목록을 무작위로 섞음 (중복 방지 셔플)
-        aiNames.sort(function() { return Math.random() - 0.5; });
-
-        var needed = 5 - sailingUsers.length;
-        for (var i = 0; i < needed; i++) {
-            // 셔플된 목록에서 순서대로 이름을 가져옴 (이름당 딱 1개씩만 생성됨)
-            var uniqueName = aiNames[i]; 
-            if (!uniqueName) break; // 이름이 모자라면 중단
-
-            var randDest = aiDests[Math.floor(Math.random() * aiDests.length)];
-            // [초미세 가중치] 각 레벨 간 확률 차이를 최소화한 촘촘한 분포
-            var r = Math.random() * 100;
-            var randLevel = 1;
-
-            if (r < 14) randLevel = 1;       // 14%
-            else if (r < 27) randLevel = 2;  // 13%
-            else if (r < 39) randLevel = 3;  // 12%
-            else if (r < 50) randLevel = 4;  // 11%
-            else if (r < 60) randLevel = 5;  // 10%
-            else if (r < 69) randLevel = 6;  // 9%
-            else if (r < 77) randLevel = 7;  // 8%
-            else if (r < 85) randLevel = 8;  // 8%
-            else if (r < 93) randLevel = 9;  // 8%
-            else randLevel = 10;             // 7%
-
-            var hasAIescort = true; 
-
-            sailingUsers.push({
-                uid: "AI_BOT_" + i,
-                isAI: true,
-                data: {
-                    name: "🚢 " + uniqueName,
-                    shipLevel: randLevel,
-                    voyage: {
-                        dest: randDest,
-                        arrival: now + ((Math.floor(Math.random() * 20) + 10) * 60000),
-                        escortUid: "AI_NAVY_ELITE" 
-                    }
-                },
-                roomName: "내리다"
-            });
         }
     }
 

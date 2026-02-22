@@ -51,6 +51,15 @@ var SCAVENGE_CONFIG = {
     ARTIFACT_PROB: 0.05                   // 인양 시 유물 조각 추가 발견 확률 (5%)
 };
 
+var INFRA_CONFIG = {
+    COST: 3000000, // 건설 비용 300만P
+    BUILDINGS: {
+        LIGHTHOUSE: { key: "lighthouse", name: "왕립 등대", icon: "🗼", desc: "입항 재해 확률 10% 감소" },
+        MARKET: { key: "market", name: "중앙 시장", icon: "⚖️", desc: "품목 시세 0.5% 추가 보너스" },
+        SHIPYARD: { key: "shipyard", name: "영지 조선소", icon: "🛠️", desc: "해당 도시 수리 기능 해금" }
+    }
+};
+
 var DUNGEON_CONFIG = {
     COSTS: [0, 3, 5, 7], // 난이도별 지도 소모량
     LEVELS: {
@@ -9182,15 +9191,11 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         if (choiceNum === 4) { _manageShip(user, replier, tradeCfg); menuWaitState[targetUid].type = 'trade_ship'; return true; }
         if (choiceNum === 5) { _showTradeShop(user, replier, roomData, tradeCfg); bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } }; delete menuWaitState[targetUid]; return true; }
 
-        // [가변 6번] 총독 관세 정산 (수정 대상)
+        // [가변 6번] 총독 집무실 입장
         if (hasGov) {
             if (choiceNum === curIdx) { 
-                // [수정] myPorts -> myRealPorts 로 변경해야 합니다.
-                // 상단에서 만든 '진짜 항구 목록'을 함수에 전달합니다.
-                _showGovernorOffice(user, replier, roomData, myRealPorts); 
-                
-                // 상태 저장 시에도 myRealPorts를 저장해야 나중에 정산할 때 오류가 안 납니다.
-                menuWaitState[targetUid] = { type: 'trade_governor_office', time: Date.now(), myPorts: myRealPorts }; 
+                _showGovernorMain(user, replier, roomData, myRealPorts); 
+                menuWaitState[targetUid] = { type: 'trade_governor_main', time: Date.now(), myPorts: myRealPorts }; 
                 return true; 
             }
             curIdx++; 
@@ -9234,6 +9239,22 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     }
 
     /* [서브 상태 핸들러 로직군 - 전체 else if 연결] */
+    else if (state.type === 'trade_governor_main') {
+        if (choice === "1") {
+            _showInfraMenu(user, replier, roomData, state.myPorts);
+            state.type = 'trade_infra_menu';
+        } else if (choice === "2") {
+            _showGovernorOffice(user, replier, roomData, state.myPorts);
+            state.type = 'trade_governor_office';
+        } else {
+            replier.reply(formatError(user, "번호 오류", "1번(건축) 또는 2번(정산)을 입력하세요."));
+        }
+        return true;
+    }
+    else if (state.type === 'trade_infra_menu') {
+        _handleInfraBuild(msg, user, data, replier, roomName, targetUid);
+        return true;
+    }
     else if (state.type === 'trade_job_enlist') { _handleJobJoin(choice, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_governor_office') { _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_royal_office') { _handleRoyalOffice(msg, user, data, replier, roomName, targetUid); return true; }
@@ -16639,8 +16660,11 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             var homePort = isPirate ? "나소" : "무역 지부";
             var curLocClean = (user.currentLoc || "").replace(/\s/g, "");
 
-            if (curLocClean !== homePort.replace(/\s/g, "")) {
-                replier.reply(formatError(user, "수리 불가", "이곳은 수리 시설이 없는 외지 항구입니다.\n'" + homePort + "'로 복귀하여 수리하세요."));
+            var pInfo = (roomData.features && roomData.features.portData) ? roomData.features.portData[user.currentLoc] : null;
+            var hasShipyard = (pInfo && pInfo.built && pInfo.built.shipyard);
+
+            if (curLocClean !== homePort.replace(/\s/g, "") && !hasShipyard) {
+                replier.reply(formatError(user, "수리 불가", "이곳은 수리 시설이 없는 외지 항구입니다.\n조선소가 있는 자치령이나 '" + homePort + "'로 복귀하세요."));
                 return true;
             }
             var curDura = Number(user.durability === undefined ? 100 : user.durability);
@@ -16712,7 +16736,97 @@ function _showTradeShop(user, replier, roomData, cfg, catId) {
 }
 
 /**
- * [추가] 🚢 총독 집무실 UI 출력 및 정산 대기 로직
+ * [v20.0] 총독 집무실 메인 메뉴
+ */
+function _showGovernorMain(user, replier, roomData, myPorts) {
+    var body = "총독님, 집무실에 오신 것을 환영합니다.\n" +
+               "통치 중인 자치령의 발전 계획을 수립하거나\n" +
+               "축적된 관세를 정산받으실 수 있습니다.\n\n" +
+               "🚩 통치 구역: [" + myPorts.join(", ") + "]\n\n" +
+               "1. 🏗️ 항구 인프라 건축 (영지 관리)\n" +
+               "2. 💰 자치령 관세 정산\n\n" +
+               "↩️ 뒤로 / ❎취소";
+    replier.reply(formatCommand("🏛️ 총독 집무실", user, body, "원하시는 업무 번호를 입력하세요."));
+}
+
+/**
+ * [v20.0] 인프라 건축 메뉴
+ */
+function _showInfraMenu(user, replier, roomData, myPorts) {
+    var pData = roomData.features.portData;
+    var port = myPorts[0]; // 현재는 단일 항구 투자 원칙이므로 첫번째 항구 참조
+    var built = pData[port].built || {};
+    var cfg = INFRA_CONFIG.BUILDINGS;
+
+    var body = "📍 대상 항구: [" + port + "]\n" +
+               "💰 건설 비용: " + fp(INFRA_CONFIG.COST) + "P (균일)\n\n" +
+               "[건설 가능 목록]\n";
+
+    var idx = 1;
+    for (var k in cfg) {
+        var b = cfg[k];
+        var status = built[b.key] ? "✅ 건설완료" : "⭕ 건설가능";
+        body += idx + ". " + b.icon + " " + b.name + ": " + status + "\n" +
+                "   └ " + b.desc + "\n";
+        idx++;
+    }
+
+    body += "\n━━━━━━━━━━━━━━━\n" +
+            "💡 건축 비용은 총독의 [개인 자산]에서 차감됩니다.\n" +
+            "↩️ 뒤로 / ❎취소";
+
+    replier.reply(formatCommand("🏗️ 영지 인프라 건축", user, body, "건설할 번호를 입력하세요."));
+}
+
+/**
+ * [v20.0] 인프라 건축 실행 핸들러
+ */
+function _handleInfraBuild(msg, user, data, replier, roomName, targetUid) {
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var roomData = data.rooms[logicRoom];
+    var state = roomData.features.states.menuWait[targetUid];
+    var choice = parseInt(msg.replace(/[^0-9]/g, ""));
+    
+    var myPorts = state.myPorts;
+    var port = myPorts[0];
+    var pData = roomData.features.portData[port];
+    if (!pData.built) pData.built = {};
+
+    var cfg = INFRA_CONFIG.BUILDINGS;
+    var keys = Object.keys(cfg);
+    
+    if (isNaN(choice) || choice < 1 || choice > keys.length) {
+        return replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 선택하세요."));
+    }
+
+    var selected = cfg[keys[choice-1]];
+    
+    if (pData.built[selected.key]) {
+        return replier.reply(formatError(user, "중복 건설", "이미 해당 건물은 건설되어 있습니다."));
+    }
+
+    if (Number(user.point) < INFRA_CONFIG.COST) {
+        return replier.reply(formatError(user, "자금 부족", "건축비 " + fp(INFRA_CONFIG.COST) + "P가 부족합니다."));
+    }
+
+    // 포인트 차감 및 상태 기록
+    util_updatePoint(user, roomData, -INFRA_CONFIG.COST, "자치령 인프라 건축: " + selected.name, roomName);
+    pData.built[selected.key] = true;
+    user.skipHealing = true;
+
+    var resMsg = "[" + port + "] 항구에 " + selected.name + " 건설을 완료했습니다!\n\n" +
+                 "✨ 효과: " + selected.desc + " 상시 적용\n" +
+                 "💰 소모 비용: -" + fp(INFRA_CONFIG.COST) + "P";
+
+    replier.reply(formatCommand("🏗️ 건축 공사 완료", user, resMsg, "내 잔액: " + fp(user.point) + "P"));
+    
+    // 대기열 비우기 및 데이터 저장
+    delete roomData.features.states.menuWait[targetUid];
+    safeSaveData(data, true);
+}
+
+/**
+ * 🚢 총독 집무실 UI 출력 및 정산 대기 로직
  */
 
 function _showGovernorOffice(user, replier, roomData, myPorts) {
@@ -17380,6 +17494,10 @@ function _showVoyageStatus(user, replier, data, roomName) {
 
         var mult = (v.marketSnapshot[v.dest] && v.marketSnapshot[v.dest].rates && v.marketSnapshot[v.dest].rates[g]) 
                    ? v.marketSnapshot[v.dest].rates[g] : 1.0;
+
+        if (pInfo && pInfo.built && pInfo.built.market) {
+            mult += 0.005;
+        }
         
         var baseTargetCost = cfg.GOODS_COST[g] || 10000;
         tRev += Math.floor(baseTargetCost * mult * qty);
@@ -17474,7 +17592,12 @@ function _manageShip(user, replier, cfg) {
     // [v16.9] 내구도 및 수리비 계산
     var durability = Number(user.durability === undefined ? 100 : user.durability);
     var currentLoc = (user.currentLoc || "무역 지부").replace(/\s/g, "");
-    var isRepairPort = (currentLoc.indexOf("무역지부") !== -1 || currentLoc.indexOf("나소") !== -1);
+    var logicRoom = "내리다"; // 데이터 기준방
+    var roomData = globalData.rooms[logicRoom];
+    var pInfo = (roomData && roomData.features && roomData.features.portData) ? roomData.features.portData[user.currentLoc] : null;
+    var hasShipyard = (pInfo && pInfo.built && pInfo.built.shipyard);
+
+    var isRepairPort = (currentLoc.indexOf("무역지부") !== -1 || currentLoc.indexOf("나소") !== -1 || hasShipyard);
     var dIcon = durability > 50 ? "🟢" : (durability >= 20 ? "🟡" : "🔴");
     
     var body = "등급: " + cur.name + " (Lv." + curLevel + ")\n" +
@@ -17659,8 +17782,14 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var pol = util_getActivePolicy(economyRoomData);
     var cfg = SYSTEM_CONFIG.TRADE;
 
+    var pDataTarget = (economyRoomData.features && economyRoomData.features.portData) ? economyRoomData.features.portData[v.dest] : null;
+
     var baseDisasterProb = cfg.EVENTS.PROB || 0.40;
     var finalDisasterProb = isHomeReturn ? 0 : (baseDisasterProb * (pol.disasterProbMult || 1.0));
+    
+    if (pDataTarget && pDataTarget.built && pDataTarget.built.lighthouse) {
+        finalDisasterProb *= 0.9; // 10% 감소
+    }
     var triggeredDisaster = null;
 
     if (!isHomeReturn && Math.random() < finalDisasterProb) {
@@ -17894,6 +18023,9 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         } else {
             // nInfo.rates가 안전하게 존재하는지 검증 후 할당
             multiplier = (nInfo && nInfo.rates && nInfo.rates[good] !== undefined) ? nInfo.rates[good] : 1.0;
+            if (pDataTarget && pDataTarget.built && pDataTarget.built.market) {
+                multiplier += 0.005;
+            }
         }
 
         // [퀘스트] 납품 대상 품목인 경우 시세를 1.5배로 강제 덮어쓰기

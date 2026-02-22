@@ -1726,6 +1726,7 @@ var CMD_LIST = {
         { cmd: "/로또데이터초기화", desc: "로또 시스템 리셋", func: "_adminEconomyLogic" },
         { cmd: "/전체복원", desc: "데이터 롤백 (안전 지점)", func: "_adminEconomyLogic" },
         { cmd: "/유저복원", desc: "[닉네임] 부분 복구", func: "_adminUserManageLogic" },
+        { cmd: "/부동산선별복구", desc: "백업본에서 부동산 지분만 안전하게 복원", func: "_adminUserManageLogic" },
         { cmd: "/시스템자가복원", desc: "메모리 최적화 및 변수 초기화", func: "_adminEconomyLogic" },
         { cmd: "/이월금수정", desc: "[금액] 경마 잭팟 금액 강제 조정", func: "_adminEconomyLogic" },
         { cmd: "/재원충전", desc: "[금액] 은행 금고 자본 긴급 수혈", func: "_adminEconomyLogic" },
@@ -11299,6 +11300,60 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
     }
     return true;
 }
+
+        /* [긴급 수술] 백업본 기반 부동산 지분 선별 복구 */
+    if (msg === "/부동산선별복구") {
+        var stablePath = BACKUP_DIR + "last_stable_backup.json";
+        var stableFile = new java.io.File(stablePath);
+
+        if (!stableFile.exists() || stableFile.length() === 0) {
+            replier.reply(formatAdmin("🚫 복구 실패", "안전 백업 파일(last_stable_backup.json)이 없습니다."));
+            return true;
+        }
+
+        try {
+            var backupData = JSON.parse(FileStream.read(stablePath));
+            var fixCount = 0;
+
+            // 1. 현재 데이터에 백업본의 부동산 관련 정보만 정밀 덮어쓰기
+            for (var r in data.rooms) {
+                if (!backupData.rooms[r]) continue;
+                for (var uid in data.rooms[r].users) {
+                    var curU = data.rooms[r].users[uid];
+                    var bakU = backupData.rooms[r].users[uid];
+
+                    // 현재 유저와 백업 유저가 모두 존재할 때만 이관
+                    if (curU && bakU && bakU.landHoldings) {
+                        curU.skipHealing = true;
+                        
+                        // [핵심] 부동산 지분, 평단가, 누적 투자액, 등기부만 과거로 되돌림
+                        curU.landHoldings = JSON.parse(JSON.stringify(bakU.landHoldings));
+                        curU.landAvg = bakU.landAvg ? JSON.parse(JSON.stringify(bakU.landAvg)) : {};
+                        curU.totalLandInvest = bakU.totalLandInvest || 0;
+                        curU.landDeedCount = bakU.landDeedCount || 0;
+                        fixCount++;
+                    }
+                }
+            }
+
+            // 2. 망가진 시장 시세표도 백업 시점으로 복원
+            if (backupData.landmarkMarket) {
+                data.landmarkMarket = JSON.parse(JSON.stringify(backupData.landmarkMarket));
+            }
+
+            safeSaveData(data, true);
+            var resMsg = "✨ 부동산 데이터 핀셋 복구 완료\n\n" +
+                         "• 대상: 유저 " + fixCount + "명 및 시장 시세\n" +
+                         "• 조치: 백업 시점의 지분/평단가로 덮어쓰기\n" +
+                         "• 보호: 배 강화, 포인트, 가방 등은 '현재 상태' 유지";
+                         
+            replier.reply(formatAdmin("부동산 선별 복구", resMsg));
+
+        } catch (e) {
+            replier.reply(formatAdmin("🚫 복구 중단", "사유: " + e.message));
+        }
+        return true;
+    }
 
         if (msg === "/시스템완전정화") {
     try {

@@ -20335,9 +20335,9 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
     var mainRoom = data.rooms["내리다"];
     var session = (mainRoom.features && mainRoom.features.activePillages) ? mainRoom.features.activePillages[victimUid] : null;
     
-    // [보정] victim 객체 식별 로직 (참조 오류 해결 핵심)
+    // victim 객체 식별 로직 (유저 및 AI 상단 모두 탐색 가능하도록 수정)
     var victim = null;
-    if (victimUid && victimUid.indexOf("AI_BOT_") === -1) { // 유저 상인인 경우에만 검색
+    if (victimUid) { 
         for (var r in data.rooms) { 
             if (data.rooms[r].users && data.rooms[r].users[victimUid]) { 
                 victim = data.rooms[r].users[victimUid]; 
@@ -20362,50 +20362,48 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         session.isBattled = true; 
     }
 
-   // [교정] navyUid 가드 및 AI 해군/전투 판별 (고용된 AI 또는 AI 상단 호위병 통합 인식)
+   // navyUid 가드 및 AI 해군/전투 판별 (고용된 AI 또는 AI 상단 호위병 통합 인식)
     var isAINavy = (navyUid && typeof navyUid === 'string' && (navyUid.indexOf("AI_NAVY_") === 0 || navyUid.indexOf("AI_BOT_") === 0));
-    var isAICombat = (mode === "AI_COMBAT");
+    var isAICombat = (mode === "AI_COMBAT");
 
-    var pirate = (mode === "ESCORT" || isAICombat) ? navyOrPirate : null;
-    var navy = (mode === "INTERVENE") ? navyOrPirate : null;
-    
-    if (!isAICombat) {
-        if (!pirate) {
-            var pId = session ? session.pirateUid : null;
-            if (!pId) return;
-            // AI 해적 더미 객체 생성 연동
-            if (session && session.isAIPirate) {
-                pirate = { uid: pId, name: session.pirateName, shipLevel: session.dummyPirateLevel, job: 'pirate', isAI: true, currentBounty: SYSTEM_CONFIG.TRADE.JOBS.PIRATE.bountyBase };
-            } else {
-                for (var r in data.rooms) { if (data.rooms[r].users[pId]) { pirate = data.rooms[r].users[pId]; break; } }
-            }
-        }
-        if (!navy && !isAINavy) {
-            var nSearchId = navyUid || (session ? session.escortUid : null);
-            for (var r in data.rooms) { if (data.rooms[r].users[nSearchId]) { navy = data.rooms[r].users[nSearchId]; break; } }
-        }
-    }
+    var pirate = (mode === "ESCORT" || isAICombat) ? navyOrPirate : null;
+    var navy = (mode === "INTERVENE") ? navyOrPirate : null;
+    
+    if (!isAICombat) {
+        if (!pirate) {
+            var pId = session ? session.pirateUid : null;
+            if (!pId) return;
+            if (session && session.isAIPirate) {
+                pirate = { uid: pId, name: session.pirateName, shipLevel: session.dummyPirateLevel, job: 'pirate', isAI: true, currentBounty: SYSTEM_CONFIG.TRADE.JOBS.PIRATE.bountyBase };
+            } else {
+                for (var r in data.rooms) { if (data.rooms[r].users[pId]) { pirate = data.rooms[r].users[pId]; break; } }
+            }
+        }
+        if (!navy && !isAINavy) {
+            var nSearchId = navyUid || (session ? session.escortUid : null);
+            for (var r in data.rooms) { if (data.rooms[r].users[nSearchId]) { navy = data.rooms[r].users[nSearchId]; break; } }
+        }
+    }
 
-    // 필수 객체 검증 가드 (pirate는 필수, 해군은 유저 해군일 때만 필수)
     if (!pirate || (!isAICombat && !isAINavy && !navy)) return;
 
-    // [안전 가드] 이름 추출 시 null 참조 오류 원천 차단
     var nName = "AI 연합함대";
     if (!isAINavy && !isAICombat && navy) nName = navy.name;
     else if (isAICombat) nName = "AI 엘리트 해군";
 
     var pName = (pirate) ? pirate.name : "정체불명의 해적";
+    var pShip = pirate.shipLevel || 1;
 
-    // [반영] AI 해군의 레벨 판정 로직
+    // AI 해군 레벨 판정 로직 통합 및 중복 선언 제거
     var nShip = 1;
     if (isAICombat) {
-        // AI 상단을 지키는 엘리트 해군은 해적 레벨에 맞춰 강해짐 (최소 7, 최대 10)
-        nShip = Math.max(7, Math.min(10, (pirate.shipLevel || 1) + 1));
+        // AI 상단 습격 시: 정상 식별된 victim 객체의 스냅샷 호위 레벨을 로드 (이제 5~10레벨 정상 반영됨)
+        nShip = (victim && victim.voyage && victim.voyage.escortLevel) ? victim.voyage.escortLevel : Math.max(7, Math.min(10, pShip + 1));
     } else if (isAINavy) {
-        // 상인이 고용한 AI 함대 (기본 5, 선박 레벨에 따라 보정 가능)
+        // 유저 상인이 고용한 AI 함대: 출항 시 저장된 escortLevel 사용
         nShip = (navyOrPirate.voyage && navyOrPirate.voyage.escortLevel) ? navyOrPirate.voyage.escortLevel : 7;
     } else {
-        // 유저 해군 레벨
+        // 유저 해군
         nShip = navy ? (navy.shipLevel || 1) : 1;
     }
 
@@ -20424,13 +20422,13 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
         nShip = navy ? (navy.shipLevel || 1) : 1;
     }
     
-    // [수정] 승률 공식 보정: 해군 기본 52% (해적 48%) + 레벨당 5% 차이
+    // 승률 공식 보정: 해군 기본 52% (해적 48%) + 레벨당 5% 차이
     var winChance = 52 + (nShip - pShip) * 5;
     
-    // [수정] AI 해군 추가 승률 보너스 제거 (유저와 동등 조건)
+    // AI 해군 추가 승률 보너스 제거 (유저와 동등 조건)
     // if (isAICombat) winChance += 5; <--- 삭제됨
 
-    // [신규] 유저 해군 명성 보너스 (명성 100당 +1%)
+    // 유저 해군 명성 보너스 (명성 100당 +1%)
     if (!isAINavy && !isAICombat && navy) {
         var fameBonus = Math.floor((navy.fame || 0) / 100);
         winChance += fameBonus;

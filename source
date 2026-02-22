@@ -637,7 +637,10 @@ var SYSTEM_CONFIG = {
                 FLOTSAM: { name: "난파선", min: 10000, max: 50000, msg: "🏚️ 표류하던 난파선에서 귀중한 물자를 건져냈습니다!" },
                 MONSTER:  { name: "괴수습격", penalty: 0.15, msg: "🦑 심해 괴수의 습격으로 배가 반파되었습니다!" },
                 FOG:      { name: "짙은안개", penalty: 0.05, msg: "🌫️ 안개로 인해 입항이 지연되었습니다." },
-                SCURVY:   { name: "선원괴질", flatPenalty: 20000, msg: "🏥 괴혈병 치료비로 지출이 발생했습니다." }
+                SCURVY:   { name: "선원괴질", flatPenalty: 20000, msg: "🏥 괴혈병 치료비로 지출이 발생했습니다." },
+                MERCHANT: { name: "대상인의 방문", boost: 0.25, msg: "💰 마침 항구에 들른 대부호가 화물을 마음에 들어하며 웃돈을 주고 매입했습니다!" },
+                SHIPWRIGHT: { name: "조선공의 호의", heal: 50, msg: "🛠️ 항구의 노련한 조선공이 선박에 감탄하며 파손된 선체를 무상으로 수리해주었습니다!" },
+                RESCUE: { name: "표류자 구조", msg: "🎖️ 바다에서 조난당한 귀족을 구출한 공로로 특별한 보상을 받았습니다!" }
           }
         },
         GOODS: ["식료품", "공예품", "공업품", "귀금속", "보석"],
@@ -17793,7 +17796,7 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var triggeredDisaster = null;
 
     if (!isHomeReturn && Math.random() < finalDisasterProb) {
-        var eventKeys = ["STORM", "FIRE", "CORROSION", "SMOOTH", "FESTIVAL", "FLOTSAM", "MONSTER", "FOG", "SCURVY"];
+        var eventKeys = ["STORM", "FIRE", "CORROSION", "SMOOTH", "FESTIVAL", "FLOTSAM", "MONSTER", "FOG", "SCURVY", "MERCHANT", "SHIPWRIGHT", "RESCUE"];
         triggeredDisaster = eventKeys[Math.floor(Math.random() * eventKeys.length)];
 
         // [안전 가드] 설정값(cfg)에 해당 키가 없으면 이벤트 취소 (Crash 방지)
@@ -18358,15 +18361,37 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                 disasterLog += "\n🛠️ [내구도 급락]: " + ev.name + "의 여파로 선체가 대파되었습니다! (-" + extraWear + "%)";
             }
 
-        if (triggeredDisaster === "FESTIVAL" && hasFavoriteSold) {
-            var festAmt = Math.floor(totalNetMargin * ev.boost);
-            totalNetMargin += festAmt;
-            disasterLog += "\n" + ev.msg + " (+" + fp(festAmt) + "P)";
+        if (triggeredDisaster === "FESTIVAL") {
+            // 축제는 hasFavoriteSold 조건이 필요함
+            if (hasFavoriteSold) {
+                var festAmt = Math.floor(totalNetMargin * ev.boost);
+                totalNetMargin += festAmt;
+                disasterLog += "\n" + ev.msg + " (+" + fp(festAmt) + "P)";
+            }
         } 
+        else if (triggeredDisaster === "SMOOTH" || triggeredDisaster === "MERCHANT") {
+            var boostAmt = Math.floor(totalNetMargin * ev.boost);
+            totalNetMargin += boostAmt;
+            disasterLog += "\n" + ev.msg + " (+" + fp(boostAmt) + "P)";
+        }
         else if (triggeredDisaster === "FLOTSAM") {
             var flotsamBonus = Math.floor(Math.random() * (ev.max - ev.min + 1)) + ev.min;
             totalNetMargin += flotsamBonus;
             disasterLog += "\n" + ev.msg + " (+" + fp(flotsamBonus) + "P)";
+        }
+        else if (triggeredDisaster === "SHIPWRIGHT") {
+            var healAmt = ev.heal || 25;
+            user.durability = Math.min(100, (user.durability || 0) + healAmt);
+            disasterLog += "\n" + ev.msg + " (내구도 +" + healAmt + "% 회복)";
+        }
+        else if (triggeredDisaster === "RESCUE") {
+            if (Math.random() < 0.5) {
+                user.royalMedals = (Number(user.royalMedals) || 0) + 1;
+                disasterLog += "\n" + ev.msg + " (왕실 훈장 +1개 획득)";
+            } else {
+                user.artifactPieces = (Number(user.artifactPieces) || 0) + 1;
+                disasterLog += "\n" + ev.msg + " (유물 조각 +1개 획득)";
+            }
         }
         else if (triggeredDisaster === "MONSTER" || triggeredDisaster === "FOG") {
             loss = Math.floor(totalNetMargin * ev.penalty); // var 삭제하고 미리 선언한 변수 사용

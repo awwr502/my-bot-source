@@ -1447,46 +1447,68 @@ function safeSaveData(data, isForceBackup) {
 
 var _saveTimer = null; 
 function _performPhysicalSave(data, isForceBackup) {
+    // 1. [준비] 실제 파일로 쓰기 위한 글자 데이터(문자열) 임시 보관소
+    var shardedStrings = {};
+    var systemString = "";
+    var backupString = null;
+
+    // 2. [찰나의 잠금] 데이터를 문자열로 복제하는 동안만 아주 짧게 잠급니다.
+    // tryLock 대신 강제 lock을 사용하여 0.01초 내외의 순수 메모리 연산만 수행합니다.
+    lock.lock(); 
+    try {
+        // [v16.0 지능형 소각 엔진 적용]
+        if (typeof util_fastClean === 'function') util_fastClean(data, 0);
+
+        // 모든 방의 데이터를 순식간에 문자열(JSON)로 추출하여 메모리에 임시 보관
+        for (var rName in data.rooms) {
+            shardedStrings[rName] = JSON.stringify(data.rooms[rName]);
+        }
+
+        // 시스템 설정 스냅샷 추출 (rooms 제외)
+        var systemSnapshot = {};
+        for (var key in data) {
+            if (key !== 'rooms') systemSnapshot[key] = data[key];
+        }
+        systemString = JSON.stringify(systemSnapshot);
+
+        if (isForceBackup) {
+            backupString = JSON.stringify(data);
+        }
+    } catch (e) {
+        Log.error("💾 스냅샷 생성 실패: " + e.message);
+        return;
+    } finally {
+        // [중요] 문자열 추출(Snapshot)이 끝나자마자 즉시 잠금을 해제합니다!
+        // 이제부터 파일 쓰기가 아무리 느려도 다른 명령어들은 락에 걸리지 않습니다.
+        lock.unlock(); 
+    }
+
+    // 3. [배경 처리] 잠금이 해제된 상태에서 느린 파일 쓰기(I/O)를 비동기로 수행합니다.
     SaveExecutor.execute(new java.lang.Runnable({
         run: function() {
-            var isAcquired = false; 
             try {
-                isAcquired = lock.tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS);
-                if (!isAcquired) return;
-
-                // [v16.0 지능형 소각 엔진 적용]
-                if (typeof util_fastClean === 'function') util_fastClean(data, 0);
-
-                // 1. [핵심] 방 데이터를 개별 파일로 분산 저장 (램 부하 분산)
-                for (var rName in data.rooms) {
-                    var roomData = data.rooms[rName];
+                // 방별 분할 파일 기록 (하드디스크 쓰기)
+                for (var rName in shardedStrings) {
                     var roomFileName = BASE_DIR + "room_" + rName + ".json";
-                    // 전체가 아닌 해당 방의 데이터만 stringify 하므로 램 사용량이 급감함
-                    FileStream.write(roomFileName, JSON.stringify(roomData));
+                    FileStream.write(roomFileName, shardedStrings[rName]);
                 }
 
-                // 2. 시스템 공통 설정만 메인 파일에 저장
-                var systemSnapshot = {};
-                for (var key in data) {
-                    if (key !== 'rooms') systemSnapshot[key] = data[key];
-                }
-                FileStream.write(FILE_PATH, JSON.stringify(systemSnapshot));
+                // 메인 설정 파일 기록
+                FileStream.write(FILE_PATH, systemString);
 
-                // 3. 백업 시에만 전체 통합본 저장 (선택 사항)
-                if (isForceBackup) {
-                    if (data._backupCycle === undefined) data._backupCycle = 1;
+                // 백업 파일 기록
+                if (isForceBackup && backupString) {
                     var cycle = (data._backupCycle % 3) + 1;
-                    FileStream.write(BACKUP_DIR + "stable_backup_" + cycle + ".json", JSON.stringify(data));
+                    FileStream.write(BACKUP_DIR + "stable_backup_" + cycle + ".json", backupString);
                     data._backupCycle = cycle;
                 }
                 
-                java.lang.System.gc(); 
+                // 가비지 컬렉션 유도 및 메모리 비우기
+                shardedStrings = null; systemString = null; backupString = null;
+                java.lang.System.gc();
             } catch (e) {
-                Log.error("Async Save Fail: " + e.message);
-                try { Api.replyRoom("베릭방", "🚨 [시스템 비상] 저장 마비: " + e.message); } catch (err) {}
-            } finally {
-                if (isAcquired) lock.unlock();
-                java.lang.System.gc(); 
+                Log.error("💾 배경 저장 중 오류: " + e.message);
+                try { Api.replyRoom("베릭방", "🚨 [저장 엔진] 배경 쓰기 실패: " + e.message); } catch(err){}
             }
         }
     }));

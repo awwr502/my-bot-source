@@ -2315,38 +2315,43 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     }
 
     try {
-        var totalNetWorth = util_calculateNetWorth(user, roomData);
-        var assetTitles = [
-            { name: "자산왕", limit: 5000000, id: 703, msg: "[장착 효과]: 매일 00시 은행 예금 이자 수령 시 이율 1.5배 보너스가 적용됩니다." },
-            { name: "부호", limit: 2000000, id: 702, msg: "상류 사회의 일원이 되신 것을 환영합니다." },
-            { name: "거상", limit: 1000000, id: 701, msg: "시장을 움직이는 거대한 손길이 느껴집니다." },
-            { name: "재벌", limit: 500000, id: 700, msg: "성공적인 자산 축적의 첫 결실을 맺었습니다." }
-        ];
+        // [패치] 대상이 AI 상단(또는 AI 해적)인 경우 자산 칭호 검사 및 수여식 알림을 완전히 생략합니다.
+        if (user && user.uid && String(user.uid).indexOf("AI_") === 0) {
+            // AI는 칭호 시스템에서 배제
+        } else {
+            var totalNetWorth = util_calculateNetWorth(user, roomData);
+            var assetTitles = [
+                { name: "자산왕", limit: 5000000, id: 703, msg: "[장착 효과]: 매일 00시 은행 예금 이자 수령 시 이율 1.5배 보너스가 적용됩니다." },
+                { name: "부호", limit: 2000000, id: 702, msg: "상류 사회의 일원이 되신 것을 환영합니다." },
+                { name: "거상", limit: 1000000, id: 701, msg: "시장을 움직이는 거대한 손길이 느껴집니다." },
+                { name: "재벌", limit: 500000, id: 700, msg: "성공적인 자산 축적의 첫 결실을 맺었습니다." }
+            ];
 
-       var rStub = { reply: function(m) { try { Api.replyRoom(roomName || "내리다", m); } catch(e){} } };
+           var rStub = { reply: function(m) { try { Api.replyRoom(roomName || "내리다", m); } catch(e){} } };
 
-        for (var i = 0; i < assetTitles.length; i++) {
-            var t = assetTitles[i];
-            if (totalNetWorth >= t.limit) {
-                // 공용 함수를 호출하여 작위 수여식 진행 (가방 체크 및 장착 로직 내장됨)
-                var awarded = util_checkAndAwardTitle(
-                    user, 
-                    rStub, 
-                    t.name, 
-                    t.id, 
-                    "💰", 
-                    "내리다 경제 위원회", 
-                    "순자산 " + fp(t.limit) + "P", 
-                    t.msg, 
-                    roomName
-                );
-                
-                if (awarded) break; // 하나라도 수여했다면 중단 (중복 방지)
-            }
-        }
-    } catch(e) {}
+            for (var i = 0; i < assetTitles.length; i++) {
+                var t = assetTitles[i];
+                if (totalNetWorth >= t.limit) {
+                    // 공용 함수를 호출하여 작위 수여식 진행 (가방 체크 및 장착 로직 내장됨)
+                    var awarded = util_checkAndAwardTitle(
+                        user, 
+                        rStub, 
+                        t.name, 
+                        t.id, 
+                        "💰", 
+                        "내리다 경제 위원회", 
+                        "순자산 " + fp(t.limit) + "P", 
+                        t.msg, 
+                        roomName
+                    );
+                    
+                    if (awarded) break; // 하나라도 수여했다면 중단 (중복 방지)
+                }
+            }
+        }
+    } catch(e) {}
 
-    if (typeof verifyPointTransaction === 'function') {
+    if (typeof verifyPointTransaction === 'function') {
         verifyPointTransaction(user, prePoint, actualDelta, reason, roomName, brDelta);
     }
 }
@@ -3337,27 +3342,32 @@ function util_checkAndAwardTitle(user, replier, titleName, titleId, icon, commit
     }
     if (hasTitle) return false;
 
-    user.inventory.push({ 
-        id: titleId, 
-        name: "[" + titleName + "] 칭호", 
-        icon: icon, 
-        effect: "title", 
-        title: titleName 
-    });
+    user.inventory.push({ 
+        id: titleId, 
+        name: "[" + titleName + "] 칭호", 
+        icon: icon, 
+        effect: "title", 
+        title: titleName 
+    });
 
-    user.title = titleName;
+    user.title = titleName;
 
-    var winMsg = "🎊 [" + committee + ": 작위 수여]\n" +
-                 "━━━━━━━━━━━━━━━\n" +
-                 "축하합니다! " + (user.name || "유저") + "님\n\n" +
-                 condition + "를 돌파하여\n" +
-                 "국가 공인 [" + titleName + "] 칭호를 하사받았습니다.\n\n" +
-                 "✨ 상태: [" + titleName + "] 자동 장착 완료\n" +
-                 "💼 보관: 영구 자산으로 가방에 등록되었습니다.\n" +
-                 "━━━━━━━━━━━━━━━\n" +
-                 "💡 " + guideText;
+    // 유저가 AI 봇일 경우, 데이터만 갱신하고 알림 메시지는 절대 전송하지 않음
+    if (user.uid && String(user.uid).indexOf("AI_") === 0) {
+        return true;
+    }
 
-    // [수정] 알림 전송 시 roomName 인자가 있으면 해당 방으로만 전송
+    var winMsg = "🎊 [" + committee + ": 작위 수여]\n" +
+                 "━━━━━━━━━━━━━━━\n" +
+                 "축하합니다! " + (user.name || "유저") + "님\n\n" +
+                 condition + "를 돌파하여\n" +
+                 "국가 공인 [" + titleName + "] 칭호를 하사받았습니다.\n\n" +
+                 "✨ 상태: [" + titleName + "] 자동 장착 완료\n" +
+                 "💼 보관: 영구 자산으로 가방에 등록되었습니다.\n" +
+                 "━━━━━━━━━━━━━━━\n" +
+                 "💡 " + guideText;
+
+    // 알림 전송 시 roomName 인자가 있으면 해당 방으로만 전송
     try {
         if (replier && typeof replier.reply === 'function') {
             replier.reply(winMsg);

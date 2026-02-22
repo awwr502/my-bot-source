@@ -16042,32 +16042,70 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
  * 처리: /의회 (현황 조회), /투표 (의사 결정)
  */
 function _gameGovernmentLogic(msg, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
-    if (!roomData || !roomData.features) return false;
-    
-    var gov = roomData.features.government;
+    var roomData = data.rooms[roomName];
+    if (!roomData || !roomData.features) return false;
+    
+    var gov = roomData.features.government;
 
-    // A. [조회] /의회 : 현재 부동산 정책 및 투표 상황 브리핑
-    if (msg === "/의회") {
-        var pol = gov.activePolicy || { stockTax: 0.05, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.0 };
-        
-        var currentPolicyStr = "• 부동산 양도세: " + (pol.stockTax * 100).toFixed(1) + "%\n" +
-                               "• 채굴/근로 효율: x" + pol.mineMult.toFixed(1) + "\n" +
-                               "• 복지 연금 배율: x" + pol.attendMult.toFixed(1) + "\n" +
-                               "• 대출 한도 승수: x" + pol.loanLimitMult.toFixed(1);
+    // A. [조회] /의회 : 현재 국가 정책 및 투표 상황 브리핑
+    if (msg === "/의회") {
+        var pol = gov.activePolicy || { stockTax: 0.05, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.2, bankInterest: 0.01 };
+        
+        // [신규] 모든 정책 효과를 매핑하여 동적으로 출력하는 딕셔너리
+        var effectNames = {
+            stockTax: { label: "부동산 양도세", type: "pct" },
+            mineMult: { label: "광산 채굴 효율", type: "mult" },
+            attendMult: { label: "복지 연금 배율", type: "mult" },
+            loanLimitMult: { label: "대출 한도 배율", type: "mult" },
+            tradeSpeedMult: { label: "항해 소요 시간", type: "mult" },
+            bankInterest: { label: "은행 예금 이율", type: "pct" },
+            disasterProbMult: { label: "해상 재해 확률", type: "mult" },
+            casinoPayoutAdj: { label: "카지노 배당 보정", type: "plus" },
+            rareMineMult: { label: "희귀 광물 발견율", type: "mult" },
+            casinoTax: { label: "카지노 치안유지세", type: "pct" },
+            fishMult: { label: "낚시 판매 수익", type: "mult" },
+            tradeIncomeTax: { label: "무역 특별 소득세", type: "pct" },
+            bankInterestMult: { label: "대출 이율 배율", type: "mult" },
+            incomeTaxAdj: { label: "근로 특별 소득세", type: "pct" },
+            allProfitTax: { label: "수익 전면 환수세", type: "pct" },
+            tradeBonusMult: { label: "항구 발전 보너스", type: "mult" },
+            casinoLimitMult: { label: "카지노 한도 배율", type: "mult" },
+            artifactMult: { label: "유물 조각 발견율", type: "mult" },
+            workMult: { label: "근로 수익 전반", type: "mult" },
+            shopPriceMult: { label: "상점 물가 조정률", type: "mult" },
+            globalRewardMult: { label: "전역 보상 배율", type: "mult" }
+        };
 
-        var billStatus = "현재 상정된 안건이 없습니다.";
-        if (gov.pendingBill) {
-            billStatus = "📜 안건: " + gov.pendingBill.name + "\n" +
-                         "✅ 혜택: " + gov.pendingBill.buffDesc + "\n" +
-                         "⚠️ 대가: " + gov.pendingBill.penaltyDesc + "\n\n" +
-                         "🗳️ 현황: 찬성 " + gov.votes.pro + " | 반대 " + gov.votes.con + "\n" +
-                         "(참여 인원: " + gov.votes.voters.length + "명)";
-        }
+        var currentPolicyStr = "";
+        var keys = Object.keys(pol);
+        
+        // 현재 활성화된 정책 객체(pol)를 순회하며 존재하는 효과만 UI에 조립
+        keys.forEach(function(k) {
+            var info = effectNames[k];
+            if (info) {
+                var val = pol[k];
+                if (info.type === "pct") currentPolicyStr += "• " + info.label + ": " + (val * 100).toFixed(1) + "%\n";
+                else if (info.type === "mult") currentPolicyStr += "• " + info.label + ": x" + val.toFixed(2) + "\n";
+                else if (info.type === "plus") currentPolicyStr += "• " + info.label + ": " + (val > 0 ? "+" : "") + val.toFixed(2) + "\n";
+            }
+        });
+        
+        if (currentPolicyStr === "") currentPolicyStr = "• 적용 중인 특별 정책이 없습니다.";
+        currentPolicyStr = currentPolicyStr.trim();
 
-        replier.reply(formatCommand("🏛️ 내리다 정부 국회 의사당", user, "[현재 시행 중인 부동산 정책]\n" + currentPolicyStr + "\n\n[실시간 투표 현황]\n" + billStatus, "투표참여: [/투표 찬성/반대]"));
-        return true;
-    }
+        var billStatus = "현재 상정된 안건이 없습니다.";
+        if (gov.pendingBill) {
+            billStatus = "📜 안건: " + gov.pendingBill.name + "\n" +
+                         "✅ 혜택: " + gov.pendingBill.buffDesc + "\n" +
+                         "⚠️ 대가: " + gov.pendingBill.penaltyDesc + "\n\n" +
+                         "🗳️ 현황: 찬성 " + gov.votes.pro + " | 반대 " + gov.votes.con + "\n" +
+                         "(참여 인원: " + gov.votes.voters.length + "명)";
+        }
+
+        // 출력 헤더 문구 [현재 시행 중인 부동산 정책] -> [현재 시행 중인 특별 정책] 으로 포괄적으로 수정
+        replier.reply(formatCommand("🏛️ 내리다 정부 국회 의사당", user, "[현재 시행 중인 특별 정책]\n" + currentPolicyStr + "\n\n[실시간 투표 현황]\n" + billStatus, "투표참여: [/투표 찬성/반대]"));
+        return true;
+    }
 
     // B. [액션] /투표 (생략 - 기존 로직 유지)
     if (msg.indexOf("/투표 ") === 0) {

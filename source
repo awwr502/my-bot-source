@@ -5000,58 +5000,56 @@ function _runSector16Logic(data, ctx) {
                     
                     var currentStock = Number(inv[gName] || 0);
 
-                    // 1. 도시의 기본 생산 및 자연 소비
+                    // 1. 도시의 기본 생산 및 자연 소비 (탄력성 복구)
                     if (TRADE_RELATION[nName].produce === gName) {
                         var baseProd = 150;
                         var synergyBonus = 0;
-                        
-                        // 시너지 재료가 공급되었다면 재료 10개당 제품 5개 추가 생산 (최대 +300개)
                         if (pData.synergyStack > 0) {
                             synergyBonus = Math.min(300, Math.floor(pData.synergyStack * 0.5));
-                            pData.synergyStack = 0; // 생산에 소모되었으므로 초기화
+                            pData.synergyStack = 0; 
                         }
                         currentStock += (baseProd + synergyBonus);
                     } else {
-                        currentStock -= (Math.floor(Math.random() * 71) + 50); // 타국 물품 자연 소비 (50~120)
+                        // [수정] 자연 소비량 완화: 50~120 -> 20~60으로 줄여 급격한 재고 고갈 방지
+                        currentStock -= (Math.floor(Math.random() * 41) + 20); 
                     }
 
-                    // 2. 🤖 [가상 상단(AI) 거시 경제 개입 엔진]
-                    // 유저 거래량이 적어 경제가 고이는 것을 방지하기 위해 AI 상단이 물량을 조절합니다.
+                    // [신규] 재고 회복력(Elasticity): 모든 물품은 기준선(2000)으로 회귀하려는 성질을 가짐
+                    var baseline = 2000;
+                    currentStock = currentStock + (baseline - currentStock) * 0.15; // 15% 복원력
+
+                    // 2. 🤖 [가상 상단(AI) 거시 경제 개입 엔진] (양방향 완화)
                     if (currentStock > 2800) {
-                        // 📉 [공급 과잉 상태]: 시세가 바닥일 때 AI 거상들이 헐값에 물건을 대량으로 싹쓸이합니다.
-                        var aiBuyOut = Math.floor(Math.random() * 400) + 200; // 200 ~ 600상자 대량 매입(증발)
-                        currentStock -= aiBuyOut;
+                        // 공급 과잉: 소량 매입 (과도한 증발 방지)
+                        currentStock -= (Math.floor(Math.random() * 200) + 100); 
                     } 
                     else if (currentStock < 1200) {
-                        // 📈 [공급 부족 상태]: 시세가 폭등했을 때 AI 상단이 비싼 값에 물건을 대량으로 풀고 갑니다.
-                        var aiSupply = Math.floor(Math.random() * 200) + 100; // 100 ~ 300상자 대량 보급
-                        currentStock += aiSupply;
+                        // 공급 부족: 대량 보급 (시세 안정화)
+                        currentStock += (Math.floor(Math.random() * 300) + 150); 
                     } 
                     else {
-                        // ⚖️ [평형 상태]: 평소에도 AI 상인들이 소규모로 지속적인 거래 노이즈를 발생시킵니다.
-                        var aiNoise = Math.floor(Math.random() * 161) - 80; // -80 ~ +80상자 변동
-                        currentStock += aiNoise;
+                        // 평형 상태: 노이즈
+                        currentStock += (Math.floor(Math.random() * 161) - 80); 
                     }
 
-                    // 최종 재고 저장 (최소 200, 최대 6000 캡 적용)
-                    inv[gName] = Math.max(200, Math.min(6000, currentStock));
+                    // 최종 재고 저장 (최소 500으로 상향하여 140% 영구 고정 방지)
+                    inv[gName] = Math.max(500, Math.min(6000, currentStock));
 
-                    // 3. 시장 노이즈 반영 (기본 등락폭을 ±8%로 축소하여 재고 분석의 중요도 강화)
+                    // 3. 시장 노이즈 반영
                     var baseRate = 0.92 + (Math.random() * 0.16); 
                     if (TRADE_RELATION[nName].produce === gName) {
-                        // 자국 생산품은 추가로 5%~10% 더 저렴하게 설정 (매입 최적화)
                         baseRate -= (Math.random() * 0.05 + 0.05); 
                     }
 
-                    // 4. 실물 재고 비례 계수 적용 (기준량 2000)
-                    var scarcityMult = 2000 / inv[gName]; 
+                    // 4. [수정] 실물 재고 비례 계수 적용 (시세 완충 공식)
+                    // 단순 반비례가 아닌 완충 지수를 넣어 시세가 미친듯이 튀는 것을 막음
+                    var scarcityMult = 1 + ((baseline - inv[gName]) / baseline) * 0.4;
                     
-                    // 과도한 폭등/폭락을 막기 위해 희소성 계수 범위를 0.8 ~ 1.5로 제한
-                    scarcityMult = Math.max(0.8, Math.min(1.5, scarcityMult)); 
+                    scarcityMult = Math.max(0.7, Math.min(1.4, scarcityMult)); 
                     
                     var finalRate = baseRate * scarcityMult;
 
-                    // 5. [최종 시세 상/하한선] 75% ~ 140% 로 제한
+                    // 5. 최종 시세 상/하한선 제한 (75% ~ 140%)
                     finalRate = Math.max(0.75, Math.min(1.40, finalRate));
                     rates[gName] = Number(finalRate.toFixed(2));
                 }

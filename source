@@ -4559,9 +4559,12 @@ function _runSeaPillageScheduler(data, ctx) {
             
             if (nowTs - p.startTime >= requiredTime) {
                 if (typeof _processPillageSuccess === 'function') {
-                    // Sector 53의 약탈 성공 정산 함수 호출
-                    _processPillageSuccess(victimUid, p, data, rName);
-                    delete pillages[victimUid]; // 세션 종료
+                    try {
+                        _processPillageSuccess(victimUid, p, data, rName);
+                    } catch (e) {
+                        Log.error("Pillage Success Logic Error: " + e);
+                    }
+                    delete pillages[victimUid]; // 에러 유무에 관계없이 3분 지나면 세션 무조건 폭파
                     ctx.isUpdated = true;
                 }
             }
@@ -16595,7 +16598,11 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         var pillageAlert = "";
         var mainRoom = data.rooms["내리다"];
         if (mainRoom && mainRoom.features.activePillages && mainRoom.features.activePillages[targetUid]) {
-            pillageAlert = "\n\n🚨 [긴급] 해적 습격 발생! (교전 중)";
+            if (!user.voyage || user.voyage.active === false) {
+                delete mainRoom.features.activePillages[targetUid]; // 찌꺼기 영구 삭제
+            } else {
+                pillageAlert = "\n\n🚨 [긴급] 해적 습격 발생! (교전 중)";
+            }
         }
 
         // 해군 전용 실시간 호위 대상 추적 (닉네임 표시)
@@ -20544,7 +20551,7 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
             // [유저 정산]: 기존 소스코드의 정밀 스냅샷 기반 계산 유지
             var v = victim.voyage;
             var tRev = 0; var tCost = 0;
-            var nSnap = v.marketSnapshot[v.dest];
+            var nSnap = (v.marketSnapshot && v.marketSnapshot[v.dest]) ? v.marketSnapshot[v.dest] : { favorite: "NONE", hate: "NONE", rates: {} };
             var cSnap = v.cargoSnapshot || {};
             var sSnap = v.specialtySnapshot || {};
             var quest = v.contractSnapshot;

@@ -7171,6 +7171,37 @@ if (user.boughtWarningRemoval === undefined) user.boughtWarningRemoval = false;
 if (user.boxFragments === undefined) user.boxFragments = 0;
 if (user.boxTickets === undefined) user.boxTickets = 0;
 
+// [v20.1 최적화] 1:1방 유저 동기화: 매번 DB를 전수 조사하지 않고, 이미 식별된 targetUid를 신뢰함
+if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && targetUid) {
+    var mainData = data.rooms["내리다"];
+    
+    // 타겟 UID를 이미 알고 있고 메인방에 존재한다면 굳이 다시 스캔하지 않음 (O(1) 매칭)
+    if (mainData && mainData.users[targetUid]) {
+        user = mainData.users[targetUid];
+        roomData = mainData; // 장부를 메인방으로 교체
+    } else {
+        // 만약 UID 매칭 실패 시에만 최후의 수단으로 '내리다' 방 안에서만 이름 탐색 (전체 방 스캔 방지)
+        var maxPoints = -1;
+        var bestMatch = null;
+        for (var mUid in mainData.users) {
+            var mUser = mainData.users[mUid];
+            if (mUser.name.trim() === cleanSender.trim()) {
+                var uPoint = Number(mUser.point || 0);
+                if (uPoint > maxPoints) {
+                    maxPoints = uPoint;
+                    bestMatch = { u: mUser, id: mUid };
+                }
+            }
+        }
+        if (bestMatch) {
+            user = bestMatch.u;
+            targetUid = bestMatch.id;
+            roomData = mainData;
+            globalData.nameToIdCache["GLOBAL_" + cleanSender] = targetUid; // 캐시 즉시 복구
+        }
+    }
+}
+
 // 1. 기록장(collectedIcons)이 없으면 생성
 if (user.collectedIcons === undefined) {
     user.collectedIcons = [];

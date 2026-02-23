@@ -6628,51 +6628,36 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
                     }
                 }
 
-               // 1:1 채팅방일 경우, 시스템이 참조하는 '방 데이터(roomData)' 자체를 메인방으로 바꿔치기합니다.
-                // 특정 방 이름을 지정하지 않고, DB에 있는 모든 방을 뒤져서 가장 부자인 계정을 찾아냅니다.
-                if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-                    var bestMatchUser = null;
-                    var bestMatchUid = null;
-                    var bestMatchRoomData = null;
-                    var maxPoints = -1;
-
-                    // 1. DB에 존재하는 모든 방을 순회
-                    for (var dbRoomName in data.rooms) {
-                        // 현재 1:1 방(자기 자신)은 제외하고 검색
-                        if (dbRoomName === realRoom) continue;
-
-                        var rData = data.rooms[dbRoomName];
-                        if (!rData || !rData.users) continue;
-
-                        // 2. 해당 방의 유저 목록 스캔
-                        for (var mUid in rData.users) {
-                            var mUser = rData.users[mUid];
-                            
-                            // 이름 일치 확인 (공백 제거 후 비교)
-                            if (mUser.name.trim() === cleanSender.trim()) {
-                                var uPoint = Number(mUser.point || 0);
-                                
-                                // 동명이인(또는 유령계정) 중 포인트가 가장 많은 '진짜'를 선택
-                                if (uPoint > maxPoints) {
-                                    maxPoints = uPoint;
-                                    bestMatchUser = mUser;
-                                    bestMatchUid = mUid;
-                                    bestMatchRoomData = rData;
+               // [v20.1 최적화] 1:1방 유저 동기화: 매번 DB를 전수 조사하지 않고, 이미 식별된 targetUid를 신뢰함
+                    if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && targetUid) {
+                        var mainData = data.rooms["내리다"];
+                        
+                        // 타겟 UID를 이미 알고 있고 메인방에 존재한다면 굳이 다시 스캔하지 않음 (O(1) 매칭)
+                        if (mainData && mainData.users[targetUid]) {
+                            user = mainData.users[targetUid];
+                            roomData = mainData; // 장부를 메인방으로 교체
+                        } else {
+                            // 만약 UID 매칭 실패 시에만 최후의 수단으로 '내리다' 방 안에서만 이름 탐색 (전체 방 스캔 방지)
+                            var maxPoints = -1;
+                            var bestMatch = null;
+                            for (var mUid in mainData.users) {
+                                var mUser = mainData.users[mUid];
+                                if (mUser.name.trim() === cleanSender.trim()) {
+                                    var uPoint = Number(mUser.point || 0);
+                                    if (uPoint > maxPoints) {
+                                        maxPoints = uPoint;
+                                        bestMatch = { u: mUser, id: mUid };
+                                    }
                                 }
+                            }
+                            if (bestMatch) {
+                                user = bestMatch.u;
+                                targetUid = bestMatch.id;
+                                roomData = mainData;
+                                globalData.nameToIdCache["GLOBAL_" + cleanSender] = targetUid; // 캐시 즉시 복구
                             }
                         }
                     }
-
-                    // 3. 찾은 '진짜 계정'으로 1:1방 데이터 덮어쓰기
-                    if (bestMatchUser && bestMatchRoomData) {
-                        user = bestMatchUser;           // 유저 객체 교체
-                        targetUid = bestMatchUid;       // UID 교체
-                        roomData = bestMatchRoomData;   // [핵심] 장부를 찾은 방의 장부로 교체
-                        
-                        // 로그: 연결된 방 이름이 무엇인지 확인하고 싶다면 주석 해제
-                        // Log.info("[연동 성공] " + cleanSender + " -> " + bestMatchRoomData.users[bestMatchUid].name);
-                    }
-                }
 
                 /* [v6.6 딥 헬러] 타입 검증형 자가 치유 엔진 (Deep Healing & Memory Sync) */
                 if (user && targetUid) {
@@ -7170,37 +7155,6 @@ if (user.boughtWarningRemoval === undefined) user.boughtWarningRemoval = false;
 /* [개편] 랜덤박스 시스템 관련 변수 안전 초기화 및 자동 마이그레이션 */
 if (user.boxFragments === undefined) user.boxFragments = 0;
 if (user.boxTickets === undefined) user.boxTickets = 0;
-
-// [v20.1 최적화] 1:1방 유저 동기화: 매번 DB를 전수 조사하지 않고, 이미 식별된 targetUid를 신뢰함
-if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && targetUid) {
-    var mainData = data.rooms["내리다"];
-    
-    // 타겟 UID를 이미 알고 있고 메인방에 존재한다면 굳이 다시 스캔하지 않음 (O(1) 매칭)
-    if (mainData && mainData.users[targetUid]) {
-        user = mainData.users[targetUid];
-        roomData = mainData; // 장부를 메인방으로 교체
-    } else {
-        // 만약 UID 매칭 실패 시에만 최후의 수단으로 '내리다' 방 안에서만 이름 탐색 (전체 방 스캔 방지)
-        var maxPoints = -1;
-        var bestMatch = null;
-        for (var mUid in mainData.users) {
-            var mUser = mainData.users[mUid];
-            if (mUser.name.trim() === cleanSender.trim()) {
-                var uPoint = Number(mUser.point || 0);
-                if (uPoint > maxPoints) {
-                    maxPoints = uPoint;
-                    bestMatch = { u: mUser, id: mUid };
-                }
-            }
-        }
-        if (bestMatch) {
-            user = bestMatch.u;
-            targetUid = bestMatch.id;
-            roomData = mainData;
-            globalData.nameToIdCache["GLOBAL_" + cleanSender] = targetUid; // 캐시 즉시 복구
-        }
-    }
-}
 
 // 1. 기록장(collectedIcons)이 없으면 생성
 if (user.collectedIcons === undefined) {

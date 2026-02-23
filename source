@@ -6977,34 +6977,49 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1 && !roomData.users[targetUid]) {
     safeSaveData(data);
 }
 
-// [수정] 단체방 접속 시 기존 유저 객체를 'user' 변수에 할당 (참조 오류 해결 핵심)
-// 특정 유저(공백 포함 닉네임 등)의 데이터 매칭 시 var 선언 누락 방지(수정)
+// 단체방 접속 시 기존 유저 객체를 'user' 변수에 할당 (참조 오류 해결 핵심)
+// 특정 유저(공백 포함 닉네임 등)의 데이터 매칭 시 var 선언 누락 방지
 if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
     if (targetUid && roomData.users[targetUid]) {
         user = roomData.users[targetUid];
     }
 }
 
-// 1. 기존 replier 기능을 가로채서 1:1 방의 답변만 중계방으로 복제하는 도구 생성 (비동기 적용)
+// [최상단] 메시지 발송 전용 1차선 큐 생성 (메모리에 1회만 할당)
+if (typeof globalData.ReplyQueue === 'undefined') {
+    globalData.ReplyQueue = java.util.concurrent.Executors.newSingleThreadExecutor();
+}
+
+// 1. 기존 replier 기능을 가로채는 도구 생성 (데이터 오염 없이 비동기 발송)
 var customReplier = {
     reply: function(content) {
-        // 1:1 방 유저에게 먼저 즉각적으로 답장을 쏩니다 (딜레이 0초)
-        replier.reply(content); 
-        
-        // 중계 조건: 1:1 방(비허용 방)이면서, 중계방 자체가 아닐 때만 실행
-        if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && realRoom !== CASINO_RELAY_ROOM) {
-            // 중계방 전송은 백그라운드(비동기) 스레드로 던져버려 메인 스레드 정지를 막습니다.
-            if (typeof Executor !== 'undefined') {
+        // 1:1 방인 경우: 딜레이 없이 즉각 출력 및 중계방 백그라운드 전송
+        if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
+            replier.reply(content); 
+            
+            if (realRoom !== CASINO_RELAY_ROOM && typeof Executor !== 'undefined') {
                 Executor.execute(new java.lang.Runnable({
                     run: function() {
                         try {
-                            // [핵심 패치] 1:1방 답장이 나간 후(최우선), 중계방에는 2초 지연을 두어 순서대로(유저입력->봇출력) 도착하게 함
-                            java.lang.Thread.sleep(800);
+                            java.lang.Thread.sleep(500);
                             Api.replyRoom(CASINO_RELAY_ROOM, "🤖 [1:1출력] To. " + cleanSender + "\n" + content);
                         } catch(e) { Log.error("Relay Output Error: " + e); }
                     }
                 }));
             }
+        }
+        // 단체방(내리다 등)인 경우: 단일 전송 큐(FIFO)에 담아 순서대로 발송
+        else {
+            globalData.ReplyQueue.execute(new java.lang.Runnable({
+                run: function() {
+                    try {
+                        // Api.replyRoom 대신 오리지널 네이티브 객체 사용 (동명이방 완벽 해결)
+                        replier.reply(content); 
+                        // 카톡 서버 도배 락 방지 및 가비지 컬렉션 처리를 위한 0.1초 간격 유지
+                        java.lang.Thread.sleep(100); 
+                    } catch(e) { Log.error("Reply Queue Error: " + e); }
+                }
+            }));
         }
     }
 };

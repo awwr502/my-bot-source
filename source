@@ -17326,7 +17326,6 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     var state = roomData.features.states.menuWait[targetUid];
     var input = msg.trim();
 
-    // [교정] 취소 또는 뒤로 가기 시 세션을 삭제하고 무역 메인 메뉴로 강제 리다이렉트
     if (input === "취소" || input === "뒤로" || input === "↩️ 뒤로") {
         if (roomData.features.states.menuWait && roomData.features.states.menuWait[targetUid]) {
             delete roomData.features.states.menuWait[targetUid];
@@ -17334,11 +17333,33 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
         return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
     }
 
+    // 선박의 최대 적재량 및 현재 적재량 계산
+    var shipCfg = cfg.SHIPS[user.shipLevel || 1];
+    var totalCap = shipCfg.capacity + (Number(user.enhLimit) || 0);
+    var currentLoaded = 0;
+    for (var c in state.selCargo) currentLoaded += Number(state.selCargo[c]);
+    for (var s in state.selSpec) currentLoaded += Number(state.selSpec[s]);
+    var remainingCap = Math.max(0, totalCap - currentLoaded);
+
     if (input === "전부") {
-        for (var k in (user.cargo || {})) if (user.cargo[k] > 0) state.selCargo[k] = user.cargo[k];
-        for (var s in (user.specialties || {})) if (user.specialties[s] > 0) state.selSpec[s] = user.specialties[s];
-        if (Number(user.rareSpecialties || 0) > 0) state.selSpec["_rare"] = user.rareSpecialties;
-        if (Number(user.unknownCargo || 0) > 0) state.selSpec["_unknown"] = user.unknownCargo;
+        // 남은 용량(remainingCap) 내에서만 순차적으로 적재하도록 안전 로직 적용
+        var loadItem = function(key, available, type) {
+            if (available <= 0 || remainingCap <= 0) return;
+            var loadQty = Math.min(available, remainingCap);
+            if (type === 'cargo') state.selCargo[key] = (state.selCargo[key] || 0) + loadQty;
+            else state.selSpec[key] = (state.selSpec[key] || 0) + loadQty;
+            remainingCap -= loadQty;
+        };
+
+        for (var k in (user.cargo || {})) loadItem(k, user.cargo[k], 'cargo');
+        for (var s in (user.specialties || {})) loadItem(s, user.specialties[s], 'spec');
+        if (Number(user.rareSpecialties || 0) > 0) loadItem("_rare", user.rareSpecialties, 'spec');
+        if (Number(user.unknownCargo || 0) > 0) loadItem("_unknown", user.unknownCargo, 'spec');
+        
+        if (remainingCap <= 0) {
+            replier.reply("⚠️ 적재 공간이 한계에 도달하여 남은 공간만큼만 화물이 선적되었습니다.");
+        }
+        
         _showTradeCargoSelectUI(user, replier, roomData, cfg, state.dest, state.selCargo, state.selSpec);
         return;
     }
@@ -17405,7 +17426,7 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     var remU = unknownCount - Number(state.selSpec["_unknown"] || 0);
     if (remU > 0) availableItems.push({ type: 'unknown', name: "미확인 교역품", qty: remU });
 
-    if (isNaN(idx) || idx < 0 || idx >= availableItems.length) {
+   if (isNaN(idx) || idx < 0 || idx >= availableItems.length) {
         if (!isNaN(parseInt(parts[0]))) {
             replier.reply(formatError(user, "번호 오류", "현재 화면에 표시된 번호를 입력하세요."));
         }
@@ -17413,13 +17434,21 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     }
 
     var selected = availableItems[idx];
-    var inputQty = parts.length > 1 ? parseInt(parts[1].replace(/[^0-9]/g, "")) : 999999;
-    var finalQty = Math.min(inputQty, selected.qty);
+    
+    // 적재 공간 가드
+    if (remainingCap <= 0) {
+        replier.reply(formatError(user, "적재 공간 부족", "선박의 적재 공간이 가득 찼습니다.\n(최대 " + totalCap + "칸)"));
+        return;
+    }
+
+    // 수량 입력이 없으면 '남은 용량 전체'를 지정하되, 최대 한도를 초과하지 못하게 억제
+    var inputQty = parts.length > 1 ? parseInt(parts[1].replace(/[^0-9]/g, "")) : remainingCap;
+    var finalQty = Math.min(inputQty, selected.qty, remainingCap);
 
     if (selected.type === 'rare') {
         state.selSpec["_rare"] = (state.selSpec["_rare"] || 0) + finalQty;
     } else if (selected.type === 'unknown') {
-        state.selSpec["_unknown"] = (state.selSpec["_unknown"] || 0) + finalQty;
+        state.selSpec["_unknown"] = (state.selSpec["_unknown"] || 0) + finalQty; // 미확인 교역품 선택 저장
     } else if (selected.type === 'cargo') {
         state.selCargo[selected.name] = (state.selCargo[selected.name] || 0) + finalQty;
     } else {

@@ -21043,63 +21043,55 @@ function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    var cfg = DUNGEON_CONFIG;
     var maps = Number(user.ancientMaps || 0);
-    var isJob = !!user.job;
     
     var body = "바다의 깊은 곳, 미지의 해저 차원문이 열렸습니다.\n" +
                "수심을 뚫고 내려가며 숨겨진 전리품을 인양하십시오!\n\n" +
                "📜 [보유 지도]: " + maps + "장\n\n" +
-               "1. [안전] 유령선의 잔해\n" +
-               "   - 소모: 지도 3장 / 권장: " + (isJob ? "Lv.3" : "Lv.1") + "\n" +
-               "2. [정예] 크라켄의 둥지\n" +
-               "   - 소모: 지도 5장 / 권장: " + (isJob ? "Lv.6" : "Lv.2") + "\n" +
-               "3. [심연] 레비아탄의 심장\n" +
-               "   - 소모: 지도 7장 / 권장: " + (isJob ? "Lv.10" : "Lv.3") + "\n\n" +
-               "⚠️ 주의: 더 깊이 잠수할수록 위험과 보상이 커집니다.\n" +
-               "침몰 시 누적된 전리품을 모두 잃을 수 있습니다.\n\n" +
+               "탐험을 시작하려면 [고대 지도 3장]이 소모됩니다.\n" +
+               "심해로 내려갈수록 더 끔찍한 괴수와 막대한 보물이 기다립니다.\n\n" +
+               "1. 🤿 심해 다이빙 시작\n\n" +
+               "⚠️ 침몰 시 누적된 전리품을 모두 잃을 수 있습니다.\n\n" +
                "↩️ 뒤로 / ❎취소";
 
-    replier.reply(formatCommand("🌀 심해 다이빙: 던전 입구", user, body, "난이도 번호를 선택하세요."));
+    replier.reply(formatCommand("🌀 심해 다이빙: 던전 입구", user, body, "번호를 선택하세요."));
     roomData.features.states.menuWait[targetUid] = { type: 'dungeon_main', time: Date.now(), originRoom: roomName };
     return true;
 }
 
-// 메뉴 선택 핸들러 보강
+// 메뉴 선택 핸들러
 function _handleDungeonSelection(choice, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
-    var diff = parseInt(choice);
-    if (isNaN(diff) || diff < 1 || diff > 3) return;
+    if (choice !== "1") {
+        return replier.reply(formatError(user, "번호 오류", "1번을 입력하여 탐험을 시작하세요."));
+    }
 
-    var cfg = DUNGEON_CONFIG;
     var maps = Number(user.ancientMaps || 0);
-    if (maps < cfg.COSTS[diff]) return replier.reply(formatError(user, "지도 부족", "입장에 필요한 고대 지도가 부족합니다."));
+    if (maps < 3) return replier.reply(formatError(user, "지도 부족", "입장에 필요한 고대 지도가 부족합니다. (3장 필요)"));
 
-    // 스탯 산출 (상인 3레벨 vs 직업 10레벨 보정)
+    // 스탯 산출
     var isJob = !!user.job;
     var sLv = Number(user.shipLevel || 1);
     
-    // HP 산출: 상인(Lv*300) / 직업(Lv*100) + 강화(칸*20)
+    // HP/ATK 산출 
     var myHP = isJob ? (sLv * 100) : (sLv * 300);
     myHP += (Number(user.enhLimit || 0) * 20);
     
-    // ATK 산출: 상인(Lv*40) / 직업(Lv*15) + 강화(수익%*2)
     var myATK = isJob ? (sLv * 15) : (sLv * 45);
     myATK += (Number(user.enhProfit || 0) * 2);
 
-    // 지도 소모
-    user.ancientMaps -= cfg.COSTS[diff];
+    // 지도 3장 소모 (고정)
+    user.ancientMaps -= 3;
     user.skipHealing = true;
 
-    // 탐험 세션 생성 (기존 combat 세션을 대체)
+    // 탐험 세션 생성
     user.dungeonExplore = {
-        diff: diff,
-        depth: 100,
+        depth: 100, // 시작 수심 100m
         myHP: myHP,
         myMaxHP: myHP,
         myATK: myATK,
         loot: { points: 0, cargo: 0, medals: 0, maps: 0, artifacts: 0 },
-        phase: 'event', // 'event' 또는 'combat'
+        phase: 'event',
         lastLog: "탐조등을 켜고 어두운 심해로 하강을 시작합니다...",
         hasRepaired: false
     };
@@ -21111,25 +21103,31 @@ function _handleDungeonSelection(choice, user, data, replier, roomName, targetUi
     safeSaveData(data, true);
 }
 
-// 심해 층별 이벤트 생성기
+// 심해 층별 이벤트 생성기 (수심 스케일링 적용)
 function _generateDungeonEvent(user) {
     var e = user.dungeonExplore;
     var rand = Math.random();
     
-    // 300m 단위이거나 25% 확률로 몬스터 난입, 그 외에는 탐색 이벤트
+    // 300m 단위이거나 25% 확률로 몬스터 난입
     if (e.depth % 300 === 0 || rand < 0.25) {
         var cfg = DUNGEON_CONFIG;
-        var enemyIdx = Math.min(2, e.diff - 1 + Math.floor(e.depth / 400));
-        var enemy = cfg.ENEMIES[enemyIdx] || cfg.ENEMIES[0];
+        
+        // 수심에 따른 몬스터 등장 풀 (1000m 이상은 레비아탄)
+        var enemyIdx = 0;
+        if (e.depth >= 1000) enemyIdx = 2; // 레비아탄
+        else if (e.depth >= 500) enemyIdx = 1; // 크라켄
+        
+        var enemy = cfg.ENEMIES[enemyIdx];
         
         e.phase = 'combat';
         e.enemyName = enemy.name;
-        // 수심에 비례하여 적 스탯 스케일링
-        var scale = 1 + (e.depth - 100) / 500;
+        
+        // 수심 스케일링: 기본 적 스탯에 100m당 10%씩 강해짐
+        var scale = 1 + (e.depth - 100) / 1000;
         e.enemyHP = Math.floor(enemy.hp * scale);
         e.enemyMaxHP = e.enemyHP;
         e.enemyATK = Math.floor(enemy.atk * scale);
-        e.hasRepaired = false; // 전투마다 1회 수리 가능토록 초기화
+        e.hasRepaired = false;
     } else {
         e.phase = 'event';
         if (rand < 0.6) {
@@ -21179,14 +21177,17 @@ function _handleDungeonCombat(msg, user, data, replier, roomName, targetUid) {
     
     roomData = data.rooms[roomName]; // 타임아웃 갱신용
 
-    // 전리품 추가 헬퍼 함수
+    // 전리품 추가 헬퍼 함수 (수심 기반 스케일링)
     var addLoot = function(mult) {
         var isJob = !!user.job;
         var pts = 0, cargo = 0;
         var log = "";
         
-        var basePts = Math.floor((Math.random() * 10000 + 5000) * e.diff * mult * (1 + e.depth/1000));
-        var baseCargo = Math.floor((Math.random() * 8 + 3) * e.diff * mult * (1 + e.depth/1000));
+        // 수심 500m 당 보상 1배씩 점진적 증가
+        var depthMult = 1 + (e.depth / 500);
+        
+        var basePts = Math.floor((Math.random() * 10000 + 5000) * mult * depthMult);
+        var baseCargo = Math.floor((Math.random() * 8 + 3) * mult * depthMult);
         
         if (isJob) pts = basePts * 2; else pts = basePts;
         if (!isJob) cargo = baseCargo;
@@ -21197,9 +21198,10 @@ function _handleDungeonCombat(msg, user, data, replier, roomName, targetUid) {
         if (pts > 0) log += "💰+" + fp(pts) + " ";
         if (cargo > 0) log += "📦+" + cargo + " ";
 
-        if (Math.random() < 0.15 * mult) { e.loot.medals++; log += "🎖️+1 "; }
-        if (Math.random() < 0.10 * mult) { e.loot.maps++; log += "🗺️+1 "; }
-        if (Math.random() < 0.05 * mult) { e.loot.artifacts++; log += "🧩+1 "; }
+        // 드랍 확률도 깊이에 따라 약간씩 보정
+        if (Math.random() < 0.15 * mult * (1 + e.depth/2000)) { e.loot.medals++; log += "🎖️+1 "; }
+        if (Math.random() < 0.10 * mult * (1 + e.depth/2000)) { e.loot.maps++; log += "🗺️+1 "; }
+        if (Math.random() < 0.05 * mult * (1 + e.depth/2000)) { e.loot.artifacts++; log += "🧩+1 "; }
         
         return log.trim();
     };
@@ -21212,17 +21214,20 @@ function _handleDungeonCombat(msg, user, data, replier, roomName, targetUid) {
                     var lLog = addLoot(1.0);
                     e.lastLog = "✅ 유적 탐색 성공!\n획득: " + lLog;
                 } else {
-                    var dmg = Math.floor(e.myMaxHP * 0.1 * e.diff);
+                    // 깊이에 따라 함정 데미지 스케일링
+                    var dmgMult = 1 + (e.depth / 1000);
+                    var dmg = Math.floor(e.myMaxHP * 0.1 * dmgMult);
                     e.myHP -= dmg;
                     e.lastLog = "⚠️ 유적에 붕괴 함정이 발동했습니다!\n선체 피해: -" + dmg;
                 }
             } else { // trap
                 if (rand < 0.7) {
-                    var dmg = Math.floor(e.myMaxHP * 0.15 * e.diff);
+                    var dmgMult = 1 + (e.depth / 1000);
+                    var dmg = Math.floor(e.myMaxHP * 0.15 * dmgMult);
                     e.myHP -= dmg;
                     e.lastLog = "⚠️ 소용돌이에 휩쓸려 파편에 부딪혔습니다!\n선체 피해: -" + dmg;
                 } else {
-                    var lLog = addLoot(1.5);
+                    var lLog = addLoot(1.5); // 함정 돌파 시 보상 1.5배
                     e.lastLog = "✅ 거센 해류 속에서 진귀한 물건을 건졌습니다!\n획득: " + lLog;
                 }
             }

@@ -4659,6 +4659,47 @@ function _runSeaPillageScheduler(data, ctx) {
         }
     }
 
+    // [Part 1.5: 해양 생물 조우 3분 타임아웃 독립 보장 엔진]
+    // 설명: 유저가 다른 명령어(/무역 등)를 쳐서 세션 상태표가 덮어씌워지더라도, 백그라운드에서 시간을 추적하여 무조건 알림을 띄웁니다.
+    var mainRoom = data.rooms["내리다"];
+    if (mainRoom && mainRoom.users) {
+        for (var uid in mainRoom.users) {
+            var u = mainRoom.users[uid];
+            if (u && u.voyage && u.voyage.encounter) {
+                // 항해가 이미 종료된 상태라면 찌꺼기 즉시 소각
+                if (u.voyage.active === false) {
+                    delete u.voyage.encounter;
+                    continue;
+                }
+
+                // 정확히 3분(180,000ms) 경과 시 알림 발송
+                if (nowTs - (u.voyage.encounter.time || 0) > 180000) {
+                    var timeoutMsg = "🌊 [상황 종료: 생물 소멸]\n" +
+                                     "━━━━━━━━━━━━━━━\n" +
+                                     (u.name || "알 수 없음") + "님\n" +
+                                     "거대 생물이 수면 아래로 깊이 잠영하여\n" +
+                                     "더 이상 자취를 찾을 수 없습니다.\n" +
+                                     "━━━━━━━━━━━━━━━\n" +
+                                     "💡 기회를 놓치셨습니다. 항해를 계속하세요.";
+                    try { Api.replyRoom("내리다", timeoutMsg); } catch(e) {}
+                    
+                    delete u.voyage.encounter;
+                    ctx.isUpdated = true;
+                    
+                    // 혹시라도 메뉴 대기열에 아직 조우 상태가 남아있다면 깔끔하게 해제
+                    for (var r in data.rooms) {
+                        if (data.rooms[r].features && data.rooms[r].features.states && data.rooms[r].features.states.menuWait) {
+                            var st = data.rooms[r].features.states.menuWait[uid];
+                            if (st && st.type === 'marine_encounter') {
+                                delete data.rooms[r].features.states.menuWait[uid];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // [Part 2: 7일 미활동 직업 박탈] (매일 00시 10분에 1회 수행)
     if (ctx.now.getHours() === 0 && ctx.now.getMinutes() === 10 && data.lastJobCleanupDate !== ctx.today) {
         data.lastJobCleanupDate = ctx.today;

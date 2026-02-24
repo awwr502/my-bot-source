@@ -21368,27 +21368,49 @@ function _generateDungeonEvent(user) {
     var e = user.dungeonExplore;
     var rand = Math.random();
     
-    // 500m 단위 심해 괴수 확정 등장, 나머지 층 일반 괴수 40% 등장
-    var isDeepBossFloor = (e.depth % 500 === 0);
-    var isNormalCombat = (!isDeepBossFloor && rand < 0.30);
+    // 1. 1000m, 2000m, 3000m... 확정 층 (재앙급)
+    var isFinalBossFloor = (e.depth % 1000 === 0);
+    // 2. 500m, 1500m, 2500m... 확정 층 (1000의 배수가 아닌 500의 배수)
+    var isMidBossFloor = (e.depth % 500 === 0 && !isFinalBossFloor);
+    // 3. 일반 층 (35% 확률 등장)
+    var isNormalCombat = (!isFinalBossFloor && !isMidBossFloor && rand < 0.35);
 
-    if (isDeepBossFloor || isNormalCombat) {
-        var cfg = DUNGEON_CONFIG;
+    if (isFinalBossFloor || isMidBossFloor || isNormalCombat) {
+        var pool = [];
         
-        var enemyIdx = 0;
-        if (isDeepBossFloor) {
-            // 500m 확정 층에서는 심해 괴수 배정 (1000m 이상: 레비아탄 / 그 외: 크라켄)
-            if (e.depth >= 1000) enemyIdx = 2; 
-            else enemyIdx = 1; 
+        // 수심 구간별 다채로운 몬스터 생태계 풀(Pool) 구성
+        if (isFinalBossFloor) {
+            pool = [
+                { name: "레비아탄", hp: 2000, atk: 110, icon: "🐉", title: "[재앙 경보: 전설의 해신 강림]" },
+                { name: "요르문간드", hp: 2200, atk: 100, icon: "🐍", title: "[재앙 경보: 세계를 감싸는 독사]" },
+                { name: "크툴루의 환영", hp: 1800, atk: 130, icon: "🐙", title: "[재앙 경보: 고대의 우주적 존재]" },
+                { name: "심연의 모비딕", hp: 2500, atk: 90, icon: "🐋", title: "[재앙 경보: 파괴적인 백경 출몰]" }
+            ];
+        } else if (isMidBossFloor) {
+            pool = [
+                { name: "심해 크라켄", hp: 800, atk: 55, icon: "🦑", title: "[위기 발생: 심해 괴수 출몰]" },
+                { name: "메갈로돈", hp: 850, atk: 60, icon: "🦈", title: "[위기 발생: 고대 포식자의 습격]" },
+                { name: "거대 바다거북", hp: 1000, atk: 45, icon: "🐢", title: "[위기 발생: 심해의 철벽 조우]" },
+                { name: "고대 바다전갈", hp: 750, atk: 65, icon: "🦂", title: "[위기 발생: 맹독의 꼬리 출몰]" }
+            ];
         } else {
-            // 일반 층에서는 일반 괴수 배정 (유령선)
-            enemyIdx = 0; 
+            pool = [
+                { name: "유령선", hp: 300, atk: 25, icon: "👻", title: "[전투 돌입: 망령 함선 조우]" },
+                { name: "세이렌 무리", hp: 280, atk: 35, icon: "🧜‍♀️", title: "[전투 돌입: 매혹적인 환청]" },
+                { name: "저주받은 해적선", hp: 350, atk: 30, icon: "🏴‍☠️", title: "[전투 돌입: 심해의 무법자 습격]" },
+                { name: "대왕 가오리", hp: 320, atk: 22, icon: "🦇", title: "[전투 돌입: 바다의 유령 조우]" },
+                { name: "심해 아귀", hp: 330, atk: 28, icon: "🐟", title: "[전투 돌입: 기괴한 포식자 조우]" },
+                { name: "환영의 함대", hp: 250, atk: 40, icon: "🌫️", title: "[전투 돌입: 짙은 안개 속의 적]" }
+            ];
         }
         
-        var enemy = cfg.ENEMIES[enemyIdx];
+        // 난수 추첨을 통해 등장 몬스터 확정
+        var enemy = pool[Math.floor(Math.random() * pool.length)];
         
         e.phase = 'combat';
         e.enemyName = enemy.name;
+        e.enemyIcon = enemy.icon;
+        e.enemyTitle = enemy.title;
         
         // [난이도 조정] 괴수(일반/심해 무관) 조우 횟수 누적
         e.bossCount = Number(e.bossCount || 0) + 1;
@@ -21401,7 +21423,7 @@ function _generateDungeonEvent(user) {
         e.enemyATK = Math.floor(enemy.atk * scale);
         e.hasRepaired = false;
     } else {
-        e.phase = 'event';
+        e.phase = 'event';
         if (rand < 0.6) {
             e.currentEvent = { type: 'treasure', title: "✨ [해저 유적 발견]", desc: "어둠 속에서 기이한 황금빛이 새어 나오는 난파선을 발견했습니다." };
         } else {
@@ -21439,7 +21461,18 @@ function _showDungeonTurn(user, replier, roomName) {
 
     } else if (e.phase === 'combat') {
         var eBar = "🟥".repeat(Math.ceil(e.enemyHP/e.enemyMaxHP*5)) + "⬜".repeat(5-Math.ceil(e.enemyHP/e.enemyMaxHP*5));
-        body += "🦑 [위기 발생: 심해 괴수 출몰]\n" + e.enemyName + "이(가) 앞을 가로막습니다!\n" +
+        
+        // 몬스터 종류에 따라 출력 타이틀 및 아이콘 세분화
+        var combatTitle = "⚔️ [적 조우]";
+        if (e.enemyName === "유령선") {
+            combatTitle = "👻 [전투 돌입: 망령 함선 조우]";
+        } else if (e.enemyName === "심해 크라켄") {
+            combatTitle = "🦑 [위기 발생: 심해 괴수 출몰]";
+        } else if (e.enemyName === "레비아탄") {
+            combatTitle = "🐉 [재앙 경보: 전설의 해신 강림]";
+        }
+
+        body += combatTitle + "\n" + e.enemyName + "이(가) 앞을 가로막습니다!\n" +
                 "   HP [" + eBar + "] " + Math.floor(e.enemyHP) + "\n\n" +
                 "1. 💣 전면 포격 (주사위 공격)\n" +
                 "2. 🔧 선체 수리 (HP 20% 회복, 전투당 1회)\n" +

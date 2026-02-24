@@ -495,11 +495,11 @@ var ROOM_FEATURE_TEMPLATE = function() {
         },
 
         portData: {
-            "포르투": { level: 1, totalInvest: 0, governorUid: "", userInvests: {}, collectedTariff: 0, inventory: {"식료품":2000, "공업품":2000, "공예품":2000, "귀금속":2000, "보석":2000} },
-            "코콜라": { level: 1, totalInvest: 0, governorUid: "", userInvests: {}, collectedTariff: 0, inventory: {"식료품":2000, "공업품":2000, "공예품":2000, "귀금속":2000, "보석":2000} },
-            "나폴리": { level: 1, totalInvest: 0, governorUid: "", userInvests: {}, collectedTariff: 0, inventory: {"식료품":2000, "공업품":2000, "공예품":2000, "귀금속":2000, "보석":2000} },
-            "베라크루스": { level: 1, totalInvest: 0, governorUid: "", userInvests: {}, collectedTariff: 0, inventory: {"식료품":2000, "공업품":2000, "공예품":2000, "귀금속":2000, "보석":2000} },
-            "킴벌리": { level: 1, totalInvest: 0, governorUid: "", userInvests: {}, collectedTariff: 0, inventory: {"식료품":2000, "공업품":2000, "공예품":2000, "귀금속":2000, "보석":2000} }
+            "포르투": { level: 1, totalInvest: 0, governorUid: "", userInvests: {}, collectedTariff: 0, inventory: {"식료품":5000, "공업품":5000, "공예품":5000, "귀금속":5000, "보석":5000} },
+            "코콜라": { level: 1, totalInvest: 0, governorUid: "", userInvests: {}, collectedTariff: 0, inventory: {"식료품":5000, "공업품":5000, "공예품":5000, "귀금속":5000, "보석":5000} },
+            "나폴리": { level: 1, totalInvest: 0, governorUid: "", userInvests: {}, collectedTariff: 0, inventory: {"식료품":5000, "공업품":5000, "공예품":5000, "귀금속":5000, "보석":5000} },
+            "베라크루스": { level: 1, totalInvest: 0, governorUid: "", userInvests: {}, collectedTariff: 0, inventory: {"식료품":5000, "공업품":5000, "공예품":5000, "귀금속":5000, "보석":5000} },
+            "킴벌리": { level: 1, totalInvest: 0, governorUid: "", userInvests: {}, collectedTariff: 0, inventory: {"식료품":5000, "공업품":5000, "공예품":5000, "귀금속":5000, "보석":5000} }
         },
 
         /* 방별 랜드마크 시장 및 기타 데이터 */
@@ -585,7 +585,8 @@ var MARINE_DB = [
 var SYSTEM_CONFIG = {
 
     TRADE: {
-        PRICE_CYCLE_MIN: 60,        // 시세 변동 주기 (60분)
+        BASELINE: 5000,             // 무역 시세 기준점 (재고 5000개일 때 시세 100%)
+        PRICE_CYCLE_MIN: 20,        // 시세 변동 주기 (20분)
 
         GOODS_COST: {
             "식료품": 10000,
@@ -3515,9 +3516,10 @@ function util_refreshMarketRate(roomData, portName, goodName) {
     var inv = roomData.features.portData[portName].inventory;
     if (!inv || inv[goodName] === undefined) return;
 
-    // 1. 현재 재고 확인 및 희소성 계수 계산 (2000개 기준)
-    var currentInv = Math.max(200, Number(inv[goodName])); // 최소 하한선도 200으로 조정
-    var scarcityMult = 2000 / currentInv;
+    // 1. 현재 재고 확인 및 희소성 계수 계산 (중앙 설정된 BASELINE 참조)
+    var baseline = (SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.BASELINE) ? SYSTEM_CONFIG.TRADE.BASELINE : 5000;
+    var currentInv = Math.max(500, Number(inv[goodName])); 
+    var scarcityMult = baseline / currentInv; 
     scarcityMult = Math.max(0.8, Math.min(1.5, scarcityMult));
 
     // 2. 기존 마켓의 기본 흐름(baseRate) 유지하며 재고 비율만 즉시 반영
@@ -5191,12 +5193,14 @@ function _runSector16Logic(data, ctx) {
                         currentStock -= (Math.floor(Math.random() * 41) + 20); 
                     }
 
-                    // 재고 회복력(Elasticity): 모든 물품은 기준선(2000)으로 회귀하려는 성질을 가짐
-                    var baseline = 2000;
+                    // 재고 회복력(Elasticity): 중앙 설정된 BASELINE으로 회귀함
+                    var baseline = (SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.BASELINE) ? SYSTEM_CONFIG.TRADE.BASELINE : 5000;
                     currentStock = currentStock + (baseline - currentStock) * 0.15; // 15% 복원력
 
-                    // 최종 재고 저장 (최소 500으로 상향하여 140% 영구 고정 방지)
-                    inv[gName] = Math.max(500, Math.min(6000, currentStock));
+                    // 최종 재고 저장 범위 조정 (기준점의 25% ~ 300% 범위 자동 유지)
+                    var minInv = Math.floor(baseline * 0.25);
+                    var maxInv = Math.floor(baseline * 3.0);
+                    inv[gName] = Math.max(minInv, Math.min(maxInv, currentStock));
 
                     // 3. 시장 노이즈 반영
                     var baseRate = 0.92 + (Math.random() * 0.16); 
@@ -13929,19 +13933,38 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         var economyRoomData = data.rooms["내리다"];
         if (!economyRoomData || !economyRoomData.features.portData) return true;
 
+        var ps = msg.split(" ");
+        if (ps.length < 2) {
+            replier.reply(formatAdmin("오류", "사용법: /무역재고초기화 [기존기준점]\n예) /무역재고초기화 2000"));
+            return true;
+        }
+
+        var oldBaseline = parseInt(ps[1].replace(/,/g, ""));
+        var newBaseline = (SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.BASELINE) ? SYSTEM_CONFIG.TRADE.BASELINE : 5000;
+
+        if (isNaN(oldBaseline) || oldBaseline <= 0) {
+            replier.reply(formatAdmin("오류", "이전 기준점을 숫자로 정확히 입력하세요."));
+            return true;
+        }
+
+        var ratio = newBaseline / oldBaseline;
         var pData = economyRoomData.features.portData;
         var goods = ["식료품", "공업품", "공예품", "귀금속", "보석"];
 
         for (var pName in pData) {
             if (!pData[pName].inventory) pData[pName].inventory = {};
             for (var i = 0; i < goods.length; i++) {
-                // 기존의 비정상적인 악성 재고(만 단위)를 새 기준점(2000개)으로 강제 압축
-                pData[pName].inventory[goods[i]] = 2000;
+                // [동적 보정] 이전 기준점 대비 신규 기준점 비율만큼 재고를 자동 곱함
+                var currentQty = Number(pData[pName].inventory[goods[i]] || oldBaseline);
+                pData[pName].inventory[goods[i]] = Math.floor(currentQty * ratio);
             }
         }
         
         safeSaveData(data, true);
-        replier.reply(formatAdmin("⚓ 무역 재고 강제 정상화", "모든 항구의 실물 재고가 새 기준점인 [2,000개]로 완벽히 리셋되었습니다.\n\n💡 다음 20분 주기 시세 갱신 때부터 90~110%대 정상 시세로 즉시 회복됩니다."));
+        replier.reply(formatAdmin("⚓ 무역 데이터 동적 마이그레이션", 
+            "기준점 변경(" + fp(oldBaseline) + " ➔ " + fp(newBaseline) + ")에 따른 재고 보정이 완료되었습니다.\n\n" +
+            "📈 적용 배율: x" + ratio.toFixed(2) + "배 증량\n" +
+            "✨ 결과: 현재 시세(%) 변동 없이 시스템 확장 완료"));
         return true;
     }
 

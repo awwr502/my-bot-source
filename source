@@ -8577,19 +8577,14 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
                 var itemPrice = getItemPrice(item, user, roomName); 
                 var discountTag = (user.title === "수집대마왕") ? " 🏵️수집대마왕 혜택(15%할인)" : "";
 
-                // 무역 물품일 경우에만 선적 현황 계산 (삭제 금지, 추가만 하세요)
+                // 무역 물품일 경우에만 보관 현황 계산 (배 용량 제한 해제, 보유량만 표시)
                 var cargoStatusLine = "";
                 if (item.effect === "trade_cargo") {
-                    var tradeCfg = SYSTEM_CONFIG.TRADE;
-                    var shipCfg = tradeCfg.SHIPS[user.shipLevel || 1];
-                    var totalCap = shipCfg.capacity + (user.enhLimit || 0); 
                     var currentCount = 0;
                     for (var k in (user.cargo || {})) currentCount += Number(user.cargo[k] || 0);
-                    
-                    // 미확인 교역품 수량 합산
                     currentCount += Number(user.unknownCargo || 0);
                     
-                    cargoStatusLine = "📦 현재: " + currentCount + " / " + totalCap + "칸\n";
+                    cargoStatusLine = "📦 현재 보관량: " + currentCount + "상자 (용량 제한 없음)\n";
                 }
 
                 // 랜덤박스일 경우 보유 이용권 수량 표시 라인 생성
@@ -10933,55 +10928,37 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         }
 
         // 항해 중이 아님이 확인된 이 시점에 실제 결제 진행
-        util_updatePoint(user, roomData, -finalPrice, "무역 화물 매입: " + item.value + " x" + qty, roomName);
+        util_updatePoint(user, roomData, -finalPrice, "무역 화물 매입: " + item.value + " x" + qty, roomName);
 
-        var tradeCfg = SYSTEM_CONFIG.TRADE;
-        var shipCfg = tradeCfg.SHIPS[user.shipLevel || 1];
-        
-        // [v15.9] 초월 강화 적재량 합산 가드 적용
-        var totalCap = shipCfg.capacity + (user.enhLimit || 0);
-        
-        // 현재 총 적재량 계산
+        // 현재 보관량 계산
         var currentCargoCount = 0;
         for (var key in (user.cargo || {})) {
             currentCargoCount += Number(user.cargo[key] || 0);
         }
-        // 미확인 교역품 수량 합산
         currentCargoCount += Number(user.unknownCargo || 0);
 
-        // 공간 부족 체크 (기본용량 -> 강화 합산용량으로 교체)
-        if (currentCargoCount + qty > totalCap) {
-            util_updatePoint(user, roomData, finalPrice, "적재 공간 부족 환불", roomName);
-            replier.reply(formatError(user, "적재 공간 부족", 
-                "선박에 더 이상 물건을 실을 수 없습니다.\n" +
-                "📦 현재: " + currentCargoCount + "/" + totalCap + "칸\n" +
-                "⚠️ 요청: " + qty + "상자"));
-            return;
-        }
-
-      // 적재함 업데이트
+      // 적재함 업데이트 (보관함에 저장)
         if (!user.cargo) user.cargo = {};
-        var goodsType = item.value; // "식료품", "보석" 등
-        if (!user.cargoAvg) user.cargoAvg = {}; // 평단가 객체 초기화
+        var goodsType = item.value; 
+        if (!user.cargoAvg) user.cargoAvg = {}; 
 
         var oldQty = Number(user.cargo[goodsType] || 0);
         var oldAvg = Number(user.cargoAvg[goodsType] || 0);
-        var currentUnitPrice = Math.floor(finalPrice / qty); // 이번 구매 개당 단가
+        var currentUnitPrice = Math.floor(finalPrice / qty);
 
-        // 새로운 가중 평균 매입가 계산 및 수량 합산
         var newAvg = Math.floor(((oldAvg * oldQty) + (currentUnitPrice * qty)) / (oldQty + qty));
         
-        user.cargoAvg[goodsType] = newAvg; // 새 평단가 기록
-        user.cargo[goodsType] = oldQty + qty; // 수량 업데이트
+        user.cargoAvg[goodsType] = newAvg; 
+        user.cargo[goodsType] = oldQty + qty; 
 
         bankProcessState[targetUid] = { type: 'trade_cargo_done', time: Date.now() };
 
-        // [v15.9.2] 출력문에 기본 용량(shipCfg.capacity) 대신 강화 합산 용량(totalCap) 적용
-        var loadBody = "[" + goodsType + " 상자] " + qty + "개를 배에 실었습니다.\n" + 
-                       "📍 현황: " + (currentCargoCount + qty) + " / " + totalCap + " 칸 사용 중\n\n" +
+        var loadBody = "[" + goodsType + " 상자] " + qty + "개를 구매하여 보관함에 넣었습니다.\n" + 
+                       "📦 보관함 총 화물: " + (currentCargoCount + qty) + "상자\n\n" +
+                       "💡 쌀 때 쟁여두고, 출항 전 하역 메뉴에서 배 용량만큼 옮겨 실을 수 있습니다.\n\n" +
                        "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
-        replier.reply(formatCommand("🚢 화물 적재 완료", user, loadBody, "출항 준비: [/무역]"));
+        replier.reply(formatCommand("🛒 화물 매입 완료", user, loadBody, "출항 준비: [/무역] ➔ 2번"));
     }
 
     // 7. 선박 강화 초기화권 효과 처리

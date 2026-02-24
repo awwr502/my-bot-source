@@ -18301,18 +18301,12 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     for (var good in cargoToSell) {
         var count = Number(cargoToSell[good]); if (count <= 0) continue;
-        var settledCount = count;
+        var settledCount = count; // 전량 매각 (반품 없음)
         var returnedCount = 0;
         
-        // [퀘스트 정규화] 납품 대상 품목이고 100상자를 초과한 경우 캡 적용
-        if (isQuestSuccess && good === quest.item && count > 100) {
-            settledCount = 100;
-            returnedCount = count - 100;
-            disasterLog += "\n📦 [납품 초과분 반품]: 100상자 초과분 " + returnedCount + "개는 창고로 반환되었습니다.";
-        }
-
+        // 오타 교정: user.cargoAvg[g] -> user.cargoAvg[good]
         var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good] || 10000);
-        var itemCost = Number(myPurchasePrice * settledCount); // 기존 count를 settledCount로 대체
+        var itemCost = Number(myPurchasePrice * settledCount); 
         
         var multiplier = 1.0;
         
@@ -18325,11 +18319,6 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             if (pDataTarget && pDataTarget.built && pDataTarget.built.market) {
                 multiplier += 0.005;
             }
-        }
-
-        // [퀘스트] 납품 대상 품목인 경우 시세를 1.5배로 강제 덮어쓰기
-        if (isQuestSuccess && good === quest.item) {
-            multiplier = 1.5; 
         }
 
         // 2. 재해 처리 (수량 전소 및 가치 하락 반영)
@@ -18346,7 +18335,24 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                 hasFavoriteSold = true;
             }
             var baseTargetCost = cfg.GOODS_COST[good] || 10000;
-            var baseEarn = Math.floor(baseTargetCost * multiplier * settledCount);
+            var baseEarn = 0;
+            var displayMultiplier = multiplier;
+
+            // [퀘스트 분할 정산] 납품 품목일 경우 100개까지만 1.5배, 초과분은 일반 시세로 매각
+            if (isQuestSuccess && good === quest.item) {
+                var premiumQty = Math.min(settledCount, 100);
+                var normalQty = Math.max(0, settledCount - 100);
+                
+                baseEarn = Math.floor(baseTargetCost * 1.5 * premiumQty) + Math.floor(baseTargetCost * multiplier * normalQty);
+                displayMultiplier = (1.5 * premiumQty + multiplier * normalQty) / settledCount;
+                
+                if (normalQty > 0) {
+                    disasterLog += "\n📜 [초과분 정산]: 100상자 초과분(" + normalQty + "상자)은 일반 시세로 매각되었습니다.";
+                }
+            } else {
+                baseEarn = Math.floor(baseTargetCost * multiplier * settledCount);
+            }
+
             var baseMargin = baseEarn - itemCost; // 순수익 = 총 매출 - 총 매입원가(평단가 기준)
             
             // 항구 발전 레벨 보너스
@@ -18363,23 +18369,23 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
             totalRevenue += finalEarn;
             totalCost += itemCost;
             if (triggeredDisaster === "CORROSION" && (good === "공업품" || good === "귀금속")) {
-                        targetRev += finalEarn;
-                        targetCst += itemCost;
-                    }
+                targetRev += finalEarn;
+                targetCst += itemCost;
+            }
             cargoSummary.push(good + "x" + settledCount);
 
-            var pct = Math.round(multiplier * 100);
-            var sign = (pct >= 115) ? "🔺" : (pct <= 90 ? "🔹" : "➖");
-            var deco = isEldorado ? "✨" : "";
-            
-            soldLog.push("• " + good + " x" + settledCount + ": " + fp(finalEarn) + "P (" + pct + "%) " + sign + deco);
-        
-            // [실물 재고 반영] 도착지 항구에 판매된 화물을 공급으로 편입 (시세 하락 유도)
-            var pInfoTarget = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : null;
-            if (pInfoTarget && !isEldorado && !isHomeReturn) {
-                if (!pInfoTarget.inventory) pInfoTarget.inventory = {"식료품":10000, "공업품":10000, "공예품":10000, "귀금속":10000, "보석":10000};
-                if (pInfoTarget.inventory[good] !== undefined) {
-                    pInfoTarget.inventory[good] = Number(pInfoTarget.inventory[good]) + settledCount;
+            var pct = Math.round(displayMultiplier * 100);
+            var sign = (pct >= 115) ? "🔺" : (pct <= 90 ? "🔹" : "➖");
+            var deco = isEldorado ? "✨" : (isQuestSuccess && good === quest.item ? "📜" : "");
+            
+            soldLog.push("• " + good + " x" + settledCount + ": " + fp(finalEarn) + "P (" + pct + "%) " + sign + deco);
+            
+            // [실물 재고 반영] 도착지 항구에 판매된 화물을 공급으로 편입 (시세 하락 유도)
+            var pInfoTarget = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : null;
+            if (pInfoTarget && !isEldorado && !isHomeReturn) {
+                if (!pInfoTarget.inventory) pInfoTarget.inventory = {"식료품":10000, "공업품":10000, "공예품":10000, "귀금속":10000, "보석":10000};
+                if (pInfoTarget.inventory[good] !== undefined) {
+                    pInfoTarget.inventory[good] = Number(pInfoTarget.inventory[good]) + settledCount;
 
                     // 판매한 물건이 항구의 시너지 재료라면 생산 스택 증가
                     if (SYNERGY_RELATION[v.dest] === good) {
@@ -18387,16 +18393,16 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                     }
 
                     util_refreshMarketRate(economyRoomData, v.dest, good);
-                }
-            }
+                }
+            }
 
-            // 유저 인벤토리 실제 반영 (초과분 반품 로직 통합)
-            if (user.cargo) {
-                user.cargo[good] = returnedCount; // 초과분만큼 가방에 다시 채움
-                if (returnedCount === 0) user.cargoAvg[good] = 0;
-            }
-        }
-    }
+            // 유저 인벤토리 실제 반영 (전량 매각 완료)
+            if (user.cargo) {
+                user.cargo[good] = 0;
+                user.cargoAvg[good] = 0;
+            }
+        }
+    }
 
     // 3. 특산품 정산 (specialtyToSell 스냅샷 기반 루프)
     for (var sName in specialtyToSell) {

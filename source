@@ -1775,7 +1775,8 @@ var CMD_LIST = {
         { cmd: "/전체직업초기화", desc: "모든 유저의 직업 및 악명/명성 데이터 초기화", func: "_adminUserManageLogic" },
         { cmd: "/화물복구", desc: "[닉네임] [품목] [수량] 화물 수동 복구", func: "_adminUserManageLogic" },
         { cmd: "/무역즉시완료", desc: "[닉네임] 항해 시간 즉시 종료 및 도착 처리", func: "_adminUserManageLogic" },
-        { cmd: "/무역재고초기화", desc: "모든 항구의 실물 재고를 2000개로 강제 리셋", func: "_adminEconomyLogic" }
+        { cmd: "/무역재고초기화", desc: "모든 항구의 실물 재고를 2000개로 강제 리셋", func: "_adminEconomyLogic" },
+        { cmd: "/직업복구", desc: "[닉네임] [해적|해군] 직업 수동 복구 (선박 보존)", func: "_adminUserManageLogic" }
     ]
 };
 
@@ -4662,11 +4663,22 @@ function _runSeaPillageScheduler(data, ctx) {
                     var lastAct = u.lastJobActivityTime || new Date(u.jobJoinDate).getTime() || 0;
                     if (nowTs - lastAct > oneWeekMs) {
                         var jobName = (u.job === 'pirate' ? "해적" : "해군");
-                        u.job = null;
-                        u.jobJoinDate = "";
-                        u.infamy = 0;
-                        u.fame = 0;
-                        u.currentBounty = 0;
+                        // [v20.2 교정] 강제 박탈 시에도 함선 데이터 안전하게 스왑 백업
+                        u.combatShipLevel = Number(u.shipLevel || 1);
+                        u.combatEnhLimit = Number(u.enhLimit || 0);
+                        u.combatEnhTime = Number(u.enhTime || 0);
+                        u.combatEnhProfit = Number(u.enhProfit || 0);
+
+                        u.shipLevel = Number(u.merchantShipLevel || 1);
+                        u.enhLimit = Number(u.merchantEnhLimit || 0);
+                        u.enhTime = Number(u.merchantEnhTime || 0);
+                        u.enhProfit = Number(u.merchantEnhProfit || 0);
+
+                        u.job = null;
+                        u.jobJoinDate = "";
+                        u.infamy = 0;
+                        u.fame = 0;
+                        u.currentBounty = 0;
                         
                         try {
                             Api.replyRoom(r, "📢 [인사 행정 알림]\n유저 '" + u.name + "'님은 7일간 해상 활동이 없어 [" + jobName + "] 직위에서 자동 해임되었습니다.");
@@ -12434,6 +12446,30 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
         return true;
     }
 
+/* [긴급] 직업 증발 유저 복구 (선박 레벨 유지) */
+    if (msg.indexOf("/직업복구 ") === 0) {
+        var ps = msg.split(" ");
+        if (ps.length < 3) return replier.reply(formatAdmin("오류", "형식: /직업복구 [닉네임] [해적/해군]"));
+        
+        var jobType = ps.pop(); // "해적" 또는 "해군"
+        var tn = ps.slice(1).join(" ").trim();
+        var found = findUserGlobal(tn, roomName);
+
+        if (found.length === 0) return replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
+        if (found.length > 1) return replier.reply(formatAdmin("오류", "중복 유저가 존재합니다. 띄어쓰기 포함 정확한 풀네임을 입력하세요."));
+
+        var tUser = found[0].data;
+        
+        tUser.job = (jobType === "해군") ? "navy" : "pirate";
+        tUser.jobJoinDate = getSimpleDate();
+        tUser.lastJobActivityTime = Date.now();
+        tUser.skipHealing = true;
+        
+        safeSaveData(data, true);
+        replier.reply(formatAdmin("✅ 직업 복구 완료", tUser.name + "님의 직업을 [" + jobType + "](으)로 원상 복구했습니다.\n(기존 선박 레벨 및 특성 모두 유지됨)"));
+        return true;
+    }
+
 if (msg === "/전체채굴복구") {
         var backupPath = BACKUP_DIR + "last_stable_backup.json";
         var backupFile = new java.io.File(backupPath);
@@ -16777,8 +16813,13 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
     
     if (!roomData || !roomData.features) return false;
 
-    // [v17.4] 타 구역 세션 간섭 제거 및 자동 동기화 (명령어 씹힘 방지)
-    if (msg.startsWith("/")) {
+    // [v20.2] 해상 직업 활동 시간 실시간 갱신 (억울한 강제 은퇴 버그 방지)
+    if (user.job) {
+        user.lastJobActivityTime = Date.now();
+    }
+
+    // [v17.4] 타 구역 세션 간섭 제거 및 자동 동기화 (명령어 씹힘 방지)
+    if (msg.startsWith("/")) {
         for (var rName in data.rooms) {
             if (rName !== logicRoom) { // 현재 처리할 방이 아닌 다른 방에 세션이 있다면
                 var otherState = data.rooms[rName].features.states.menuWait;

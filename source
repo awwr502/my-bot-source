@@ -13930,41 +13930,53 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
     }
 
         if (msg === "/무역재고초기화") {
-        var economyRoomData = data.rooms["내리다"];
-        if (!economyRoomData || !economyRoomData.features.portData) return true;
-
-        var ps = msg.split(" ");
-        if (ps.length < 2) {
-            replier.reply(formatAdmin("오류", "사용법: /무역재고초기화 [기존기준점]\n예) /무역재고초기화 2000"));
+        var targetData = data.rooms[roomName] || data.rooms["내리다"];
+        
+        // 데이터 존재 여부 검증 및 에러 리포트 (침묵 방지)
+        if (!targetData) {
+            replier.reply(formatAdmin("오류", "방 데이터를 찾을 수 없습니다. (현재 방: " + roomName + ")"));
+            return true;
+        }
+        if (!targetData.features || !targetData.features.portData) {
+            replier.reply(formatAdmin("오류", "해당 방 데이터 내에 '무역 데이터(portData)'가 존재하지 않습니다."));
             return true;
         }
 
-        var oldBaseline = parseInt(ps[1].replace(/,/g, ""));
+        var ps = msg.split(/\s+/); // 공백 여러 개 대응
+        if (ps.length < 2) {
+            replier.reply(formatAdmin("사용법 안내", "명령어 뒤에 [이전 기준점]을 입력하세요.\n예) /무역재고초기화 2000"));
+            return true;
+        }
+
+        var oldBaseline = parseInt(ps[1].replace(/[^0-9]/g, ""));
         var newBaseline = (SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.BASELINE) ? SYSTEM_CONFIG.TRADE.BASELINE : 5000;
 
         if (isNaN(oldBaseline) || oldBaseline <= 0) {
-            replier.reply(formatAdmin("오류", "이전 기준점을 숫자로 정확히 입력하세요."));
+            replier.reply(formatAdmin("오류", "이전 기준점은 0보다 큰 숫자로 입력해야 합니다."));
             return true;
         }
 
         var ratio = newBaseline / oldBaseline;
-        var pData = economyRoomData.features.portData;
+        var pData = targetData.features.portData;
         var goods = ["식료품", "공업품", "공예품", "귀금속", "보석"];
 
+        // 실제 보정 집행
+        var count = 0;
         for (var pName in pData) {
             if (!pData[pName].inventory) pData[pName].inventory = {};
             for (var i = 0; i < goods.length; i++) {
-                // [동적 보정] 이전 기준점 대비 신규 기준점 비율만큼 재고를 자동 곱함
                 var currentQty = Number(pData[pName].inventory[goods[i]] || oldBaseline);
                 pData[pName].inventory[goods[i]] = Math.floor(currentQty * ratio);
+                count++;
             }
         }
         
         safeSaveData(data, true);
         replier.reply(formatAdmin("⚓ 무역 데이터 동적 마이그레이션", 
-            "기준점 변경(" + fp(oldBaseline) + " ➔ " + fp(newBaseline) + ")에 따른 재고 보정이 완료되었습니다.\n\n" +
-            "📈 적용 배율: x" + ratio.toFixed(2) + "배 증량\n" +
-            "✨ 결과: 현재 시세(%) 변동 없이 시스템 확장 완료"));
+            "기준점 변경(" + fp(oldBaseline) + " ➔ " + fp(newBaseline) + ") 보정 완료!\n\n" +
+            "📈 적용 배율: x" + ratio.toFixed(2) + "배\n" +
+            "📊 처리 항목: " + count + "개 품목 재고 조정 완료\n" +
+            "✨ 현재 시세(%)가 유지된 상태로 기준점이 확장되었습니다."));
         return true;
     }
 

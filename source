@@ -9308,7 +9308,7 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
 
     /* v16.7 고대 지도 제작 세션 처리 (도굴왕 획득자 전용) */
     else if (state.type === 'artifact_book') {
-        if (msg === "제작") {
+        if (msg.indexOf("제작") === 0) {
             // 1. 도굴왕 획득(보유) 여부 재검증 (인벤토리 스캔)
             var hasDugKing = (user.inventory || []).some(function(it) { 
                 return it.effect === "title" && it.title === "도굴왕"; 
@@ -9319,22 +9319,32 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
                 return true;
             }
 
+            // [수량 파싱] "제작 [수량]" 분석, 숫자가 없으면 1로 간주
+            var parts = msg.trim().split(/\s+/);
+            var count = 1;
+            if (parts.length > 1) {
+                count = parseInt(parts[1].replace(/[^0-9]/g, ""));
+            }
+            if (isNaN(count) || count <= 0) count = 1;
+
             var pieces = Number(user.artifactPieces || 0);
-            if (pieces < 5) {
-                replier.reply(formatError(user, "재료 부족", "지도를 제작하려면 유물 조각 10개가 필요합니다.\n(현재 보유: " + pieces + "개)"));
+            var required = count * 5; // 1장당 조각 5개 소모
+            
+            if (pieces < required) {
+                replier.reply(formatError(user, "재료 부족", "지도를 " + count + "장 제작하려면 유물 조각 " + required + "개가 필요합니다.\n(현재 보유: " + pieces + "개)"));
                 return true;
             }
 
-            // 2. 제작 집행 (조각 5 -> 지도 1)
-            user.artifactPieces -= 5;
-            user.ancientMaps = (user.ancientMaps || 0) + 1;
+            // 2. 제작 집행 (조각 5개 -> 지도 1장 비율로 일괄 처리)
+            user.artifactPieces -= required;
+            user.ancientMaps = (user.ancientMaps || 0) + count;
             user.skipHealing = true; // 보안 엔진 예외 허용
             
-            var craftMsg = "유물 조각 5개를 소모하여\n[고대 지도] 1장을 성공적으로 제작했습니다!\n\n" +
+            var craftMsg = "유물 조각 " + required + "개를 소모하여\n[고대 지도] " + count + "장을 성공적으로 제작했습니다!\n\n" +
                            "🗺️ 현재 고대 지도: " + user.ancientMaps + " / 10 장\n" +
                            "🧩 남은 유물 조각: " + user.artifactPieces + "개";
 
-            replier.reply(formatCommand("🗺️ 고대 지도 제작 성공", user, craftMsg, "추가 제작은 다시 [제작]을 입력하세요."));
+            replier.reply(formatCommand("🗺️ 고대 지도 제작 성공", user, craftMsg, "추가 제작은 [제작 수량]을 입력하세요."));
             state.time = Date.now(); // 세션 시간 연장 (연속 제작 지원)
             safeSaveData(data);
             return true;

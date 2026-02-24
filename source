@@ -76,6 +76,15 @@ var DUNGEON_CONFIG = {
     }
 };
 
+var ALCHEMY_CONFIG = {
+    TIME_MS: 10 * 60 * 1000, // 연성 소요 시간 10분
+    RECIPES: {
+        "heal": { name: "💚 심해수 복구 키트", cargo: { "식료품": 50 }, artifact: 1, point: 100000, desc: "즉시 체력 30% 회복" },
+        "maxhp": { name: "🛡️ 티타늄 장갑 코팅제", cargo: { "공업품": 50, "귀금속": 20 }, artifact: 1, point: 100000, desc: "해당 탐험 중 Max HP 50% 증가" },
+        "atk": { name: "⚔️ 흑색 화약 압축액", cargo: { "공업품": 50, "보석": 20 }, artifact: 1, point: 100000, desc: "해당 탐험 중 공격력 50% 증가" }
+    }
+};
+
 if (typeof globalData === 'undefined' || globalData === null) {
     globalData = { rooms: {}, botActive: true, statusCheck: {} };
 }
@@ -345,7 +354,9 @@ var USER_SCHEMA = [
     { key: 'nobleRank', default: 0, type: 'number' },
     { key: 'unknownCargo', default: 0, type: 'number' },
     { key: 'discoveredCreatures', default: [], type: 'array' }, // 발견한 생물 ID 리스트
-    { key: 'pediaRewardLevel', default: 0, type: 'number' }     // 도감 보상 수령 단계 (0~5)
+    { key: 'pediaRewardLevel', default: 0, type: 'number' },    // 도감 보상 수령 단계 (0~5)
+    { key: 'potions', default: { heal: 0, maxhp: 0, atk: 0 }, type: 'object' }, // 보유 물약
+    { key: 'brewing', default: { active: false, type: "", endTime: 0 }, type: 'object' } // 연성 진행도
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -10016,6 +10027,11 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     else if (state.type === 'trade_battle_list') { _handleCombatSelect(choice, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_escort_select') { _handleEscortHire(choice, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_escort_confirm') { _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
+    /* [v17.6] 던전 난이도 및 연금술 공방 메뉴 라우팅 */
+    else if (state.type === 'dungeon_main' || state.type === 'dungeon_resume' || state.type === 'dungeon_lobby' || state.type === 'dungeon_alchemy') {
+        _handleDungeonSelection(choice, user, data, replier, roomName, targetUid);
+        return true;
+    }
     /* [v17.6] 던전 난이도 선택 및 전투 액션 핸들러 */
     else if (state.type === 'dungeon_main' || state.type === 'dungeon_resume') {
         _handleDungeonSelection(choice, user, data, replier, roomName, targetUid);
@@ -21329,13 +21345,14 @@ function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
         menuType = 'dungeon_resume'; // 재진입 전용 상태 설정
     } else {
         body = "바다의 깊은 곳, 미지의 해저 차원문이 열렸습니다.\n" +
-               "수심을 뚫고 내려가며 숨겨진 전리품을 인양하십시오!\n\n" +
-               "📜 [보유 지도]: " + maps + "장\n\n" +
-               "탐험을 시작하려면 [고대 지도 " + mapCost + "장]이 소모됩니다.\n" +
-               "심해로 내려갈수록 더 끔찍한 괴수와 막대한 보물이 기다립니다.\n\n" +
-               "1. 🤿 심해 다이빙 시작\n\n" +
-               "⚠️ 침몰 시 누적된 전리품을 모두 잃을 수 있습니다.\n\n" +
-               "↩️ 뒤로 / ❎취소";
+               "수심을 뚫고 내려가며 숨겨진 전리품을 인양하십시오!\n\n" +
+               "📜 [보유 지도]: " + maps + "장\n\n" +
+               "1. 🤿 심해 다이빙 시작 (고대 지도 " + mapCost + "장 소모)\n" +
+               "2. 🧪 연금술 연성진 (물약 제작 및 수령)\n" +
+               "3. 🎒 내 물약 가방 확인\n\n" +
+               "⚠️ 침몰 시 누적된 전리품을 모두 잃을 수 있습니다.\n\n" +
+               "↩️ 뒤로 / ❎취소";
+        menuType = 'dungeon_lobby'; // 로비 상태로 전환
     }
 
     replier.reply(formatCommand("🌀 심해 다이빙: " + (menuType === 'dungeon_resume' ? "이어하기" : "입구"), user, body, "번호를 선택하세요."));
@@ -21362,12 +21379,26 @@ function _handleDungeonSelection(choice, user, data, replier, roomName, targetUi
         } else {
             return replier.reply(formatError(user, "번호 오류", "1번(이어하기) 또는 2번(새로 시작)을 입력하세요."));
         }
-    } else {
-        // dungeon_main 상태일 경우의 핸들링
-        if (choice !== "1") {
-            return replier.reply(formatError(user, "번호 오류", "1번을 입력하여 탐험을 시작하세요."));
-        }
-    }
+    }
+    else if (waitInfo && waitInfo.type === 'dungeon_lobby') {
+        if (choice === "2") {
+            return _showAlchemyMenu(user, data, replier, roomName, targetUid);
+        } else if (choice === "3") {
+            var p = user.potions || {heal:0, maxhp:0, atk:0};
+            var bag = "🎒 내 물약 보관함\n\n" +
+                      "💚 복구 키트: " + p.heal + "개\n" +
+                      "🛡️ 코팅제: " + p.maxhp + "개\n" +
+                      "⚔️ 압축액: " + p.atk + "개\n\n" +
+                      "💡 물약은 심해 다이빙 중 전투 화면에서 사용할 수 있습니다.";
+            replier.reply(formatCommand("🧪 연금술 가방", user, bag, "뒤로 가려면 [뒤로] 입력"));
+            return;
+        } else if (choice !== "1") {
+            return replier.reply(formatError(user, "번호 오류", "1번, 2번, 3번 중 하나를 선택하세요."));
+        }
+    }
+    else if (waitInfo && waitInfo.type === 'dungeon_alchemy') {
+        return _handleAlchemyAction(choice, user, data, replier, roomName, targetUid);
+    }
 
     var mapCost = DUNGEON_CONFIG.COST || 3;
     var maps = Number(user.ancientMaps || 0);
@@ -21406,6 +21437,88 @@ function _handleDungeonSelection(choice, user, data, replier, roomName, targetUi
     _generateDungeonEvent(user);
     _showDungeonTurn(user, replier, roomName);
     safeSaveData(data, true);
+}
+
+function _showAlchemyMenu(user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    if (!user.brewing) user.brewing = { active: false, type: "", endTime: 0 };
+    
+    var body = "";
+    if (user.brewing.active) {
+        var remain = user.brewing.endTime - Date.now();
+        if (remain <= 0) {
+            var rcp = ALCHEMY_CONFIG.RECIPES[user.brewing.type];
+            if (!user.potions) user.potions = {heal:0, maxhp:0, atk:0};
+            user.potions[user.brewing.type]++;
+            user.brewing.active = false;
+            user.skipHealing = true;
+            safeSaveData(data, true);
+            
+            body = "✨ 연성이 완료되었습니다!\n\n" +
+                   "[" + rcp.name + "] 1개를 수령했습니다.\n\n" +
+                   "다시 연성진을 보려면 [뒤로] 후 다시 진입하세요.";
+            replier.reply(formatCommand("🧪 연금술 완료", user, body));
+        } else {
+            var m = Math.floor(remain / 60000);
+            var s = Math.floor((remain % 60000) / 1000);
+            body = "🔥 가마솥이 끓고 있습니다...\n\n" +
+                   "연성 중인 물약: " + ALCHEMY_CONFIG.RECIPES[user.brewing.type].name + "\n" +
+                   "남은 시간: " + m + "분 " + s + "초\n\n" +
+                   "↩️ 뒤로 / ❎취소";
+            replier.reply(formatCommand("🧪 연금술 연성 중", user, body));
+        }
+    } else {
+        body = "심해의 기운을 담아 강력한 비약을 만듭니다.\n" +
+               "소요 시간: 10분\n\n" +
+               "1. 💚 심해수 복구 키트\n" +
+               "   └ 🍎식료품 50상자 + 🧩유물 1개 + 10만P\n" +
+               "2. 🛡️ 티타늄 장갑 코팅제\n" +
+               "   └ ⚙️공업품 50상자 + 🪙귀금속 20상자 + 🧩유물 1개 + 10만P\n" +
+               "3. ⚔️ 흑색 화약 압축액\n" +
+               "   └ ⚙️공업품 50상자 + 💎보석 20상자 + 🧩유물 1개 + 10만P\n\n" +
+               "원하는 제작 번호를 입력하세요.\n" +
+               "↩️ 뒤로 / ❎취소";
+        replier.reply(formatCommand("🧪 연금술 공방", user, body));
+    }
+    roomData.features.states.menuWait[targetUid] = { type: 'dungeon_alchemy', time: Date.now(), originRoom: roomName };
+}
+
+function _handleAlchemyAction(choice, user, data, replier, roomName, targetUid) {
+    if (user.brewing && user.brewing.active) {
+        return _showAlchemyMenu(user, data, replier, roomName, targetUid);
+    }
+
+    var types = { "1": "heal", "2": "maxhp", "3": "atk" };
+    var type = types[choice];
+    if (!type) return replier.reply(formatError(user, "번호 오류", "1~3번을 선택하세요."));
+
+    var recipe = ALCHEMY_CONFIG.RECIPES[type];
+    
+    if (Number(user.point) < recipe.point) return replier.reply(formatError(user, "재료 부족", "포인트가 부족합니다. (" + fp(recipe.point) + "P 필요)"));
+    if (Number(user.artifactPieces || 0) < recipe.artifact) return replier.reply(formatError(user, "재료 부족", "유물 조각이 부족합니다. (" + recipe.artifact + "개 필요)"));
+
+    if (!user.cargo) user.cargo = {};
+    for (var k in recipe.cargo) {
+        if (Number(user.cargo[k] || 0) < recipe.cargo[k]) {
+            return replier.reply(formatError(user, "재료 부족", "창고에 [" + k + "]이(가) 부족합니다. (" + recipe.cargo[k] + "상자 필요)"));
+        }
+    }
+
+    util_updatePoint(user, data.rooms["내리다"], -recipe.point, "연금술 제작: " + recipe.name, roomName);
+    user.artifactPieces -= recipe.artifact;
+    for (var k in recipe.cargo) {
+        user.cargo[k] -= recipe.cargo[k];
+    }
+
+    user.brewing = {
+        active: true,
+        type: type,
+        endTime: Date.now() + ALCHEMY_CONFIG.TIME_MS
+    };
+    user.skipHealing = true;
+    safeSaveData(data, true);
+
+    replier.reply(formatCommand("🔥 연성 시작", user, "[" + recipe.name + "] 제작을 시작했습니다!\n약 10분 뒤에 공방을 다시 방문해주세요.", "뒤로 가려면 [뒤로] 입력"));
 }
 
 // 심해 층별 이벤트 생성기 (수심 스케일링 적용)
@@ -21517,12 +21630,24 @@ function _showDungeonTurn(user, replier, roomName) {
             combatTitle = "🐉 [재앙 경보: 전설의 해신 강림]";
         }
 
-        body += combatTitle + "\n" + e.enemyName + "이(가) 앞을 가로막습니다!\n" +
-                "   HP [" + eBar + "] " + Math.floor(e.enemyHP) + "\n\n" +
-                "1. 💣 전면 포격 (주사위 공격)\n" +
-                "2. 🔧 선체 수리 (HP 20% 회복, 전투당 1회)\n" +
-                "3. 💨 긴급 탈출 (전리품 50% 상실 및 귀항)";
-    }
+       var p = user.potions || {heal:0, maxhp:0, atk:0};
+
+        body += combatTitle + "\n" + e.enemyName + "이(가) 앞을 가로막습니다!\n" +
+                "   HP [" + eBar + "] " + Math.floor(e.enemyHP) + "\n\n" +
+                "1. 💣 전면 포격 (주사위 공격)\n" +
+                "2. 🎒 물약 가방 열기 (보유: 회복 " + p.heal + " / 장갑 " + p.maxhp + " / 화약 " + p.atk + ")\n" +
+                "3. 💨 긴급 탈출 (전리품 50% 상실 및 귀항)";
+    } else if (e.phase === 'potion_use') {
+        var p = user.potions || {heal:0, maxhp:0, atk:0};
+        body += "어떤 물약을 사용하시겠습니까? (사용 시 턴이 소모되지 않습니다!)\n\n" +
+                "1. 💚 심해수 복구 키트 (보유: " + p.heal + "개)\n" +
+                "   └ 즉시 HP 30% 회복\n" +
+                "2. 🛡️ 티타늄 장갑 코팅제 (보유: " + p.maxhp + "개)\n" +
+                "   └ 이번 탐험 한정 Max HP 50% 증가\n" +
+                "3. ⚔️ 흑색 화약 압축액 (보유: " + p.atk + "개)\n" +
+                "   └ 이번 탐험 한정 ATK 50% 증가\n\n" +
+                "4. ↩️ 돌아가기 (전투 화면으로)";
+    }
 
     replier.reply(formatCommand("🌊 해저 탐험 진행 중", user, body, "행동 번호를 입력하세요."));
 }
@@ -21660,27 +21785,56 @@ function _handleDungeonCombat(msg, user, data, replier, roomName, targetUid) {
 
             _showDungeonTurn(user, replier, roomName);
 
-        } else if (msg === "2") { // 수리
-            if (e.hasRepaired) {
-                replier.reply("⚠️ 이번 교전에서는 이미 수리를 진행했습니다!");
-                return;
-            }
-            var heal = Math.floor(e.myMaxHP * 0.2);
-            e.myHP = Math.min(e.myMaxHP, e.myHP + heal);
-            e.hasRepaired = true;
-            
-            var eDamage = Math.floor(e.enemyATK * (Math.random() * 0.7 + 0.8));
-            e.myHP -= eDamage;
-            
-            e.lastLog = "🔧 긴급 수리로 HP를 " + heal + " 회복했습니다.\n🏹 적의 공격으로 " + eDamage + "의 피해를 입었습니다.";
-            if (e.myHP <= 0) return _finishDungeon(user, data, replier, roomName, targetUid, "DEATH");
-            
-            _showDungeonTurn(user, replier, roomName);
-
-        } else if (msg === "3") { // 도주
-            return _finishDungeon(user, data, replier, roomName, targetUid, "FLEE");
-        }
-    }
+        } else if (msg === "2") { // 물약 가방 열기
+            e.phase = 'potion_use';
+            _showDungeonTurn(user, replier, roomName);
+        } else if (msg === "3") { // 도주
+            return _finishDungeon(user, data, replier, roomName, targetUid, "FLEE");
+        }
+    } 
+    else if (e.phase === 'potion_use') {
+        if (msg === "4" || msg === "뒤로" || msg === "취소") {
+            e.phase = 'combat';
+            _showDungeonTurn(user, replier, roomName);
+            return;
+        }
+        
+        var p = user.potions || {heal:0, maxhp:0, atk:0};
+        var used = false;
+        
+        if (msg === "1") {
+            if (p.heal <= 0) return replier.reply(formatError(user, "물약 부족", "심해수 복구 키트가 없습니다."));
+            p.heal--;
+            var healAmt = Math.floor(e.myMaxHP * 0.3);
+            e.myHP = Math.min(e.myMaxHP, e.myHP + healAmt);
+            e.lastLog = "💚 [복구 키트 사용] 선체 내구도를 " + healAmt + "만큼 회복했습니다!";
+            used = true;
+        } else if (msg === "2") {
+            if (p.maxhp <= 0) return replier.reply(formatError(user, "물약 부족", "티타늄 장갑 코팅제가 없습니다."));
+            p.maxhp--;
+            var boost = Math.floor(e.myMaxHP * 0.5);
+            e.myMaxHP += boost;
+            e.myHP += boost;
+            e.lastLog = "🛡️ [장갑 코팅제 사용] 함선 최대 내구도가 " + boost + "만큼 영구 증가했습니다!";
+            used = true;
+        } else if (msg === "3") {
+            if (p.atk <= 0) return replier.reply(formatError(user, "물약 부족", "흑색 화약 압축액이 없습니다."));
+            p.atk--;
+            var boost = Math.floor(e.myATK * 0.5);
+            e.myATK += boost;
+            e.lastLog = "⚔️ [화약 압축액 사용] 함선 포격 데미지가 " + boost + "만큼 영구 증가했습니다!";
+            used = true;
+        } else {
+            return replier.reply(formatError(user, "번호 오류", "올바른 번호를 입력하세요."));
+        }
+        
+        if (used) {
+            user.potions = p;
+            e.phase = 'combat'; // 물약 사용 후 턴 소모 없이 즉시 전투 복귀
+            user.skipHealing = true;
+            _showDungeonTurn(user, replier, roomName);
+        }
+    }
     
     // 시간 연장
     if (data.rooms[roomName].features.states.menuWait[targetUid]) {

@@ -9245,35 +9245,89 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     var cleanInput = String(msg || "").replace(/\s/g, "");
     var choice = String(msg || "").replace(/[^0-9]/g, "").trim();
 
-    // [계층형 뒤로가기 통합 핸들러]
-    if (msg === "뒤로" || msg === "↩️ 뒤로") {
-        // [특수 1] 하역 설정 중이면 출항지 선택으로 복구
-        if (state.type === 'trade_select_cargo') {
-            state.type = 'trade_depart'; state.depth = 2; state.time = Date.now();
-            _prepareVoyage(user, replier, SYSTEM_CONFIG.TRADE, data.rooms[logicRoom]);
-            return true;
-        }
-        // [특수 2] 상세 도감 -> 도감 메인 복귀
-        if (state.type === 'trade_pedia_detail_view') {
-            _showMarinePediaUI(user, replier, data, logicRoom, targetUid);
-            return true;
-        }
-        // [특수 3] 도감 메인 -> 무역 메인 복귀
-        if (state.type === 'trade_pedia_main') {
-            delete menuWaitState[targetUid];
-            return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
-        }
+    // [계층형 뒤로가기 통합 핸들러 (1단계씩 역순 이동)]
+    if (msg === "뒤로" || msg === "↩️ 뒤로") {
+        var prevState = state.type;
+        var myPorts = (typeof util_getUserGovernorPorts === 'function') ? util_getUserGovernorPorts(targetUid, roomData) : [];
 
-        // 일반 서브메뉴 복귀
-        delete menuWaitState[targetUid];
-        if (state.type.startsWith('trade_')) return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
-        if (state.type.startsWith('casino_')) return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid);
-        if (state.type === 'shop_detail') return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
-        if (state.type.startsWith('help')) { replier.reply("📖 이용을 종료했습니다."); return true; }
-        
-        replier.reply(formatCommand("🚪 메뉴 종료", user, "이용을 종료했습니다."));
-        return true;
-    }
+        // 1. 좀비 세션 완벽 삭제 (메인방과 1:1방 모두 파괴 후 새로 생성 유도)
+        delete menuWaitState[targetUid];
+        if (data.rooms["내리다"] && data.rooms["내리다"].features.states.menuWait) {
+            delete data.rooms["내리다"].features.states.menuWait[targetUid];
+        }
+
+        // --- [A] 3단계 메뉴에서 2단계로 복귀 ---
+        
+        // 1. 하역 설정 -> 출항지 선택
+        if (prevState === 'trade_select_cargo') {
+            roomData.features.states.menuWait[targetUid] = { type: 'trade_depart', time: Date.now(), originRoom: roomName };
+            _prepareVoyage(user, replier, SYSTEM_CONFIG.TRADE, roomData);
+            return true;
+        }
+        // 2. 호위 선택 -> 하역 설정
+        if (prevState === 'trade_escort_confirm') {
+            roomData.features.states.menuWait[targetUid] = { 
+                type: 'trade_select_cargo', dest: state.dest, selCargo: state.selCargo, selSpec: state.selSpec, time: Date.now(), originRoom: roomName 
+            };
+            _showTradeCargoSelectUI(user, replier, roomData, SYSTEM_CONFIG.TRADE, state.dest, state.selCargo, state.selSpec);
+            return true;
+        }
+        // 3. 총독실 하위(건축/정산) -> 총독실 메인
+        if (prevState === 'trade_infra_menu' || prevState === 'trade_governor_office') {
+            roomData.features.states.menuWait[targetUid] = { type: 'trade_governor_main', time: Date.now(), myPorts: myPorts, originRoom: roomName };
+            _showGovernorMain(user, replier, roomData, myPorts);
+            return true;
+        }
+        // 4. 해적 하위(약탈목록, 정산) -> 해적 메인
+        if (prevState === 'trade_raid_list' || (prevState === 'trade_job_settlement' && user.job === 'pirate')) {
+            _showPirateMenu(user, replier, roomData, targetUid);
+            return true;
+        }
+        // 5. 해군 하위(토벌목록, 정산) -> 해군 메인
+        if (prevState === 'trade_battle_list' || (prevState === 'trade_job_settlement' && user.job === 'navy')) {
+            _showNavyMenu(user, replier, roomData, targetUid);
+            return true;
+        }
+        // 6. 선박 강화/재시도 -> 선박 관리 메인
+        if (prevState === 'trade_enh_confirm' || prevState === 'trade_enh_retry') {
+            roomData.features.states.menuWait[targetUid] = { type: 'trade_ship', time: Date.now(), originRoom: roomName };
+            _manageShip(user, replier, SYSTEM_CONFIG.TRADE);
+            return true;
+        }
+        // 7. 도감 상세 -> 도감 메인
+        if (prevState === 'trade_pedia_detail_view') {
+            _showMarinePediaUI(user, replier, data, roomName, targetUid);
+            return true;
+        }
+        // 8. 연금술 공방 -> 던전 로비
+        if (prevState === 'dungeon_alchemy') {
+            return _gameDungeonLogic("/무역", user, data, replier, roomName, targetUid);
+        }
+
+        // --- [B] 2단계 메뉴에서 1단계(최상단 메인)로 복귀 ---
+        var toTradeMain = ['trade_depart', 'trade_status', 'trade_market', 'trade_ship', 'trade_governor_main', 'trade_pirate_menu', 'trade_navy_menu', 'trade_job_enlist', 'trade_royal_office', 'trade_pedia_main', 'dungeon_lobby', 'dungeon_resume'];
+        
+        if (toTradeMain.indexOf(prevState) !== -1) {
+            return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
+        }
+
+        if (prevState.startsWith('casino_') && prevState !== 'casino_main') {
+            return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid);
+        }
+        
+        if (prevState === 'shop_detail') {
+            return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
+        }
+        
+        if (prevState.startsWith('help')) { 
+            replier.reply("📖 이용을 종료했습니다."); 
+            return true; 
+        }
+
+        // 그 외 최상위 메뉴에서 뒤로가기 시 완전 종료
+        replier.reply(formatCommand("🚪 메뉴 종료", user, "이전 화면이 없어 퇴거합니다."));
+        return true;
+    }
 
     // 핵심 데이터 로드 실패 시 숫자 로직 진입 방지
     if (choice !== "" && (!tradeCfg || !roomData || !bankProcessState)) return false;

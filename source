@@ -14204,10 +14204,43 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         
         if (found.length > 1) {
             handleUserSelection(replier, targetUid, found, "admin_item_give", { item: itemName, qty: qty }, user, roomName);
-            return true;
+            var targetUser = found[0].data;
+        var targetRoom = found[0].roomName;
+        var tradeGoods = ["식료품", "공업품", "공예품", "귀금속", "보석", "밀수품"];
+        var isTradeItem = false;
+        var matchedGood = "";
+
+        // 입력된 아이템명에 무역품 키워드가 포함되어 있는지 검사
+        for (var i = 0; i < tradeGoods.length; i++) {
+            if (itemName.indexOf(tradeGoods[i]) !== -1) {
+                isTradeItem = true;
+                matchedGood = tradeGoods[i];
+                break;
+            }
         }
 
-        _executeItemGive(found[0].data, itemName, qty, replier, found[0].roomName);
+        if (isTradeItem) {
+            // [무역품 처리] 창고(cargo)로 지급
+            if (!targetUser.cargo) targetUser.cargo = {};
+            if (!targetUser.cargoAvg) targetUser.cargoAvg = {};
+
+            var oldQty = Number(targetUser.cargo[matchedGood] || 0);
+            var oldAvg = Number(targetUser.cargoAvg[matchedGood] || 0);
+            
+            // 시스템 기본가 설정 (수익률 계산용)
+            var basePrices = { "식료품": 10000, "공업품": 15000, "공예품": 20000, "귀금속": 25000, "보석": 30000, "밀수품": 10000 };
+            var basePrice = basePrices[matchedGood] || 10000;
+
+            targetUser.cargo[matchedGood] = oldQty + qty;
+            targetUser.cargoAvg[matchedGood] = Math.floor(((oldAvg * oldQty) + (basePrice * qty)) / (oldQty + qty));
+
+            replier.reply(formatAdmin("🚢 무역품 창고 지급", 
+                targetNick + "님의 창고에 [" + matchedGood + "] " + qty + "상자를 지급했습니다.\n" +
+                "📦 현재 창고 보유량: " + targetUser.cargo[matchedGood] + "상자"));
+        } else {
+            // [일반 아이템 처리] 기존 인벤토리 지급 함수 호출
+            _executeItemGive(targetUser, itemName, qty, replier, targetRoom);
+        }
         safeSaveData(data, true);
         return true;
     }

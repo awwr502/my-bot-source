@@ -17266,27 +17266,35 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
         availableItems.push({ type: 'rare', name: "진귀한 보물", qty: remainingRare, status: "💰고정가 (10만P)" });
     }
 
+    var unknownCount = Number(user.unknownCargo || 0);
+    var selectedUnknown = Number(selS._unknown || 0);
+    var remainingUnknown = unknownCount - selectedUnknown;
+    
+    if (remainingUnknown > 0) {
+        availableItems.push({ type: 'unknown', name: "미확인 교역품", qty: remainingUnknown, status: "🔄변환 대기" });
+    }
+
     if (availableItems.length === 0) {
         body += "- 적재 가능한 보유 물품 없음 -\n";
     } else {
         availableItems.forEach(function(it, i) {
-            var prefix = (it.type === 'spec') ? "⭐" : (it.type === 'rare' ? "💎" : "");
-            body += (i + 1) + ". " + prefix + it.name + " (" + it.qty + "상자) - " + it.status + "\n";
+            var prefix = (it.type === 'spec') ? "⭐" : (it.type === 'rare' ? "💎" : (it.type === 'unknown' ? "📦" : ""));
+            body += (i + 1) + ". " + prefix + it.name + " (" + it.qty + (it.type === 'rare' ? "개" : "상자") + ") - " + it.status + "\n";
         });
     }
 
     body += "\n[✅ 선박 적재 완료]\n";
     var selList = [];
     for (var c in selC) selList.push("• " + c + " x" + selC[c] + "상자");
-    // 미확인 교역품 표시
-    if (Number(user.unknownCargo || 0) > 0) {
-        selList.push("• 📦미확인 교역품 x" + user.unknownCargo + "상자 (출항 시 변환)");
+
+    if (selectedUnknown > 0) {
+        selList.push("• 📦미확인 교역품 x" + selectedUnknown + "상자 (출항 시 변환)");
     }
     
     for (var s in selS) {
         if (s === "_rare") {
             if (selS[s] > 0) selList.push("• 💎진귀한 보물 x" + selS[s] + "개");
-        } else {
+        } else if (s !== "_unknown") {
             if (selS[s] > 0) selList.push("• ⭐" + s + " x" + selS[s] + "개");
         }
     }
@@ -17330,6 +17338,7 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
         for (var k in (user.cargo || {})) if (user.cargo[k] > 0) state.selCargo[k] = user.cargo[k];
         for (var s in (user.specialties || {})) if (user.specialties[s] > 0) state.selSpec[s] = user.specialties[s];
         if (Number(user.rareSpecialties || 0) > 0) state.selSpec["_rare"] = user.rareSpecialties;
+        if (Number(user.unknownCargo || 0) > 0) state.selSpec["_unknown"] = user.unknownCargo;
         _showTradeCargoSelectUI(user, replier, roomData, cfg, state.dest, state.selCargo, state.selSpec);
         return;
     }
@@ -17392,6 +17401,10 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     var remR = rareCount - Number(state.selSpec["_rare"] || 0);
     if (remR > 0) availableItems.push({ type: 'rare', name: "진귀한 보물", qty: remR });
 
+    var unknownCount = Number(user.unknownCargo || 0);
+    var remU = unknownCount - Number(state.selSpec["_unknown"] || 0);
+    if (remU > 0) availableItems.push({ type: 'unknown', name: "미확인 교역품", qty: remU });
+
     if (isNaN(idx) || idx < 0 || idx >= availableItems.length) {
         if (!isNaN(parseInt(parts[0]))) {
             replier.reply(formatError(user, "번호 오류", "현재 화면에 표시된 번호를 입력하세요."));
@@ -17403,9 +17416,10 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     var inputQty = parts.length > 1 ? parseInt(parts[1].replace(/[^0-9]/g, "")) : 999999;
     var finalQty = Math.min(inputQty, selected.qty);
 
-    /* v16.7 보물 선택 시 즉시 매각이 아닌 '적재 목록'으로 추가 */
     if (selected.type === 'rare') {
         state.selSpec["_rare"] = (state.selSpec["_rare"] || 0) + finalQty;
+    } else if (selected.type === 'unknown') {
+        state.selSpec["_unknown"] = (state.selSpec["_unknown"] || 0) + finalQty;
     } else if (selected.type === 'cargo') {
         state.selCargo[selected.name] = (state.selCargo[selected.name] || 0) + finalQty;
     } else {
@@ -17592,12 +17606,11 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     var roomData = data.rooms[roomName];
     user.skipHealing = true;
 
-    var unknownCount = Number(user.unknownCargo || 0);
-    if (unknownCount > 0) {
+    var selectedUnknownCount = Number(selS["_unknown"] || 0);
+    if (selectedUnknownCount > 0) {
         var maxQty = -1;
         var maxGoodKey = "";
 
-        // 1. 배에 실린 일반 화물(selC) 중 최대 수량 품목 탐색
         for (var good in selC) {
             var currentQty = Number(selC[good] || 0);
             if (currentQty > maxQty) {
@@ -17606,24 +17619,24 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
             }
         }
 
-        // 2. 변환 집행: 가장 많이 실린 품목이 있을 때만 작동
         if (maxGoodKey !== "") {
-            selC[maxGoodKey] = (Number(selC[maxGoodKey]) || 0) + unknownCount;
-            user.unknownCargo = 0; // 유저 데이터 초기화
+            selC[maxGoodKey] = (Number(selC[maxGoodKey]) || 0) + selectedUnknownCount;
+            user.unknownCargo = Math.max(0, (Number(user.unknownCargo) || 0) - selectedUnknownCount);
             
-            var transformMsg = "✨ [물자 변환]: 미확인 교역품 " + unknownCount + "상자가 수량이 가장 많은 [" + maxGoodKey + "](으)로 변환되어 선적되었습니다.";
+            var transformMsg = "✨ [물자 변환]: 미확인 교역품 " + selectedUnknownCount + "상자가 수량이 가장 많은 [" + maxGoodKey + "](으)로 변환되어 선적되었습니다.";
             extraMsg = extraMsg ? extraMsg + "\n" + transformMsg : transformMsg;
         } else {
-            // 실린 일반 화물이 아예 없는 경우 (미확인만 싣고 출항한 경우)
-            // 목적지의 선호품(Favorite)으로 자동 변환하여 증발 방지
             var destFav = (cfg.NATIONS[dest] && cfg.NATIONS[dest].favorite) ? cfg.NATIONS[dest].favorite : "식료품";
             if (destFav === "NONE" || destFav === "N/A") destFav = "식료품"; 
             
-            selC[destFav] = unknownCount;
-            user.unknownCargo = 0;
-            var transformMsg = "✨ [물자 변환]: 선적된 일반 화물이 없어 미확인 교역품 " + unknownCount + "상자가 목적지 선호품인 [" + destFav + "](으)로 자동 변환되었습니다.";
+            selC[destFav] = selectedUnknownCount;
+            user.unknownCargo = Math.max(0, (Number(user.unknownCargo) || 0) - selectedUnknownCount);
+            
+            var transformMsg = "✨ [물자 변환]: 선적된 일반 화물이 없어 미확인 교역품 " + selectedUnknownCount + "상자가 목적지 선호품인 [" + destFav + "](으)로 자동 변환되었습니다.";
             extraMsg = extraMsg ? extraMsg + "\n" + transformMsg : transformMsg;
         }
+        
+        delete selS["_unknown"];
     }
 
     user.isPillaged = false; 

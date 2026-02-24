@@ -1858,9 +1858,8 @@ function util_autoClearTimeouts(data) {
                 
                 // [v18.3 핵심] 유저 데이터(voyage.encounter)를 직접 확인하여 마스터 권한 부여
                 var u = (data.rooms["내리다"] && data.rooms["내리다"].users[uid]) ? data.rooms["내리다"].users[uid] : null;
-                var isMarineSession = (entry.type === 'marine_encounter' || (u && u.voyage && u.voyage.encounter));
-                
-                // 생물 조우 시에는 세션 타입이 없더라도 무조건 180,000ms(3분)를 기다립니다.
+                // 오직 '해양 조우(marine_encounter)' 창 그 자체만 3분을 대기하도록 엄격히 분리합니다.
+                var isMarineSession = (entry.type === 'marine_encounter');
                 var threshold = isMarineSession ? 180000 : 30000;
                 
                 if (startTime > 0 && (now - startTime > threshold)) {
@@ -1870,14 +1869,12 @@ function util_autoClearTimeouts(data) {
 
                     // [v18.5 보험 엔진 연결] 세션 종료 및 환불 여부 확인
                     var actualOrigin = entry.originRoom || rName;
-                    
-                    // 삭제와 동시에 환불 정보를 가져옴
                     var refundInfo = util_terminateSession(uid, u, data.rooms[rName], actualOrigin, qKey);
 
                     if (!notifiedInThisCycle[uid] && u) {
                         try {
                             if (entry.type === 'marine_encounter') {
-                                // 거대 생물 전용 타임아웃 메시지
+                                // 거대 생물 전용 타임아웃 (3분 경과)
                                 var timeoutMsg = "🌊 [상황 종료: 생물 소멸]\n" +
                                                  "━━━━━━━━━━━━━━━\n" +
                                                  getDisplayName(u) + "님\n" +
@@ -1886,12 +1883,16 @@ function util_autoClearTimeouts(data) {
                                                  "━━━━━━━━━━━━━━━\n" +
                                                  "💡 기회를 놓치셨습니다. 항해를 계속하세요.";
                                 Api.replyRoom(actualOrigin, timeoutMsg);
-                                // 생물 데이터 즉시 소각
                                 if (u.voyage) delete u.voyage.encounter;
                             } else {
-                                // 환불 정보(refundInfo)가 있다면 기존 에러 메시지에 합산하여 출력
+                                // 일반 메뉴 타임아웃 (30초 경과)
                                 var errorMsg = "30초 이내에 응답이 없어 메뉴가 닫혔습니다." + refundInfo;
                                 Api.replyRoom(actualOrigin, formatError(u, "입력 시간 초과", errorMsg));
+                                
+                                // 💡 [팝업 엔진 연동] 방금 닫힌 게 일반 메뉴인데, 뒤에 생물이 숨어있다면 즉시 복구시킴!
+                                if (typeof util_restoreEncounterPopup === 'function') {
+                                    util_restoreEncounterPopup(u, null, data, actualOrigin, uid, true);
+                                }
                             }
                             notifiedInThisCycle[uid] = true;
                         } catch(e) { Log.error("Timeout Notify Error: " + e); }
@@ -3047,6 +3048,54 @@ function util_terminateSession(uid, user, roomData, roomName, qKey) {
     return refundMsg;
 }
 
+/**
+ * 백그라운드 조우 세션 자동 복구 엔진 (Auto-Popup)
+ * 기능: 활성 세션이 종료(취소/타임아웃)되었을 때 뒤에 숨어있던 생물 조우 화면을 강제로 끌어올립니다.
+ */
+function util_restoreEncounterPopup(user, replier, data, roomName, targetUid, isApiReply) {
+    if (!user || !user.voyage || !user.voyage.encounter) return false;
+    
+    var v = user.voyage;
+    // 3분(180초) 타이머 실시간 검증
+    var remainMs = 180000 - (Date.now() - (v.encounter.time || 0));
+    
+    if (remainMs <= 0) {
+        delete v.encounter; // 이미 죽은 생물은 띄우지 않고 소각
+        return false;
+    }
+
+    var creature = MARINE_DB.find(function(c) { return c.id === v.encounter.id; });
+    if (!creature) return false;
+
+    var m = Math.floor(remainMs / 60000);
+    var s = Math.floor((remainMs % 60000) / 1000);
+
+    var body = "🔭 식별 결과: [" + creature.rank + "] " + creature.name + "\n" +
+               "━━━━━━━━━━━━━━━\n" +
+               "1. 📸 관찰하기\n" +
+               "2. 🎣 포획시도\n" +
+               "3. ⛵ 무시하고 항해\n\n" +
+               "⏳ 남은 시간: " + m + "분 " + s + "초";
+
+    // 덮어씌워졌던 세션을 해양 조우(marine_encounter) 상태로 다시 살려냄
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    if (!data.rooms[logicRoom].features.states.menuWait) data.rooms[logicRoom].features.states.menuWait = {};
+    data.rooms[logicRoom].features.states.menuWait[targetUid] = { 
+        type: 'marine_encounter', 
+        time: Date.now(), // 타임아웃(30초) 연장
+        originRoom: roomName 
+    };
+
+    var msg = formatCommand("🌊 [백그라운드 조우 복귀]", user, body, "진행하던 작업이 종료되어 조우 화면으로 자동 복귀했습니다.");
+
+    try {
+        if (isApiReply) Api.replyRoom(roomName, msg); // 타임아웃용 (replier 없음)
+        else replier.reply(msg); // 취소용 (replier 있음)
+    } catch(e) {}
+    
+    return true;
+}
+
 function util_checkUserState(user, uid, roomName, isJobActivity) {
     if (typeof util_scrubNativeObject === 'function') util_scrubNativeObject(user);
     var now = Date.now();
@@ -3094,7 +3143,7 @@ function util_checkUserState(user, uid, roomName, isJobActivity) {
             return { canAction: false, reason: "현재 함대 재정비(해상 징역) 중입니다. (" + remainMinP + "분 남음)" };
         }
 
-    // [신규] 해상 교전(약탈/토벌) 진행 상태 체크 - 해상 활동 시에만 차단
+    // 해상 교전(약탈/토벌) 진행 상태 체크 - 해상 활동 시에만 차단
         if (activePillages[uid]) return { canAction: false, reason: "현재 해적에게 습격받아 교전 중입니다!" };
         
         for (var pKey in activePillages) {
@@ -3200,10 +3249,10 @@ function findUserByName(roomData, name) {
 }
 
 /**
- * [신설] 전역 유저 검색 엔진 (Cross-Room Search)
+ * 전역 유저 검색 엔진 (Cross-Room Search)
  * 기능: 현재 방뿐만 아니라 모든 방의 데이터베이스를 뒤져서 유저를 찾습니다.
  */
-// 수정: currentRoom 참조 오류 해결 및 인자 규격 확장
+// currentRoom 참조 오류 해결 및 인자 규격 확장
 function findUserGlobal(name, roomName) {
     var res = [];
     var searchName = name.trim();
@@ -3276,7 +3325,7 @@ function handleUserSelection(replier, targetUid, found, type, extra, user, roomN
 }
 
 /**
- * [신설] 중복 종목 선택 핸들러
+ * 중복 종목 선택 핸들러
  */
 function handleStockSelection(replier, targetUid, found, type, qty, user, roomName) {
     var data = getDatabase();
@@ -3294,7 +3343,7 @@ function handleStockSelection(replier, targetUid, found, type, qty, user, roomNa
 }
 
 /**
- * [신설: 원자적 신분 동기화 엔진] v1.0
+ * [원자적 신분 동기화 엔진] v1.0
  * 기능: 유저의 닉네임 변경 시 전 서버의 모든 참조 데이터(사채, 경마 등)를 일괄 갱신합니다.
  * @param {String} uid - 유저 고유 ID
  * @param {String} oldName - 변경 전 이름
@@ -3401,7 +3450,7 @@ function util_checkAndAwardTitle(user, replier, titleName, titleId, icon, commit
 }
 
 /**
- * [신설] 순자산 백분위 계산 엔진
+ * 순자산 백분위 계산 엔진
  * 기능: 해당 방 유저들의 자산을 전수 조사하여 나의 상대적 위치(상위 %)를 반환합니다.
  */
 function util_getNetWorthPercentile(user, roomName) {
@@ -3433,7 +3482,7 @@ function util_getNetWorthPercentile(user, roomName) {
 }
 
 /**
- * [신설] 지능형 차등 소득세 및 UI 데이터 생성기
+ * 지능형 차등 소득세 및 UI 데이터 생성기
  * 기준: 상위 10% 이내(7%), 30% 이내(5%), 그 외(3%)
  * 반환: { 세율%, 차감액, 내순위%, 세후수익 }
  */
@@ -3464,7 +3513,7 @@ function util_applyIncomeTax(user, income, roomName) {
 }
 
 /**
- * [신규 추가] 신용 등급별 무역 수익 배율 반환 엔진
+ * 신용 등급별 무역 수익 배율 반환 엔진
  * 기능: 등급(1~6)에 따라 순수익의 90%~60% 차등 지급 배율을 결정합니다.
  */
 function util_getTradeCreditMult(grade) {
@@ -3481,7 +3530,7 @@ function util_getTradeCreditMult(grade) {
 }
 
 /**
- * [추가] 총독 자격 검증 엔진
+ * 총독 자격 검증 엔진
  * 기능: 특정 유저가 해당 항구의 총독인지 여부를 확인합니다.
  * @param {String} targetUid - 유저 UID
  * @param {String} portName - 항구 이름
@@ -3493,7 +3542,7 @@ function util_isUserGovernor(targetUid, portName, roomData) {
 }
 
 /**
- * [추가] 유저 보유 총독 권한 목록 추출
+ * 유저 보유 총독 권한 목록 추출
  */
 function util_getUserGovernorPorts(targetUid, roomData) {
     var myPorts = [];
@@ -10333,11 +10382,19 @@ if (actualFeatures && actualFeatures.states) {
             });
         };
 
+        // [작동 1] 완전 취소 (모든 창 닫기 및 팝업)
         if (input.indexOf("취소") !== -1) {
             clearAll(targetUid, roomName);
-            replier.reply(formatCommand("🚫 작업 종료", user, "진행 중이던 대기 상태를 모두 해제했습니다."));
+            
+            // 💡 [팝업 엔진 연동] 뒤에 숨어있는 생물이 있다면 취소 메시지 대신 생물 화면을 띄움
+            if (typeof util_restoreEncounterPopup === 'function' && util_restoreEncounterPopup(user, replier, data, roomName, targetUid, false)) {
+                // 성공적으로 팝업을 띄웠으므로 아무것도 하지 않음
+            } else {
+                // 숨어있는 생물이 없을 때만 기존처럼 작업 종료 메시지 출력
+                replier.reply(formatCommand("🚫 작업 종료", user, "진행 중이던 대기 상태를 모두 해제했습니다."));
+            }
             return true;
-        } 
+        }
         
         if (input.indexOf("처음으로") !== -1) {
             clearAll(targetUid, roomName);

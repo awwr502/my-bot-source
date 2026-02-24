@@ -21307,40 +21307,41 @@ function util_checkNavyTitle(user, replier, roomName) {
  * 기능: 상인/직업군 밸런스형 턴제 전투 및 보상 정산
  */
 
-// === 수정 부위 시작 ===
 function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
-    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-    // 1. 입장 가드 (무역 지부 및 활동 가능 상태 체크)
-    var stateRes = util_checkUserState(user, targetUid, roomName, true);
-    if (!stateRes.canAction) {
-        replier.reply(formatError(user, "입장 불가", stateRes.reason));
-        return true;
-    }
-    
-    if (user.voyage && user.voyage.active) {
-        replier.reply(formatError(user, "진입 불가", "항해 중에는 심해의 균열에 진입할 수 없습니다.\n가까운 항구에 정박한 뒤 시도하세요."));
-        return true;
-    }
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var roomData = data.rooms[logicRoom];
+    
+    // 1. 입장 가드 (무역 지부 및 활동 가능 상태 체크)
+    var stateRes = util_checkUserState(user, targetUid, roomName, true);
+    if (!stateRes.canAction) {
+        replier.reply(formatError(user, "입장 불가", stateRes.reason));
+        return true;
+    }
+    
+    if (user.voyage && user.voyage.active) {
+        replier.reply(formatError(user, "진입 불가", "항해 중에는 심해의 균열에 진입할 수 없습니다.\n가까운 항구에 정박한 뒤 시도하세요."));
+        return true;
+    }
 
-    var mapCost = DUNGEON_CONFIG.COST || 3;
-    var maps = Number(user.ancientMaps || 0);
-    
-    var body = "";
-    var menuType = 'dungeon_main';
+    var mapCost = DUNGEON_CONFIG.COST || 3;
+    var maps = Number(user.ancientMaps || 0);
+    
+    var body = "";
+    var menuType = 'dungeon_lobby'; // 기본값을 로비로 고정
 
-    // [v17.7] 중도 재진입 체크: 기존 탐험 데이터가 남아있는지 확인
-    if (user.dungeonExplore) {
-        var e = user.dungeonExplore;
-        body = "🌊 [중단된 탐험 발견]\n지난 탐험이 아직 심해에 남아있습니다.\n\n" +
-               "📏 수심: " + e.depth + "m\n" +
-               "🚢 함선 HP: " + Math.floor(e.myHP) + " / " + e.myMaxHP + "\n" +
-               "📦 누적 전리품: " + e.loot.cargo + "상자 외\n\n" +
-               "1. ⏩ 이어서 탐험 (지도 소모 없음)\n" +
-               "2. 🆕 새로 시작 (지도 " + mapCost + "장 소모)\n\n" +
-               "⚠️ 새로 시작 시 기존 전리품은 모두 유실됩니다.";
-        menuType = 'dungeon_resume'; // 재진입 전용 상태 설정
-    } else {
-        body = "바다의 깊은 곳, 미지의 해저 차원문이 열렸습니다.\n" +
+    // [v17.7] 중도 재진입 체크: 기존 탐험 데이터가 남아있는지 확인
+    if (user.dungeonExplore) {
+        var e = user.dungeonExplore;
+        body = "🌊 [중단된 탐험 발견]\n지난 탐험이 아직 심해에 남아있습니다.\n\n" +
+               "📏 수심: " + e.depth + "m\n" +
+               "🚢 함선 HP: " + Math.floor(e.myHP) + " / " + e.myMaxHP + "\n" +
+               "📦 누적 전리품: " + e.loot.cargo + "상자 외\n\n" +
+               "1. ⏩ 이어서 탐험 (지도 소모 없음)\n" +
+               "2. 🆕 새로 시작 (지도 " + mapCost + "장 소모)\n\n" +
+               "⚠️ 새로 시작 시 기존 전리품은 모두 유실됩니다.";
+        menuType = 'dungeon_resume'; // 재진입 전용 상태 설정
+    } else {
+        body = "바다의 깊은 곳, 미지의 해저 차원문이 열렸습니다.\n" +
                "수심을 뚫고 내려가며 숨겨진 전리품을 인양하십시오!\n\n" +
                "📜 [보유 지도]: " + maps + "장\n\n" +
                "1. 🤿 심해 다이빙 시작 (고대 지도 " + mapCost + "장 소모)\n" +
@@ -21349,20 +21350,21 @@ function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
                "⚠️ 침몰 시 누적된 전리품을 모두 잃을 수 있습니다.\n\n" +
                "↩️ 뒤로 / ❎취소";
         menuType = 'dungeon_lobby'; // 로비 상태로 전환
-    }
+    }
 
-    replier.reply(formatCommand("🌀 심해 다이빙: " + (menuType === 'dungeon_resume' ? "이어하기" : "입구"), user, body, "번호를 선택하세요."));
-    roomData.features.states.menuWait[targetUid] = { type: menuType, time: Date.now(), originRoom: roomName };
-    return true;
+    // [핵심 해결 구간] 상태를 메모리에 즉시 박제합니다.
+    replier.reply(formatCommand("🌀 심해 다이빙: " + (menuType === 'dungeon_resume' ? "이어하기" : "로비"), user, body, "번호를 선택하세요."));
+    roomData.features.states.menuWait[targetUid] = { type: menuType, time: Date.now(), originRoom: roomName };
+    return true;
 }
 
 // 메뉴 선택 핸들러
 function _handleDungeonSelection(choice, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
-    var waitInfo = roomData.features.states.menuWait[targetUid];
+    var roomData = data.rooms[roomName];
+    var waitInfo = roomData.features.states.menuWait[targetUid];
 
-    // [재진입 처리] 이어하기 상태일 경우의 핸들링
-    if (waitInfo && waitInfo.type === 'dungeon_resume') {
+    // [재진입 처리] 이어하기 상태일 경우의 핸들링
+    if (waitInfo && waitInfo.type === 'dungeon_resume') {
         if (choice === "1") {
             // [이어하기] 기존 데이터 유지, 핸들러 타입만 변경하여 즉시 복구
             roomData.features.states.menuWait[targetUid] = { type: 'dungeon_combat', time: Date.now() };
@@ -21375,8 +21377,8 @@ function _handleDungeonSelection(choice, user, data, replier, roomName, targetUi
         } else {
             return replier.reply(formatError(user, "번호 오류", "1번(이어하기) 또는 2번(새로 시작)을 입력하세요."));
         }
-    }
-    else if (waitInfo && waitInfo.type === 'dungeon_lobby') {
+    } 
+    else if (waitInfo && waitInfo.type === 'dungeon_lobby') {
         if (choice === "2") {
             return _showAlchemyMenu(user, data, replier, roomName, targetUid);
         } else if (choice === "3") {
@@ -21386,8 +21388,7 @@ function _handleDungeonSelection(choice, user, data, replier, roomName, targetUi
                       "🛡️ 코팅제: " + p.maxhp + "개\n" +
                       "⚔️ 압축액: " + p.atk + "개\n\n" +
                       "💡 물약은 심해 다이빙 중 전투 화면에서 사용할 수 있습니다.";
-            replier.reply(formatCommand("🧪 연금술 가방", user, bag, "뒤로 가려면 [뒤로] 입력"));
-            return;
+            return replier.reply(formatCommand("🧪 연금술 가방", user, bag, "뒤로 가려면 [뒤로] 입력"));
         } else if (choice !== "1") {
             return replier.reply(formatError(user, "번호 오류", "1번, 2번, 3번 중 하나를 선택하세요."));
         }
@@ -21396,43 +21397,40 @@ function _handleDungeonSelection(choice, user, data, replier, roomName, targetUi
         return _handleAlchemyAction(choice, user, data, replier, roomName, targetUid);
     }
 
-    var mapCost = DUNGEON_CONFIG.COST || 3;
-    var maps = Number(user.ancientMaps || 0);
-    if (maps < mapCost) return replier.reply(formatError(user, "지도 부족", "입장에 필요한 고대 지도가 부족합니다. (" + mapCost + "장 필요)"));
+    // 1번 선택(신규 시작) 시 공통 처리 로직
+    var mapCost = DUNGEON_CONFIG.COST || 3;
+    var maps = Number(user.ancientMaps || 0);
+    if (maps < mapCost) return replier.reply(formatError(user, "지도 부족", "입장에 필요한 고대 지도가 부족합니다. (" + mapCost + "장 필요)"));
 
-    // 스탯 산출
-    var isJob = !!user.job;
-    var sLv = Number(user.shipLevel || 1);
-    
-    // HP/ATK 산출 
-    var myHP = isJob ? (sLv * 100) : (sLv * 300);
-    myHP += (Number(user.enhLimit || 0) * 20);
-    
-    var myATK = isJob ? (sLv * 15) : (sLv * 45);
-    myATK += (Number(user.enhProfit || 0) * 2);
+    var isJob = !!user.job;
+    var sLv = Number(user.shipLevel || 1);
+    
+    var myHP = isJob ? (sLv * 100) : (sLv * 300);
+    myHP += (Number(user.enhLimit || 0) * 20);
+    
+    var myATK = isJob ? (sLv * 15) : (sLv * 45);
+    myATK += (Number(user.enhProfit || 0) * 2);
 
-    // 지도 소모
-    user.ancientMaps -= mapCost;
-    user.skipHealing = true;
+    user.ancientMaps -= mapCost;
+    user.skipHealing = true;
 
-    // 탐험 세션 생성
-    user.dungeonExplore = {
-        depth: 100, // 시작 수심 100m
-        bossCount: 0, // 보스 조우 횟수 추적
-        myHP: myHP,
-        myMaxHP: myHP,
-        myATK: myATK,
-        loot: { points: 0, cargo: 0, medals: 0, maps: 0, artifacts: 0 },
-        phase: 'event',
-        lastLog: "탐조등을 켜고 어두운 심해로 하강을 시작합니다...",
-        hasRepaired: false
-    };
+    user.dungeonExplore = {
+        depth: 100, 
+        bossCount: 0, 
+        myHP: myHP,
+        myMaxHP: myHP,
+        myATK: myATK,
+        loot: { points: 0, cargo: 0, medals: 0, maps: 0, artifacts: 0 },
+        phase: 'event',
+        lastLog: "탐조등을 켜고 어두운 심해로 하강을 시작합니다...",
+        hasRepaired: false
+    };
 
-    roomData.features.states.menuWait[targetUid] = { type: 'dungeon_combat', time: Date.now() };
-    
-    _generateDungeonEvent(user);
-    _showDungeonTurn(user, replier, roomName);
-    safeSaveData(data, true);
+    roomData.features.states.menuWait[targetUid] = { type: 'dungeon_combat', time: Date.now() };
+    
+    _generateDungeonEvent(user);
+    _showDungeonTurn(user, replier, roomName);
+    safeSaveData(data, true);
 }
 
 function _showAlchemyMenu(user, data, replier, roomName, targetUid) {

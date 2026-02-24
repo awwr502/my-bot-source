@@ -1582,6 +1582,7 @@ var SHOP_ITEMS = [
     { id: 105, name: "보석 상자", icon: "💎", price: 30000, effect: "trade_cargo", value: "보석", cat: 6 },
     { id: 106, name: "선박 이름변경권", icon: "📝", price: 500000, effect: "ship_rename", cat: 6 },
     { id: 108, name: "선박 강화 초기화권", icon: "♻️", price: 1000000, effect: "ship_enh_reset", cat: 6 },
+    { id: 109, name: "유물 조각", icon: "🧩", price: 1000000, effect: "buy_artifact", cat: 6 },
     { id: 107, name: "밀수품 상자", icon: "📦", price: 10000, effect: "trade_cargo", value: "밀수품", cat: 7 }
 ];
 
@@ -8573,7 +8574,7 @@ function _handleBankStep5(msg, user, data, replier, roomName, targetUid) {
             }
 
             // 수량 입력 단계로 전환 시 현재 아이템 목록을 저장(뒤로가기용)
-            if (["promotion", "tierGuard", "randomBox", "spitto", "trade_cargo"].indexOf(item.effect) !== -1) {
+            if (["promotion", "tierGuard", "randomBox", "spitto", "trade_cargo", "buy_artifact"].indexOf(item.effect) !== -1) {
                 var itemPrice = getItemPrice(item, user, roomName); 
                 var discountTag = (user.title === "수집대마왕") ? " 🏵️수집대마왕 혜택(15%할인)" : "";
 
@@ -10984,7 +10985,30 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         return; 
     }
 
+    // 유물 조각 상점 구매 처리
+    if (item.effect === "buy_artifact") {
+        user.artifactPieces = (Number(user.artifactPieces) || 0) + qty;
+        
+        var artifactBody = "[유물 조각] " + qty + "개를 구매했습니다.\n" + 
+                           "🧩 현재 보유: " + user.artifactPieces + "개\n\n" +
+                           "💡 50개를 모아 도굴왕 칭호에 도전하세요!\n\n" +
+                           "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+                           
+        // 칭호 조건 달성 시 즉시 부여
+        var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
+        if (user.artifactPieces >= 50) util_checkAndAwardTitle(user, rStub, "도굴왕", 2915, "⚜️", "내리다 고고학 연구소", "유물 조각 50개 달성", "[장착 효과]: 광산 채굴 시 희귀 광물 발견 확률 20% 상승", roomName);
+        else if (user.artifactPieces >= 40) util_checkAndAwardTitle(user, rStub, "트레저헌터", 2914, "💎", "내리다 고고학 연구소", "유물 조각 40개 달성", "전설의 보물을 찾아 전 세계를 누비는 탐험가입니다.", roomName);
+        else if (user.artifactPieces >= 30) util_checkAndAwardTitle(user, rStub, "발굴가", 2913, "🏺", "내리다 고고학 연구소", "유물 조각 30개 달성", "역사의 파편을 맞춰나가며 신비를 밝히고 있습니다.", roomName);
+        else if (user.artifactPieces >= 20) util_checkAndAwardTitle(user, rStub, "탐사원", 2912, "🔍", "내리다 고고학 연구소", "유물 조각 20개 달성", "유적의 흔적들이 보이기 시작합니다.", roomName);
+        else if (user.artifactPieces >= 10) util_checkAndAwardTitle(user, rStub, "도굴꾼", 2911, "🧤", "내리다 고고학 연구소", "유물 조각 10개 달성", "드디어 첫 번째 유물 칭호를 획득하셨습니다.", roomName);
+
+        replier.reply(formatCommand("🛒 유물 조각 구매 완료", user, artifactBody, "출항 준비: [/무역] ➔ 2번"));
+        safeSaveData(data, true);
+        return;
+    }
+
     // 0. 스피또 복권 처리 로직
+    if (item.effect === "spitto") {
     if (item.effect === "spitto") {
         var conf = SYSTEM_CONFIG.ECO.SPITTO;
         var totalPrize = 0;
@@ -16971,15 +16995,17 @@ function _showTradeShop(user, replier, roomData, cfg, catId) {
     var inv = (pInfo && pInfo.inventory) ? pInfo.inventory : null;
 
     var list = filtered.map(function(item, i) {
-        var price = getItemPrice(item, user, logicRoom);
-        var stockStr = "";
-        if (item.cat === 6) { 
-            if (isInfinite) stockStr = " [무한대]";
-            else if (inv && inv[item.value] !== undefined) stockStr = " [잔고: " + fp(inv[item.value]) + "상자]";
-            else stockStr = " [재고 알수없음]";
-        }
-        return (i + 1) + ". " + item.icon + " " + item.name + " : " + fp(price) + "P" + stockStr;
-    });
+        var price = getItemPrice(item, user, logicRoom);
+        var stockStr = "";
+        
+        // [조건 변경] 무역 화물(trade_cargo)일 때만 재고 텍스트를 출력하도록 제한 (유물 조각 등 제외)
+        if (item.cat === 6 && item.effect === "trade_cargo") { 
+            if (isInfinite) stockStr = " [무한대]";
+            else if (inv && inv[item.value] !== undefined) stockStr = " [잔고: " + fp(inv[item.value]) + "상자]";
+            else stockStr = " [재고 알수없음]";
+        }
+        return (i + 1) + ". " + item.icon + " " + item.name + " : " + fp(price) + "P" + stockStr;
+    });
     
     var title = (targetCat === 7) ? "🏴‍☠️ 나소 암시장 (밀수품 적재)" : "🛒 무역 물품 적재 센터";
     var body = list.join("\n") + "\n\n💰 보유 포인트: " + fp(user.point) + "P\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";

@@ -360,7 +360,11 @@ var USER_SCHEMA = [
     { key: 'abyssEmblems', default: 0, type: 'number' },        // 심연의 인장 (기둥 재화)
     { key: 'abyssBlessing', default: 0, type: 'number' },       // 심연의 축복 레벨 (캐릭터 강화)
     { key: 'pillarFloor', default: 1, type: 'number' },         // 기둥 현재 도달(시작) 층수
-    { key: 'pillarBest', default: 0, type: 'number' }           // 기둥 최고 기록
+    { key: 'pillarBest', default: 0, type: 'number' },           // 기둥 최고 기록
+    { key: 'warehouse', default: {}, type: 'object' },      // 창고 보관 일반 화물 { "품목": 수량 }
+    { key: 'warehouseAvg', default: {}, type: 'object' },   // 창고 보관 화물 평단가
+    { key: 'warehouseSpec', default: {}, type: 'object' },  // 창고 보관 특산품/보물
+    { key: 'warehouseSize', default: 500, type: 'number' }  // 창고 최대 용량 (기본 500칸)
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -5000,6 +5004,53 @@ function _runSector16Logic(data, ctx) {
         }
     } catch (e) { Log.error("Relay Ping Error: " + e); }
     var conf = SYSTEM_CONFIG.ECO.LANDMARK;
+
+    // 매시간 정각 창고 보관료(원금의 1%) 자동 징수 엔진
+    try {
+        if (currentMin === 0 && data.lastWarehouseFeeHour !== currentHour) {
+            data.lastWarehouseFeeHour = currentHour;
+            var feeCollected = 0;
+            
+            for (var r in data.rooms) {
+                if (ALLOWED_ROOMS.indexOf(r) === -1) continue;
+                var rObj = data.rooms[r];
+                for (var uid in rObj.users) {
+                    var u = rObj.users[uid];
+                    var myFee = 0;
+                    
+                    // 1. 일반 화물 보관료 (평단가 * 수량 * 1%)
+                    for (var k in (u.warehouse || {})) {
+                        var q = Number(u.warehouse[k]);
+                        if (q > 0) {
+                            var avg = Number((u.warehouseAvg && u.warehouseAvg[k]) || SYSTEM_CONFIG.TRADE.GOODS_COST[k] || 10000);
+                            myFee += Math.floor(avg * q * 0.01);
+                        }
+                    }
+                    // 2. 특산품 및 기타 보관료 (고정 기본가 * 수량 * 1%)
+                    for (var s in (u.warehouseSpec || {})) {
+                        var sq = Number(u.warehouseSpec[s]);
+                        if (sq > 0) {
+                            var sBase = 20000;
+                            if (s === "_rare") sBase = 100000;
+                            else if (s === "_unknown") sBase = 10000;
+                            else {
+                                for (var rel in TRADE_RELATION) { if (TRADE_RELATION[rel].set === s) { sBase = SYSTEM_CONFIG.TRADE.SPECIALTY_COST[TRADE_RELATION[rel].produce] || 20000; break; } }
+                            }
+                            myFee += Math.floor(sBase * sq * 0.01);
+                        }
+                    }
+                    
+                    if (myFee > 0) {
+                        u.skipHealing = true;
+                        util_updatePoint(u, data.rooms["내리다"], -myFee, "물류 창고 보관료 (1%)", r);
+                        feeCollected += myFee;
+                    }
+                }
+            }
+            if (feeCollected > 0) Log.info("📦 [Warehouse] 매시간 창고 보관료 총 " + fp(feeCollected) + "P 징수 완료");
+        }
+    } catch(e) { Log.error("Warehouse Fee Error: " + e); }
+
     var rConf = SYSTEM_CONFIG.ECO.RACING; 
     var mani = conf.MANIPULATION;
 
@@ -9329,7 +9380,8 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         'casino_main', 'casino_ladder', 'casino_baccarat',
         'casino_ladder_sub', 'casino_baccarat_sub',
         'trade_pedia_main', 'trade_pedia_detail_view',
-        'explore_hub', 'pillar_lobby', 'pillar_combat'
+        'explore_hub', 'pillar_lobby', 'pillar_combat',
+        'trade_warehouse', 'trade_warehouse_action'
     ];
 
     var logicRoom = (typeof ALLOWED_ROOMS !== 'undefined' && ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
@@ -9594,6 +9646,15 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         if (choiceNum === 3) { _showVoyageStatus(user, replier, data, roomName); menuWaitState[targetUid].type = 'trade_status'; return true; }
         if (choiceNum === 4) { _manageShip(user, replier, tradeCfg); menuWaitState[targetUid].type = 'trade_ship'; return true; }
         if (choiceNum === 5) { _showTradeShop(user, replier, roomData, tradeCfg); bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: SHOP_ITEMS.filter(function(it){ return it.cat === 6; }) } }; delete menuWaitState[targetUid]; return true; }
+
+        // 6번 창고 시스템 진입 로직 및 하위 가변 인덱스 처리
+        if (choiceNum === 6) { 
+            _showWarehouseUI(user, replier, roomData); 
+            menuWaitState[targetUid] = { type: 'trade_warehouse', time: Date.now(), originRoom: roomName };
+            return true; 
+        }
+
+        var curIdx = 7;
 
         // [가변 6번] 총독 집무실 입장
         if (hasGov) {
@@ -17186,8 +17247,9 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         var isMerchant = (!user.job || user.job === null || user.job === "null");
 
         var curIdx = 6;
-        
-        // 1. 총독 메뉴 (조건부)
+        menu += "\n" + (curIdx++) + ". 📦 물류 창고 (재고 관리)";
+
+        // 1. 총독 메뉴 (조건부)
         if (hasGov) {
             menu += "\n" + (curIdx++) + ". 🏛️ 총독실 (총독업무)";
         }
@@ -19445,6 +19507,205 @@ function util_notifySeaReward(user, replier) {
     
     replier.reply(formatCommand(rewardTitle, user, rewardMsg));
     user.hasNotifiedReward = true; // 첫 채팅 시 1회만 알림
+}
+
+/* === [물류 창고 시스템] UI 및 핸들러 === */
+function _showWarehouseUI(user, replier, roomData) {
+    var w = user.warehouse || {};
+    var ws = user.warehouseSpec || {};
+    var list = [];
+    var currentUsage = 0;
+
+    for (var k in w) { 
+        if (w[k] > 0) { 
+            var wAvg = Number((user.warehouseAvg && user.warehouseAvg[k]) || 0);
+            list.push("• " + k + ": " + w[k] + "상자 (평단: " + fp(wAvg) + "P)"); 
+            currentUsage += w[k]; 
+        } 
+    }
+    for (var s in ws) { 
+        if (ws[s] > 0) { 
+            var dispName = (s === "_rare") ? "진귀한 보물" : (s === "_unknown" ? "미확인 교역품" : s);
+            var dispIcon = (s === "_rare") ? "💎" : (s === "_unknown" ? "📦" : "⭐");
+            list.push(dispIcon + " " + dispName + ": " + ws[s] + (s==='_rare'?"개":"상자")); 
+            currentUsage += ws[s]; 
+        } 
+    }
+
+    var cap = user.warehouseSize || 500;
+    var body = "🏠 [개인 물류 창고 현황]\n" +
+               "📊 사용량: " + currentUsage + " / " + cap + " 칸\n" +
+               "━━━━━━━━━━━━━━━\n" +
+               (list.length > 0 ? list.join("\n") : "- 보관 중인 물자가 없습니다 -") + "\n\n" +
+               "💬 [이용 방법]\n" +
+               "1. 📥 입고: [배 ➔ 창고] 물자 보관\n" +
+               "2. 📤 출고: [창고 ➔ 배] 물자 선적\n" +
+               "3. ⬆️ 창고 확장 (+500칸 / 비용 500만P)\n\n" +
+               "⚠️ 주의: 보관 물자는 매시간 원가의 1%가 보관료로 징수됩니다.\n\n" +
+               "↩️ 뒤로 / ❎취소";
+
+    replier.reply(formatCommand("📦 물류 창고", user, body, "원하시는 번호를 입력하세요."));
+}
+
+function _handleWarehouseMain(choice, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    
+    if (choice === "1" || choice === "2") {
+        if (user.voyage && user.voyage.active) {
+            return replier.reply(formatError(user, "작업 불가", "선박이 항해 중이거나 정산 대기 상태일 때는 물자를 옮길 수 없습니다."));
+        }
+
+        var mode = (choice === "1") ? "deposit" : "withdraw";
+        var actionName = (mode === "deposit") ? "입고 (배 ➔ 창고)" : "출고 (창고 ➔ 배)";
+        
+        var w = user.warehouse || {}; var ws = user.warehouseSpec || {};
+        var whUsage = 0;
+        for (var k in w) whUsage += Number(w[k]);
+        for (var s in ws) whUsage += Number(ws[s]);
+        
+        var c = user.cargo || {}; var cs = user.specialties || {};
+        var shipUsage = 0;
+        for (var k in c) shipUsage += Number(c[k]);
+        for (var s in cs) shipUsage += Number(cs[s]);
+        shipUsage += Number(user.rareSpecialties || 0) + Number(user.unknownCargo || 0);
+
+        var whCap = user.warehouseSize || 500;
+        var shipCfg = SYSTEM_CONFIG.TRADE.SHIPS[user.shipLevel || 1];
+        var shipCap = shipCfg.capacity + (Number(user.enhLimit) || 0);
+
+        var list = [];
+        var itemsToSelect = [];
+        
+        if (mode === "deposit") {
+            for (var k in c) { if (c[k] > 0) { list.push("• " + k + " " + c[k] + "상자"); itemsToSelect.push({type:'cargo', name:k, qty:c[k]}); } }
+            for (var s in cs) { if (cs[s] > 0) { list.push("⭐ " + s + " " + cs[s] + "상자"); itemsToSelect.push({type:'spec', name:s, qty:cs[s]}); } }
+            if (user.rareSpecialties > 0) { list.push("💎 진귀한 보물 " + user.rareSpecialties + "개"); itemsToSelect.push({type:'spec', name:'_rare', qty:user.rareSpecialties}); }
+            if (user.unknownCargo > 0) { list.push("📦 미확인 교역품 " + user.unknownCargo + "상자"); itemsToSelect.push({type:'spec', name:'_unknown', qty:user.unknownCargo}); }
+        } else {
+            for (var k in w) { if (w[k] > 0) { list.push("• " + k + " " + w[k] + "상자"); itemsToSelect.push({type:'cargo', name:k, qty:w[k]}); } }
+            for (var s in ws) { if (ws[s] > 0) {
+                var dispName = (s === "_rare") ? "진귀한 보물" : (s === "_unknown" ? "미확인 교역품" : s);
+                var dispIcon = (s === "_rare") ? "💎" : (s === "_unknown" ? "📦" : "⭐");
+                list.push(dispIcon + " " + dispName + " " + ws[s] + (s==='_rare'?"개":"상자"));
+                itemsToSelect.push({type:'spec', name:s, qty:ws[s]}); 
+            }}
+        }
+
+        var destUsage = (mode === "deposit") ? whUsage : shipUsage;
+        var destCap = (mode === "deposit") ? whCap : shipCap;
+
+        var body = "🔄 [" + actionName + "]\n\n" +
+                   "[보관 중인 대상 목록]\n" +
+                   (list.length > 0 ? list.map(function(l,i){ return (i+1)+". "+l; }).join("\n") : "- 옮길 물자가 없습니다 -") + "\n\n" +
+                   "📦 목적지 남은 공간: " + Math.max(0, destCap - destUsage) + "칸\n\n" +
+                   "💬 [입력 방법]\n" +
+                   "• 개별: [번호] [수량] (예: 1 50)\n" +
+                   "• 일괄: [전부]\n\n" +
+                   "↩️ 뒤로 / ❎취소";
+
+        roomData.features.states.menuWait[targetUid] = { 
+            type: 'trade_warehouse_action', time: Date.now(), originRoom: roomName, 
+            extra: { mode: mode, items: itemsToSelect, remCap: Math.max(0, destCap - destUsage) } 
+        };
+        replier.reply(formatCommand("📦 물류 창고 " + (mode==="deposit"?"입고":"출고"), user, body, "번호와 수량을 입력하세요."));
+        
+    } else if (choice === "3") {
+        var cost = 5000000;
+        if (Number(user.point) < cost) return replier.reply(formatError(user, "자금 부족", "창고 확장에는 " + fp(cost) + "P가 필요합니다."));
+        
+        util_updatePoint(user, data.rooms["내리다"], -cost, "물류 창고 확장", roomName);
+        user.warehouseSize = (user.warehouseSize || 500) + 500;
+        user.skipHealing = true;
+        safeSaveData(data, true);
+        
+        replier.reply(formatCommand("⬆️ 창고 확장 완료", user, "창고 용량이 +500칸 증가했습니다!\n\n현재 최대 용량: " + fp(user.warehouseSize) + "칸", "내 잔액: " + fp(user.point) + "P"));
+        _showWarehouseUI(user, replier, roomData);
+        roomData.features.states.menuWait[targetUid] = { type: 'trade_warehouse', time: Date.now(), originRoom: roomName };
+    } else {
+        replier.reply(formatError(user, "번호 오류", "1~3번을 선택하세요."));
+    }
+}
+
+function _handleWarehouseAction(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    var state = roomData.features.states.menuWait[targetUid];
+    var input = msg.trim();
+    var mode = state.extra.mode;
+    var items = state.extra.items;
+    var remCap = state.extra.remCap;
+
+    if (remCap <= 0) return replier.reply(formatError(user, "공간 부족", "목적지에 더 이상 적재할 공간이 없습니다."));
+
+    if (!user.warehouse) user.warehouse = {};
+    if (!user.warehouseAvg) user.warehouseAvg = {};
+    if (!user.warehouseSpec) user.warehouseSpec = {};
+    if (!user.cargo) user.cargo = {};
+    if (!user.cargoAvg) user.cargoAvg = {};
+    if (!user.specialties) user.specialties = {};
+
+    var processMove = function(item, reqQty) {
+        var moveQty = Math.min(reqQty, item.qty, remCap);
+        if (moveQty <= 0) return 0;
+
+        if (mode === "deposit") {
+            if (item.type === 'cargo') {
+                var sAvg = Number(user.cargoAvg[item.name] || SYSTEM_CONFIG.TRADE.GOODS_COST[item.name] || 10000);
+                var wQty = Number(user.warehouse[item.name] || 0);
+                var wAvg = Number(user.warehouseAvg[item.name] || 0);
+                user.warehouseAvg[item.name] = Math.floor(((wAvg * wQty) + (sAvg * moveQty)) / (wQty + moveQty));
+                user.warehouse[item.name] = wQty + moveQty;
+                user.cargo[item.name] -= moveQty;
+                if (user.cargo[item.name] <= 0) delete user.cargo[item.name];
+            } else {
+                user.warehouseSpec[item.name] = (Number(user.warehouseSpec[item.name]) || 0) + moveQty;
+                if (item.name === '_rare') user.rareSpecialties -= moveQty;
+                else if (item.name === '_unknown') user.unknownCargo -= moveQty;
+                else { user.specialties[item.name] -= moveQty; if (user.specialties[item.name] <= 0) delete user.specialties[item.name]; }
+            }
+        } else {
+            if (item.type === 'cargo') {
+                var wAvg = Number(user.warehouseAvg[item.name] || SYSTEM_CONFIG.TRADE.GOODS_COST[item.name] || 10000);
+                var sQty = Number(user.cargo[item.name] || 0);
+                var sAvg = Number(user.cargoAvg[item.name] || 0);
+                user.cargoAvg[item.name] = Math.floor(((sAvg * sQty) + (wAvg * moveQty)) / (sQty + moveQty));
+                user.cargo[item.name] = sQty + moveQty;
+                user.warehouse[item.name] -= moveQty;
+                if (user.warehouse[item.name] <= 0) delete user.warehouse[item.name];
+            } else {
+                if (item.name === '_rare') user.rareSpecialties = (Number(user.rareSpecialties) || 0) + moveQty;
+                else if (item.name === '_unknown') user.unknownCargo = (Number(user.unknownCargo) || 0) + moveQty;
+                else user.specialties[item.name] = (Number(user.specialties[item.name]) || 0) + moveQty;
+                
+                user.warehouseSpec[item.name] -= moveQty;
+                if (user.warehouseSpec[item.name] <= 0) delete user.warehouseSpec[item.name];
+            }
+        }
+        remCap -= moveQty;
+        return moveQty;
+    };
+
+    var movedTotal = 0;
+    if (input === "전부") {
+        for (var i = 0; i < items.length; i++) {
+            if (remCap <= 0) break;
+            movedTotal += processMove(items[i], items[i].qty);
+        }
+    } else {
+        var parts = input.split(/\s+/);
+        var idx = parseInt(parts[0]) - 1;
+        if (isNaN(idx) || idx < 0 || idx >= items.length) return replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 입력하세요."));
+        var inputQty = parts.length > 1 ? parseInt(parts[1].replace(/[^0-9]/g, "")) : remCap;
+        movedTotal = processMove(items[idx], inputQty);
+    }
+
+    user.skipHealing = true;
+    safeSaveData(data, true);
+
+    if (movedTotal > 0) replier.reply(formatCommand("✅ 이동 완료", user, "성공적으로 " + movedTotal + "상자의 물자를 " + (mode==="deposit"?"입고":"출고") + "했습니다."));
+    else replier.reply(formatError(user, "이동 실패", "옮길 수 있는 물자가 없거나 공간이 부족합니다."));
+
+    _showWarehouseUI(user, replier, roomData);
+    roomData.features.states.menuWait[targetUid] = { type: 'trade_warehouse', time: Date.now(), originRoom: roomName };
 }
 
 //==========섹터52==========

@@ -17273,23 +17273,32 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             myGovernorTitle = "\n🚩 통치 항구: [" + myPorts.join(", ") + "]";
         }
         
-        // [Gemini] 일반 교역품(수량) 및 특산품(종류) 분리 계산 로직
+        // [v20.7] 선적 리스트(Manifest) 기반 실시간 용량 계산 엔진 적용
         var currentGeneralCount = 0;
         var currentSpecTypeCount = 0;
 
-        // 1. 일반 교역품 잔여량 계산 (출항 시 이미 user.cargo에서 차감되므로 추가 차감 불필요)
+        // 1. 일반 화물 선적량 계산: 현재 선박 홀드(user.cargo)에 실린 순수 선적 리스트만 합산
         for (var k in (user.cargo || {})) {
-            currentGeneralCount += Number(user.cargo[k] || 0);
+            var q = Number(user.cargo[k] || 0);
+            if (q > 0) currentGeneralCount += q;
         }
-        currentGeneralCount += Number(user.unknownCargo || 0);
 
-        // 2. 특산품 잔여 종류 계산
+        // 2. 특산품 선적 종류 계산: Specialties 가방 내 시스템 필드를 제외한 순수 특산품 종류 카운트
         for (var s in (user.specialties || {})) {
+            if (s.indexOf("_") === 0) continue; // 내부 데이터(_rare, _unknown) 제외
             if (Number(user.specialties[s] || 0) > 0) currentSpecTypeCount++;
         }
 
-        // 음수 보정
-        if (currentGeneralCount < 0) currentGeneralCount = 0;
+        // 만약 항해 중이 아닌데(Docked) 유령 화물이 남아있다면 0으로 정규화
+        if ((!user.voyage || user.voyage.active === false) && currentGeneralCount > 0) {
+            if (msg === "/무역") { // 메뉴 진입 시에만 1회 소독
+                user.cargo = {};
+                user.specialties = {};
+                currentGeneralCount = 0;
+                currentSpecTypeCount = 0;
+                Log.info("🧹 [Cleanup] " + user.name + "님의 선박 유령 화물을 소독했습니다.");
+            }
+        }
         
         var pillageAlert = "";
         var mainRoom = data.rooms["내리다"];

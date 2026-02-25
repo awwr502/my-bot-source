@@ -18838,12 +18838,18 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                     var isSpec = false;
                     for (var n in TRADE_RELATION) { if (TRADE_RELATION[n].set === wreck.name) { isSpec = true; break; } }
                     if (isSpec) {
-                        user.specialties[wreck.name] = (Number(user.specialties[wreck.name]) || 0) + wreck.amt;
-                    } else {
-                        user.cargo[wreck.name] = (Number(user.cargo[wreck.name]) || 0) + wreck.amt;
-                    }
-                    rewardMsg = "📦 유실물 인양: [" + wreck.name + "] " + wreck.amt + "상자";
-                }
+                        if (!user.warehouseSpec) user.warehouseSpec = {};
+                        user.warehouseSpec[wreck.name] = (Number(user.warehouseSpec[wreck.name]) || 0) + wreck.amt;
+                    } else {
+                        if (!user.warehouse) user.warehouse = {};
+                        if (!user.warehouseAvg) user.warehouseAvg = {};
+                        var wQty = Number(user.warehouse[wreck.name] || 0);
+                        var wAvg = Number(user.warehouseAvg[wreck.name] || 0);
+                        var baseCost = (SYSTEM_CONFIG && SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.GOODS_COST && SYSTEM_CONFIG.TRADE.GOODS_COST[wreck.name]) ? SYSTEM_CONFIG.TRADE.GOODS_COST[wreck.name] : 10000;
+                        user.warehouseAvg[wreck.name] = Math.floor(((wAvg * wQty) + (baseCost * wreck.amt)) / (wQty + wreck.amt));
+                        user.warehouse[wreck.name] = wQty + wreck.amt;
+                    }
+                    rewardMsg = "📦 유실물 인양: [" + wreck.name + "] " + wreck.amt + "상자 (창고 보관)";
 
                 var scavengeBody = "🌊 [심해 탐사: 난파선 인양 성공]\n" +
                                    "━━━━━━━━━━━━━━━\n" +
@@ -19224,32 +19230,26 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     }
 
     if (!isHomeReturn && Math.random() < cfg.SPECIALTY_CHANCE) {
-        if (isEldorado) { 
-            user.rareSpecialties = (user.rareSpecialties || 0) + 1;
-            specialtyFound = "\n\n💎 [전설의 유물]: '아스테리아 황금 성배' 1개 획득!";
-        } else {
-            // v.dest가 스냅샷에 없을 경우를 대비해 기본값 "생필품" 강제 부여
-            var nSnap = (v.marketSnapshot && v.marketSnapshot[v.dest]) ? v.marketSnapshot[v.dest] : null;
-            var newItem = (nSnap && nSnap.specialty) ? nSnap.specialty : "생필품";
-            
-            var pInfo = (roomData.features && roomData.features.portData && roomData.features.portData[v.dest]) 
-                        ? roomData.features.portData[v.dest] : { level: 1, governorUid: "" };
-            
-            var isGov = (pInfo.governorUid === targetUid);
-            var amount = isGov ? (Math.floor(Math.random() * (Number(cfg.INVEST.GOV_SPEC_MAX) - Number(cfg.INVEST.GOV_SPEC_MIN) + 1)) + Number(cfg.INVEST.GOV_SPEC_MIN)) : 1;
-            
-            // [v18.0] 도감 60% 보상: 특산품 발견 개수 +1 추가
-            if (user.pediaRewardLevel >= 3) {
-                amount += 1;
-            }
-            
-            if (!user.specialties) user.specialties = {};
-            // newItem이 혹시라도 누락되었을 경우를 대비한 최종 방어
-            if (newItem === "undefined" || !newItem) newItem = "생필품";
-            
-            user.specialties[newItem] = (Number(user.specialties[newItem]) || 0) + amount;
-            specialtyFound = "\n\n✨ 특산품 '" + newItem + "' " + (isGov ? "x" + amount + " " : "") + "발견!";
-        }
+        if (!user.warehouseSpec) user.warehouseSpec = {};
+        if (isEldorado) { 
+            user.warehouseSpec["_rare"] = (Number(user.warehouseSpec["_rare"]) || 0) + 1;
+            specialtyFound = "\n\n💎 [전설의 유물]: '아스테리아 황금 성배' 1개 획득! (창고 보관)";
+        } else {
+            var nSnap = (v.marketSnapshot && v.marketSnapshot[v.dest]) ? v.marketSnapshot[v.dest] : null;
+            var newItem = (nSnap && nSnap.specialty) ? nSnap.specialty : "생필품";
+            
+            var pInfo = (roomData.features && roomData.features.portData && roomData.features.portData[v.dest]) 
+                        ? roomData.features.portData[v.dest] : { level: 1, governorUid: "" };
+            
+            var isGov = (pInfo.governorUid === targetUid);
+            var amount = isGov ? (Math.floor(Math.random() * (Number(cfg.INVEST.GOV_SPEC_MAX) - Number(cfg.INVEST.GOV_SPEC_MIN) + 1)) + Number(cfg.INVEST.GOV_SPEC_MIN)) : 1;
+            
+            if (user.pediaRewardLevel >= 3) amount += 1;
+            if (newItem === "undefined" || !newItem) newItem = "생필품";
+            
+            user.warehouseSpec[newItem] = (Number(user.warehouseSpec[newItem]) || 0) + amount;
+            specialtyFound = "\n\n✨ 특산품 '" + newItem + "' " + (isGov ? "x" + amount + " " : "") + "발견! (창고 보관)";
+        }
     }
 
     // [v16.7] 7-1. 엘도라도 전용 수익 보정

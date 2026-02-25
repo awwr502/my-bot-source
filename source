@@ -17744,16 +17744,14 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
     var nInfo = (dest === "무역 지부") ? { favorite: "N/A", hate: "N/A" } : (market[dest] || { favorite: "NONE", hate: "NONE" });
     var currentLoc = user.currentLoc || "무역 지부";
     var body = "📍 목적지: [" + dest + "]\n\n" +
-               "[🚢 선박 적재함 보유 현황]\n"; // 텍스트 변경: 창고 -> 선박 적재함
+               "[📦 물류 창고 보유 현황]\n"; 
     
     var availableItems = []; 
     
-    // [Gemini 요청] Warehouse 참조 제거 -> 오직 Cargo(선박)만 참조하여 리스트 생성
-    
-    // 1. 일반 화물 (선박 Cargo 기준)
-    var allCargo = user.cargo || {};
-    for (var k in allCargo) {
-        var total = Number(allCargo[k] || 0);
+    // 1. 일반 화물 (물류 창고 기준)
+    var allWarehouse = user.warehouse || {};
+    for (var k in allWarehouse) {
+        var total = Number(allWarehouse[k] || 0);
         var selected = Number(selC[k] || 0);
         var remaining = total - selected;
         
@@ -17765,8 +17763,8 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
         }
     }
 
-    // 2. 특산품 (선박 Specialties 기준)
-    var allSpec = user.specialties || {};
+    // 2. 특산품 (물류 창고 기준)
+    var allSpec = user.warehouseSpec || {};
     for (var s in allSpec) {
         if (s === "_rare" || s === "_unknown") continue; 
         
@@ -17787,17 +17785,17 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
         }
     }
 
-    /* 3. 보물 및 미확인 교역품 (선박 기준) */
-    var rareCount = Number(user.rareSpecialties || 0); // user.rareSpecialties는 선박/캐릭 귀속이므로 그대로 사용
-    var selectedRare = Number(selS._rare || 0);
+    /* 3. 보물 및 미확인 교역품 (물류 창고 기준) */
+    var rareCount = Number(allSpec["_rare"] || 0); 
+    var selectedRare = Number(selS["_rare"] || 0);
     var remainingRare = rareCount - selectedRare;
 
     if (remainingRare > 0) {
         availableItems.push({ type: 'rare', name: "진귀한 보물", qty: remainingRare, status: "💰고정가 (10만P)" });
     }
 
-    var unknownCount = Number(user.unknownCargo || 0); // user.unknownCargo도 선박 귀속
-    var selectedUnknown = Number(selS._unknown || 0);
+    var unknownCount = Number(allSpec["_unknown"] || 0); 
+    var selectedUnknown = Number(selS["_unknown"] || 0);
     var remainingUnknown = unknownCount - selectedUnknown;
     
     if (remainingUnknown > 0) {
@@ -17881,12 +17879,18 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
             remainingCap -= loadQty;
         };
 
-        // user.warehouse 루프 삭제 -> 오직 user.cargo만 순회
-        for (var k in (user.cargo || {})) loadItem(k, user.cargo[k], 'cargo');
-        for (var s in (user.specialties || {})) loadItem(s, user.specialties[s], 'spec');
+        // 창고(warehouse) 데이터 순회
+        var w = user.warehouse || {};
+        var ws = user.warehouseSpec || {};
+
+        for (var k in w) loadItem(k, w[k], 'cargo');
+        for (var s in ws) {
+            if (s === "_rare" || s === "_unknown") continue;
+            loadItem(s, ws[s], 'spec');
+        }
         
-        if (Number(user.rareSpecialties || 0) > 0) loadItem("_rare", user.rareSpecialties, 'spec');
-        if (Number(user.unknownCargo || 0) > 0) loadItem("_unknown", user.unknownCargo, 'spec');
+        if (Number(ws["_rare"] || 0) > 0) loadItem("_rare", ws["_rare"], 'spec');
+        if (Number(ws["_unknown"] || 0) > 0) loadItem("_unknown", ws["_unknown"], 'spec');
         
         if (remainingCap <= 0) {
             replier.reply("⚠️ 적재 공간이 한계에 도달하여 남은 공간만큼만 화물이 선적되었습니다.");
@@ -17945,9 +17949,9 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     
     var availableItems = [];
     
-    // 오직 선박(cargo) 데이터만 순수하게 참조하도록 창고 병합 삭제
+    // 오직 창고(warehouse) 데이터만 순수하게 참조하도록 변경
     var allCargo = {};
-    for (var k in (user.cargo || {})) allCargo[k] = (allCargo[k] || 0) + Number(user.cargo[k]);
+    for (var k in (user.warehouse || {})) allCargo[k] = (allCargo[k] || 0) + Number(user.warehouse[k]);
 
     for (var k in allCargo) {
         var rem = allCargo[k] - Number(state.selCargo[k] || 0);
@@ -17955,18 +17959,19 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     }
 
     var allSpec = {};
-    for (var s in (user.specialties || {})) allSpec[s] = (allSpec[s] || 0) + Number(user.specialties[s]);
+    for (var s in (user.warehouseSpec || {})) allSpec[s] = (allSpec[s] || 0) + Number(user.warehouseSpec[s]);
 
     for (var s in allSpec) {
+        if (s === "_rare" || s === "_unknown") continue;
         var remS = allSpec[s] - Number(state.selSpec[s] || 0);
         if (remS > 0) availableItems.push({ type: 'spec', name: s, qty: remS });
     }
 
-    var rareCount = Number(user.rareSpecialties || 0);
+    var rareCount = Number(allSpec["_rare"] || 0);
     var remR = rareCount - Number(state.selSpec["_rare"] || 0);
     if (remR > 0) availableItems.push({ type: 'rare', name: "진귀한 보물", qty: remR });
 
-    var unknownCount = Number(user.unknownCargo || 0);
+    var unknownCount = Number(allSpec["_unknown"] || 0);
     var remU = unknownCount - Number(state.selSpec["_unknown"] || 0);
     if (remU > 0) availableItems.push({ type: 'unknown', name: "미확인 교역품", qty: remU });
 
@@ -18174,37 +18179,37 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     var logicRoom = (typeof ALLOWED_ROOMS !== 'undefined' && ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var roomData = data.rooms[logicRoom];
 
-    // [Gemini 요청] 출항 시 선박(cargo)에서 차감 (창고 참조 삭제)
-    if (!user.cargo) user.cargo = {};
+    // [Gemini 요청] 출항 시 창고(warehouse)에서 차감하도록 변경
+    if (!user.warehouse) user.warehouse = {};
     for (var good in selC) {
         var loadQty = Number(selC[good] || 0);
         if (loadQty > 0) {
-            user.cargo[good] = Math.max(0, (Number(user.cargo[good]) || 0) - loadQty);
-            if (user.cargo[good] <= 0) delete user.cargo[good];
+            user.warehouse[good] = Math.max(0, (Number(user.warehouse[good]) || 0) - loadQty);
+            if (user.warehouse[good] <= 0) delete user.warehouse[good];
         }
     }
 
-    if (!user.specialties) user.specialties = {};
+    if (!user.warehouseSpec) user.warehouseSpec = {};
     for (var spec in selS) {
         if (spec.indexOf("_") === 0) continue; 
         
         var loadSpecQty = Number(selS[spec] || 0);
         if (loadSpecQty > 0) {
-            user.specialties[spec] = Math.max(0, (Number(user.specialties[spec]) || 0) - loadSpecQty);
-            if (user.specialties[spec] <= 0) delete user.specialties[spec];
+            user.warehouseSpec[spec] = Math.max(0, (Number(user.warehouseSpec[spec]) || 0) - loadSpecQty);
+            if (user.warehouseSpec[spec] <= 0) delete user.warehouseSpec[spec];
         }
     }
 
-    // 진귀한 보물 차감 (선박 기준)
+    // 진귀한 보물 차감 (창고 기준)
     var rareLoot = Number(selS["_rare"] || 0);
     if (rareLoot > 0) {
-        user.rareSpecialties = Math.max(0, (Number(user.rareSpecialties) || 0) - rareLoot);
+        user.warehouseSpec["_rare"] = Math.max(0, (Number(user.warehouseSpec["_rare"]) || 0) - rareLoot);
+        if (user.warehouseSpec["_rare"] <= 0) delete user.warehouseSpec["_rare"];
     }
     
-    // 미확인 교역품 차감 및 변환 로직 (선박 기준)
+    // 미확인 교역품 차감 및 변환 로직 (창고 기준)
     var selectedUnknownCount = Number(selS["_unknown"] || 0);
     if (selectedUnknownCount > 0) {
-        // ... (기존 변환 로직 유지) ...
         var maxQty = -1;
         var maxGoodKey = "";
         for (var good in selC) {
@@ -18224,12 +18229,13 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
             extraMsg = extraMsg ? extraMsg + "\n" + transformMsg : transformMsg;
         }
         
-        // 차감 (user.unknownCargo)
-        user.unknownCargo = Math.max(0, (Number(user.unknownCargo) || 0) - selectedUnknownCount);
+        // 차감
+        user.warehouseSpec["_unknown"] = Math.max(0, (Number(user.warehouseSpec["_unknown"]) || 0) - selectedUnknownCount);
+        if (user.warehouseSpec["_unknown"] <= 0) delete user.warehouseSpec["_unknown"];
         delete selS["_unknown"];
     }
 
-    user.isPillaged = false; 
+    user.isPillaged = false;
 
     var mainRoom = data.rooms["내리다"];
     if (mainRoom && mainRoom.features && mainRoom.features.activePillages) {
@@ -18912,9 +18918,9 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         var settledCount = count; // 전량 매각 (반품 없음)
         var returnedCount = 0;
         
-        // 오타 교정: user.cargoAvg[g] -> user.cargoAvg[good]
-        var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good] || 10000);
-        var itemCost = Number(myPurchasePrice * settledCount); 
+        // [Gemini 요청] 출항을 창고 기반으로 변경했으므로, 원가 계산 시 warehouseAvg를 우선 참조합니다.
+        var myPurchasePrice = Number((user.warehouseAvg && user.warehouseAvg[good]) || (user.cargoAvg && user.cargoAvg[good]) || cfg.GOODS_COST[good] || 10000);
+        var itemCost = Number(myPurchasePrice * settledCount);
         
         var multiplier = 1.0;
         
@@ -19476,28 +19482,25 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var disasterLogStr = (typeof disasterLog !== 'undefined' && disasterLog) ? disasterLog.trim() : "";
     var separateEmergencyMsg = null;
 
-    // [Gemini 요청] 긴급 회항 시 적재 완료 상태 유지 (창고 반환 X)
-    
+    // [Gemini 요청] 긴급 회항 시 적재 완료 상태 유지 (물류 창고로 반환)
     if (isHomeReturn) {
-        // 일반 화물 복구
-        if (!user.cargo) user.cargo = {};
+        // 일반 화물 복구 (물류 창고로 반환)
+        if (!user.warehouse) user.warehouse = {};
         for (var g in cargoToSell) {
              var q = Number(cargoToSell[g] || 0);
              if (q > 0) {
-                 user.cargo[g] = (Number(user.cargo[g]) || 0) + q;
+                 user.warehouse[g] = (Number(user.warehouse[g]) || 0) + q;
              }
         }
-        // 특산품 복구
-        if (!user.specialties) user.specialties = {};
+        // 특산품 복구 (물류 창고로 반환)
+        if (!user.warehouseSpec) user.warehouseSpec = {};
         for (var s in specialtyToSell) {
              var q = Number(specialtyToSell[s] || 0);
              if (q > 0) {
-                 if (s === "_rare") user.rareSpecialties = (Number(user.rareSpecialties) || 0) + q;
-                 else if (s === "_unknown") user.unknownCargo = (Number(user.unknownCargo) || 0) + q;
-                 else user.specialties[s] = (Number(user.specialties[s]) || 0) + q;
+                 user.warehouseSpec[s] = (Number(user.warehouseSpec[s]) || 0) + q;
              }
         }
-        disasterLog += "\n⚓ [귀항 완료]: 모든 적재 화물이 선박에 그대로 유지됩니다.";
+        disasterLog += "\n⚓ [귀항 완료]: 출항 시 적재했던 화물이 모두 물류 창고로 안전하게 반환되었습니다.";
     }
 
     var profitSign = totalNetMargin >= 0 ? "+" : "-";
@@ -21611,7 +21614,7 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
             // 일반 화물 매출/원가 계산
             for (var g in cSnap) {
                 var qty = Number(cSnap[g]); if (qty <= 0) continue;
-                var myPurchasePrice = Number((victim.cargoAvg && victim.cargoAvg[g]) || cfg.GOODS_COST[g]);
+                var myPurchasePrice = Number((victim.warehouseAvg && victim.warehouseAvg[g]) || (victim.cargoAvg && victim.cargoAvg[g]) || cfg.GOODS_COST[g] || 10000);
                 var rateInfo = SYSTEM_CONFIG.PROFIT_RATES[g] || { pref: 1.15, norm: 1.05, hate: 0.8 };
                 // [퀘스트 정규화] 1.5배 시세 적용 여부를 출발 시간(v.startTime) 기준으로 판정
                 var isPremium = (quest && v.startTime >= quest.startTime && v.startTime <= quest.endTime && v.dest === quest.nation && g === quest.item);

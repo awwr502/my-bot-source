@@ -10251,7 +10251,17 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     else if (state.type === 'trade_battle_list') { _handleCombatSelect(choice, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_escort_select') { _handleEscortHire(choice, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_escort_confirm') { _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
-    
+
+    // 물류 창고 시스템 입력 핸들러 연결 (먹통 현상 원천 해결)
+    else if (state.type === 'trade_warehouse') {
+        _handleWarehouseMain(choice, user, data, replier, roomName, targetUid);
+        return true;
+    }
+    else if (state.type === 'trade_warehouse_action') {
+        _handleWarehouseAction(msg, user, data, replier, roomName, targetUid);
+        return true;
+    }
+
     /* [v17.6] 탐험 허브 및 던전 난이도 메뉴 라우팅 */
     else if (state.type === 'dungeon_main' || state.type === 'dungeon_resume' || state.type === 'dungeon_lobby' || state.type === 'dungeon_alchemy' || state.type === 'explore_hub') {
         _handleDungeonSelection(choice, user, data, replier, roomName, targetUid);
@@ -14782,6 +14792,67 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         }
         return true;
     }
+
+    // 무한 가방 -> 물류 창고 일괄 이관 마이그레이션 엔진
+    if (msg === "/창고마이그레이션") {
+        var count = 0;
+        for (var r in data.rooms) {
+            for (var uid in data.rooms[r].users) {
+                var u = data.rooms[r].users[uid];
+                var moved = false;
+
+                if (!u.warehouse) u.warehouse = {};
+                if (!u.warehouseAvg) u.warehouseAvg = {};
+                if (!u.warehouseSpec) u.warehouseSpec = {};
+
+                // 1. 일반 화물 이동 (평단가 보존)
+                for (var k in (u.cargo || {})) {
+                    if (u.cargo[k] > 0) {
+                        var q = Number(u.cargo[k]);
+                        var cAvg = Number(u.cargoAvg[k] || SYSTEM_CONFIG.TRADE.GOODS_COST[k] || 10000);
+                        var wQty = Number(u.warehouse[k] || 0);
+                        var wAvg = Number(u.warehouseAvg[k] || 0);
+
+                        u.warehouseAvg[k] = Math.floor(((wAvg * wQty) + (cAvg * q)) / (wQty + q));
+                        u.warehouse[k] = wQty + q;
+                        u.cargo[k] = 0;
+                        u.cargoAvg[k] = 0;
+                        moved = true;
+                    }
+                }
+
+                // 2. 특산품 이동
+                for (var s in (u.specialties || {})) {
+                    if (u.specialties[s] > 0) {
+                        u.warehouseSpec[s] = (Number(u.warehouseSpec[s]) || 0) + Number(u.specialties[s]);
+                        u.specialties[s] = 0;
+                        moved = true;
+                    }
+                }
+
+                // 3. 미확인 및 진귀한 보물 이동
+                if (Number(u.unknownCargo || 0) > 0) {
+                    u.warehouseSpec["_unknown"] = (Number(u.warehouseSpec["_unknown"]) || 0) + Number(u.unknownCargo);
+                    u.unknownCargo = 0;
+                    moved = true;
+                }
+                if (Number(u.rareSpecialties || 0) > 0) {
+                    u.warehouseSpec["_rare"] = (Number(u.warehouseSpec["_rare"]) || 0) + Number(u.rareSpecialties);
+                    u.rareSpecialties = 0;
+                    moved = true;
+                }
+
+                if (moved) {
+                    u.skipHealing = true;
+                    count++;
+                }
+            }
+        }
+        safeSaveData(data, true);
+        replier.reply(formatAdmin("📦 창고 마이그레이션 완료", "기존 유저 " + count + "명의 무한 가방(선박 적재함) 데이터를\n모두 개인 물류 창고로 안전하게 이관했습니다.\n\n💡 용량을 초과하여 이관된 유저는 초과분만큼 창고 입고가 제한되며 출고(판매)만 가능합니다."));
+        return true;
+    }
+
     return false;
 }
 

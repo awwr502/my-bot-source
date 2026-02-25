@@ -17263,24 +17263,15 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         var currentGeneralCount = 0;
         var currentSpecTypeCount = 0;
 
-        // 1. 일반 교역품 잔여량 계산 (항해 중인 스냅샷 제외)
+        // 1. 일반 교역품 잔여량 계산 (출항 시 이미 user.cargo에서 차감되므로 추가 차감 불필요)
         for (var k in (user.cargo || {})) {
-            var q = Number(user.cargo[k] || 0);
-            if (user.voyage && user.voyage.active === true) {
-                q -= Number((user.voyage.cargoSnapshot || {})[k] || 0);
-            }
-            if (q > 0) currentGeneralCount += q;
+            currentGeneralCount += Number(user.cargo[k] || 0);
         }
-        // 미확인 교역품은 항해 중이 아니면 100% 창고/배에 있으므로 그대로 합산
         currentGeneralCount += Number(user.unknownCargo || 0);
 
-        // 2. 특산품 잔여 종류 계산 (항해 중인 종류 제외)
+        // 2. 특산품 잔여 종류 계산
         for (var s in (user.specialties || {})) {
-            var sq = Number(user.specialties[s] || 0);
-            if (user.voyage && user.voyage.active === true) {
-                sq -= Number((user.voyage.specialtySnapshot || {})[s] || 0);
-            }
-            if (sq > 0) currentSpecTypeCount++;
+            if (Number(user.specialties[s] || 0) > 0) currentSpecTypeCount++;
         }
 
         // 음수 보정
@@ -17314,13 +17305,8 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
             }
         }
 
-        // 진귀한 보물 수량 계산 (항해 중인 수량 차감 로직 추가)
+        // 진귀한 보물 수량 계산 (출항 시 이미 차감되므로 추가 차감 불필요)
         var rareTreasureCount = Number(user.rareSpecialties || 0);
-        if (user.voyage && user.voyage.active && user.voyage.specialtySnapshot) {
-            // 현재 항해 중인 배에 실린 보물 개수를 전체 보유량에서 뺍니다.
-            rareTreasureCount -= Number(user.voyage.specialtySnapshot._rare || 0);
-        }
-        // 음수 방지
         if (rareTreasureCount < 0) rareTreasureCount = 0;
 
         // [UI 개편] 요청하신 순서대로 레이아웃 재구성
@@ -17827,7 +17813,7 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
         });
     }
 
-    body += "\n[✅ 선박 적재 완료]\n";
+    body += "\n[✅ 이번 출항 선적 리스트]\n";
     var selList = [];
     for (var c in selC) selList.push("• " + c + " x" + selC[c] + "상자");
 
@@ -17959,9 +17945,9 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     
     var availableItems = [];
     
+    // 오직 선박(cargo) 데이터만 순수하게 참조하도록 창고 병합 삭제
     var allCargo = {};
     for (var k in (user.cargo || {})) allCargo[k] = (allCargo[k] || 0) + Number(user.cargo[k]);
-    for (var k in (user.warehouse || {})) allCargo[k] = (allCargo[k] || 0) + Number(user.warehouse[k]);
 
     for (var k in allCargo) {
         var rem = allCargo[k] - Number(state.selCargo[k] || 0);
@@ -17970,20 +17956,17 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
 
     var allSpec = {};
     for (var s in (user.specialties || {})) allSpec[s] = (allSpec[s] || 0) + Number(user.specialties[s]);
-    for (var s in (user.warehouseSpec || {})) {
-        if (s !== "_rare" && s !== "_unknown") allSpec[s] = (allSpec[s] || 0) + Number(user.warehouseSpec[s]);
-    }
 
     for (var s in allSpec) {
         var remS = allSpec[s] - Number(state.selSpec[s] || 0);
         if (remS > 0) availableItems.push({ type: 'spec', name: s, qty: remS });
     }
 
-    var rareCount = Number(user.rareSpecialties || 0) + Number((user.warehouseSpec || {})["_rare"] || 0);
+    var rareCount = Number(user.rareSpecialties || 0);
     var remR = rareCount - Number(state.selSpec["_rare"] || 0);
     if (remR > 0) availableItems.push({ type: 'rare', name: "진귀한 보물", qty: remR });
 
-    var unknownCount = Number(user.unknownCargo || 0) + Number((user.warehouseSpec || {})["_unknown"] || 0);
+    var unknownCount = Number(user.unknownCargo || 0);
     var remU = unknownCount - Number(state.selSpec["_unknown"] || 0);
     if (remU > 0) availableItems.push({ type: 'unknown', name: "미확인 교역품", qty: remU });
 

@@ -11226,12 +11226,9 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         var shipCap = shipCfg.capacity + (Number(user.enhLimit) || 0);
         var shipRem = Math.max(0, shipCap - currentCargoCount);
 
-        // 2. 선박 적재 공간 부족 시 차단
-        if (qty > shipRem) {
-            user.skipHealing = true;
-            replier.reply(formatError(user, "선박 용량 부족", "선박 적재함에 빈 공간이 부족합니다.\n\n🚢 남은 공간: " + shipRem + "칸\n📦 구매 시도: " + qty + "칸"));
-            return;
-        }
+        // 2. 적재 분배 계산: 선박 우선, 나머지 창고 (계산식으로 대체)
+        var toShip = Math.min(qty, shipRem);
+        var toWarehouse = qty - toShip;
 
         // [실물 재고 가드]
         if (!isInfinite && pData && pData.inventory) {
@@ -11250,27 +11247,44 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
 
         var currentUnitPrice = Math.floor(finalPrice / qty);
 
-        if (!user.cargo) user.cargo = {};
-        if (!user.cargoAvg) user.cargoAvg = {};
-        
-        var cOldQty = Number(user.cargo[goodsType] || 0);
-        var cOldAvg = Number(user.cargoAvg[goodsType] || 0);
-        
-        // 선박 적재함(Cargo)에 수량 및 평단가 반영
-        user.cargoAvg[goodsType] = Math.floor(((cOldAvg * cOldQty) + (currentUnitPrice * qty)) / (cOldQty + qty));
-        user.cargo[goodsType] = cOldQty + qty;
+        // 1. 선박 적재 처리 (우선 순위)
+        if (toShip > 0) {
+            if (!user.cargo) user.cargo = {};
+            if (!user.cargoAvg) user.cargoAvg = {};
+            var cOldQty = Number(user.cargo[goodsType] || 0);
+            var cOldAvg = Number(user.cargoAvg[goodsType] || 0);
+            user.cargoAvg[goodsType] = Math.floor(((cOldAvg * cOldQty) + (currentUnitPrice * toShip)) / (cOldQty + toShip));
+            user.cargo[goodsType] = cOldQty + toShip;
+        }
+
+        // 2. 창고 이관 처리 (용량 초과 잔여량)
+        if (toWarehouse > 0) {
+            if (!user.warehouse) user.warehouse = {};
+            if (!user.warehouseAvg) user.warehouseAvg = {};
+            var wOldQty = Number(user.warehouse[goodsType] || 0);
+            var wOldAvg = Number(user.warehouseAvg[goodsType] || 0);
+            user.warehouseAvg[goodsType] = Math.floor(((wOldAvg * wOldQty) + (currentUnitPrice * toWarehouse)) / (wOldQty + toWarehouse));
+            user.warehouse[goodsType] = wOldQty + toWarehouse;
+        }
 
         bankProcessState[targetUid] = { type: 'trade_cargo_done', time: Date.now() };
 
-        var loadBody = "[" + goodsType + " 상자] " + qty + "개를 구매하여 선박에 적재했습니다.\n\n" +
-                       "🚢 상태: 선박 적재함(Cargo) 입고 완료\n" +
-                       "📊 현재 적재: " + user.cargo[goodsType] + "상자 (평단: " + fp(user.cargoAvg[goodsType]) + "P)\n\n" +
-                       "💡 [시스템]: 상점 구매 물품은 즉시 선박에 실립니다.\n" +
-                       "보관이 필요하면 [물류 창고]에서 입고 처리를 하세요.\n\n" +
+        var statusMsg = "📦 [" + goodsType + " 상자] " + qty + "개 구매 완료\n";
+        statusMsg += "🚢 선박 적재: +" + toShip + "상자\n";
+        if (toWarehouse > 0) {
+            statusMsg += "🏠 창고 이관: +" + toWarehouse + "상자 (용량 초과분)\n";
+        }
+        
+        statusMsg += "\n📊 [현재 보유 현황]\n";
+        statusMsg += "🚢 선박: " + (user.cargo[goodsType] || 0) + "상자 (평단: " + fp(user.cargoAvg[goodsType] || 0) + "P)\n";
+        statusMsg += "🏠 창고: " + (user.warehouse[goodsType] || 0) + "상자 (평단: " + fp(user.warehouseAvg[goodsType] || 0) + "P)";
+
+        var loadBody = statusMsg + "\n\n" +
+                       "💡 [안내]: 선박 용량을 초과한 물량은 자동으로 물류 창고로 이송되었습니다.\n\n" +
                        "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
-        replier.reply(formatCommand("🛒 선박 적재 완료", user, loadBody, "출항 준비: [/무역] ➔ 2번"));
-        return; // 정상 종료
+        replier.reply(formatCommand("🛒 선박/창고 적재 완료", user, loadBody, "출항 준비: [/무역] ➔ 2번"));
+        return; // 정산 종료
     }
 
     // 7. 선박 강화 초기화권 효과 처리

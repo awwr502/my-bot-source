@@ -22496,7 +22496,7 @@ function _showPillarLobby(user, data, replier, roomName, targetUid) {
                "• 최고 도달: " + best + "층\n" +
                "• 시작 구간: " + startFloor + "층부터 진행\n\n" +
                "✨ [심연의 축복: Lv." + bless + "]\n" +
-               "• 기둥 돌파 성공률: +" + bless + "%\n" +
+               "• 기본 산소량: +" + (bless * 5) + "\n" +
                "• 보유 인장: 💠 " + emblems + "개\n\n" +
                "1. 🔱 하강 시작 (비용: " + fp(cost) + "P" + mapReq + ")\n" +
                "2. 💠 축복 강화" + isMax + "\n\n" +
@@ -22531,7 +22531,10 @@ function _handlePillarSelection(choice, user, data, replier, roomName, targetUid
             if (needMap) user.ancientMaps -= 1;
             user.skipHealing = true;
 
-            user.pillarLoot = { points: 0, floor: startFloor };
+            var bless = Number(user.abyssBlessing || 0);
+            var startOxygen = 100 + (bless * 5); // 축복 레벨당 5의 산소 보너스 부여
+
+            user.pillarLoot = { points: 0, floor: startFloor, oxygen: startOxygen };
             roomData.features.states.menuWait[targetUid] = { type: 'pillar_combat', time: Date.now(), originRoom: roomName };
             _showPillarTurn(user, replier, roomName, targetUid);
             safeSaveData(data, true);
@@ -22546,30 +22549,28 @@ function _handlePillarSelection(choice, user, data, replier, roomName, targetUid
             user.abyssBlessing = bless + 1;
             user.skipHealing = true;
             safeSaveData(data, true);
-            replier.reply(formatCommand("✨ 축복 강화 완료", user, "심연의 축복이 Lv." + user.abyssBlessing + "(으)로 상승했습니다!\n기둥 하강 돌파 성공률이 추가로 증가합니다.", "다시 확인하려면 [뒤로] 입력"));
+            replier.reply(formatCommand("✨ 축복 강화 완료", user, "심연의 축복이 Lv." + user.abyssBlessing + "(으)로 상승했습니다!\n기둥 진입 시 주어지는 기본 산소량이 증가합니다.", "다시 확인하려면 [뒤로] 입력"));
             delete roomData.features.states.menuWait[targetUid];
         } else {
             replier.reply(formatError(user, "번호 오류", "1번 또는 2번을 선택하세요."));
         }
-    }
+    } 
     else if (waitInfo.type === 'pillar_combat') {
         var pl = user.pillarLoot;
         if (!pl) return;
         
         var curFloor = pl.floor;
-        var bless = Number(user.abyssBlessing || 0);
         
         if (choice === "1" || choice === "2") {
             var rand = Math.random() * 100;
             var isRush = (choice === "1");
-            var successRate = (isRush ? 55 : 85) + bless; // 심연의 축복으로 성공률 합산 상승
+            var successRate = (isRush ? 55 : 85); // 축복으로 인한 확률 합산 제거, 고정 확률 사용
             
             if (rand < successRate) {
                 var jump = isRush ? 2 : 1;
                 pl.floor += jump;
                 
                 var ecoMult = util_getEcoMultiplier(roomName);
-                // 포인트: (5000 + 층수*500) * 물가배율
                 var earned = Math.floor((5000 + pl.floor * 500) * ecoMult);
                 pl.points += earned;
                 
@@ -22577,10 +22578,9 @@ function _handlePillarSelection(choice, user, data, replier, roomName, targetUid
                               "\n\n🔻 도달: " + pl.floor + "층 (+" + jump + "층)\n" +
                               "💰 전리품 누적: +" + fp(earned) + "P";
                 
-                // 인장: 1~99층 5%, 100층당 1%씩 증가 (최대 30%)
                 var getEmb = 0;
                 for (var i = 0; i < jump; i++) {
-                    var targetFloor = curFloor + i + 1; // 돌파하는 각 층
+                    var targetFloor = curFloor + i + 1;
                     var dropRate = Math.min(30, 5 + Math.floor(targetFloor / 100));
                     
                     if (Math.random() * 100 < dropRate) {
@@ -22593,7 +22593,6 @@ function _handlePillarSelection(choice, user, data, replier, roomName, targetUid
                     msgBody += "\n\n💠 [심연의 인장 발견!]: " + getEmb + "개 획득";
                 }
                 
-                // 10층 단위 체크포인트 판정 (기록 갱신만 처리)
                 var oldCheck = Math.floor((curFloor - 1) / 10);
                 var newCheck = Math.floor((pl.floor - 1) / 10);
                 if (newCheck > oldCheck) {
@@ -22611,19 +22610,18 @@ function _handlePillarSelection(choice, user, data, replier, roomName, targetUid
                 replier.reply(formatCommand("✅ 하강 성공", user, msgBody));
                 roomData.features.states.menuWait[targetUid].time = Date.now();
                 
-                // 성공 알림 직후 다음 턴 알림 즉시 출력
                 _showPillarTurn(user, replier, roomName, targetUid);
 
             } else {
-                // 돌파 실패
-                var duraLoss = isRush ? 15 : 5;
-                user.durability = Math.max(0, (Number(user.durability)||100) - duraLoss);
+                // 돌파 실패 시 산소 차감 로직 적용
+                var oxyLoss = isRush ? 20 : 10;
+                pl.oxygen = Math.max(0, (Number(pl.oxygen)||100) - oxyLoss);
                 user.skipHealing = true;
                 
                 if (isRush) {
                     var finalPts = Math.floor(pl.points / 2);
-                    var failMsg = "💥 끔찍한 충돌!\n선체가 심하게 파손되어 긴급 부상합니다.\n\n" +
-                                  "🛠️ 내구도: -" + duraLoss + "%\n" +
+                    var failMsg = "💥 끔찍한 충돌!\n호흡 장치가 심하게 손상되어 긴급 부상합니다.\n\n" +
+                                  "🫧 산소량: -" + oxyLoss + "\n" +
                                   "💸 모은 포인트의 절반 분실\n" +
                                   "💰 최종 획득: +" + fp(finalPts) + "P";
                     
@@ -22632,25 +22630,30 @@ function _handlePillarSelection(choice, user, data, replier, roomName, targetUid
                     delete roomData.features.states.menuWait[targetUid];
                     safeSaveData(data, true);
                     replier.reply(formatCommand("💀 돌파 실패 (조난)", user, failMsg));
+                    return true;
                 } else {
                     var failMsg = "⚠️ 하강 중 거센 해류에 밀려났습니다.\n\n" +
-                                  "🛠️ 내구도: -" + duraLoss + "%\n" +
+                                  "🫧 산소량: -" + oxyLoss + "\n" +
                                   "해당 층에서 다시 시도합니다.";
                     safeSaveData(data, true);
                     replier.reply(formatCommand("⚠️ 하강 지연", user, failMsg));
                     roomData.features.states.menuWait[targetUid].time = Date.now();
-                    _showPillarTurn(user, replier, roomName, targetUid);
                 }
             }
             
-            // 내구도 0 사망 처리 (최종 가드)
-            if (user.durability === 0 && user.pillarLoot) {
+            // 산소 0 사망 처리 (최종 가드)
+            if (pl && pl.oxygen <= 0 && user.pillarLoot) {
                 var finalPts = Math.floor(user.pillarLoot.points / 2);
-                util_updatePoint(user, data.rooms["내리다"], finalPts, "심연의 기둥 침몰", roomName);
+                util_updatePoint(user, data.rooms["내리다"], finalPts, "심연의 기둥 산소 고갈", roomName);
                 user.pillarLoot = null;
                 delete roomData.features.states.menuWait[targetUid];
-                replier.reply(formatError(user, "침몰", "선박 내구도가 0이 되어 강제로 끌어올려집니다.\n전리품의 절반을 바다에 떨어뜨렸습니다."));
+                replier.reply(formatError(user, "산소 고갈", "산소가 0이 되어 긴급 구조됩니다.\n전리품의 절반을 바다에 떨어뜨렸습니다."));
                 safeSaveData(data, true);
+                return true;
+            }
+            
+            if (!isRush) {
+                 _showPillarTurn(user, replier, roomName, targetUid);
             }
 
         } else if (choice === "3") {
@@ -22670,22 +22673,26 @@ function _handlePillarSelection(choice, user, data, replier, roomName, targetUid
 function _showPillarTurn(user, replier, roomName, targetUid) {
     var pl = user.pillarLoot;
     if (!pl) return;
-    var dura = Number(user.durability || 100);
-    var dIcon = dura > 50 ? "🟢" : (dura >= 20 ? "🟡" : "🔴");
+    var oxy = Number(pl.oxygen || 0);
+    var bless = Number(user.abyssBlessing || 0);
+    var maxOxy = 100 + (bless * 5);
+    
+    // 산소 비율에 따른 아이콘 (50%, 20% 기준)
+    var ratio = oxy / maxOxy;
+    var dIcon = ratio > 0.5 ? "🟢" : (ratio >= 0.2 ? "🟡" : "🔴");
     
     var body = "현재 심연 " + pl.floor + "층을 지나고 있습니다...\n\n" +
-               "🛠️ 내구도: " + dIcon + " " + dura + "%\n" +
+               "🫧 산소 잔량: " + dIcon + " " + oxy + " / " + maxOxy + "\n" +
                "💰 누적 전리품: " + fp(pl.points) + "P\n" +
                "━━━━━━━━━━━━━━━\n\n" +
-               "1. 💥 과부하 돌파 (확률 낮음, +2층)\n" +
-               "   └ 실패 시: 내구도 -15% & 강제탈출(반토막)\n" +
-               "2. 🛡️ 신중한 하강 (확률 높음, +1층)\n" +
-               "   └ 실패 시: 내구도 -5% & 해당 층 재도전\n" +
+               "1. 💥 과부하 돌파 (확률 55%, +2층)\n" +
+               "   └ 실패 시: 산소 -20 & 강제탈출(반토막)\n" +
+               "2. 🛡️ 신중한 하강 (확률 85%, +1층)\n" +
+               "   └ 실패 시: 산소 -10 & 해당 층 재도전\n" +
                "3. 🏃 귀항 (현재 보상 100% 수령 및 탈출)";
                
     replier.reply(formatCommand("🔱 [심연의 기둥 - " + pl.floor + "층]", user, body, "번호를 선택하세요."));
 }
-
 //==========섹터55==========
 
 /**

@@ -11213,78 +11213,63 @@ function _handleShopEffect(item, user, roomName, replier, data, targetUid, final
         }
 
         var goodsType = item.value;
-        var currentLoc = user.currentLoc || "무역 지부";
-        var isInfinite = (currentLoc === "무역 지부" || currentLoc === "나소" || currentLoc === ELDORADO_CONFIG.NAME);
-        var pData = (roomData.features && roomData.features.portData) ? roomData.features.portData[currentLoc] : null;
+        var currentLoc = user.currentLoc || "무역 지부";
+        var isInfinite = (currentLoc === "무역 지부" || currentLoc === "나소" || currentLoc === ELDORADO_CONFIG.NAME);
+        var pData = (roomData.features && roomData.features.portData) ? roomData.features.portData[currentLoc] : null;
 
-        // 무한 가방 꼼수 차단 및 창고 자동 이송(분할 적재) 로직 적용
-
-        // 1. 현재 배에 실린 화물량 및 여유 공간 계산
-        var currentCargoCount = 0;
-        for (var key in (user.cargo || {})) currentCargoCount += Number(user.cargo[key] || 0);
-        currentCargoCount += Number(user.unknownCargo || 0);
+        // 1. 선박 적재함(Cargo) 용량 체크 (창고 체크 로직 삭제)
+        var currentCargoCount = 0;
+        for (var key in (user.cargo || {})) currentCargoCount += Number(user.cargo[key] || 0);
+        currentCargoCount += Number(user.unknownCargo || 0);
 
         var shipCfg = SYSTEM_CONFIG.TRADE.SHIPS[user.shipLevel || 1];
         var shipCap = shipCfg.capacity + (Number(user.enhLimit) || 0);
         var shipRem = Math.max(0, shipCap - currentCargoCount);
 
-        // 2. 현재 창고에 실린 화물량 및 여유 공간 계산
-        var w = user.warehouse || {}; var ws = user.warehouseSpec || {};
-        var whUsage = 0;
-        for (var k in w) whUsage += Number(w[k]);
-        for (var s in ws) whUsage += Number(ws[s]);
-        var whCap = user.warehouseSize || 500;
-        var whRem = Math.max(0, whCap - whUsage);
-
-        // 3. 전체 적재 공간 부족 시 결제 전 즉시 차단
-        if (qty > shipRem + whRem) {
+        // 2. 선박 적재 공간 부족 시 차단
+        if (qty > shipRem) {
             user.skipHealing = true;
-            replier.reply(formatError(user, "공간 부족", "선박과 창고의 빈 공간이 부족합니다.\n\n🚢 배 여유: " + shipRem + "칸\n📦 창고 여유: " + whRem + "칸\n\n💡 팁: [6. 물류 창고] 메뉴에서 용량을 확장하세요."));
+            replier.reply(formatError(user, "선박 용량 부족", "선박 적재함에 빈 공간이 부족합니다.\n\n🚢 남은 공간: " + shipRem + "칸\n📦 구매 시도: " + qty + "칸"));
             return;
         }
 
-        // [실물 재고 가드] 외항(일반 항구)에서 매입 시 재고 검증 및 차감
-        if (!isInfinite && pData && pData.inventory) {
-            var currentStock = Number(pData.inventory[goodsType] || 0);
-            if (currentStock < qty) {
-                user.skipHealing = true;
-                replier.reply(formatError(user, "재고 부족", "해당 항구의 [" + goodsType + "] 재고가 부족합니다.\n현재 잔여: " + currentStock + "상자\n요청 수량: " + qty + "상자"));
-                return;
-            }
-            pData.inventory[goodsType] -= qty; // 재고 차감 반영
-            util_refreshMarketRate(roomData, currentLoc, goodsType);
-        }
+        // [실물 재고 가드]
+        if (!isInfinite && pData && pData.inventory) {
+            var currentStock = Number(pData.inventory[goodsType] || 0);
+            if (currentStock < qty) {
+                user.skipHealing = true;
+                replier.reply(formatError(user, "재고 부족", "해당 항구의 [" + goodsType + "] 재고가 부족합니다.\n현재 잔여: " + currentStock + "상자"));
+                return;
+            }
+            pData.inventory[goodsType] -= qty;
+            util_refreshMarketRate(roomData, currentLoc, goodsType);
+        }
 
-        // 모든 검증을 통과한 이 시점에 실제 결제 진행
-        util_updatePoint(user, roomData, -finalPrice, "무역 화물 매입: " + item.value + " x" + qty, roomName);
+        // 결제 진행
+        util_updatePoint(user, roomData, -finalPrice, "무역 화물 매입: " + item.value + " x" + qty, roomName);
 
-        // [Gemini 요청] 선박 적재 개념 삭제 -> 창고로 100% 직행
         var currentUnitPrice = Math.floor(finalPrice / qty);
 
-        if (!user.warehouse) user.warehouse = {};
-        if (!user.warehouseAvg) user.warehouseAvg = {};
+        if (!user.cargo) user.cargo = {};
+        if (!user.cargoAvg) user.cargoAvg = {};
         
-        var wOldQty = Number(user.warehouse[goodsType] || 0);
-        var wOldAvg = Number(user.warehouseAvg[goodsType] || 0);
+        var cOldQty = Number(user.cargo[goodsType] || 0);
+        var cOldAvg = Number(user.cargoAvg[goodsType] || 0);
         
-        // 평단가 갱신 및 수량 합산
-        user.warehouseAvg[goodsType] = Math.floor(((wOldAvg * wOldQty) + (currentUnitPrice * qty)) / (wOldQty + qty));
-        user.warehouse[goodsType] = wOldQty + qty;
-
-        // 혹시 모를 잔존 선박 데이터 삭제 (데이터 정규화)
-        if (user.cargo && user.cargo[goodsType]) {
-            user.warehouse[goodsType] += user.cargo[goodsType];
-            delete user.cargo[goodsType];
-        }
+        // 선박 적재함(Cargo)에 수량 및 평단가 반영
+        user.cargoAvg[goodsType] = Math.floor(((cOldAvg * cOldQty) + (currentUnitPrice * qty)) / (cOldQty + qty));
+        user.cargo[goodsType] = cOldQty + qty;
 
         bankProcessState[targetUid] = { type: 'trade_cargo_done', time: Date.now() };
 
-        var loadBody = "[" + goodsType + " 상자] " + qty + "개를 구매했습니다.\n\n" +
-                       "📦 상태: 물류 창고로 전량 입고 완료\n" +
-                       "📊 현재 재고: " + user.warehouse[goodsType] + "상자 (평단: " + fp(user.warehouseAvg[goodsType]) + "P)\n\n" +
+        var loadBody = "[" + goodsType + " 상자] " + qty + "개를 구매하여 선박에 적재했습니다.\n\n" +
+                       "🚢 상태: 선박 적재함(Cargo) 입고 완료\n" +
+                       "📊 현재 적재: " + user.cargo[goodsType] + "상자 (평단: " + fp(user.cargoAvg[goodsType]) + "P)\n\n" +
+                       "💡 [시스템]: 상점 구매 물품은 즉시 선박에 실립니다.\n" +
+                       "보관이 필요하면 [물류 창고]에서 입고 처리를 하세요.\n\n" +
                        "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
-        replier.reply(formatCommand("🛒 화물 매입 완료", user, loadBody, "출항 준비: [/무역] ➔ 2번"));
+        replier.reply(formatCommand("🛒 선박 적재 완료", user, loadBody, "출항 준비: [/무역] ➔ 2번"));
         return; // 정상 종료
     }
 
@@ -17767,58 +17752,20 @@ function _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid
  */
 function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS) {
 
-    var stateRef = roomData.features.states.menuWait[user.uid];
-    if (stateRef && stateRef.isAutoLoaded !== true) {
-        stateRef.isAutoLoaded = true; // 화면 갱신 시 중복 이관을 방지하는 스위치
-        var shipCfg = cfg.SHIPS[user.shipLevel || 1];
-        var totalCap = shipCfg.capacity + (Number(user.enhLimit) || 0);
-        var currentLoaded = 0;
-        for (var c in selC) currentLoaded += Number(selC[c]);
-        for (var s in selS) currentLoaded += Number(selS[s]);
-        var remainingCap = Math.max(0, totalCap - currentLoaded);
-
-        var loadItem = function(key, available, type) {
-            if (available <= 0 || remainingCap <= 0) return;
-            var loadQty = Math.min(available, remainingCap);
-            if (type === 'cargo') {
-                selC[key] = (selC[key] || 0) + loadQty;
-                if (stateRef.selCargo) stateRef.selCargo[key] = selC[key];
-            } else {
-                selS[key] = (selS[key] || 0) + loadQty;
-                if (stateRef.selSpec) stateRef.selSpec[key] = selS[key];
-            }
-            remainingCap -= loadQty;
-        };
-
-        for (var k in (user.cargo || {})) loadItem(k, user.cargo[k], 'cargo');
-        for (var k in (user.warehouse || {})) loadItem(k, user.warehouse[k], 'cargo');
-        for (var s in (user.specialties || {})) loadItem(s, user.specialties[s], 'spec');
-        for (var s in (user.warehouseSpec || {})) {
-            if (s !== "_rare" && s !== "_unknown") loadItem(s, user.warehouseSpec[s], 'spec');
-        }
-        if (Number(user.rareSpecialties || 0) > 0) loadItem("_rare", user.rareSpecialties, 'spec');
-        if (Number((user.warehouseSpec || {})["_rare"] || 0) > 0) loadItem("_rare", user.warehouseSpec["_rare"], 'spec');
-        
-        if (Number(user.unknownCargo || 0) > 0) loadItem("_unknown", user.unknownCargo, 'spec');
-        if (Number((user.warehouseSpec || {})["_unknown"] || 0) > 0) loadItem("_unknown", user.warehouseSpec["_unknown"], 'spec');
-        // [증발 방지 가드] 자동 적재 완료 직후 데이터를 물리 파일에 즉시 박제하여 유실 차단
-        if (typeof globalData !== 'undefined' && typeof safeSaveData === 'function') {
-            safeSaveData(globalData, true);
-        }
-    }
+    // 사용자가 직접 선택하거나 '전부'를 입력해야만 적재됨.
 
     var market = roomData.features.tradeMarket || cfg.NATIONS;
     var nInfo = (dest === "무역 지부") ? { favorite: "N/A", hate: "N/A" } : (market[dest] || { favorite: "NONE", hate: "NONE" });
     var currentLoc = user.currentLoc || "무역 지부";
     var body = "📍 목적지: [" + dest + "]\n\n" +
-               "[📦 무역품 보유 현황]\n";
+               "[🚢 선박 적재함 보유 현황]\n"; // 텍스트 변경: 창고 -> 선박 적재함
     
     var availableItems = []; 
     
-    // [Gemini 요청] user.cargo(선박보관함) 참조 제거 -> 오직 창고(warehouse)만 참조
+    // [Gemini 요청] Warehouse 참조 제거 -> 오직 Cargo(선박)만 참조하여 리스트 생성
     
-    // 1. 일반 화물 (창고 기준)
-    var allCargo = user.warehouse || {};
+    // 1. 일반 화물 (선박 Cargo 기준)
+    var allCargo = user.cargo || {};
     for (var k in allCargo) {
         var total = Number(allCargo[k] || 0);
         var selected = Number(selC[k] || 0);
@@ -17832,10 +17779,10 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
         }
     }
 
-    // 2. 특산품 (창고 기준)
-    var allSpec = user.warehouseSpec || {};
+    // 2. 특산품 (선박 Specialties 기준)
+    var allSpec = user.specialties || {};
     for (var s in allSpec) {
-        if (s === "_rare" || s === "_unknown") continue; // 내부 키 제외
+        if (s === "_rare" || s === "_unknown") continue; 
         
         var totalS = Number(allSpec[s] || 0);
         var selectedS = Number(selS[s] || 0);
@@ -17854,8 +17801,8 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
         }
     }
 
-    /* 3. 보물 및 미확인 교역품 (창고 기준) */
-    var rareCount = Number((user.warehouseSpec || {})["_rare"] || 0);
+    /* 3. 보물 및 미확인 교역품 (선박 기준) */
+    var rareCount = Number(user.rareSpecialties || 0); // user.rareSpecialties는 선박/캐릭 귀속이므로 그대로 사용
     var selectedRare = Number(selS._rare || 0);
     var remainingRare = rareCount - selectedRare;
 
@@ -17863,7 +17810,7 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
         availableItems.push({ type: 'rare', name: "진귀한 보물", qty: remainingRare, status: "💰고정가 (10만P)" });
     }
 
-    var unknownCount = Number(user.unknownCargo || 0) + Number((user.warehouseSpec || {})["_unknown"] || 0);
+    var unknownCount = Number(user.unknownCargo || 0); // user.unknownCargo도 선박 귀속
     var selectedUnknown = Number(selS._unknown || 0);
     var remainingUnknown = unknownCount - selectedUnknown;
     
@@ -17939,7 +17886,7 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     var remainingCap = Math.max(0, totalCap - currentLoaded);
 
     if (input === "전부") {
-        // 남은 용량(remainingCap) 내에서만 순차적으로 적재하도록 안전 로직 적용
+        // 남은 용량(remainingCap) 내에서만 순차적으로 적재
         var loadItem = function(key, available, type) {
             if (available <= 0 || remainingCap <= 0) return;
             var loadQty = Math.min(available, remainingCap);
@@ -17948,23 +17895,17 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
             remainingCap -= loadQty;
         };
 
+        // user.warehouse 루프 삭제 -> 오직 user.cargo만 순회
         for (var k in (user.cargo || {})) loadItem(k, user.cargo[k], 'cargo');
-        for (var k in (user.warehouse || {})) loadItem(k, user.warehouse[k], 'cargo');
         for (var s in (user.specialties || {})) loadItem(s, user.specialties[s], 'spec');
-        for (var s in (user.warehouseSpec || {})) {
-            if (s !== "_rare" && s !== "_unknown") loadItem(s, user.warehouseSpec[s], 'spec');
-        }
-        if (Number(user.rareSpecialties || 0) > 0) loadItem("_rare", user.rareSpecialties, 'spec');
-        if (Number((user.warehouseSpec || {})["_rare"] || 0) > 0) loadItem("_rare", user.warehouseSpec["_rare"], 'spec');
         
+        if (Number(user.rareSpecialties || 0) > 0) loadItem("_rare", user.rareSpecialties, 'spec');
         if (Number(user.unknownCargo || 0) > 0) loadItem("_unknown", user.unknownCargo, 'spec');
-        if (Number((user.warehouseSpec || {})["_unknown"] || 0) > 0) loadItem("_unknown", user.warehouseSpec["_unknown"], 'spec');
         
         if (remainingCap <= 0) {
             replier.reply("⚠️ 적재 공간이 한계에 도달하여 남은 공간만큼만 화물이 선적되었습니다.");
         }
         
-        // [증발 방지 가드] 상태 시간 갱신 및 물리 파일 즉시 저장
         state.time = Date.now();
         safeSaveData(data, true);
         
@@ -18250,45 +18191,42 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     var logicRoom = (typeof ALLOWED_ROOMS !== 'undefined' && ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var roomData = data.rooms[logicRoom];
 
-    // [Gemini 요청] 출항 시 창고(warehouse)에서만 차감 (배 저장소 개념 삭제)
-    if (!user.warehouse) user.warehouse = {};
+    // [Gemini 요청] 출항 시 선박(cargo)에서 차감 (창고 참조 삭제)
+    if (!user.cargo) user.cargo = {};
     for (var good in selC) {
         var loadQty = Number(selC[good] || 0);
         if (loadQty > 0) {
-            user.warehouse[good] = Math.max(0, (Number(user.warehouse[good]) || 0) - loadQty);
-            if (user.warehouse[good] <= 0) delete user.warehouse[good];
+            user.cargo[good] = Math.max(0, (Number(user.cargo[good]) || 0) - loadQty);
+            if (user.cargo[good] <= 0) delete user.cargo[good];
         }
     }
 
-    if (!user.warehouseSpec) user.warehouseSpec = {};
+    if (!user.specialties) user.specialties = {};
     for (var spec in selS) {
         if (spec.indexOf("_") === 0) continue; 
         
         var loadSpecQty = Number(selS[spec] || 0);
         if (loadSpecQty > 0) {
-            user.warehouseSpec[spec] = Math.max(0, (Number(user.warehouseSpec[spec]) || 0) - loadSpecQty);
-            if (user.warehouseSpec[spec] <= 0) delete user.warehouseSpec[spec];
+            user.specialties[spec] = Math.max(0, (Number(user.specialties[spec]) || 0) - loadSpecQty);
+            if (user.specialties[spec] <= 0) delete user.specialties[spec];
         }
     }
 
-    // 진귀한 보물 차감 (창고 기준)
+    // 진귀한 보물 차감 (선박 기준)
     var rareLoot = Number(selS["_rare"] || 0);
     if (rareLoot > 0) {
-        user.warehouseSpec["_rare"] = Math.max(0, (Number(user.warehouseSpec["_rare"]) || 0) - rareLoot);
-        if (user.warehouseSpec["_rare"] <= 0) delete user.warehouseSpec["_rare"];
+        user.rareSpecialties = Math.max(0, (Number(user.rareSpecialties) || 0) - rareLoot);
     }
-
+    
+    // 미확인 교역품 차감 및 변환 로직 (선박 기준)
     var selectedUnknownCount = Number(selS["_unknown"] || 0);
     if (selectedUnknownCount > 0) {
+        // ... (기존 변환 로직 유지) ...
         var maxQty = -1;
         var maxGoodKey = "";
-
         for (var good in selC) {
             var currentQty = Number(selC[good] || 0);
-            if (currentQty > maxQty) {
-                maxQty = currentQty;
-                maxGoodKey = good;
-            }
+            if (currentQty > maxQty) { maxQty = currentQty; maxGoodKey = good; }
         }
 
         if (maxGoodKey !== "") {
@@ -18298,16 +18236,13 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
         } else {
             var destFav = (cfg.NATIONS[dest] && cfg.NATIONS[dest].favorite) ? cfg.NATIONS[dest].favorite : "식료품";
             if (destFav === "NONE" || destFav === "N/A") destFav = "식료품"; 
-            
             selC[destFav] = selectedUnknownCount;
             var transformMsg = "✨ [물자 변환]: 선적된 일반 화물이 없어 미확인 교역품 " + selectedUnknownCount + "상자가 목적지 선호품인 [" + destFav + "](으)로 자동 변환되었습니다.";
             extraMsg = extraMsg ? extraMsg + "\n" + transformMsg : transformMsg;
         }
         
-        // 차감 로직 (창고 기준)
-        user.warehouseSpec["_unknown"] = Math.max(0, (Number(user.warehouseSpec["_unknown"]) || 0) - selectedUnknownCount);
-        if (user.warehouseSpec["_unknown"] <= 0) delete user.warehouseSpec["_unknown"];
-        
+        // 차감 (user.unknownCargo)
+        user.unknownCargo = Math.max(0, (Number(user.unknownCargo) || 0) - selectedUnknownCount);
         delete selS["_unknown"];
     }
 
@@ -19081,17 +19016,15 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
                     if (SYNERGY_RELATION[v.dest] === good) {
                         pInfoTarget.synergyStack = (Number(pInfoTarget.synergyStack) || 0) + settledCount;
                     }
-
                     util_refreshMarketRate(economyRoomData, v.dest, good);
                 }
             }
-
-            // 유저 인벤토리 실제 반영 (전량 매각 완료)
-            if (user.cargo) {
-                user.cargo[good] = 0;
-                user.cargoAvg[good] = 0;
-            }
-        }
+            
+            // [Gemini 요청] 정산 완료 시 판매된 수량만큼 스냅샷에서 제거했지만,
+            // 회항(HomeReturn)이거나 판매되지 않은 물품이 있다면 user.cargo(선박)에 다시 채워넣어야 함
+            // 하지만 현재 로직은 '전량 매각'을 전제로 하므로,
+            // 매각되지 않은 케이스(예: 시세가 안맞거나 회항 등)를 위해 아래 로직 추가
+        } // for cargoToSell 루프 종료
     }
 
     // 3. 특산품 정산 (specialtyToSell 스냅샷 기반 루프)
@@ -19559,6 +19492,30 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     var finalTitle = "🌊 [항해 일지: 무역 보고]"; 
     var disasterLogStr = (typeof disasterLog !== 'undefined' && disasterLog) ? disasterLog.trim() : "";
     var separateEmergencyMsg = null;
+
+    // [Gemini 요청] 긴급 회항 시 적재 완료 상태 유지 (창고 반환 X)
+    
+    if (isHomeReturn) {
+        // 일반 화물 복구
+        if (!user.cargo) user.cargo = {};
+        for (var g in cargoToSell) {
+             var q = Number(cargoToSell[g] || 0);
+             if (q > 0) {
+                 user.cargo[g] = (Number(user.cargo[g]) || 0) + q;
+             }
+        }
+        // 특산품 복구
+        if (!user.specialties) user.specialties = {};
+        for (var s in specialtyToSell) {
+             var q = Number(specialtyToSell[s] || 0);
+             if (q > 0) {
+                 if (s === "_rare") user.rareSpecialties = (Number(user.rareSpecialties) || 0) + q;
+                 else if (s === "_unknown") user.unknownCargo = (Number(user.unknownCargo) || 0) + q;
+                 else user.specialties[s] = (Number(user.specialties[s]) || 0) + q;
+             }
+        }
+        disasterLog += "\n⚓ [귀항 완료]: 모든 적재 화물이 선박에 그대로 유지됩니다.";
+    }
 
     var profitSign = totalNetMargin >= 0 ? "+" : "-";
     var displayMargin = fp(Math.abs(totalNetMargin)); 

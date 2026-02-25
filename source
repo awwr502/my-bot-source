@@ -18006,18 +18006,34 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
 
     body += "\n[✅ 이번 출항 선적 리스트]\n";
     var selList = [];
-    for (var c in selC) selList.push("• " + c + " x" + selC[c] + "상자");
+    
+    // [Gemini 패치]: 기존 선박 보유분(user.cargo)과 창고 하역분(selC)을 병합하여 출력
+    var combinedCargo = JSON.parse(JSON.stringify(user.cargo || {}));
+    for (var c in selC) combinedCargo[c] = (combinedCargo[c] || 0) + Number(selC[c]);
+    
+    for (var c in combinedCargo) {
+        if (combinedCargo[c] > 0) selList.push("• " + c + " x" + combinedCargo[c] + "상자");
+    }
 
-    if (selectedUnknown > 0) {
-        selList.push("• 📦미확인 교역품 x" + selectedUnknown + "상자 (출항 시 변환)");
+    var combinedUnknown = Number(user.unknownCargo || 0) + Number(selS["_unknown"] || 0);
+    if (combinedUnknown > 0) {
+        selList.push("• 📦미확인 교역품 x" + combinedUnknown + "상자 (출항 시 변환)");
     }
     
+    var combinedRare = Number(user.rareSpecialties || 0) + Number(selS["_rare"] || 0);
+    if (combinedRare > 0) {
+        selList.push("• 💎진귀한 보물 x" + combinedRare + "개");
+    }
+
+    var combinedSpec = JSON.parse(JSON.stringify(user.specialties || {}));
     for (var s in selS) {
-        if (s === "_rare") {
-            if (selS[s] > 0) selList.push("• 💎진귀한 보물 x" + selS[s] + "개");
-        } else if (s !== "_unknown") {
-            if (selS[s] > 0) selList.push("• ⭐" + s + " x" + selS[s] + "개");
+        if (s !== "_rare" && s !== "_unknown") {
+            combinedSpec[s] = (combinedSpec[s] || 0) + Number(selS[s]);
         }
+    }
+    
+    for (var s in combinedSpec) {
+        if (combinedSpec[s] > 0) selList.push("• ⭐" + s + " x" + combinedSpec[s] + "개");
     }
 
     if (selList.length > 0) {
@@ -18058,8 +18074,16 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     var shipCfg = cfg.SHIPS[user.shipLevel || 1];
     var totalCap = shipCfg.capacity + (Number(user.enhLimit) || 0);
     var currentLoaded = 0;
+    
+    // [Gemini 패치]: 기존 선박 보유분 합산 (용량 초과 적재 방지)
+    for (var c in (user.cargo || {})) currentLoaded += Number(user.cargo[c]);
+    for (var s in (user.specialties || {})) currentLoaded += Number(user.specialties[s]);
+    currentLoaded += Number(user.unknownCargo || 0) + Number(user.rareSpecialties || 0);
+
+    // 창고 하역분 합산
     for (var c in state.selCargo) currentLoaded += Number(state.selCargo[c]);
     for (var s in state.selSpec) currentLoaded += Number(state.selSpec[s]);
+    
     var remainingCap = Math.max(0, totalCap - currentLoaded);
 
     if (input === "전부") {
@@ -18409,33 +18433,49 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
         if (user.warehouseSpec["_rare"] <= 0) delete user.warehouseSpec["_rare"];
     }
     
-    // 미확인 교역품 차감 및 변환 로직 (창고 기준)
-    var selectedUnknownCount = Number(selS["_unknown"] || 0);
-    if (selectedUnknownCount > 0) {
+    // [Gemini 패치]: 스냅샷 생성 시 기존 선박 보유분(user.cargo)과 창고 하역분(selC)을 완벽 병합
+    var finalCargoSnap = JSON.parse(JSON.stringify(user.cargo || {}));
+    for (var c in selC) finalCargoSnap[c] = (finalCargoSnap[c] || 0) + Number(selC[c]);
+    
+    var finalSpecSnap = JSON.parse(JSON.stringify(user.specialties || {}));
+    for (var s in selS) {
+        if (s !== "_rare" && s !== "_unknown") {
+            finalSpecSnap[s] = (finalSpecSnap[s] || 0) + Number(selS[s]);
+        }
+    }
+
+    // 미확인 교역품 차감 및 변환 로직 (통합본 기준 연산)
+    var totalUnknownCount = Number(user.unknownCargo || 0) + Number(selS["_unknown"] || 0);
+    if (totalUnknownCount > 0) {
         var maxQty = -1;
         var maxGoodKey = "";
-        for (var good in selC) {
-            var currentQty = Number(selC[good] || 0);
+        for (var good in finalCargoSnap) {
+            var currentQty = Number(finalCargoSnap[good] || 0);
             if (currentQty > maxQty) { maxQty = currentQty; maxGoodKey = good; }
         }
 
         if (maxGoodKey !== "") {
-            selC[maxGoodKey] = (Number(selC[maxGoodKey]) || 0) + selectedUnknownCount;
-            var transformMsg = "✨ [물자 변환]: 미확인 교역품 " + selectedUnknownCount + "상자가 수량이 가장 많은 [" + maxGoodKey + "](으)로 변환되어 선적되었습니다.";
+            finalCargoSnap[maxGoodKey] = (Number(finalCargoSnap[maxGoodKey]) || 0) + totalUnknownCount;
+            var transformMsg = "✨ [물자 변환]: 미확인 교역품 " + totalUnknownCount + "상자가 수량이 가장 많은 [" + maxGoodKey + "](으)로 변환되어 선적되었습니다.";
             extraMsg = extraMsg ? extraMsg + "\n" + transformMsg : transformMsg;
         } else {
             var destFav = (cfg.NATIONS[dest] && cfg.NATIONS[dest].favorite) ? cfg.NATIONS[dest].favorite : "식료품";
             if (destFav === "NONE" || destFav === "N/A") destFav = "식료품"; 
-            selC[destFav] = selectedUnknownCount;
-            var transformMsg = "✨ [물자 변환]: 선적된 일반 화물이 없어 미확인 교역품 " + selectedUnknownCount + "상자가 목적지 선호품인 [" + destFav + "](으)로 자동 변환되었습니다.";
+            finalCargoSnap[destFav] = totalUnknownCount;
+            var transformMsg = "✨ [물자 변환]: 선적된 일반 화물이 없어 미확인 교역품 " + totalUnknownCount + "상자가 목적지 선호품인 [" + destFav + "](으)로 자동 변환되었습니다.";
             extraMsg = extraMsg ? extraMsg + "\n" + transformMsg : transformMsg;
         }
         
-        // 차감
+        // 창고 하역분 차감 및 기존 선박 보유분 초기화
+        var selectedUnknownCount = Number(selS["_unknown"] || 0);
         user.warehouseSpec["_unknown"] = Math.max(0, (Number(user.warehouseSpec["_unknown"]) || 0) - selectedUnknownCount);
         if (user.warehouseSpec["_unknown"] <= 0) delete user.warehouseSpec["_unknown"];
         delete selS["_unknown"];
+        user.unknownCargo = 0; 
     }
+
+    var totalRareCount = Number(user.rareSpecialties || 0) + Number(selS["_rare"] || 0);
+    if (totalRareCount > 0) finalSpecSnap["_rare"] = totalRareCount;
 
     user.isPillaged = false;
 
@@ -18448,35 +18488,25 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     
     var ship = cfg.SHIPS[user.shipLevel || 1];
     
-    // [v15.9.3] 초 단위 정밀 계산 엔진 도입
-    var baseTimeSec = (60 * ship.speedMult) * 60; // 기본 항해 시간 (초)
-    var enhSec = Number(user.enhTime || 0);       // 초월 강화 보정 (초)
-    
-    // 1단계: 기본 시간 + 강화 보정 합산
+    var baseTimeSec = (60 * ship.speedMult) * 60; 
+    var enhSec = Number(user.enhTime || 0);       
     var totalSec = baseTimeSec + enhSec;
 
-    // 2단계: 정부 정책 배율 적용
     var pol = util_getActivePolicy(roomData);
     if (pol.tradeSpeedMult) {
         totalSec *= pol.tradeSpeedMult;
     }
     
-    // 3단계: 순풍(Tailwind) 확률 판정 및 적용
     var isSmooth = Math.random() < 0.1;
     if (isSmooth) {
-        totalSec *= 0.8; // 20% 단축
+        totalSec *= 0.8; 
     }
     
-    // 4단계: 최종 시간 확정 (분/초 단위 분리 표기)
     var finalMin = Math.floor(totalSec / 60);
     var finalSec = Math.floor(totalSec % 60);
-    
     var arrival = Date.now() + (totalSec * 1000);
 
-    // === 내구도 차감 로직 ===
-    var wear = Math.floor(Math.random() * 6) + 10; // 10~15%
-    
-    // [v18.0] 도감 40% 보상: 내구도 감소폭 하락 (1~3%p 감소)
+    var wear = Math.floor(Math.random() * 6) + 10; 
     if (user.pediaRewardLevel >= 2) {
         var reduce = Math.floor(Math.random() * 3) + 1;
         wear = Math.max(1, wear - reduce);
@@ -18485,13 +18515,10 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     user.durability = Math.max(0, (user.durability || 100) - wear);
     user.skipHealing = true;
     
-   // [v17.7.3] 출항 시점의 계약 정보 박제 (출발 시간 기준 판정의 핵심)
     var currentQuest = (roomData.features && roomData.features.activeContract) ? JSON.parse(JSON.stringify(roomData.features.activeContract)) : null;
-
-    // [v18.5] 조우 기록 승계 로직: 긴급 회항 후 재출항 시 중복 조우를 방지합니다.
     var prevEncountered = (user.voyage && user.voyage.hasEncountered === true);
 
-    // 데이터 패키징 (v.arrival에 최종 계산된 값 저장)
+    // 데이터 패키징 (v.arrival에 최종 계산된 값 저장, 스냅샷에 병합본 적용)
     user.voyage = {
         active: true, 
         dest: dest, 
@@ -18499,13 +18526,12 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
         arrival: arrival, 
         startTime: Date.now(),
         isSmuggling: !!isSmuggling,
-        hasEncountered: prevEncountered, // 이전 항해 객체에서 기록을 가져옴
-        contractSnapshot: currentQuest, // 현재 계약 정보를 스냅샷으로 보관
-        // 기존 NATIONS 상수가 아닌 현재 방의 실시간 시세(tradeMarket)를 저장
+        hasEncountered: prevEncountered, 
+        contractSnapshot: currentQuest, 
         marketSnapshot: JSON.parse(JSON.stringify(roomData.features.tradeMarket || {})), 
         ecoMultSnapshot: util_getEcoMultiplier(roomName),
-        cargoSnapshot: JSON.parse(JSON.stringify(selC || {})), 
-        specialtySnapshot: JSON.parse(JSON.stringify(selS || {})),
+        cargoSnapshot: finalCargoSnap, 
+        specialtySnapshot: finalSpecSnap,
         escortUid: escortUid || null,
         escortFee: escortFee || 0,
         isSmooth: isSmooth,

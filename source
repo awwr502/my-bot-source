@@ -7836,15 +7836,22 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             }
 
             if (isSpec) {
-                if (!targetUser.specialties) targetUser.specialties = {};
-                targetUser.specialties[itemName] = (Number(targetUser.specialties[itemName]) || 0) + count;
-            } else {
-                if (!targetUser.cargo) targetUser.cargo = {};
-                targetUser.cargo[itemName] = (Number(targetUser.cargo[itemName]) || 0) + count;
-            }
-        
-        targetUser.skipHealing = true;
-        replier.reply(formatAdmin("📦 화물 강제 복구 완료", "대상: [" + targetRoom + "] " + targetUser.name + "\n품목: " + (isSpec ? "[특] " : "") + itemName + "\n수량: " + count + "개 추가 완료"));
+            if (!tUser.warehouseSpec) tUser.warehouseSpec = {};
+            tUser.warehouseSpec[itemName] = (Number(tUser.warehouseSpec[itemName]) || 0) + count;
+        } else {
+            if (!tUser.warehouse) tUser.warehouse = {};
+            if (!tUser.warehouseAvg) tUser.warehouseAvg = {};
+            var wQty = Number(tUser.warehouse[itemName] || 0);
+            var wAvg = Number(tUser.warehouseAvg[itemName] || 0);
+            var baseCost = (SYSTEM_CONFIG && SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.GOODS_COST && SYSTEM_CONFIG.TRADE.GOODS_COST[itemName]) ? SYSTEM_CONFIG.TRADE.GOODS_COST[itemName] : 10000;
+            
+            tUser.warehouseAvg[itemName] = Math.floor(((wAvg * wQty) + (baseCost * count)) / (wQty + count));
+            tUser.warehouse[itemName] = wQty + count;
+        }
+        
+        tUser.skipHealing = true;
+        safeSaveData(data, true);
+        replier.reply(formatAdmin("📦 화물 강제 복구 완료", "대상: " + tUser.name + "\n품목: " + (isSpec ? "[특] " : "") + itemName + "\n수량: " + count + "개 추가\n목적지: 물류 창고"));
     }
 
          else if (type === "admin_trade_speedup") {
@@ -14613,22 +14620,22 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
 
         if (isTradeItem) {
             // [무역품 처리] 창고(cargo)로 지급
-            if (!targetUser.cargo) targetUser.cargo = {};
-            if (!targetUser.cargoAvg) targetUser.cargoAvg = {};
+           if (!targetUser.warehouse) targetUser.warehouse = {};
+            if (!targetUser.warehouseAvg) targetUser.warehouseAvg = {};
 
-            var oldQty = Number(targetUser.cargo[matchedGood] || 0);
-            var oldAvg = Number(targetUser.cargoAvg[matchedGood] || 0);
-            
-            // 시스템 기본가 설정 (수익률 계산용)
-            var basePrices = { "식료품": 10000, "공업품": 15000, "공예품": 20000, "귀금속": 25000, "보석": 30000, "밀수품": 10000 };
-            var basePrice = basePrices[matchedGood] || 10000;
+            var oldQty = Number(targetUser.warehouse[matchedGood] || 0);
+            var oldAvg = Number(targetUser.warehouseAvg[matchedGood] || 0);
+            
+            // 시스템 기본가 설정 (수익률 계산용)
+            var basePrices = { "식료품": 10000, "공업품": 15000, "공예품": 20000, "귀금속": 25000, "보석": 30000, "밀수품": 10000 };
+            var basePrice = basePrices[matchedGood] || 10000;
 
-            targetUser.cargo[matchedGood] = oldQty + qty;
-            targetUser.cargoAvg[matchedGood] = Math.floor(((oldAvg * oldQty) + (basePrice * qty)) / (oldQty + qty));
+            targetUser.warehouse[matchedGood] = oldQty + qty;
+            targetUser.warehouseAvg[matchedGood] = Math.floor(((oldAvg * oldQty) + (basePrice * qty)) / (oldQty + qty));
 
-            replier.reply(formatAdmin("🚢 무역품 창고 지급", 
-                targetNick + "님의 창고에 [" + matchedGood + "] " + qty + "상자를 지급했습니다.\n" +
-                "📦 현재 창고 보유량: " + targetUser.cargo[matchedGood] + "상자"));
+            replier.reply(formatAdmin("🚢 무역품 창고 지급", 
+                targetNick + "님의 물류 창고에 [" + matchedGood + "] " + qty + "상자를 지급했습니다.\n" +
+                "📦 현재 창고 보유량: " + targetUser.warehouse[matchedGood] + "상자"));
         } else {
             // [일반 아이템 처리] 기존 인벤토리 지급 함수 호출
             _executeItemGive(targetUser, itemName, qty, replier, targetRoom);

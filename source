@@ -9740,7 +9740,29 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     else if (state.type === 'trade_governor_office') { _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_royal_office') { _handleRoyalOffice(msg, user, data, replier, roomName, targetUid); return true; }
     else if (state.type === 'trade_job_settlement') { _handleJobSettlement(msg, user, data, replier, roomName, targetUid); return true; }
-    else if (state.type === 'trade_select_cargo') { _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg); return true; }
+    else if (state.type === 'trade_select_cargo') { 
+        var input = msg.trim();
+        if (input === "출항" || input === "호위") {
+            var stateRef = roomData.features.states.menuWait[targetUid];
+            if (stateRef && (!stateRef.extra.loaded || stateRef.extra.loaded.length === 0)) {
+                if (!stateRef.extra.loaded) stateRef.extra.loaded = [];
+                // 배의 화물을 하역(loaded) 상태로 즉시 강제 복사
+                for (var k in (user.cargo||{})) { if(user.cargo[k]>0) stateRef.extra.loaded.push({type:'cargo', name:k, qty:user.cargo[k]}); }
+                for (var s in (user.specialties||{})) { if(user.specialties[s]>0) stateRef.extra.loaded.push({type:'spec', name:s, qty:user.specialties[s]}); }
+                if (Number(user.rareSpecialties||0) > 0) stateRef.extra.loaded.push({type:'_rare', name:'_rare', qty:user.rareSpecialties});
+                if (Number(user.unknownCargo||0) > 0) stateRef.extra.loaded.push({type:'_unknown', name:'_unknown', qty:user.unknownCargo});
+                
+                // 기존 화물 비우기 (중복 복사 방지)
+                user.cargo = {};
+                user.specialties = {};
+                user.rareSpecialties = 0;
+                user.unknownCargo = 0;
+            }
+        }
+        // 관리자님의 기존 처리 함수 호출 유지
+        _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUid, tradeCfg); 
+        return true;
+    }
     else if (state.type === 'trade_pirate_menu') {
         if (choice === "1") _showRaidList(user, replier, data, roomName, targetUid);
         else if (choice === "2") _showPirateInfo(user, replier);
@@ -17773,6 +17795,31 @@ function _handleGovernorSettlement(msg, user, data, replier, roomName, targetUid
  * 🚢 무역 하역 설정 UI 출력 함수 (디자인 가독성 강화)
  */
 function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS) {
+
+    var stateRef = roomData.features.states.menuWait[user.uid];
+    if (stateRef && stateRef.isAutoLoaded !== true) {
+        stateRef.isAutoLoaded = true; // 화면 갱신 시 중복 이관을 방지하는 스위치
+        var shipCfg = cfg.SHIPS[user.shipLevel || 1];
+        var totalCap = shipCfg.capacity + (Number(user.enhLimit) || 0);
+        var currentLoaded = 0;
+        for (var c in selC) currentLoaded += Number(selC[c]);
+        for (var s in selS) currentLoaded += Number(selS[s]);
+        var remainingCap = Math.max(0, totalCap - currentLoaded);
+
+        var loadItem = function(key, available, type) {
+            if (available <= 0 || remainingCap <= 0) return;
+            var loadQty = Math.min(available, remainingCap);
+            if (type === 'cargo') selC[key] = (selC[key] || 0) + loadQty;
+            else selS[key] = (selS[key] || 0) + loadQty;
+            remainingCap -= loadQty;
+        };
+
+        for (var k in (user.cargo || {})) loadItem(k, user.cargo[k], 'cargo');
+        for (var s in (user.specialties || {})) loadItem(s, user.specialties[s], 'spec');
+        if (Number(user.rareSpecialties || 0) > 0) loadItem("_rare", user.rareSpecialties, 'spec');
+        if (Number(user.unknownCargo || 0) > 0) loadItem("_unknown", user.unknownCargo, 'spec');
+    }
+
     var market = roomData.features.tradeMarket || cfg.NATIONS;
     var nInfo = (dest === "무역 지부") ? { favorite: "N/A", hate: "N/A" } : (market[dest] || { favorite: "NONE", hate: "NONE" });
     var currentLoc = user.currentLoc || "무역 지부";
@@ -18118,25 +18165,13 @@ function _prepareVoyage(user, replier, cfg, roomData) {
         return true;
     }
 
-    // 1. 내 화물 목록 작성
-    var cargoList = []; var total = 0;
-    var myCargo = user.cargo || {};
-    var mySpec = user.specialties || {};
-    
-    for (var k in myCargo) {
-        var q = Number(myCargo[k]);
-        if (q > 0) { cargoList.push("• " + k + ": " + q + "상자"); total += q; }
-    }
-    for (var s in mySpec) {
-        if (mySpec[s] > 0) { cargoList.push("⭐ " + s + ": " + mySpec[s] + "상자"); total += 1; }
-    }
-
-    if (user.unknownCargo > 0) {
-        cargoList.push("📦 미확인 교역품: " + user.unknownCargo + "상자");
-        total += user.unknownCargo;
-    }
-
-    if (user.rareSpecialties > 0) cargoList.push("• 💎 진귀한 보물: " + user.rareSpecialties + "개");
+    // 1. 기존 내 가방 대신 물류 창고 현황을 불러오도록 변수 교체
+    var cargoList = []; 
+    var w = user.warehouse || {};
+    var ws = user.warehouseSpec || {};
+    for (var k in w) { if (w[k] > 0) cargoList.push("• " + k + ": " + w[k] + "상자"); }
+    for (var s in ws) { if (ws[s] > 0) cargoList.push("⭐ " + s + ": " + ws[s] + "상자"); }
+    if (cargoList.length === 0) cargoList.push("- 보관 중인 물자가 없습니다 -");
 
     var nations = Object.keys(cfg.NATIONS);
     var nStr = ""; 
@@ -18182,7 +18217,7 @@ function _prepareVoyage(user, replier, cfg, roomData) {
             "도착 시 특산품을 최대 3배 획득합니다!\n\n" +
             "↩️ 뒤로 / 🏠 처음으로 / ❎취소";
             
-    replier.reply(formatCommand("🚢 목적지 설정", user, "[내 보관함]\n" + cargoList.join("\n") + "\n\n[출항지 선택]\n" + nStr, "국가 번호를 입력하세요."));
+    replier.reply(formatCommand("🚢 목적지 설정", user, "[📦 물류 창고 현황]\n" + cargoList.join("\n") + "\n\n[출항지 선택]\n" + nStr, "국가 번호를 입력하세요."));
     return true;
 }
 

@@ -3373,8 +3373,11 @@ function util_refreshMarketRate(roomData, portName, goodName) {
 
 /* 🏛️ 지하 도시(Underground City) 상수 설정 */
 var CITY_CONFIG = {
-    EXPAND_COST_BASE: 3000000, // 슬롯 확장 기본 비용 (슬롯 수 비례 증가)
+    EXPAND_COST_BASE: 500000, // 슬롯 확장 기본 비용 (슬롯 수 비례 증가)
+    EXPAND_TIME_MS: 30 * 60 * 1000, // 구역 개척 소요 시간 (30분)
     MAX_SLOTS: 10,
+    TAX_PER_POP: 20, // 인구 1명당 시간당 생산하는 세금
+    MAINT_PER_BLD: 15000, // 건물 1개당 시간당 소모되는 유지비
     BUILDINGS: {
         "tent": { key: "tent", name: "천막촌", icon: "🏕️", type: "주거", cost: 100000, popBonus: 100, desc: "기본 거주 구역 (+100명)" },
         "market": { key: "market", name: "지하 시장", icon: "⚖️", type: "상업", cost: 300000, taxBoost: 0.1, desc: "세금 수익률 10% 증가" },
@@ -3397,24 +3400,56 @@ function _gameCityLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 초기 데이터 세팅 (Deep-Healer 1차 보강)
+        // 초기 데이터 세팅 및 개척 객체 보강
         if (!user.undergroundCity) {
-            user.undergroundCity = { level: 1, slots: 1, maxSlots: 5, population: 0, happiness: 100, vault: 0, buildings: {} };
+            user.undergroundCity = { level: 1, slots: 1, maxSlots: 5, population: 0, happiness: 100, vault: 0, buildings: {}, expanding: { active: false, endTime: 0 } };
         }
         var city = user.undergroundCity;
+        if (!city.expanding) city.expanding = { active: false, endTime: 0 };
+
+        // 1. 개척 완료 자동 정산 로직
+        var expandMsg = "";
+        if (city.expanding.active && Date.now() >= city.expanding.endTime) {
+            city.slots += 1;
+            city.expanding.active = false;
+            city.expanding.endTime = 0;
+            expandMsg = "🎉 [구역 개척 완료]\n인부들이 암반을 뚫고 새로운 구역을 확보했습니다!\n(총 가용 슬롯: " + city.slots + "칸)\n\n";
+            user.skipHealing = true;
+            safeSaveData(data, false);
+        }
 
         var bCount = Object.keys(city.buildings || {}).length;
         
-        var body = "어둡고 축축한 지하 공간... 당신만의 새로운 영지가 시작되는 곳입니다.\n\n" +
+        // 2. 현재 개척 진행 중 UI 알림
+        var expandStatus = "";
+        if (city.expanding.active) {
+            var remain = city.expanding.endTime - Date.now();
+            var rm = Math.ceil(remain / 60000);
+            expandStatus = "\n⛏️ 현재 구역 확장 공사 중 (" + rm + "분 남음)";
+        }
+        
+        // 3. 시간당 세입 및 지출 예상치 계산
+        var expectedTax = city.population * CITY_CONFIG.TAX_PER_POP;
+        if (city.buildings["market"]) expectedTax = Math.floor(expectedTax * 1.1); // 상가 보너스 10%
+        var expectedMaint = bCount * CITY_CONFIG.MAINT_PER_BLD;
+
+        var hapIcon = city.happiness >= 80 ? "😊" : (city.happiness >= 50 ? "😐" : "😡");
+
+        var body = expandMsg + 
+                   "어둡고 축축한 지하 공간... 당신만의 새로운 영지가 시작되는 곳입니다.\n\n" +
                    "👥 인구: " + city.population + " 명\n" +
-                   "😊 행복도: " + city.happiness + " %\n" +
+                   hapIcon + " 행복도: " + city.happiness + " % (50% 미만 시 인구 이탈)\n" +
                    "💰 금고(세금): " + fp(city.vault) + " P\n" +
                    "🏗️ 가용 슬롯: " + bCount + " / " + city.slots + " 칸\n" +
+                   "━━━━━━━━━━━━━━━\n" +
+                   "📈 [예상 세입]: 매시간 +" + fp(expectedTax) + "P 자동 적립\n" +
+                   "📉 [예상 지출]: 매시간 -" + fp(expectedMaint) + "P 유지비 발생\n" +
+                   expandStatus + "\n" +
                    "━━━━━━━━━━━━━━━\n" +
                    "1. ⛏️ 구역 확장 (슬롯 확보)\n" +
                    "2. 🏗️ 건축 및 개발\n" +
                    "3. 💵 세금 징수 (지갑으로 이체)\n" +
-                   "4. 🛡️ 영지 관리 및 보수\n\n" +
+                   "4. 🛡️ 영지 관리 및 보수 (행복도 복구)\n\n" +
                    "↩️ 뒤로 / ❎취소";
 
         replier.reply(formatCommand("🏛️ 지하 도시 (Lv." + city.level + ")", user, body, "메뉴 번호를 입력하세요."));
@@ -3662,20 +3697,31 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
     // [1단계] 메인 메뉴 분기 처리
     if (state.type === 'city_main') {
         if (choice === "1") {
-            // 구역 확장 로직
-            var cost = CITY_CONFIG.EXPAND_COST_BASE * city.slots; // 슬롯당 점진적 비용 증가
+            // 개척 진행 상태 가드
+            if (city.expanding && city.expanding.active) {
+                var rm = Math.ceil((city.expanding.endTime - Date.now()) / 60000);
+                replier.reply(formatError(user, "공사 진행 중", "현재 구역 확장 공사가 진행 중입니다.\n공사가 끝날 때까지 기다려주세요.\n(남은 시간: " + rm + "분)"));
+                return true;
+            }
+
             if (city.slots >= CITY_CONFIG.MAX_SLOTS) {
                 replier.reply(formatError(user, "확장 불가", "더 이상 도시를 확장할 수 없습니다. (최대 " + CITY_CONFIG.MAX_SLOTS + "칸)"));
-            } else if (Number(user.point) < cost) {
-                replier.reply(formatError(user, "자금 부족", "구역 확장에 " + fp(cost) + "P가 필요합니다.\n(현재 잔액: " + fp(user.point) + "P)"));
-            } else {
-                util_updatePoint(user, data.rooms["내리다"], -cost, "지하 도시 구역 확장", roomName);
-                city.slots += 1;
-                user.skipHealing = true;
-                safeSaveData(data, true);
-                replier.reply(formatCommand("⛏️ 개척 완료", user, "인부들이 단단한 암반을 뚫고 새로운 구역을 확보했습니다!\n\n🏗️ 총 가용 슬롯: " + city.slots + "칸", "다시 확인하려면 [/도시]"));
-                delete roomData.features.states.menuWait[targetUid];
+                return true;
             }
+
+            var cost = CITY_CONFIG.EXPAND_COST_BASE * city.slots; // 슬롯당 점진적 비용 증가
+            var timeMin = Math.floor(CITY_CONFIG.EXPAND_TIME_MS / 60000);
+
+            var confirmBody = "지하의 단단한 암반을 뚫어 새로운 구역을 개척합니다.\n\n" +
+                              "💰 개척 비용: " + fp(cost) + "P\n" +
+                              "⏳ 소요 시간: " + timeMin + "분\n\n" +
+                              "진행하시겠습니까?\n\n" +
+                              "1. 예 (공사 시작)\n" +
+                              "2. 아니오 (취소)\n\n" +
+                              "↩️ 뒤로 / ❎취소";
+
+            roomData.features.states.menuWait[targetUid] = { type: 'city_expand_confirm', time: Date.now(), extra: { cost: cost } };
+            replier.reply(formatCommand("⛏️ 구역 확장 확인", user, confirmBody, "번호를 입력하세요."));
         } 
         else if (choice === "2") {
             // 건축 메뉴 진입
@@ -3711,10 +3757,83 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
             }
         }
         else if (choice === "4") {
-            replier.reply(formatSimple("🛡️ 영지 관리", "현재 영지 유지비 및 보수 시스템은 건물 활성화 이후 다음 패치에 오픈될 예정입니다.", "이전 화면: [뒤로]"));
+            // 영지 관리 및 보수 로직
+            if (city.happiness >= 100) {
+                replier.reply(formatSimple("🛡️ 영지 관리", "현재 영지의 행복도가 100%로 최상입니다.\n별도의 보수가 필요하지 않습니다.", "이전 화면: [뒤로]"));
+                return true;
+            }
+            
+            var repairCost = (100 - city.happiness) * 5000; // 잃은 행복도 1%당 5,000P 소모
+            roomData.features.states.menuWait[targetUid] = { type: 'city_repair_confirm', time: Date.now(), extra: { cost: repairCost } };
+            
+            var repBody = "민심을 달래고 파손된 시설을 보수하여 영지의 행복도를 100%로 복구합니다.\n\n" +
+                          "📉 현재 행복도: " + city.happiness + "%\n" +
+                          "💰 필요 예산: " + fp(repairCost) + "P\n\n" +
+                          "진행하시겠습니까?\n\n" +
+                          "1. 예 (보수 진행)\n" +
+                          "2. 아니오 (취소)\n\n" +
+                          "↩️ 뒤로 / ❎취소";
+            
+            replier.reply(formatCommand("🛡️ 영지 긴급 보수", user, repBody, "번호를 입력하세요."));
         }
         else {
             replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 입력하세요."));
+        }
+        return true;
+    }
+
+    // [1-1단계] 구역 확장 확정 핸들러
+    if (state.type === 'city_expand_confirm') {
+        if (choice === "1" || choice === "예") {
+            var cost = state.extra.cost;
+            if (Number(user.point) < cost) {
+                replier.reply(formatError(user, "자금 부족", "구역 확장에 " + fp(cost) + "P가 필요합니다.\n(현재 잔액: " + fp(user.point) + "P)"));
+                return true;
+            }
+            
+            // 비용 차감 및 타이머 세팅
+            util_updatePoint(user, data.rooms["내리다"], -cost, "지하 도시 구역 확장 공사", roomName);
+            
+            city.expanding.active = true;
+            city.expanding.endTime = Date.now() + CITY_CONFIG.EXPAND_TIME_MS;
+            
+            user.skipHealing = true;
+            safeSaveData(data, true);
+            
+            var timeMin = Math.floor(CITY_CONFIG.EXPAND_TIME_MS / 60000);
+            replier.reply(formatCommand("⛏️ 공사 시작", user, "인부들이 암반을 뚫기 시작했습니다!\n약 " + timeMin + "분 뒤에 새로운 구역이 확보됩니다.", "진행 현황: [/도시]"));
+            delete roomData.features.states.menuWait[targetUid];
+            
+        } else if (choice === "2" || choice === "아니오") {
+            replier.reply(formatCommand("🚫 취소", user, "구역 확장을 취소했습니다.\n다시 메인 메뉴로 돌아갑니다.", "이전 화면: [뒤로]"));
+            return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
+        } else {
+            replier.reply(formatError(user, "번호 오류", "1번(예) 또는 2번(아니오)을 선택하세요."));
+        }
+        return true;
+    }
+
+    // [1-2단계] 영지 보수 확정 핸들러
+    if (state.type === 'city_repair_confirm') {
+        if (choice === "1" || choice === "예") {
+            var cost = state.extra.cost;
+            if (Number(user.point) < cost) {
+                replier.reply(formatError(user, "자금 부족", "보수 작업에 " + fp(cost) + "P가 필요합니다."));
+                return true;
+            }
+            
+            util_updatePoint(user, data.rooms["내리다"], -cost, "지하 도시 영지 보수", roomName);
+            city.happiness = 100;
+            user.skipHealing = true;
+            safeSaveData(data, true);
+            
+            replier.reply(formatCommand("🛠️ 보수 완료", user, "도시의 모든 시설이 정비되고 민심이 안정되었습니다!\n(행복도 100% 달성)", "도시 현황: [/도시]"));
+            delete roomData.features.states.menuWait[targetUid];
+        } else if (choice === "2" || choice === "아니오") {
+            replier.reply(formatCommand("🚫 취소", user, "영지 보수를 취소했습니다.", "이전 화면: [뒤로]"));
+            return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
+        } else {
+            replier.reply(formatError(user, "번호 오류", "1번(예) 또는 2번(아니오)을 선택하세요."));
         }
         return true;
     }
@@ -4833,6 +4952,70 @@ function _runSector16Logic(data, ctx) {
             if (feeCollected > 0) Log.info("📦 [Warehouse] 매시간 창고 보관료 총 " + fp(feeCollected) + "P 징수 완료 (일반 화물 한정)");
         }
     } catch(e) { Log.error("Warehouse Fee Error: " + e); }
+
+    // 매시간 정각 지하 도시 세금 적립 및 유지비 징수 엔진
+    try {
+        if (currentMin === 0 && data.lastCityUpdateHour !== currentHour) {
+            data.lastCityUpdateHour = currentHour;
+            var cityFeeCollected = 0;
+            var cityTaxDistributed = 0;
+            var mainUsers = (data.rooms["내리다"] && data.rooms["내리다"].users) ? data.rooms["내리다"].users : {};
+
+            for (var uid in mainUsers) {
+                var u = mainUsers[uid];
+                if (u.undergroundCity) {
+                    var city = u.undergroundCity;
+                    var bCount = Object.keys(city.buildings || {}).length;
+                    
+                    if (bCount > 0 || city.population > 0) {
+                        var isModified = false;
+
+                        // 1. 시간당 세금 자동 적립 (인구수 비례)
+                        if (city.population > 0) {
+                            var popTax = city.population * (CITY_CONFIG.TAX_PER_POP || 20);
+                            if (city.buildings["market"]) popTax = Math.floor(popTax * 1.1); // 상업지구 보너스
+                            city.vault += popTax;
+                            cityTaxDistributed += popTax;
+                            isModified = true;
+                        }
+
+                        // 2. 시간당 건물 유지비 징수
+                        if (bCount > 0) {
+                            var expectedMaint = bCount * (CITY_CONFIG.MAINT_PER_BLD || 15000);
+                            var currentPoint = Number(u.point || 0);
+
+                            if (currentPoint >= expectedMaint) {
+                                // 정상 납부
+                                util_updatePoint(u, data.rooms["내리다"], -expectedMaint, "지하 도시 건물 유지비", "내리다");
+                                cityFeeCollected += expectedMaint;
+                            } else {
+                                // 미납 발생: 파산 및 패널티 (행복도 급감)
+                                if (currentPoint > 0) {
+                                    util_updatePoint(u, data.rooms["내리다"], -currentPoint, "지하 도시 유지비 (부분납)", "내리다");
+                                    cityFeeCollected += currentPoint;
+                                }
+                                city.happiness = Math.max(0, city.happiness - 15); // 유지비 체납 시 행복도 15% 하락
+                                isModified = true;
+                            }
+                        }
+
+                        // 3. 행복도 하락에 따른 인구 이탈 처리
+                        if (city.happiness < 50 && city.population > 0) {
+                            var runaway = Math.floor(city.population * 0.1); // 매시간 10%씩 인구 이탈
+                            if (runaway < 1) runaway = 1; // 최소 1명씩은 이탈
+                            city.population = Math.max(0, city.population - runaway);
+                            isModified = true;
+                        }
+
+                        if (isModified) u.skipHealing = true;
+                    }
+                }
+            }
+            if (cityFeeCollected > 0 || cityTaxDistributed > 0) {
+                Log.info("🏛️ [Underground City] 매시간 도시 정산 완료 (유지비 징수: " + fp(cityFeeCollected) + "P / 세금 적립: " + fp(cityTaxDistributed) + "P)");
+            }
+        }
+    } catch(e) { Log.error("Underground City Scheduler Error: " + e); }
 
     var rConf = SYSTEM_CONFIG.ECO.RACING; 
     var mani = conf.MANIPULATION;

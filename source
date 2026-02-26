@@ -2380,7 +2380,7 @@ function formatError(user, content, nextStep) {
 }
 
 /**
- * [신규] 랜드마크 가격 변동 엔진
+ * 랜드마크 가격 변동 엔진
  */
 function stock_calculateNextPrice(currentPrice) {
     if (!marketOpenPrice || marketOpenPrice <= 0) return currentPrice;
@@ -2401,7 +2401,7 @@ function stock_calculateNextPrice(currentPrice) {
 }
 
 /**
- * [신설] 국고 비상태세 배율 산출 (지능형 방어)
+ * 국고 비상태세 배율 산출 (지능형 방어)
  */
 function util_getEmergencyMultiplier(roomName) {
     var data = getDatabase();
@@ -2417,7 +2417,7 @@ function util_getEmergencyMultiplier(roomName) {
 }
 
 /**
- * [신설] 국고 지급 가능 여부 체크 (부도 방어)
+ * 국고 지급 가능 여부 체크 (부도 방어)
  */
 function util_isBankSolvent(roomName, amount) {
     var data = getDatabase(); 
@@ -2428,7 +2428,7 @@ function util_isBankSolvent(roomName, amount) {
 }
 
 /**
- * [신설] 국가 부도 상태 확인 함수
+ * 국가 부도 상태 확인 함수
  * 부도 선포(disaster) 상태인지 확인하여 리스크 컨텐츠 진행 여부 결정
  */
 function util_isBankruptcy(roomName) {
@@ -2440,7 +2440,7 @@ function util_isBankruptcy(roomName) {
 }
 
 /**
- * [신설] 종목 약어 검색 엔진
+ * 종목 약어 검색 엔진
  * @param {Object} market - 검색 대상 종목 객체 (전체 시장 혹은 보유 랜드마크)
  * @param {String} input - 유저 입력 약어 (예: "나투증")
  */
@@ -2463,7 +2463,7 @@ function util_findStockByShorthand(market, input) {
 }
 
 /**
- * [신설] 랜드마크 최대주주 추출 엔진
+ * 랜드마크 최대주주 추출 엔진
  * @param {Object} roomData - 해당 방 데이터
  * @param {String} landName - 건물 이름
  * @returns {Object|null} 유저 객체 및 ID, 지분량
@@ -2489,7 +2489,7 @@ function util_getMajorityOwner(roomData, landName) {
 }
 
 /**
- * [신규] 전 구역 특정 건물의 총 지분 합계 계산 (Global)
+ * 전 구역 특정 건물의 총 지분 합계 계산 (Global)
  * 설명: 모든 방의 유저 데이터를 뒤져 특정 건물의 발행된 총 지분 수를 합산합니다.
  */
 function util_getTotalShares(landName, roomData) {
@@ -2572,8 +2572,11 @@ function calculateEconomy(data, roomName) {
 
         // B. 유저 데이터 합산 루프
         for (var uid in roomData.users) {
-            var u = roomData.users[uid];
-            if (!u) continue;
+            // AI 봇(유령 개체)은 경제 지표 합산에서 완전히 제외 (인플레 왜곡 방지)
+            if (String(uid).indexOf("AI_") === 0) continue;
+
+            var u = roomData.users[uid];
+            if (!u) continue;
 
             // 1. [평균자산용]: 채권/채무가 포함된 유저의 실질 순자산 합산 (지니계수 및 랭킹용 유지)
             totalUserWealth += util_calculateNetWorth(u, roomData);
@@ -2606,9 +2609,12 @@ function util_calculateGini(roomName) {
 
     var assets = [];
     for (var uid in room.users) {
-        // 유저별 순자산(현금+예금+랜드마-빚) 리스트 추출
-        var netWorth = util_calculateNetWorth(room.users[uid], room);
-        assets.push(Math.max(0, netWorth));
+        // AI 봇은 빈부격차(지니계수) 연산에서 제외
+        if (String(uid).indexOf("AI_") === 0) continue;
+
+        // 유저별 순자산(현금+예금+랜드마-빚) 리스트 추출
+        var netWorth = util_calculateNetWorth(room.users[uid], room);
+        assets.push(Math.max(0, netWorth));
     }
     
     var n = assets.length;
@@ -14739,26 +14745,30 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
 
     /* [기능 6] 자산 순위 */
     if (msg === "/출석순위") {
-        var targetZone = (roomName === "베릭방" || ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-        var targetRoomData = data.rooms[targetZone];
-        var users = [];
-        var roomUsers = roomData.users;
-        for (var id in roomUsers) {
-            var u = roomUsers[id];
-            var netWorth = util_calculateNetWorth(u, roomData);
-            if (netWorth >= 1) users.push({ data: u, total: netWorth });
-        }
-        users.sort(function(a, b) { return b.total - a.total; });
-        var rankList = [];
-        for (var i = 0; i < Math.min(10, users.length); i++) {
-            rankList.push((i + 1) + ". " + getDisplayName(users[i].data) + " (" + fp(users[i].total) + "P)");
-        }
-        var rankMsg = (rankList.length > 0 ? rankList.join("\n") : "순위 데이터가 없습니다.");
-        replier.reply(formatSimple("자산 랭킹 (실질 순자산 기준)", rankMsg, "내 정보: [/내정보]"));
-        return true;
-    }
+        var targetZone = (roomName === "베릭방" || ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+        var targetRoomData = data.rooms[targetZone];
+        var users = [];
+        var roomUsers = targetRoomData.users; // [버그 픽스]: 베릭방에서 조회 시에도 랭킹이 정상 출력되도록 수정
+        
+        for (var id in roomUsers) {
+            // [추가]: AI 봇(유령 상단 및 함대)은 랭킹 집계에서 완전 은폐
+            if (String(id).indexOf("AI_") === 0) continue;
 
-    // [수정] 유저정보 조회 및 랭킹 산출 시 지역 변수 선언(var) 누락 해결
+            var u = roomUsers[id];
+            var netWorth = util_calculateNetWorth(u, targetRoomData);
+            if (netWorth >= 1) users.push({ data: u, total: netWorth });
+        }
+        users.sort(function(a, b) { return b.total - a.total; });
+        var rankList = [];
+        for (var i = 0; i < Math.min(10, users.length); i++) {
+            rankList.push((i + 1) + ". " + getDisplayName(users[i].data) + " (" + fp(users[i].total) + "P)");
+        }
+        var rankMsg = (rankList.length > 0 ? rankList.join("\n") : "순위 데이터가 없습니다.");
+        replier.reply(formatSimple("자산 랭킹 (실질 순자산 기준)", rankMsg, "내 정보: [/내정보]"));
+        return true;
+    }
+
+    // 유저정보 조회 및 랭킹 산출 시 지역 변수 선언(var) 누락 해결
     if (msg.indexOf("/유저정보") === 0) {
         var tn = msg.substring(5).trim(); 
         if (tn === "") {

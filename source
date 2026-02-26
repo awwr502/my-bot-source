@@ -17932,29 +17932,30 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
     
     var availableItems = []; 
     
-    // 1. 일반 화물 (물류 창고 기준)
+    var availableItems = []; 
+    var goodsOrder = ["식료품", "공업품", "공예품", "귀금속", "보석", "밀수품"];
+    var specOrder = ["돼지고기", "강철", "도자기", "금괴", "다이아몬드"];
+    
     var allWarehouse = user.warehouse || {};
-    for (var k in allWarehouse) {
+    var processCargoItem = function(k) {
         var total = Number(allWarehouse[k] || 0);
         var selected = Number(selC[k] || 0);
         var remaining = total - selected;
-        
         if (remaining > 0) {
             var avgPrice = Number((user.warehouseAvg && user.warehouseAvg[k]) || (user.cargoAvg && user.cargoAvg[k]) || cfg.GOODS_COST[k] || 10000);
             var status = "평단 " + fp(avgPrice) + "P";
             availableItems.push({ type: 'cargo', name: k, qty: remaining, status: status });
         }
-    }
+    };
+    
+    goodsOrder.forEach(processCargoItem);
+    for (var k in allWarehouse) { if (goodsOrder.indexOf(k) === -1) processCargoItem(k); }
 
-    // 2. 특산품 (물류 창고 기준)
     var allSpec = user.warehouseSpec || {};
-    for (var s in allSpec) {
-        if (s === "_rare" || s === "_unknown") continue; 
-        
+    var processSpecItem = function(s) {
         var totalS = Number(allSpec[s] || 0);
         var selectedS = Number(selS[s] || 0);
         var remainingS = totalS - selectedS;
-
         if (remainingS > 0) {
             var pG = "";
             for (var rel in TRADE_RELATION) {
@@ -17962,26 +17963,28 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
             }
             var sBase = cfg.SPECIALTY_COST[pG] || 20000;
             var sStatus = "평단 " + fp(sBase) + "P";
-            
             availableItems.push({ type: 'spec', name: s, qty: remainingS, status: sStatus });
         }
-    }
+    };
 
-    /* 3. 보물 및 미확인 교역품 (물류 창고 기준) */
-    var rareCount = Number(allSpec["_rare"] || 0); 
-    var selectedRare = Number(selS["_rare"] || 0);
-    var remainingRare = rareCount - selectedRare;
-
-    if (remainingRare > 0) {
-        availableItems.push({ type: 'rare', name: "진귀한 보물", qty: remainingRare, status: "💰고정가 (10만P)" });
+    specOrder.forEach(processSpecItem);
+    for (var s in allSpec) {
+        if (s === "_rare" || s === "_unknown" || specOrder.indexOf(s) !== -1) continue; 
+        processSpecItem(s);
     }
 
     var unknownCount = Number(allSpec["_unknown"] || 0); 
     var selectedUnknown = Number(selS["_unknown"] || 0);
     var remainingUnknown = unknownCount - selectedUnknown;
-    
     if (remainingUnknown > 0) {
         availableItems.push({ type: 'unknown', name: "미확인 교역품", qty: remainingUnknown, status: "🔄변환 대기" });
+    }
+
+    var rareCount = Number(allSpec["_rare"] || 0); 
+    var selectedRare = Number(selS["_rare"] || 0);
+    var remainingRare = rareCount - selectedRare;
+    if (remainingRare > 0) {
+        availableItems.push({ type: 'rare', name: "진귀한 보물", qty: remainingRare, status: "💰고정가 (10만P)" });
     }
 
     if (availableItems.length === 0) {
@@ -17996,34 +17999,33 @@ function _showTradeCargoSelectUI(user, replier, roomData, cfg, dest, selC, selS)
     body += "\n[✅ 이번 출항 선적 리스트]\n";
     var selList = [];
     
-    // [Gemini 패치]: 기존 선박 보유분(user.cargo)과 창고 하역분(selC)을 병합하여 출력
     var combinedCargo = JSON.parse(JSON.stringify(user.cargo || {}));
     for (var c in selC) combinedCargo[c] = (combinedCargo[c] || 0) + Number(selC[c]);
     
-    for (var c in combinedCargo) {
+    goodsOrder.forEach(function(c) {
         if (combinedCargo[c] > 0) selList.push("• " + c + " x" + combinedCargo[c] + "상자");
-    }
-
-    var combinedUnknown = Number(user.unknownCargo || 0) + Number(selS["_unknown"] || 0);
-    if (combinedUnknown > 0) {
-        selList.push("• 📦미확인 교역품 x" + combinedUnknown + "상자 (출항 시 변환)");
-    }
-    
-    var combinedRare = Number(user.rareSpecialties || 0) + Number(selS["_rare"] || 0);
-    if (combinedRare > 0) {
-        selList.push("• 💎진귀한 보물 x" + combinedRare + "개");
+    });
+    for (var c in combinedCargo) {
+        if (goodsOrder.indexOf(c) === -1 && combinedCargo[c] > 0) selList.push("• " + c + " x" + combinedCargo[c] + "상자");
     }
 
     var combinedSpec = JSON.parse(JSON.stringify(user.specialties || {}));
     for (var s in selS) {
-        if (s !== "_rare" && s !== "_unknown") {
-            combinedSpec[s] = (combinedSpec[s] || 0) + Number(selS[s]);
-        }
+        if (s !== "_rare" && s !== "_unknown") combinedSpec[s] = (combinedSpec[s] || 0) + Number(selS[s]);
     }
     
-    for (var s in combinedSpec) {
+    specOrder.forEach(function(s) {
         if (combinedSpec[s] > 0) selList.push("• ⭐" + s + " x" + combinedSpec[s] + "개");
+    });
+    for (var s in combinedSpec) {
+        if (specOrder.indexOf(s) === -1 && combinedSpec[s] > 0) selList.push("• ⭐" + s + " x" + combinedSpec[s] + "개");
     }
+
+    var combinedUnknown = Number(user.unknownCargo || 0) + Number(selS["_unknown"] || 0);
+    if (combinedUnknown > 0) selList.push("• 📦미확인 교역품 x" + combinedUnknown + "상자 (출항 시 변환)");
+    
+    var combinedRare = Number(user.rareSpecialties || 0) + Number(selS["_rare"] || 0);
+    if (combinedRare > 0) selList.push("• 💎진귀한 보물 x" + combinedRare + "개");
 
     if (selList.length > 0) {
         body += selList.join("\n");
@@ -18154,32 +18156,41 @@ function _handleTradeCargoSelection(msg, user, data, replier, roomName, targetUi
     var idx = parseInt(parts[0]) - 1;
     
     var availableItems = [];
+    var goodsOrder = ["식료품", "공업품", "공예품", "귀금속", "보석", "밀수품"];
+    var specOrder = ["돼지고기", "강철", "도자기", "금괴", "다이아몬드"];
     
-    // 오직 창고(warehouse) 데이터만 순수하게 참조하도록 변경
     var allCargo = {};
     for (var k in (user.warehouse || {})) allCargo[k] = (allCargo[k] || 0) + Number(user.warehouse[k]);
 
-    for (var k in allCargo) {
+    var processCargoIndex = function(k) {
         var rem = allCargo[k] - Number(state.selCargo[k] || 0);
         if (rem > 0) availableItems.push({ type: 'cargo', name: k, qty: rem });
-    }
+    };
+
+    goodsOrder.forEach(processCargoIndex);
+    for (var k in allCargo) { if(goodsOrder.indexOf(k) === -1) processCargoIndex(k); }
 
     var allSpec = {};
     for (var s in (user.warehouseSpec || {})) allSpec[s] = (allSpec[s] || 0) + Number(user.warehouseSpec[s]);
 
-    for (var s in allSpec) {
-        if (s === "_rare" || s === "_unknown") continue;
+    var processSpecIndex = function(s) {
         var remS = allSpec[s] - Number(state.selSpec[s] || 0);
         if (remS > 0) availableItems.push({ type: 'spec', name: s, qty: remS });
-    }
+    };
 
-    var rareCount = Number(allSpec["_rare"] || 0);
-    var remR = rareCount - Number(state.selSpec["_rare"] || 0);
-    if (remR > 0) availableItems.push({ type: 'rare', name: "진귀한 보물", qty: remR });
+    specOrder.forEach(processSpecIndex);
+    for (var s in allSpec) {
+        if (s === "_rare" || s === "_unknown" || specOrder.indexOf(s) !== -1) continue;
+        processSpecIndex(s);
+    }
 
     var unknownCount = Number(allSpec["_unknown"] || 0);
     var remU = unknownCount - Number(state.selSpec["_unknown"] || 0);
     if (remU > 0) availableItems.push({ type: 'unknown', name: "미확인 교역품", qty: remU });
+
+    var rareCount = Number(allSpec["_rare"] || 0);
+    var remR = rareCount - Number(state.selSpec["_rare"] || 0);
+    if (remR > 0) availableItems.push({ type: 'rare', name: "진귀한 보물", qty: remR });
 
    if (isNaN(idx) || idx < 0 || idx >= availableItems.length) {
         if (!isNaN(parseInt(parts[0]))) {
@@ -18328,18 +18339,24 @@ function _prepareVoyage(user, replier, cfg, roomData) {
     }
 
     // 1. 기존 내 가방 대신 물류 창고 현황을 불러오도록 변수 교체
-    var cargoList = []; 
+    var cargoList = []; 
     var w = user.warehouse || {};
     var ws = user.warehouseSpec || {};
-    for (var k in w) { if (w[k] > 0) cargoList.push("• " + k + ": " + w[k] + "상자"); }
-    for (var s in ws) { 
-        if (ws[s] > 0) {
-            if (s === "_rare") cargoList.push("💎 진귀한 보물: " + ws[s] + "개");
-            else if (s === "_unknown") cargoList.push("📦 미확인 교역품: " + ws[s] + "상자");
-            else cargoList.push("⭐ " + s + ": " + ws[s] + "상자");
-        } 
+    var goodsOrder = ["식료품", "공업품", "공예품", "귀금속", "보석", "밀수품"];
+    var specOrder = ["돼지고기", "강철", "도자기", "금괴", "다이아몬드"];
+
+    goodsOrder.forEach(function(k){ if (w[k] > 0) cargoList.push("• " + k + ": " + w[k] + "상자"); });
+    for (var k in w) { if (goodsOrder.indexOf(k) === -1 && w[k] > 0) cargoList.push("• " + k + ": " + w[k] + "상자"); }
+    
+    specOrder.forEach(function(s){ if (ws[s] > 0) cargoList.push("⭐ " + s + ": " + ws[s] + "상자"); });
+    for (var s in ws) { 
+        if (s === "_rare" || s === "_unknown" || specOrder.indexOf(s) !== -1) continue;
+        if (ws[s] > 0) cargoList.push("⭐ " + s + ": " + ws[s] + "상자"); 
     }
-    if (cargoList.length === 0) cargoList.push("- 보관 중인 물자가 없습니다 -");
+    if (ws["_unknown"] > 0) cargoList.push("📦 미확인 교역품: " + ws["_unknown"] + "상자");
+    if (ws["_rare"] > 0) cargoList.push("💎 진귀한 보물: " + ws["_rare"] + "개");
+
+    if (cargoList.length === 0) cargoList.push("- 보관 중인 물자가 없습니다 -");
 
     var nations = Object.keys(cfg.NATIONS);
     var nStr = ""; 
@@ -18583,9 +18600,12 @@ function _showVoyageStatus(user, replier, data, roomName) {
                 ? roomData.features.portData[v.dest] : { level: 1 };
     var portLevelBonus = Number((pInfo.level - 1) * (cfg.INVEST.BONUS_PER_LEVEL || 0.01));
 
+    var goodsOrder = ["식료품", "공업품", "공예품", "귀금속", "보석", "밀수품"];
+    var specOrder = ["돼지고기", "강철", "도자기", "금괴", "다이아몬드"];
+
     var cSnap = v.cargoSnapshot || {};
-    for (var g in cSnap) {
-        var qty = Number(cSnap[g]); if (qty <= 0) continue;
+    var processCargo = function(g) {
+        var qty = Number(cSnap[g]); if (qty <= 0) return;
         currentCargoLines.push("      • " + g + " " + qty + "상자");
         totalCargoInShip += qty;
         var myPurchasePrice = Number((user.cargoAvg && user.cargoAvg[g]) || cfg.GOODS_COST[g]);
@@ -18593,7 +18613,7 @@ function _showVoyageStatus(user, replier, data, roomName) {
         tCost += itemCost;
 
         var mult = (v.marketSnapshot[v.dest] && v.marketSnapshot[v.dest].rates && v.marketSnapshot[v.dest].rates[g]) 
-                   ? v.marketSnapshot[v.dest].rates[g] : 1.0;
+                    ? v.marketSnapshot[v.dest].rates[g] : 1.0;
 
         if (pInfo && pInfo.built && pInfo.built.market) {
             mult += 0.005;
@@ -18601,19 +18621,14 @@ function _showVoyageStatus(user, replier, data, roomName) {
         
         var baseTargetCost = cfg.GOODS_COST[g] || 10000;
         tRev += Math.floor(baseTargetCost * mult * qty);
-    }
+    };
+
+    goodsOrder.forEach(function(g) { if(cSnap[g] !== undefined) processCargo(g); });
+    for(var g in cSnap) { if(goodsOrder.indexOf(g) === -1) processCargo(g); }
 
     var sSnap = v.specialtySnapshot || {};
-    for (var s in sSnap) {
-        var sQty = Number(sSnap[s]); if (sQty <= 0) continue;
-        if (s === "_rare") {
-            currentCargoLines.push("💎 진귀한 보물 " + sQty + "개");
-            totalCargoInShip += sQty;
-            // 보물은 원가가 0원이므로, 예상 수익(매출)에만 판매가(10만P) 합산
-            tRev += (100000 * sQty); 
-            continue; // 아래 일반 특산품 로직 건너뜀
-        }
-
+    var processSpec = function(s) {
+        var sQty = Number(sSnap[s]); if (sQty <= 0) return;
         currentCargoLines.push("    ⭐" + s + " " + sQty + "상자");
         totalCargoInShip += sQty;
         var pG = "";
@@ -18622,12 +18637,24 @@ function _showVoyageStatus(user, replier, data, roomName) {
         var sRate = (v.marketSnapshot[v.dest] && v.marketSnapshot[v.dest].rates && v.marketSnapshot[v.dest].rates[pG])
                     ? v.marketSnapshot[v.dest].rates[pG] : 1.0;
         
-        // 자국 생산물 체크 로직 추가
         var producedByDest = (TRADE_RELATION[v.dest]) ? TRADE_RELATION[v.dest].produce : "";
         var finalSmult = (pG === producedByDest) ? 0 : (sRate * cfg.SPECIALTY_PROFIT);
 
         tCost += (sBase * sQty);
         tRev += Math.floor(sBase * sQty * finalSmult);
+    };
+
+    specOrder.forEach(function(s) { if(sSnap[s] !== undefined) processSpec(s); });
+    for(var s in sSnap) { 
+        if(s === "_rare" || s === "_unknown" || specOrder.indexOf(s) !== -1) continue; 
+        processSpec(s); 
+    }
+
+    var rareQty = Number(sSnap["_rare"]);
+    if (rareQty > 0) {
+        currentCargoLines.push("💎 진귀한 보물 " + rareQty + "개");
+        totalCargoInShip += rareQty;
+        tRev += (100000 * rareQty); 
     }
 
     // 1. 기초 마진에 선박 효율을 먼저 곱하여 '세전 기대 수익'을 확정합니다.
@@ -19858,20 +19885,48 @@ function _showWarehouseUI(user, replier, roomData) {
     var list = [];
     var currentUsage = 0;
 
-    for (var k in w) { 
+    var goodsOrder = ["식료품", "공업품", "공예품", "귀금속", "보석", "밀수품"];
+    var specOrder = ["돼지고기", "강철", "도자기", "금괴", "다이아몬드"];
+
+    // 1. 일반 화물
+    goodsOrder.forEach(function(k) {
         if (w[k] > 0) { 
+            var wAvg = Number((user.warehouseAvg && user.warehouseAvg[k]) || 0);
+            list.push("• " + k + ": " + w[k] + "상자 (평단: " + fp(wAvg) + "P)"); 
+            currentUsage += w[k]; 
+        }
+    });
+    for (var k in w) { 
+        if (goodsOrder.indexOf(k) === -1 && w[k] > 0) { 
             var wAvg = Number((user.warehouseAvg && user.warehouseAvg[k]) || 0);
             list.push("• " + k + ": " + w[k] + "상자 (평단: " + fp(wAvg) + "P)"); 
             currentUsage += w[k]; 
         } 
     }
-    for (var s in ws) { 
+
+    // 2. 특산품
+    specOrder.forEach(function(s) {
         if (ws[s] > 0) { 
-            var dispName = (s === "_rare") ? "진귀한 보물" : (s === "_unknown" ? "미확인 교역품" : s);
-            var dispIcon = (s === "_rare") ? "💎" : (s === "_unknown" ? "📦" : "⭐");
-            list.push(dispIcon + " " + dispName + ": " + ws[s] + (s==='_rare'?"개":"상자")); 
+            list.push("⭐ " + s + ": " + ws[s] + "상자"); 
+            currentUsage += ws[s]; 
+        }
+    });
+    for (var s in ws) { 
+        if (s === "_rare" || s === "_unknown" || specOrder.indexOf(s) !== -1) continue;
+        if (ws[s] > 0) { 
+            list.push("⭐ " + s + ": " + ws[s] + "상자"); 
             currentUsage += ws[s]; 
         } 
+    }
+
+    // 3. 특수 보물
+    if (ws["_unknown"] > 0) {
+        list.push("📦 미확인 교역품: " + ws["_unknown"] + "상자");
+        currentUsage += ws["_unknown"];
+    }
+    if (ws["_rare"] > 0) {
+        list.push("💎 진귀한 보물: " + ws["_rare"] + "개");
+        currentUsage += ws["_rare"];
     }
 
     var cap = user.warehouseSize || 500;
@@ -19918,19 +19973,40 @@ function _handleWarehouseMain(choice, user, data, replier, roomName, targetUid) 
         var list = [];
         var itemsToSelect = [];
         
+        var goodsOrder = ["식료품", "공업품", "공예품", "귀금속", "보석", "밀수품"];
+        var specOrder = ["돼지고기", "강철", "도자기", "금괴", "다이아몬드"];
+
         if (mode === "deposit") {
-            for (var k in c) { if (c[k] > 0) { list.push("• " + k + " " + c[k] + "상자"); itemsToSelect.push({type:'cargo', name:k, qty:c[k]}); } }
-            for (var s in cs) { if (cs[s] > 0) { list.push("⭐ " + s + " " + cs[s] + "상자"); itemsToSelect.push({type:'spec', name:s, qty:cs[s]}); } }
-            if (user.rareSpecialties > 0) { list.push("💎 진귀한 보물 " + user.rareSpecialties + "개"); itemsToSelect.push({type:'spec', name:'_rare', qty:user.rareSpecialties}); }
+            goodsOrder.forEach(function(k){
+                if (c[k] > 0) { list.push("• " + k + " " + c[k] + "상자"); itemsToSelect.push({type:'cargo', name:k, qty:c[k]}); }
+            });
+            for (var k in c) { 
+                if (goodsOrder.indexOf(k) === -1 && c[k] > 0) { list.push("• " + k + " " + c[k] + "상자"); itemsToSelect.push({type:'cargo', name:k, qty:c[k]}); } 
+            }
+            specOrder.forEach(function(s){
+                if (cs[s] > 0) { list.push("⭐ " + s + " " + cs[s] + "상자"); itemsToSelect.push({type:'spec', name:s, qty:cs[s]}); }
+            });
+            for (var s in cs) { 
+                if (specOrder.indexOf(s) === -1 && cs[s] > 0) { list.push("⭐ " + s + " " + cs[s] + "상자"); itemsToSelect.push({type:'spec', name:s, qty:cs[s]}); } 
+            }
             if (user.unknownCargo > 0) { list.push("📦 미확인 교역품 " + user.unknownCargo + "상자"); itemsToSelect.push({type:'spec', name:'_unknown', qty:user.unknownCargo}); }
+            if (user.rareSpecialties > 0) { list.push("💎 진귀한 보물 " + user.rareSpecialties + "개"); itemsToSelect.push({type:'spec', name:'_rare', qty:user.rareSpecialties}); }
         } else {
-            for (var k in w) { if (w[k] > 0) { list.push("• " + k + " " + w[k] + "상자"); itemsToSelect.push({type:'cargo', name:k, qty:w[k]}); } }
-            for (var s in ws) { if (ws[s] > 0) {
-                var dispName = (s === "_rare") ? "진귀한 보물" : (s === "_unknown" ? "미확인 교역품" : s);
-                var dispIcon = (s === "_rare") ? "💎" : (s === "_unknown" ? "📦" : "⭐");
-                list.push(dispIcon + " " + dispName + " " + ws[s] + (s==='_rare'?"개":"상자"));
-                itemsToSelect.push({type:'spec', name:s, qty:ws[s]}); 
-            }}
+            goodsOrder.forEach(function(k){
+                if (w[k] > 0) { list.push("• " + k + " " + w[k] + "상자"); itemsToSelect.push({type:'cargo', name:k, qty:w[k]}); }
+            });
+            for (var k in w) { 
+                if (goodsOrder.indexOf(k) === -1 && w[k] > 0) { list.push("• " + k + " " + w[k] + "상자"); itemsToSelect.push({type:'cargo', name:k, qty:w[k]}); } 
+            }
+            specOrder.forEach(function(s){
+                if (ws[s] > 0) { list.push("⭐ " + s + " " + ws[s] + "상자"); itemsToSelect.push({type:'spec', name:s, qty:ws[s]}); }
+            });
+            for (var s in ws) { 
+                if (s === "_rare" || s === "_unknown" || specOrder.indexOf(s) !== -1) continue;
+                if (ws[s] > 0) { list.push("⭐ " + s + " " + ws[s] + "상자"); itemsToSelect.push({type:'spec', name:s, qty:ws[s]}); } 
+            }
+            if (ws["_unknown"] > 0) { list.push("📦 미확인 교역품 " + ws["_unknown"] + "상자"); itemsToSelect.push({type:'spec', name:'_unknown', qty:ws["_unknown"]}); }
+            if (ws["_rare"] > 0) { list.push("💎 진귀한 보물 " + ws["_rare"] + "개"); itemsToSelect.push({type:'spec', name:'_rare', qty:ws["_rare"]}); }
         }
 
         var destUsage = (mode === "deposit") ? whUsage : shipUsage;

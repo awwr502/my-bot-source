@@ -21498,9 +21498,12 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
     var isPatrol = (mode === "PATROL"); // 순찰 모드 추가
 
     var pirate = (mode === "ESCORT" || isAICombat || isPatrol) ? navyOrPirate : null;
-    var navy = (mode === "INTERVENE" || isPatrol) ? navyOrPirate : null;
+    var navy = (mode === "INTERVENE") ? navyOrPirate : null; // isPatrol 중복 할당 제거
     
-    if (!isAICombat && !isPatrol) {
+    if (isPatrol) {
+        // 순찰 모드에서는 navyOrPirate가 해적 객체로 들어오므로 해군(user)을 다시 식별
+        for (var r in data.rooms) { if (data.rooms[r].users[navyUid]) { navy = data.rooms[r].users[navyUid]; break; } }
+    } else if (!isAICombat) {
         if (!pirate) {
             var pId = session ? session.pirateUid : null;
             if (!pId) return;
@@ -21519,38 +21522,17 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
     if (!pirate || (!isAICombat && !isAINavy && !navy)) return;
 
     var nName = "AI 연합함대";
-    if (!isAINavy && !isAICombat && navy) nName = navy.name;
-    else if (isAICombat) nName = "AI 엘리트 해군";
     if (isPatrol) nName = navy.name;
+    else if (!isAINavy && !isAICombat && navy) nName = navy.name;
+    else if (isAICombat) nName = "AI 엘리트 해군";
 
     var pName = (pirate) ? pirate.name : "정체불명의 해적";
     var pShip = pirate.shipLevel || 1;
 
-    // AI 해군 레벨 판정 로직 통합 및 중복 선언 제거
     var nShip = 1;
-    if (isAICombat) {
-        // AI 상단 습격 시: 정상 식별된 victim 객체의 스냅샷 호위 레벨을 로드 (이제 5~10레벨 정상 반영됨)
+    if (isAICombat || isAINavy) {
         nShip = (victim && victim.voyage && victim.voyage.escortLevel) ? victim.voyage.escortLevel : Math.max(7, Math.min(10, pShip + 1));
-    } else if (isAINavy) {
-        // 유저 상인이 고용한 AI 함대: 출항 시 저장된 escortLevel 사용
-        nShip = (navyOrPirate.voyage && navyOrPirate.voyage.escortLevel) ? navyOrPirate.voyage.escortLevel : 7;
     } else {
-        // 유저 해군
-        nShip = navy ? (navy.shipLevel || 1) : 1;
-    }
-
-    var pShip = pirate.shipLevel || 1;
-
-    // AI 해군 레벨 판정 (고정 수치가 아닌 생성된 스냅샷 레벨 사용)
-    var nShip = 1;
-    if (isAICombat) {
-        // AI 상단 습격 시: 미리 생성되어 voyage에 저장된 호위 레벨을 가져옴
-        nShip = (victim && victim.voyage && victim.voyage.escortLevel) ? victim.voyage.escortLevel : 5;
-    } else if (isAINavy) {
-        // 유저 상인이 고용한 AI 함대: 출항 시 저장된 escortLevel 사용
-        nShip = (navyOrPirate.voyage && navyOrPirate.voyage.escortLevel) ? navyOrPirate.voyage.escortLevel : 5;
-    } else {
-        // 유저 해군
         nShip = navy ? (navy.shipLevel || 1) : 1;
     }
     
@@ -21571,21 +21553,21 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
     var isNavyWin = (Math.random() * 100 < winChance);
 
     var resultMsg = "⚔️ [해상 교전 결과 보고]\n━━━━━━━━━━━━━━━\n" +
-                    "👮 해군: " + (isAINavy ? "AI 연합함대" : (isAICombat ? "AI 엘리트 해군" : navy.name)) + " (Lv." + nShip + ")\n" + 
-                    "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pShip + ")\n\n";
+                    "👮 해군: " + nName + " (Lv." + nShip + ")\n" + 
+                    "🏴‍☠️ 해적: " + pName + " (Lv." + pShip + ")\n\n";
 
     if (isNavyWin) {
-        // 해전 패배시 징역 시간 하드코딩을 상수로 연결 (기본 10분 = 600,000ms)
         var piratePenaltyMs = cfg.PIRATE.jailTime || 600000; 
-            pirate.pillageCooldownEndTime = Date.now() + piratePenaltyMs;
-            pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
-            
-            var baseReward = Math.floor(cfg.PIRATE.bountyBase * 0.3); // cfg.JOBS 제거
-            var bounty = baseReward + (Number(pirate.currentBounty) || 0);
-            pirate.currentBounty = Number(cfg.PIRATE.bountyBase);
+        pirate.pillageCooldownEndTime = Date.now() + piratePenaltyMs;
+        pirate.infamy = Math.max(0, (pirate.infamy || 0) - 20);
+        
+        var baseReward = Math.floor(cfg.PIRATE.bountyBase * 0.3);
+        var bounty = baseReward + (Number(pirate.currentBounty) || 0);
+        pirate.currentBounty = Number(cfg.PIRATE.bountyBase);
 
-        // [분배] 고용된 AI 해군 승리 시에도 현재 방의 유저 해군들에게 현상금 균등 분배
-       if (isAINavy || isAICombat) {
+        resultMsg += "🔥 [해군 승리] 해적선이 나포되었습니다!\n\n";
+
+        if (isAINavy || isAICombat) {
             var localNavies = [];
             var totalNavyLevels = 0;
             var targetRoomObj = data.rooms[roomName];
@@ -21607,8 +21589,9 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
                     n.claimableReward = (Number(n.claimableReward) || 0) + myShare; 
                     n.hasNotifiedReward = false;
                 });
-                resultMsg += "🎊 [AI 해군 승보] 현상금 " + fp(bounty) + "P를 확보했습니다!\n" +
-                             "💰 지분 배분: 함선 체급(Lv)에 비례하여 정산소로 입고되었습니다.\n\n";
+                resultMsg += "💰 AI 연합함대: 현상금 " + fp(bounty) + "P 확보 (가담 해군 분배 완료)\n";
+            } else {
+                resultMsg += "💰 AI 연합함대: 현상금 " + fp(bounty) + "P 획득\n";
             }
         } else {
             navy.fame = (navy.fame || 0) + 10;
@@ -21616,35 +21599,48 @@ function _executeSeaCombat(navyOrPirate, victimUid, navyUid, data, roomName, mod
             navy.hasNotifiedReward = false;
             navy.totalCaptureSuccess = (navy.totalCaptureSuccess || 0) + 1;
             util_checkNavyTitle(navy, null, "내리다");
+            
             resultMsg += "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득\n";
         }
 
-        // [글로벌 AI 해적 패배 처리] 순찰로 토벌했거나 개입으로 토벌한 경우
-            if (pirate.isGlobalAI) {
-                var ap = data.aiPirates.find(function(a) { return a.uid === pirate.uid; });
-                if (ap) {
-                    ap.status = 'cooldown';
-                    ap.endTime = Date.now() + AI_PIRATE_CONFIG.COOLDOWN_MS;
-                    
+        var routeClearMsg = "";
+        if (pirate.isGlobalAI) {
+            var ap = data.aiPirates.find(function(a) { return a.uid === pirate.uid; });
+            if (ap) {
+                ap.status = 'cooldown';
+                ap.endTime = Date.now() + AI_PIRATE_CONFIG.COOLDOWN_MS;
+                
+                var remP = data.aiPirates.filter(function(a){ return a.status === 'sailing' && a.route === ap.route; }).length;
+                if (remP === 0) {
                     if (!data.safeRoutes) data.safeRoutes = {};
                     data.safeRoutes[ap.route] = Date.now() + AI_PIRATE_CONFIG.SAFE_TIME_MS;
-                    resultMsg += "🛡️ [항로 정화]: '" + ap.route + "' 항로가 20분간 안전구역으로 선포되었습니다!\n\n";
+                    routeClearMsg = "🛡️ [항로 정화]: '" + ap.route + "' 항로가 20분간 안전구역으로 선포되었습니다!";
+                } else if (isPatrol) {
+                    routeClearMsg = "🛡️ [임무 완료]: 해적을 격퇴했습니다. 남은시간동안 순찰을 지속합니다.";
+                } else {
+                    routeClearMsg = "🛡️ [임무 완료]: 해적을 격퇴했습니다. 해당 상선은 보호 프로토콜에 따라 더 이상 습격받지 않습니다.";
                 }
             }
+        } else {
+             routeClearMsg = "⚓ " + pirate.name + ": 약탈 금지 " + Math.floor(piratePenaltyMs / 60000) + "분 부과";
+        }
 
-        if (!isAICombat && victim && victim.voyage) {
-            victim.voyage.escortUid = null; // 해군은 즉시 자유 신분 (고용 가능)
+        resultMsg += routeClearMsg;
+
+        if (!isAICombat && !isPatrol && victim && victim.voyage) {
+            victim.voyage.escortUid = null; 
             victim.voyage.escortFee = 0;
-            victim.isPillaged = true; // [상인 보호] 한번 시도된 선박은 약탈 가능 목록에서 제외
+            victim.isPillaged = true; 
             if (victim.voyage) victim.voyage.isPillaged = true;
-            resultMsg += "🛡️ [임무 완료]: 해적을 격퇴했습니다. 해당 상선은 보호 프로토콜에 따라 더 이상 습격받지 않습니다.\n";
+            if (!pirate.isGlobalAI) {
+                resultMsg += "\n🛡️ [임무 완료]: 해적을 격퇴했습니다. 해당 상선은 보호 프로토콜에 따라 더 이상 습격받지 않습니다.";
+            }
         }
 
         if (session) delete mainRoom.features.activePillages[victimUid];
-        resultMsg += "🔥 [해군 승리] 해적선이 나포되었습니다!\n\n" +
-                     (pirate.isAI ? "⚓ " + pirate.name + ": 다른 해역으로 도주\n" : "⚓ " + pirate.name + ": 약탈 금지 " + Math.floor(piratePenaltyMs / 60000) + "분 부과\n") +
-                     ((isAICombat || isAINavy) ? "" : "💰 " + navy.name + ": 현상금 " + fp(bounty) + "P 획득");
+        
         } else {
+
         // 해적 승리 (해군 패배) 로직 시작
         
         // 1. 습격 대상이 AI인지 여부 선행 판별 (유령 상단 및 고용된 AI 함대 포함)

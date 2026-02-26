@@ -12214,10 +12214,9 @@ if (msg.startsWith("/화물복구")) {
     return false;
 }
 
-/* [핵심] 블랙박스 파일 분석 및 출력 엔진 (전역 함수로 격상) */
+/* [핵심] 블랙박스 파일 분석 및 출력 엔진 (실시간+누적 5/6열 호환 버전) */
 function _executeBlackboxSearch(uid, targetUser, replier) {
-    // [수정] 전역 스코프로 나왔으므로 data 객체를 직접 로드
-    var data = getDatabase(); 
+    var data = getDatabase(); 
     try {
         var logs = [];
         var mainUser = (data.rooms["내리다"] && data.rooms["내리다"].users[uid]) ? data.rooms["내리다"].users[uid] : targetUser;
@@ -12231,17 +12230,37 @@ function _executeBlackboxSearch(uid, targetUser, replier) {
                 lines.forEach(function(line) {
                     if (!line.trim()) return;
                     var parts = line.split("|");
-                    if (parts[0] === uid) {
-                        var delta = Number(parts[2]);
-                        var sign = delta > 0 ? "➕" : "➖";
-                        logs.push("• [" + parts[4] + "] " + sign + fp(Math.abs(delta)) + "P");
+                    
+                    var logUid = "";
+                    var amount = 0;
+                    var reason = "";
+                    var timeStr = "";
+
+                    // [v13.8 포맷] 6열 구조 (시간 | UID | 방이름 | 금액 | 국고 | 사유)
+                    if (parts.length >= 6) {
+                        logUid = parts[1];
+                        amount = Number(parts[3]);
+                        reason = parts[5];
+                        var date = new Date(Number(parts[0]));
+                        timeStr = "[" + ("0" + date.getHours()).slice(-2) + ":" + ("0" + date.getMinutes()).slice(-2) + "] ";
+                    } 
+                    // [구버전 포맷] 5열 구조 (UID | 방이름 | 금액 | 국고 | 사유)
+                    else if (parts.length === 5) {
+                        logUid = parts[0];
+                        amount = Number(parts[2]);
+                        reason = parts[4];
+                    }
+
+                    if (logUid === uid) {
+                        var sign = amount > 0 ? "➕" : "➖";
+                        logs.push("• " + timeStr + "[" + reason + "] " + sign + fp(Math.abs(amount)) + "P");
                     }
                 });
             }
         });
 
         var readMore = "\u200b".repeat(500); 
-        var displayLogs = logs.reverse();
+        var displayLogs = logs.reverse(); // 최신 내역이 위로 오도록 반전
 
         var resultBody = "👤 대상: " + mainUser.name + "\n" +
                          "🆔 ID: " + uid + "\n" +

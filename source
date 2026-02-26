@@ -355,7 +355,8 @@ var USER_SCHEMA = [
     { key: 'warehouseAvg', default: {}, type: 'object' },   // 창고 보관 화물 평단가
     { key: 'warehouseSpec', default: {}, type: 'object' },  // 창고 보관 특산품/보물
     { key: 'warehouseSize', default: 500, type: 'number' },  // 창고 최대 용량 (기본 500칸)
-    { key: 'undergroundCity', default: { level: 1, slots: 1, maxSlots: 5, population: 0, happiness: 100, vault: 0, buildings: {} }, type: 'object' }
+    { key: 'undergroundCity', default: { level: 1, slots: 1, maxSlots: 5, population: 0, happiness: 100, vault: 0, buildings: {} }, type: 'object' },
+    { key: 'spiritData', default: { activeUid: null, roster: [], incubators: [null, null, null], pedia: [], items: {} }, type: 'object' }
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -1624,7 +1625,8 @@ var CMD_LIST = {
         { cmd: "/낚시", desc: "강가에서 물고기 낚기 (10분 쿨타임)", cat: "게임", func: "_gameActivityLogic" },
         { cmd: "/무역", desc: "가상 국가와의 해상 교역 및 선박 관리", cat: "무역", func: "_gameTradeLogic" },
         { cmd: "/펀드", desc: "[금액] 위험 항로 벤처 투자 (5분 주기)", cat: "게임", func: "_gameActionLogic" },
-        { cmd: "/도시", desc: "나만의 지하 영지 개척 및 관리", cat: "게임", func: "_gameCityLogic" }
+        { cmd: "/도시", desc: "나만의 지하 영지 개척 및 관리", cat: "게임", func: "_gameCityLogic" },
+        { cmd: "/정령", desc: "신비한 정령 부화, 육성 및 진화", cat: "게임", func: "_gameSpiritLogic" }
     ],
     admin: [
         { cmd: "/공지", desc: "[내용] 내리다 방에 공지 전송", func: "_adminSystemLogic" },
@@ -3883,13 +3885,440 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
     return false;
 }
 
+/**
+ * [게임 하위 모듈] 정령 시스템 메뉴 핸들러
+ */
+function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    if (!roomData || !roomData.features || !roomData.features.states.menuWait) return false;
+
+    var state = roomData.features.states.menuWait[targetUid];
+    if (!state || !state.type.startsWith('spirit_')) return false;
+
+    var NAV = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+
+    if (msg === "취소" || msg === "❎취소") {
+        delete roomData.features.states.menuWait[targetUid];
+        replier.reply(formatCommand("🚫 작업 종료", user, "정원 관리를 종료합니다."));
+        return true;
+    }
+    if (msg === "뒤로" || msg === "↩️ 뒤로") {
+        if (state.type !== 'spirit_main') return _gameSpiritLogic("/정령", user, data, replier, roomName, targetUid);
+        else {
+            delete roomData.features.states.menuWait[targetUid];
+            replier.reply(formatCommand("🚪 퇴장", user, "정원에서 빠져나왔습니다."));
+            return true;
+        }
+    }
+    if (msg.startsWith("/")) return false;
+
+    var choice = msg.trim();
+    var sd = user.spiritData;
+
+    // [1단계] 메인 메뉴 분기
+    if (state.type === 'spirit_main') {
+        if (choice === "1") {
+            if (sd.roster.length === 0) {
+                replier.reply(formatError(user, "정령 없음", "보유 중인 정령이 없습니다. 부화장에서 알을 먼저 부화시키세요." + NAV));
+                return true;
+            }
+            // 보유 훈련 자동 정산 (시간 경과 시 EXP 즉시 지급)
+            sd.roster.forEach(function(sp) {
+                if (sp.trainEndTime > 0 && Date.now() >= sp.trainEndTime) {
+                    sp.exp += SPIRIT_CONFIG.TRAIN_EXP;
+                    var max = SPIRIT_CONFIG.DB[sp.id].maxExp;
+                    if (max > 0 && sp.exp > max) sp.exp = max;
+                    sp.trainEndTime = 0;
+                }
+            });
+            user.skipHealing = true;
+            
+            var list = sd.roster.map(function(sp, i) {
+                var db = SPIRIT_CONFIG.DB[sp.id];
+                var tStatus = (sp.trainEndTime > 0) ? " [💦훈련중]" : "";
+                var eqStatus = (sd.activeUid === sp.uid) ? " [✅동행]" : "";
+                return (i+1) + ". " + db.el + " " + sp.name + " (Lv." + db.rank + ")" + eqStatus + tStatus;
+            }).join("\n");
+            
+            state.type = 'spirit_roster';
+            state.time = Date.now();
+            replier.reply(formatCommand("🐾 내 정령 관리", user, list + NAV, "상세 정보를 볼 정령의 번호를 입력하세요."));
+        } 
+        else if (choice === "2") {
+            // 부화장 로직
+            var incStr = "";
+            sd.incubators.forEach(function(inc, i) {
+                if (!inc) incStr += (i+1) + "번 슬롯: ⚪ 비어있음\n";
+                else {
+                    var remain = inc.endTime - Date.now();
+                    if (remain <= 0) incStr += (i+1) + "번 슬롯: 🌟 부화 완료! (숫자 입력 시 수령)\n";
+                    else {
+                        var rm = Math.ceil(remain / 60000);
+                        incStr += (i+1) + "번 슬롯: 🥚 품는 중 (" + rm + "분 남음)\n";
+                    }
+                }
+            });
+            var myEggs = [];
+            for (var k in sd.items) { if (k.indexOf("egg_") === 0 && sd.items[k] > 0) myEggs.push(SPIRIT_CONFIG.ITEMS[k].name + " x" + sd.items[k]); }
+            
+            state.type = 'spirit_hatchery';
+            state.time = Date.now();
+            replier.reply(formatCommand("🥚 신비한 부화장", user, incStr + "\n[보유 알]: " + (myEggs.length > 0 ? myEggs.join(", ") : "없음") + NAV, "작업할 슬롯 번호(1~3)를 입력하세요."));
+        }
+        else if (choice === "3") {
+            // 교배소 로직 (에픽/전설 등급만 목록 출력)
+            var elites = [];
+            sd.roster.forEach(function(sp, idx) {
+                var db = SPIRIT_CONFIG.DB[sp.id];
+                if (db.rank === "에픽" || db.rank === "전설") elites.push({ rIdx: idx, sp: sp, db: db });
+            });
+            if (elites.length < 2) {
+                replier.reply(formatError(user, "조건 미달", "교배를 위해서는 성체가 된 [에픽] 또는 [전설] 등급 정령이 최소 2마리 필요합니다." + NAV));
+                return true;
+            }
+            
+            var eList = elites.map(function(e) { return (e.rIdx + 1) + ". " + e.db.el + " " + e.sp.name; }).join("\n");
+            state.type = 'spirit_breed';
+            state.time = Date.now();
+            replier.reply(formatCommand("🧬 생명의 교배소", user, "두 마리의 영혼을 융합하여 상점에서는 얻을 수 없는 [돌연변이 알(2시간 소요)]을 얻습니다. (⚠️ 부모 정령은 소멸합니다!)\n\n" + eList + NAV, "융합할 두 마리의 번호를 띄어쓰기로 입력하세요 (예: 1 2)"));
+        }
+        else if (choice === "4") {
+            // 상점
+            var sList = Object.keys(SPIRIT_CONFIG.ITEMS).map(function(k, i) {
+                var it = SPIRIT_CONFIG.ITEMS[k];
+                var 보유 = sd.items[k] || 0;
+                return (i+1) + ". " + it.icon + " " + it.name + " (" + fp(it.price) + "P)\n   └ " + it.desc + " [보유: " + 보유 + "]";
+            }).join("\n\n");
+            
+            state.type = 'spirit_shop';
+            state.time = Date.now();
+            state.extra = { keys: Object.keys(SPIRIT_CONFIG.ITEMS) };
+            replier.reply(formatCommand("🛒 정령 전용 상점", user, sList + "\n\n💰 내 잔액: " + fp(user.point) + "P" + NAV, "구매할 물품의 번호를 입력하세요."));
+        }
+        else if (choice === "5") {
+            // 도감
+            var total = Object.keys(SPIRIT_CONFIG.DB).length;
+            var collected = sd.pedia.length;
+            var pct = Math.floor((collected / total) * 100);
+            replier.reply(formatSimple("📘 정령 생태 도감", "수집률: " + pct + "% (" + collected + " / " + total + "종)\n다양한 속성과 교배를 통해 모든 정령을 수집해보세요!", "이전 화면: [뒤로]"));
+        }
+        else replier.reply(formatError(user, "번호 오류", "올바른 번호를 입력하세요."));
+        return true;
+    }
+
+    // [2단계] 로스터 상세 관리
+    if (state.type === 'spirit_roster') {
+        var idx = parseInt(choice) - 1;
+        if (isNaN(idx) || !sd.roster[idx]) return replier.reply(formatError(user, "번호 오류", "목록의 번호를 입력하세요."));
+        
+        var sp = sd.roster[idx];
+        var db = SPIRIT_CONFIG.DB[sp.id];
+        
+        var detail = "['" + sp.name + "' 상태창]\n" +
+                     "⭐ 등급: " + db.rank + " | 속성: " + db.el + "\n" +
+                     "📈 경험치: " + (db.maxExp > 0 ? sp.exp + " / " + db.maxExp : "MAX (진화불가)") + "\n" +
+                     "🍖 포만감: " + sp.satiety + " / 100\n\n" +
+                     "1. 🍖 먹이주기\n" +
+                     "2. ⚔️ 훈련보내기 (-30포만감, 10분 소요)\n" +
+                     "3. ✨ 진화하기 (경험치 MAX 시)\n" +
+                     "4. " + (sd.activeUid === sp.uid ? "💤 동행 해제" : "🐾 동행 설정") + "\n" +
+                     "5. 🗑️ 자연으로 방생하기 (복구 불가)\n" + NAV;
+                     
+        state.type = 'spirit_manage';
+        state.extra = { spIdx: idx };
+        state.time = Date.now();
+        replier.reply(formatCommand("🔍 정령 상세 관리", user, detail, "원하는 행동 번호를 입력하세요."));
+        return true;
+    }
+
+    // [3단계] 정령 액션 (먹이/훈련/진화 등)
+    if (state.type === 'spirit_manage') {
+        var sp = sd.roster[state.extra.spIdx];
+        if (!sp) return _gameSpiritLogic("/정령", user, data, replier, roomName, targetUid);
+        var db = SPIRIT_CONFIG.DB[sp.id];
+
+        if (choice === "1") {
+            // 먹이 주기 팝업
+            var fList = [];
+            var tempFoodKeys = [];
+            for (var k in sd.items) {
+                if (k.indexOf("food_") === 0 && sd.items[k] > 0) {
+                    var fInfo = SPIRIT_CONFIG.ITEMS[k];
+                    fList.push((fList.length+1) + ". " + fInfo.icon + " " + fInfo.name + " (보유: " + sd.items[k] + ")");
+                    tempFoodKeys.push(k);
+                }
+            }
+            if (fList.length === 0) return replier.reply(formatError(user, "사료 없음", "상점에서 마력 사료를 먼저 구매하세요." + NAV));
+            state.type = 'spirit_feed';
+            state.extra.foodKeys = tempFoodKeys;
+            state.time = Date.now();
+            replier.reply(formatCommand("🍖 사료 먹이기", user, fList.join("\n") + NAV, "먹일 사료 번호를 입력하세요."));
+        } else if (choice === "2") {
+            if (sp.trainEndTime > 0) return replier.reply(formatError(user, "훈련 중", "이미 훈련 중입니다." + NAV));
+            if (sp.satiety < SPIRIT_CONFIG.TRAIN_COST_SAT) return replier.reply(formatError(user, "배고픔", "포만감이 부족하여 훈련할 수 없습니다. (최소 30 필요)" + NAV));
+            if (db.maxExp === 0) return replier.reply(formatError(user, "최고 레벨", "이미 최고 성체이므로 훈련이 불필요합니다." + NAV));
+            
+            sp.satiety -= SPIRIT_CONFIG.TRAIN_COST_SAT;
+            sp.trainEndTime = Date.now() + SPIRIT_CONFIG.TRAIN_TIME_MS;
+            user.skipHealing = true; safeSaveData(data, true);
+            replier.reply(formatCommand("💦 훈련 시작", user, sp.name + "(이)가 훈련소로 향했습니다!\n10분 뒤 확인하면 경험치가 크게 상승합니다.", "이전 화면: [뒤로]"));
+        } else if (choice === "3") {
+            if (db.maxExp === 0 || !db.next) return replier.reply(formatError(user, "진화 불가", "더 이상 진화할 수 없는 개체입니다." + NAV));
+            if (sp.exp < db.maxExp) return replier.reply(formatError(user, "조건 미달", "경험치가 100%가 되어야 진화할 수 있습니다." + NAV));
+            
+            var nextDb = SPIRIT_CONFIG.DB[db.next];
+            sp.id = nextDb.id;
+            sp.exp = 0;
+            if (sd.pedia.indexOf(sp.id) === -1) sd.pedia.push(sp.id);
+            user.skipHealing = true; safeSaveData(data, true);
+            replier.reply(formatCommand("✨ 진화 성공!", user, "눈부신 빛과 함께 [" + db.name + "]이(가) [" + nextDb.name + "](으)로 진화했습니다!", "이전 화면: [뒤로]"));
+        } else if (choice === "4") {
+            if (sd.activeUid === sp.uid) {
+                sd.activeUid = null;
+                replier.reply(formatCommand("💤 동행 해제", user, sp.name + "을(를) 정원으로 돌려보냈습니다.", "이전 화면: [뒤로]"));
+            } else {
+                sd.activeUid = sp.uid;
+                replier.reply(formatCommand("🐾 동행 설정", user, "이제부터 [" + sp.name + "]와(과) 함께 다닙니다.", "이전 화면: [뒤로]"));
+            }
+            user.skipHealing = true; safeSaveData(data, true);
+        } else if (choice === "5") {
+            if (sd.activeUid === sp.uid) sd.activeUid = null;
+            sd.roster.splice(state.extra.spIdx, 1);
+            user.skipHealing = true; safeSaveData(data, true);
+            replier.reply(formatCommand("🕊️ 방생 완료", user, "정령을 자연으로 돌려보냈습니다.", "이전 화면: [뒤로]"));
+        } else replier.reply(formatError(user, "번호 오류", "올바른 메뉴를 선택하세요."));
+        return true;
+    }
+
+    // [먹이주기 확정]
+    if (state.type === 'spirit_feed') {
+        var sp = sd.roster[state.extra.spIdx];
+        var fIdx = parseInt(choice) - 1;
+        if (isNaN(fIdx) || !state.extra.foodKeys[fIdx]) return replier.reply(formatError(user, "번호 오류", "올바른 사료 번호를 선택하세요."));
+        
+        var fKey = state.extra.foodKeys[fIdx];
+        if (!sd.items[fKey] || sd.items[fKey] <= 0) return replier.reply(formatError(user, "재고 없음", "해당 사료가 부족합니다."));
+        
+        sd.items[fKey]--;
+        var fInfo = SPIRIT_CONFIG.ITEMS[fKey];
+        sp.satiety = Math.min(100, sp.satiety + fInfo.val);
+        user.skipHealing = true; safeSaveData(data, true);
+        replier.reply(formatCommand("🍖 먹이주기", user, sp.name + "에게 " + fInfo.name + "을 먹여 포만감이 " + sp.satiety + "/100 이 되었습니다!", "이전 화면: [뒤로]"));
+        return true;
+    }
+
+    // [2단계] 부화장 관리
+    if (state.type === 'spirit_hatchery') {
+        var sIdx = parseInt(choice) - 1;
+        if (isNaN(sIdx) || sIdx < 0 || sIdx > 2) return replier.reply(formatError(user, "번호 오류", "1~3번 슬롯 중 하나를 선택하세요."));
+        
+        var inc = sd.incubators[sIdx];
+        if (inc) {
+            // 알이 있는 경우 -> 부화 수령
+            if (Date.now() < inc.endTime) return replier.reply(formatError(user, "부화 중", "아직 알이 따뜻합니다. 조금 더 기다려주세요." + NAV));
+            
+            if (sd.roster.length >= SPIRIT_CONFIG.MAX_ROSTER) return replier.reply(formatError(user, "공간 부족", "정원이 가득 차서 더 이상 부화시킬 수 없습니다. (최대 10마리)"));
+            
+            var newId = _getHatchResult(inc.eggKey);
+            var db = SPIRIT_CONFIG.DB[newId];
+            var newSp = { uid: generateUUID(), id: newId, name: db.name, exp: 0, satiety: 100, trainEndTime: 0 };
+            
+            sd.roster.push(newSp);
+            sd.incubators[sIdx] = null; // 슬롯 비우기
+            if (sd.pedia.indexOf(newId) === -1) sd.pedia.push(newId); // 도감 등록
+            
+            user.skipHealing = true; safeSaveData(data, true);
+            replier.reply(formatCommand("🌟 부화 성공!", user, "껍질을 깨고 " + db.el + " [" + db.name + "] (등급: " + db.rank + ")이(가) 태어났습니다!", "목록 확인: [/정령]"));
+        } else {
+            // 알이 없는 경우 -> 알 올리기 팝업
+            var eList = [];
+            var tempEggKeys = [];
+            for (var k in sd.items) {
+                if (k.indexOf("egg_") === 0 && sd.items[k] > 0) {
+                    var eInfo = SPIRIT_CONFIG.ITEMS[k];
+                    eList.push((eList.length+1) + ". " + eInfo.icon + " " + eInfo.name + " (보유: " + sd.items[k] + ")");
+                    tempEggKeys.push(k);
+                }
+            }
+            if (eList.length === 0) return replier.reply(formatError(user, "알 없음", "보유 중인 알이 없습니다. 상점에서 구매하세요." + NAV));
+            
+            state.type = 'spirit_incubate';
+            state.extra = { slotIdx: sIdx, eggKeys: tempEggKeys };
+            state.time = Date.now();
+            replier.reply(formatCommand("🥚 알 올리기", user, eList.join("\n") + NAV, "부화기에 넣을 알 번호를 입력하세요."));
+        }
+        return true;
+    }
+
+    // [부화 시작 확정]
+    if (state.type === 'spirit_incubate') {
+        var eIdx = parseInt(choice) - 1;
+        if (isNaN(eIdx) || !state.extra.eggKeys[eIdx]) return replier.reply(formatError(user, "번호 오류", "올바른 알 번호를 선택하세요."));
+        
+        var eKey = state.extra.eggKeys[eIdx];
+        if (!sd.items[eKey] || sd.items[eKey] <= 0) return replier.reply(formatError(user, "재고 없음", "해당 알이 부족합니다."));
+        
+        var eInfo = SPIRIT_CONFIG.ITEMS[eKey] || { timeMs: 120 * 60 * 1000 };
+        sd.items[eKey]--;
+        sd.incubators[state.extra.slotIdx] = { eggKey: eKey, endTime: Date.now() + eInfo.timeMs };
+        
+        user.skipHealing = true; safeSaveData(data, true);
+        var rm = Math.floor(eInfo.timeMs / 60000);
+        replier.reply(formatCommand("🔥 부화 시작", user, "부화기에 알을 넣었습니다!\n약 " + rm + "분 뒤에 부화합니다.", "이전 화면: [뒤로]"));
+        return true;
+    }
+
+    // [2단계] 정령 상점 구매
+    if (state.type === 'spirit_shop') {
+        var sIdx = parseInt(choice) - 1;
+        if (isNaN(sIdx) || !state.extra.keys[sIdx]) return replier.reply(formatError(user, "번호 오류", "올바른 상점 번호를 선택하세요."));
+        
+        var itemKey = state.extra.keys[sIdx];
+        var item = SPIRIT_CONFIG.ITEMS[itemKey];
+        if (Number(user.point) < item.price) return replier.reply(formatError(user, "잔액 부족", "비용 " + fp(item.price) + "P가 부족합니다." + NAV));
+        
+        util_updatePoint(user, data.rooms["내리다"], -item.price, "정령 상점 구매", roomName);
+        sd.items[itemKey] = (sd.items[itemKey] || 0) + 1;
+        
+        user.skipHealing = true; safeSaveData(data, true);
+        replier.reply(formatCommand("🛒 상점 구매 완료", user, item.icon + " [" + item.name + "] 1개를 구매하여 보관함에 넣었습니다.", "추가 구매: [뒤로]"));
+        return true;
+    }
+
+    // [2단계] 교배소 확정
+    if (state.type === 'spirit_breed') {
+        var parts = choice.split(/\s+/);
+        if (parts.length !== 2) return replier.reply(formatError(user, "입력 오류", "융합할 두 마리의 번호를 띄어쓰기로 입력하세요. (예: 1 2)"));
+        
+        var p1 = parseInt(parts[0]) - 1;
+        var p2 = parseInt(parts[1]) - 1;
+        if (isNaN(p1) || isNaN(p2) || p1 === p2 || !sd.roster[p1] || !sd.roster[p2]) {
+            return replier.reply(formatError(user, "선택 오류", "서로 다른 올바른 번호를 2개 선택하세요." + NAV));
+        }
+
+        // 선택된 정령이 진짜 에픽/전설인지 2차 가드
+        if (SPIRIT_CONFIG.DB[sd.roster[p1].id].rank === "노말" || SPIRIT_CONFIG.DB[sd.roster[p1].id].rank === "레어" || 
+            SPIRIT_CONFIG.DB[sd.roster[p2].id].rank === "노말" || SPIRIT_CONFIG.DB[sd.roster[p2].id].rank === "레어") {
+            return replier.reply(formatError(user, "조건 미달", "교배는 [에픽] 또는 [전설] 등급만 가능합니다."));
+        }
+
+        // 역순으로 지워야 인덱스 꼬임을 방지함
+        var indices = [p1, p2].sort(function(a, b){ return b - a; });
+        var n1 = sd.roster[p1].name; var n2 = sd.roster[p2].name;
+        
+        // 동행 중인 녀석이 소멸되면 해제
+        if (sd.activeUid === sd.roster[p1].uid || sd.activeUid === sd.roster[p2].uid) sd.activeUid = null;
+
+        sd.roster.splice(indices[0], 1);
+        sd.roster.splice(indices[1], 1);
+        
+        // 희귀 돌연변이 알(egg_mutant) 획득
+        sd.items["egg_mutant"] = (sd.items["egg_mutant"] || 0) + 1;
+        // 상점에 노출되지 않는 히든 아이템 정의
+        if (!SPIRIT_CONFIG.ITEMS["egg_mutant"]) {
+            SPIRIT_CONFIG.ITEMS["egg_mutant"] = { name: "영롱한 돌연변이 알", type: "egg", timeMs: 120 * 60 * 1000, icon: "🌠", desc: "2시간 소요. 교배로 탄생한 빛나는 알." };
+        }
+
+        user.skipHealing = true; safeSaveData(data, true);
+        replier.reply(formatCommand("🧬 생명 융합 성공", user, "[" + n1 + "]과 [" + n2 + "]의 영혼이 하나로 합쳐져\n[🌠 영롱한 돌연변이 알] 1개를 획득했습니다!\n(부화장으로 이동하세요)", "메인 메뉴: [처음으로]"));
+        return true;
+    }
+    return false;
+}
+
 //==========섹터15==========
 
-function generateLandmarkName(data) { return ""; }
-function assignLandmarkType() { return "normal"; }
-function updateLandmarkPrices(data) { return []; }
-function market_forceNewLandmark() { return "폐기된 시스템입니다."; }
-function market_updateLandmarkNow(roomName) { return "폐기된 시스템입니다."; }
+/* 🌿 정령 육성 시스템 (Spirit Tamer) 통합 엔진 */
+var SPIRIT_CONFIG = {
+    MAX_ROSTER: 10, // 최대 보유 가능 정령 수
+    TRAIN_TIME_MS: 10 * 60 * 1000, // 훈련 소요 시간 (10분)
+    TRAIN_EXP: 60,  // 훈련 시 획득 경험치
+    TRAIN_COST_SAT: 30, // 훈련 시 소모 포만감
+    
+    ITEMS: {
+        "egg_normal": { id: "egg_normal", name: "평범한 정령의 알", type: "egg", price: 100000, timeMs: 15 * 60 * 1000, icon: "🥚", desc: "15분 소요 (노말~레어 부화)" },
+        "egg_rare": { id: "egg_rare", name: "신비한 정령의 알", type: "egg", price: 500000, timeMs: 60 * 60 * 1000, icon: "🔮", desc: "1시간 소요 (레어~에픽 부화)" },
+        "food_normal": { id: "food_normal", name: "일반 마력 사료", type: "food", price: 15000, val: 40, icon: "🍎", desc: "포만감 40 회복" },
+        "food_premium": { id: "food_premium", name: "고급 마력 사료", type: "food", price: 50000, val: 100, icon: "🍖", desc: "포만감 100 회복 (MAX)" }
+    },
+
+    // 정령 도감 및 진화 트리
+    DB: {
+        1: { id: 1, name: "불꽃씨앗", el: "🔥", rank: "노말", maxExp: 100, next: 2 },
+        2: { id: 2, name: "작은 이프리트", el: "🔥", rank: "레어", maxExp: 300, next: 3 },
+        3: { id: 3, name: "염제 이프리트", el: "🔥", rank: "에픽", maxExp: 0, next: null },
+        4: { id: 4, name: "물방울", el: "💧", rank: "노말", maxExp: 100, next: 5 },
+        5: { id: 5, name: "운디네", el: "💧", rank: "레어", maxExp: 300, next: 6 },
+        6: { id: 6, name: "해일의 운디네", el: "💧", rank: "에픽", maxExp: 0, next: null },
+        7: { id: 7, name: "새싹", el: "🌿", rank: "노말", maxExp: 100, next: 8 },
+        8: { id: 8, name: "실프", el: "🌿", rank: "레어", maxExp: 300, next: 9 },
+        9: { id: 9, name: "세계수 정령", el: "🌿", rank: "에픽", maxExp: 0, next: null },
+        10: { id: 10, name: "별빛의 파편", el: "✨", rank: "희귀", maxExp: 500, next: 11 },
+        11: { id: 11, name: "홀리 나이트", el: "✨", rank: "전설", maxExp: 0, next: null },
+        12: { id: 12, name: "심연의 눈", el: "🌌", rank: "희귀", maxExp: 500, next: 13 },
+        13: { id: 13, name: "다크 로드", el: "🌌", rank: "전설", maxExp: 0, next: null }
+    }
+};
+
+// 알 등급별 부화 확률 풀
+function _getHatchResult(eggId) {
+    var rand = Math.random() * 100;
+    if (eggId === "egg_normal") {
+        if (rand < 80) return [1, 4, 7][Math.floor(Math.random() * 3)]; // 80% 노말
+        return [2, 5, 8][Math.floor(Math.random() * 3)]; // 20% 레어
+    } else if (eggId === "egg_rare") {
+        if (rand < 50) return [2, 5, 8][Math.floor(Math.random() * 3)]; // 50% 레어
+        if (rand < 85) return [3, 6, 9][Math.floor(Math.random() * 3)]; // 35% 에픽
+        return [10, 12][Math.floor(Math.random() * 2)]; // 15% 희귀(빛/어둠)
+    } else if (eggId === "egg_mutant") {
+        return [11, 13][Math.floor(Math.random() * 2)]; // 돌연변이 알(교배): 100% 전설
+    }
+    return 1;
+}
+
+/** 메인 진입점 */
+function _gameSpiritLogic(msg, user, data, replier, roomName, targetUid) {
+    if (msg === "/정령") {
+        var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+        var roomData = data.rooms[logicRoom];
+        
+        var stateRes = util_checkUserState(user, targetUid, roomName, true);
+        if (!stateRes.canAction) return replier.reply(formatError(user, "진입 불가", stateRes.reason));
+
+        if (!user.spiritData) user.spiritData = { activeUid: null, roster: [], incubators: [null, null, null], pedia: [], items: {} };
+        var sd = user.spiritData;
+
+        // 동행 중인 정령 정보 추출
+        var activeInfo = "동행 중인 정령이 없습니다.";
+        if (sd.activeUid) {
+            var activeSp = sd.roster.find(function(s){ return s.uid === sd.activeUid; });
+            if (activeSp) {
+                var dbInfo = SPIRIT_CONFIG.DB[activeSp.id];
+                var expBar = (dbInfo.maxExp > 0) ? Math.floor((activeSp.exp / dbInfo.maxExp) * 100) + "%" : "MAX";
+                activeInfo = "[동행 중: " + dbInfo.el + " " + activeSp.name + " (" + dbInfo.rank + ")]\n" +
+                             "• 경험치: " + expBar + "\n" +
+                             "• 포만감: " + activeSp.satiety + " / 100";
+            } else { sd.activeUid = null; }
+        }
+
+        var body = "신비한 마력이 흐르는 정령술사의 정원에 오신 것을 환영합니다.\n\n" +
+                   activeInfo + "\n" +
+                   "━━━━━━━━━━━━━━━\n" +
+                   "1. 🐾 내 정령 관리 (먹이/훈련/진화/동행)\n" +
+                   "2. 🥚 부화장 (알 부화시키기)\n" +
+                   "3. 🧬 생명의 교배소 (에픽 이상 2마리 합성)\n" +
+                   "4. 🛒 정령 전용 상점 (알 및 사료 구매)\n" +
+                   "5. 📘 정령 도감 (" + sd.pedia.length + " / " + Object.keys(SPIRIT_CONFIG.DB).length + "종)\n\n" +
+                   "↩️ 뒤로 / ❎취소";
+
+        replier.reply(formatCommand("🌿 정령술사의 정원", user, body, "메뉴 번호를 입력하세요."));
+        
+        if (!roomData.features.states.menuWait) roomData.features.states.menuWait = {};
+        roomData.features.states.menuWait[targetUid] = { type: 'spirit_main', time: Date.now(), originRoom: roomName };
+        return true;
+    }
+    return false;
+}
 
 //==========섹터16-1==========
 
@@ -9950,6 +10379,8 @@ if (actualFeatures && actualFeatures.states) {
     if (typeof _handleLottoInput === 'function' && _handleLottoInput(msg, user, data, replier, logicRoom, targetUid)) return;
     // 지하 도시 메뉴 핸들러 연결
     if (typeof _handleCityMenuStep === 'function' && _handleCityMenuStep(msg, user, data, replier, logicRoom, targetUid)) return;
+    // 정령 시스템 메뉴 핸들러 연결
+    if (typeof _handleSpiritMenuStep === 'function' && _handleSpiritMenuStep(msg, user, data, replier, logicRoom, targetUid)) return;
 }
 
 // 5. 일반 게임 명령어 처리

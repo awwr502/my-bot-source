@@ -19076,16 +19076,32 @@ function _handleEscortHire(choice, user, data, replier, roomName, targetUid) {
 function _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, cfg) {
     var roomData = data.rooms[roomName];
     var state = roomData.features.states.menuWait[targetUid];
-    var choice = parseInt(msg.replace(/[^0-9]/g, ""));
 
+    if (!state || state.type !== 'trade_escort_confirm') return false;
+
+    // 1. 중복 진입 차단 (이미 깃발이 꽂혀있다면 무시)
+    if (state.isProcessing === true) return; 
+
+    var choice = parseInt(msg.replace(/[^0-9]/g, ""));
     if (isNaN(choice) || choice < 0 || choice > state.extra.navyList.length) {
         return replier.reply(formatError(user, "번호 오류", "0~" + state.extra.navyList.length + "번 사이를 선택하세요."));
     }
 
+    // 2. 점유 시작 (로직 진입 전 깃발 꽂기)
+    state.isProcessing = true;
+
+    // [헬퍼] 전 구역 세션 삭제 함수
+    var clearSession = function() {
+        if (roomData.features.states.menuWait) delete roomData.features.states.menuWait[targetUid];
+        if (data.rooms["내리다"] && data.rooms["내리다"].features.states.menuWait) {
+            delete data.rooms["내리다"].features.states.menuWait[targetUid];
+        }
+    };
+
     // 0번 선택 시 단독 출항
     if (choice === 0) {
         _departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec);
-        delete roomData.features.states.menuWait[targetUid];
+        clearSession(); // 성공 시 세션 파기
         return;
     }
 
@@ -19094,11 +19110,14 @@ function _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, cfg
     var tax = state.extra.totalTax;
 
     if (user.point < tax) {
-        return replier.reply(formatError(user, "자금 부족", "보호세(" + fp(tax) + "P)가 부족하여 고용할 수 없습니다."));
+        // [복구]: 잔액 부족 시 깃발을 내려서 다시 선택할 기회를 줌
+        state.isProcessing = false; 
+        return replier.reply(formatError(user, "자금 부족", "보호세(" + fp(tax) + "P)가 부족합니다."));
     }
 
     user.skipHealing = true;
-    util_updatePoint(user, roomData, -tax, "해군 호위 보호세 지불", roomName);
+    // [마스터 로직]: 자산 차감은 항상 메인방("내리다") 기준으로 수행
+    util_updatePoint(user, data.rooms["내리다"], -tax, "해군 호위 보호세 지불", roomName);
 
     // 출항 시작 (호위 정보 포함)
     _departVoyage(user, data, replier, roomName, state.dest, cfg, state.selCargo, state.selSpec, selectedNavy.uid, tax);
@@ -19106,7 +19125,6 @@ function _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, cfg
     if (!selectedNavy.isAI) {
         try {
             var navyTarget = null;
-            // 전 서버 방을 뒤져서 해당 해군 유저와 방 이름을 찾음
             for (var rN in data.rooms) {
                 if (data.rooms[rN].users && data.rooms[rN].users[selectedNavy.uid]) {
                     navyTarget = { data: data.rooms[rN].users[selectedNavy.uid], roomName: rN };
@@ -19118,7 +19136,7 @@ function _handleEscortConfirm(msg, user, data, replier, roomName, targetUid, cfg
         replier.reply("🤖 [AI 함대 통신]\n\"중앙 정부의 명에 따라 귀하의 선단을 보호하겠습니다.\"");
     }
 
-    delete roomData.features.states.menuWait[targetUid];
+    clearSession(); // 최종 성공 시 세션 파기
     safeSaveData(data, true);
 }
 

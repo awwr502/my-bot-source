@@ -256,34 +256,23 @@ var USER_SCHEMA = [
     { key: 'creditScore', default: 600, type: 'number' },
     { key: 'inventory', default: [], type: 'array' },
     { key: 'collectedIcons', default: [], type: 'array' },
-    { key: 'landHoldings', default: {}, type: 'object' },
-    { key: 'landAvg', default: {}, type: 'object' },
     { key: 'chatLog', default: [], type: 'array' },
     { key: 'timeoutEndTime', default: 0, type: 'number' },
     { key: 'totalMiningTime', default: 0, type: 'number' },
     { key: 'artifactPieces', default: 0, type: 'number' },
-    { key: 'totalGambleCount', default: 0, type: 'number' },
-    { key: 'totalGambleWins', default: 0, type: 'number' },
-    { key: 'totalTheftSuccess', default: 0, type: 'number' },
-    { key: 'totalLandInvest', default: 0, type: 'number' },
     { key: 'dailyPromotionAttempts', default: 1, type: 'number' },
-    { key: 'dailyGambleCount', default: 0, type: 'number' },
     { key: 'boughtWarningRemoval', default: false, type: 'boolean' },
     { key: 'hasVotedToday', default: false, type: 'boolean' },
     { key: 'lastFishingTime', default: 0, type: 'number' },
     { key: 'totalSpittoBought', default: 0, type: 'number' },
     { key: 'horseParts', default: [], type: 'array' },
-    { key: 'landDeedCount', default: 0, type: 'number' },
     { key: 'lottoFailCount', default: 0, type: 'number' },
     { key: 'luckyCharmEnd', default: 0, type: 'number' },
     { key: 'accruedInterest', default: 0, type: 'number' },
     { key: 'lastBankUpdateTime', default: 0, type: 'number' },
     { key: 'totalFishingSuccess', default: 0, type: 'number' },
     { key: 'totalDonation', default: 0, type: 'number' },
-    { key: 'consecutiveWins', default: 0, type: 'number' },
-    { key: 'lastGambleTime', default: 0, type: 'number' },
     { key: 'isManipulated', default: false, type: 'boolean' },
-    { key: 'gambleWinRate', default: 0, type: 'number' },
     { key: 'fishLuck', default: 0, type: 'number' },
     { key: 'horseWinRate', default: 0, type: 'number' },
     { key: 'spittoWinRate', default: 0, type: 'number' },
@@ -292,17 +281,7 @@ var USER_SCHEMA = [
     { key: 'cargoAvg', default: {}, type: 'object' },
     { key: 'specialties', default: {}, type: 'object' },
     { key: 'tradeCount', default: 0, type: 'number' },
-    { key: 'totalCasinoBet', default: 0, type: 'number' },
-    { key: 'totalCasinoWin', default: 0, type: 'number' },
     { key: 'shipName', default: '', type: 'string' },
-    { key: 'lastCasinoResult', default: null, type: 'object' },
-    { key: 'dailyLadderWins', default: [], type: 'array' },
-    { key: 'dailyBaccaratWins', default: [], type: 'array' },
-    { key: 'blackjackState', default: null, type: 'object' },
-    { key: 'dailyBlackjackWins', default: [], type: 'array' },
-    { key: 'casinoAuditStartTime', default: 0, type: 'number' },
-    { key: 'casinoAuditStartAssets', default: 0, type: 'number' },
-    { key: 'casinoAuditAlertHistory', default: [], type: 'array' },
     { key: 'lastBotUseTime', default: 0, type: 'number' },
     { key: 'loan', default: { debt: 0, items: [] }, type: 'object' },
     { key: 'purchasedPromotionAttempts', default: 0, type: 'number' },
@@ -313,8 +292,6 @@ var USER_SCHEMA = [
     { key: 'dailyLoanCount', default: 0, type: 'number' },
     { key: 'dailyStimulusCount', default: 0, type: 'number' },
     { key: 'dailyCreditRestoreCount', default: 0, type: 'number' },
-    { key: 'lastTheftActionTime', default: 0, type: 'number' },
-    { key: 'lastTheftVictimTime', default: 0, type: 'number' },
     { key: 'isDefaulter', default: false, type: 'boolean' },
     { key: 'lastDate', default: '', type: 'string' },
     { key: 'hasSeenSyncNotice', default: false, type: 'boolean' },
@@ -3392,122 +3369,7 @@ function util_refreshMarketRate(roomData, portName, goodName) {
 
 //==========섹터12==========
 
-/* 경찰 출동 결과 처리 함수 (중앙은행 연동 및 방별 격리 보정) */
-function processPoliceResult(roomName, thiefUid, victimUid) {
-    var data = getDatabase();
-    if (!data) return;
-    var room = data.rooms[roomName];
-    if (!room || !room.features || !room.features.states) return;
-
-    // [핵심 수정] 전역 변수가 아닌 방별 독립 상태 저장소를 참조하도록 연결
-    var activeThefts = room.features.states.activeThefts; 
-
-    var theftData = activeThefts[victimUid];
-    if (!theftData) return;
-    
-    var thief = room.users[thiefUid];
-    
-    if (activeThefts[victimUid].successTimer) clearTimeout(activeThefts[victimUid].successTimer);
-    
-    // [상태 해제] 올바른 참조 경로에서 삭제 수행
-    delete activeThefts[victimUid]; 
-    
-    // 1. 벌금 계산: 현금 차감은 보유액의 10%
-    var cashFine = Math.floor(Number(thief.point) * 0.1);
-    // 2. 대납 계산: 1,000P 하한선 보장 (부족분 산출)
-    var loanGap = Math.max(0, 1000 - cashFine);
-    
-    util_updatePoint(thief, room, -cashFine, "도둑질 체포 벌금", roomName);
-    
-    var loanMsg = "";
-    if (loanGap > 0) {
-        if (!thief.loan) thief.loan = { debt: 0, items: [] };
-        thief.loan.debt = Number(thief.loan.debt || 0) + loanGap;
-        if (!thief.loan.items) thief.loan.items = [];
-        thief.loan.items.push(loanGap);
-        loanMsg = "\n⚠️ 벌금 부족분 대납: " + fp(loanGap) + "P 대출 전환";
-    }
-    
-    var jailTime = 1 * 60 * 60 * 1000;
-    util_setData(thief, 'jailReleaseTime', Date.now() + jailTime, "도둑질 체포 징역", roomName);
-    
-    var msg = "🚨 [경찰 출동]\n대상: " + getDisplayName(thief) + "\n내용: 도둑질 현행범 체포\n벌금: -" + fp(cashFine) + "P / 징역 1시간" + loanMsg + "\n내 잔액: " + fp(thief.point) + "P";
-    Api.replyRoom("내리다", formatAdmin("🚓 체포 완료", msg));
-    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
-        replier.reply("📡 도둑질 체포 결과가 메인방('내리다')에 타전되었습니다.");
-    }
-    safeSaveData(data);
-}
-
-/* 도둑질 성공 결과 처리 함수 (중앙은행 연동 및 방별 격리 보정) */
-function processTheftResult(roomName, thiefUid, victimUid) {
-    var data = getDatabase();
-    if (!data) return;
-    var room = data.rooms[roomName];
-    if (!room || !room.features || !room.features.states) return;
-    
-    // [핵심 수정] 방별 독립 상태 저장소 참조 연결
-    var activeThefts = room.features.states.activeThefts;
-
-    if (!room.users[thiefUid] || !room.users[victimUid]) { 
-        if (activeThefts[victimUid]) delete activeThefts[victimUid]; 
-        Api.replyRoom(roomName, "⚠️ [시스템 알림]\n도둑질 진행 중 대상이 사라져 상황이 종료되었습니다.");
-        return; 
-    }
-    
-    if (activeThefts[victimUid] && activeThefts[victimUid].policeTimer) clearTimeout(activeThefts[victimUid].policeTimer);
-
-    var thief = room.users[thiefUid];
-    var victim = room.users[victimUid];
-    
-    // 1. 탈취액: 5% ~ 10% 사이 랜덤
-    var minSteal = Math.floor(Number(victim.point) * 0.05);
-    var maxSteal = Math.floor(Number(victim.point) * 0.10);
-    var stealAmount = Math.floor(Math.random() * (maxSteal - minSteal + 1)) + minSteal;
-    
-    // 2. 피해자 보호: 6시간 동안 타겟 제외
-    victim.lastTheftVictimTime = Date.now() + (6 * 60 * 60 * 1000);
-
-    util_updatePoint(victim, room, -stealAmount, "도둑질 당함", roomName);
-
-    var plunderArtifact = "";
-    if (Math.random() < 0.10 && Number(victim.artifactPieces || 0) > 0) {
-        victim.artifactPieces = Number(victim.artifactPieces) - 1;
-        thief.artifactPieces = Number(thief.artifactPieces || 0) + 1;
-        plunderArtifact = "\n\n✨ [유물 약탈 성공]!\n" + victim.name + "님의 '유물 조각' 1개를 가로챘습니다!";
-    }
-
-    var res = processRepayment(thief, stealAmount, thiefUid, roomName); 
-    
-    // 도둑의 포인트 증가 (이 돈은 피해자에게서 왔으므로 은행 재원 변동 0)
-    util_updatePoint(thief, room, Number(res.actualGain), "도둑질 성공", roomName);
-    
-   // 2. [확정] 도둑질 성공 누적 통계 게이트웨이 보호
-    var nextTheftSuccess = Number(thief.totalTheftSuccess || 0) + 1;
-    util_setData(thief, 'totalTheftSuccess', nextTheftSuccess, "도둑질 성공 기록", roomName);
-
-    // 3. 리플라이어 스텁 선언 (칭호 자동 부여 시스템 연동용)
-    var replierStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
-
-    // 칭호 부여 로직 (게이트웨이로 갱신된 최신 값을 참조)
-    if (thief.totalTheftSuccess >= 50) {
-        util_checkAndAwardTitle(thief, replierStub, "약탈왕", 1203, "👤", "내리다 그림자 길드", "누적 도둑질 성공 50회", "[장착 효과]: 도둑질 시 경찰이 출동할 확률이 기존 50%에서 30%로 감소합니다.");
-    } else if (thief.totalTheftSuccess >= 30) {
-        util_checkAndAwardTitle(thief, replierStub, "대도", 1202, "👺", "내리다 그림자 길드", "누적 도둑질 성공 30회", "대담한 수법으로 세상을 놀라게 하고 있습니다.");
-    } else if (thief.totalTheftSuccess >= 10) {
-        util_checkAndAwardTitle(thief, replierStub, "좀도둑", 1201, "🧤", "내리다 그림자 길드", "누적 도둑질 성공 10회", "남의 지갑을 가볍게 만드는 기술을 익혔습니다.");
-    }
-    
-    // [상태 해제] 올바른 참조 경로에서 삭제 수행
-    if (activeThefts[victimUid]) delete activeThefts[victimUid]; 
-    
-    var content = "🕵️ 도둑질 성공!\n" + getDisplayName(victim) + "님의 지갑에서\n" + fp(stealAmount) + "P를 훔쳤습니다!" + res.repayMsg + plunderArtifact;
-    Api.replyRoom("내리다", formatCommand("💰 도둑질 결과", thief, content, "내 잔액: " + fp(thief.point) + "P"));
-    if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
-        replier.reply("📡 도둑질 성공 결과가 메인방('내리다')에 타전되었습니다.");
-    }
-    safeSaveData(data);
-}
+// (더 이상 호출되지 않는 과거 코드로, 이 영역은 비워둡니다.)
 
 //==========섹터13==========
 
@@ -12466,46 +12328,81 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         return true;
     }
 
-    // 랜드마크 완전 철거 및 일괄 환불 명령어
-    if (msg === "/랜드마크청산") {
+    // 도둑질, 카지노, 부동산 데이터 및 관련 칭호 완전 청산 명령어
+    if (msg === "/폐기시스템청산") {
+        var obsoleteTitles = ["전설의 큰손", "투기왕", "건물주", "임대인", "약탈왕", "대도", "좀도둑", "도박왕", "타짜", "승부사"];
         var totalRefund = 0;
         var userCount = 0;
+        var titleRevoked = 0;
         var rData = data.rooms["내리다"];
         
         for (var r in data.rooms) {
             for (var uid in data.rooms[r].users) {
                 var u = data.rooms[r].users[uid];
+                var isModified = false;
+
+                // 1. 랜드마크 지분 환불 처리
                 if (u.landHoldings && Object.keys(u.landHoldings).length > 0) {
                     var refundAmt = 0;
                     for (var lName in u.landHoldings) {
                         var qty = Number(u.landHoldings[lName]);
-                        // 저장된 평단가(매입가)를 기준으로 환산 (누락 시 고정가 20만P 적용)
                         var avg = Number((u.landAvg && u.landAvg[lName]) ? u.landAvg[lName] : 200000);
                         refundAmt += (qty * avg);
                     }
-                    
                     if (refundAmt > 0) {
-                        u.skipHealing = true;
-                        util_updatePoint(u, rData, refundAmt, "랜드마크 시스템 종료에 따른 지분 일괄 환불", "내리다");
+                        util_updatePoint(u, rData, refundAmt, "폐기 시스템 지분 일괄 환불", "내리다");
                         totalRefund += refundAmt;
-                        userCount++;
+                        isModified = true;
                     }
-                    
-                    // 지분 및 투자 이력 관련 필드 영구 삭제
-                    delete u.landHoldings;
-                    delete u.landAvg;
-                    delete u.totalLandInvest;
-                    delete u.landDeedCount;
+                }
+
+                // 2. 폐기 칭호 가방에서 삭제 및 장착 해제
+                if (u.inventory) {
+                    var beforeLen = u.inventory.length;
+                    u.inventory = u.inventory.filter(function(it) {
+                        if (it.effect === "title" && obsoleteTitles.indexOf(it.title) !== -1) return false;
+                        if (it.effect === "title" && obsoleteTitles.indexOf(it.name) !== -1) return false;
+                        return true;
+                    });
+                    if (u.inventory.length < beforeLen) {
+                        titleRevoked += (beforeLen - u.inventory.length);
+                        isModified = true;
+                    }
+                }
+
+                if (obsoleteTitles.indexOf(u.title) !== -1) {
+                    u.title = "";
+                    isModified = true;
+                }
+
+                // 3. 폐기 데이터 필드 영구 삭제
+                var garbageFields = [
+                    'landHoldings', 'landAvg', 'totalLandInvest', 'landDeedCount',
+                    'totalTheftSuccess', 'lastTheftActionTime', 'lastTheftVictimTime',
+                    'totalGambleCount', 'totalGambleWins', 'dailyGambleCount', 'lastGambleTime', 'gambleWinRate',
+                    'totalCasinoBet', 'totalCasinoWin', 'lastCasinoResult', 'dailyLadderWins', 'dailyBaccaratWins',
+                    'blackjackState', 'dailyBlackjackWins', 'casinoAuditStartTime', 'casinoAuditStartAssets', 'casinoAuditAlertHistory'
+                ];
+                garbageFields.forEach(function(f) {
+                    if (u[f] !== undefined) {
+                        delete u[f];
+                        isModified = true;
+                    }
+                });
+
+                if (isModified) {
+                    u.skipHealing = true;
+                    userCount++;
                 }
             }
         }
         
-        // 랜드마크 시장 전체 데이터 삭제
+        // 전역 폐기 데이터 삭제
         delete data.landmarkMarket;
         delete data.landmarkTraffic;
         
         safeSaveData(data, true);
-        replier.reply(formatAdmin("🏢 랜드마크 시스템 완전 파기 완료", "시스템 파기 정책에 따라 기존 지분 보유자 " + userCount + "명에게\n총 " + fp(totalRefund) + "P의 매입 원금을 환불 조치했습니다.\n\n해당 시장 데이터와 로직은 전면 제거되었습니다."));
+        replier.reply(formatAdmin("🧹 폐기 시스템 잔재 청산 완료", "대상 유저: " + userCount + "명\n환불 총액: " + fp(totalRefund) + "P\n박탈된 칭호: " + titleRevoked + "개\n\n도둑질, 카지노, 부동산과 관련된 모든 데이터 필드 및 칭호를\n메모리에서 완벽히 영구 삭제했습니다."));
         return true;
     }
 

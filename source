@@ -3937,13 +3937,17 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
             var sList = Object.keys(SPIRIT_CONFIG.ITEMS).map(function(k, i) {
                 var it = SPIRIT_CONFIG.ITEMS[k];
                 var 보유 = sd.items[k] || 0;
-                return (i+1) + ". " + it.icon + " " + it.name + " (" + fp(it.price) + "P)\n   └ " + it.desc + " [보유: " + 보유 + "]";
+                var costStr = (it.currency === "artifact") ? it.price + "조각" : fp(it.price) + "P";
+                return (i+1) + ". " + it.icon + " " + it.name + " (" + costStr + ")\n   └ " + it.desc + " [보유: " + 보유 + "]";
             }).join("\n\n");
             
             state.type = 'spirit_shop';
             state.time = Date.now();
             state.extra = { keys: Object.keys(SPIRIT_CONFIG.ITEMS) };
-            replier.reply(formatCommand("🛒 정령 전용 상점", user, sList + "\n\n💰 내 잔액: " + fp(user.point) + "P" + NAV, "구매할 물품의 번호를 입력하세요."));
+            
+            var pAmount = fp(user.point);
+            var aAmount = Number(user.artifactPieces || 0);
+            replier.reply(formatCommand("🛒 정령 전용 상점", user, sList + "\n\n💰 잔액: " + pAmount + "P | 🧩 유물: " + aAmount + "개" + NAV, "구매할 물품의 번호를 입력하세요."));
         }
         else if (choice === "5") {
             var total = Object.keys(SPIRIT_CONFIG.DB).length;
@@ -4120,9 +4124,17 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
         
         var itemKey = state.extra.keys[sIdx];
         var item = SPIRIT_CONFIG.ITEMS[itemKey];
-        if (Number(user.point) < item.price) return replier.reply(formatError(user, "잔액 부족", "비용 " + fp(item.price) + "P가 부족합니다." + NAV));
-        
-        util_updatePoint(user, data.rooms["내리다"], -item.price, "정령 상점 구매", roomName);
+        if (item.currency === "artifact") {
+            var pieces = Number(user.artifactPieces || 0);
+            if (pieces < item.price) return replier.reply(formatError(user, "조각 부족", "비용 " + item.price + "조각이 부족합니다." + NAV));
+            
+            user.artifactPieces = pieces - item.price;
+            util_setData(user, 'artifactPieces', user.artifactPieces, "정령 상점 구매", roomName);
+        } else {
+            if (Number(user.point) < item.price) return replier.reply(formatError(user, "잔액 부족", "비용 " + fp(item.price) + "P가 부족합니다." + NAV));
+            
+            util_updatePoint(user, data.rooms["내리다"], -item.price, "정령 상점 구매", roomName);
+        }
         sd.items[itemKey] = (sd.items[itemKey] || 0) + 1;
         
         user.skipHealing = true; safeSaveData(data, true);
@@ -4176,10 +4188,10 @@ var SPIRIT_CONFIG = {
     TRAIN_COST_SAT: 30, // 훈련 시 소모 포만감
     
     ITEMS: {
-        "egg_normal": { id: "egg_normal", name: "평범한 정령의 알", type: "egg", price: 100000, timeMs: 15 * 60 * 1000, icon: "🥚", desc: "15분 소요 (노말~레어 부화)" },
-        "egg_rare": { id: "egg_rare", name: "신비한 정령의 알", type: "egg", price: 500000, timeMs: 60 * 60 * 1000, icon: "🔮", desc: "1시간 소요 (레어~에픽 부화)" },
-        "food_normal": { id: "food_normal", name: "일반 마력 사료", type: "food", price: 15000, val: 40, icon: "🍎", desc: "포만감 40 회복" },
-        "food_premium": { id: "food_premium", name: "고급 마력 사료", type: "food", price: 50000, val: 100, icon: "🍖", desc: "포만감 100 회복 (MAX)" }
+        "egg_normal": { id: "egg_normal", name: "평범한 정령의 알", type: "egg", currency: "artifact", price: 5, icon: "🥚", desc: "15분 소요 (노말~레어 부화)" },
+        "egg_rare": { id: "egg_rare", name: "신비한 정령의 알", type: "egg", currency: "artifact", price: 30, icon: "🔮", desc: "1시간 소요 (레어~에픽 부화)" },
+        "food_normal": { id: "food_normal", name: "일반 마력 사료", type: "food", currency: "point", price: 15000, val: 40, icon: "🍎", desc: "포만감 40 회복" },
+        "food_premium": { id: "food_premium", name: "고급 마력 사료", type: "food", currency: "point", price: 50000, val: 100, icon: "🍖", desc: "포만감 100 회복 (MAX)" }
     },
 
     // 정령 도감 및 진화 트리

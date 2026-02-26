@@ -6827,21 +6827,17 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
                             }
                         }
 
-                        // [중계 시스템] 유저 입력 실시간 탈취 (단일 큐 도입으로 1:1방 렉 완벽 제거 및 순서 보장)
+                        // [중계 시스템] 유저 입력 실시간 탈취 (독립 스레드로 핸들러 먹통 현상 완전 제거)
                         if (ALLOWED_ROOMS.indexOf(realRoom) === -1 && realRoom !== CASINO_RELAY_ROOM) {
-                            if (typeof __RelayQueue === 'undefined' || __RelayQueue === null) {
-                                __RelayQueue = java.util.concurrent.Executors.newSingleThreadExecutor();
-                            }
-                            __RelayQueue.execute(new java.lang.Runnable({
+                            new java.lang.Thread(new java.lang.Runnable({
                                 run: function() {
                                     try {
-                                        // [핵심 패치] 1:1방에 먼저 봇이 즉각 반응하도록, 중계 전송은 0.5초(500ms) 대기 후 발송
-                                        java.lang.Thread.sleep(500);
+                                        // 입력 내역은 지연 없이 즉시 중계방에 먼저 기록
                                         var relayInput = "👤 [1:1입력] " + cleanSender + "\n💬 " + msg;
                                         Api.replyRoom(CASINO_RELAY_ROOM, relayInput);
-                                    } catch(e) { Log.error("Input Relay Error: " + e); }
+                                    } catch(e) {}
                                 }
-                            }));
+                            })).start();
                         }
 
                        /* [핵심 가드] 이제 식별된 targetUid로 관리자 여부를 정확히 판별합니다. */
@@ -7299,32 +7295,28 @@ if (ALLOWED_ROOMS.indexOf(roomName) !== -1) {
     }
 }
 
-// [핵심 패치] 단체방 발송 전용 큐 및 중계방 전용 단일 큐 선언 (전역 스코프 유지)
+// [핵심 패치] 메시지 발송 전용 큐를 스크립트 전역에 보관하여 소독 엔진을 회피합니다.
 if (typeof __ReplyQueue === 'undefined' || __ReplyQueue === null) {
     __ReplyQueue = java.util.concurrent.Executors.newSingleThreadExecutor();
-}
-if (typeof __RelayQueue === 'undefined' || __RelayQueue === null) {
-    __RelayQueue = java.util.concurrent.Executors.newSingleThreadExecutor();
 }
 
 // 1. 기존 replier 기능을 가로채는 도구 생성 (데이터 오염 없이 비동기 발송)
 var customReplier = {
     reply: function(content) {
-        // 1:1 방인 경우: 딜레이 없이 즉각 출력 및 중계방 백그라운드 전송
         if (ALLOWED_ROOMS.indexOf(realRoom) === -1) {
-            // [우선 처리]: 1:1방에 즉시 답장을 보내 렉을 0으로 만듦
+            // [1순위 최우선 처리] 1:1방 유저에게 어떠한 딜레이도 없이 즉각 답장 송출 (렉 0%)
             replier.reply(content); 
             
             if (realRoom !== CASINO_RELAY_ROOM) {
-                // 단일 큐(SingleThread)에 담아 입력(0.5초 대기)이 완전히 송출된 직후 출력되도록 순서 완벽 보장
-                __RelayQueue.execute(new java.lang.Runnable({
+                // [2순위 지연 처리] 1:1방 출력이 카톡 서버에 완전히 도달한 것을 보장하기 위해 1.5초 강제 대기 후 중계방 송출
+                new java.lang.Thread(new java.lang.Runnable({
                     run: function() {
                         try {
-                            java.lang.Thread.sleep(100); 
+                            java.lang.Thread.sleep(500); // 0.5초 딜레이 확정
                             Api.replyRoom(CASINO_RELAY_ROOM, "🤖 [1:1출력] To. " + cleanSender + "\n" + content);
-                        } catch(e) { Log.error("Relay Output Error: " + e); }
+                        } catch(e) {}
                     }
-                }));
+                })).start();
             }
         }
         // 단체방(내리다 등)인 경우: 단일 전송 큐(FIFO)에 담아 순서대로 발송

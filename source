@@ -3863,298 +3863,18 @@ function processRepayment(user, amount, userUid, roomName) {
 
 //==========섹터14==========
 
-/* [개편] 랜드마크 리스트 생성 함수 (부동산 컨셉 적용) */
+/* 랜드마크 리스트 생성 함수 (부동산 컨셉 적용) */
 function generateLandmarkList(data, roomName) {
-    var list = [];
-    var dangerLandmarks = [];
-    var keys = Object.keys(data.landmarkMarket || {});
-    if (keys.length === 0) return null;
-
-    // 타입별 우선순위 정의 (낮을수록 상단)
-    var getTypePriority = function(name) {
-        var fixed = ["광산", "낚시터", "카지노", "중앙은행", "백화점", "경마장"];
-        if (fixed.indexOf(name) !== -1) return 1; // 1순위: 고정 랜드마크
-
-        var land = data.landmarkMarket[name];
-        if (!land) return 4;
-        
-        if (land.type === "bluechip") return 2; // 2순위: 비즈니스타워 (🏨)
-        if (land.type === "hotspot") return 3;  // 3순위: 상가 및 기타 (🏚️)
-        return 4;
-    };
-
-    // 다중 정렬: 1순위 타입(우선순위), 2순위 이름(가나다)
-    keys.sort(function(a, b) {
-        var priA = getTypePriority(a);
-        var priB = getTypePriority(b);
-        
-        if (priA !== priB) return priA - priB;
-        return a.localeCompare(b); // 가나다순
-    });
-
-    var roomData = data.rooms[roomName]; // 해당 방의 유저 데이터를 참조하기 위해 가져옴
-    var landmarkTraits = SYSTEM_CONFIG.ECO.LANDMARK.TRAITS;
-
-    var fixCfg = SYSTEM_CONFIG.ECO.LANDMARK.FIXED_POLICY; // 누락된 변수 정의 추가
-
-    for (var i = 0; i < keys.length; i++) {
-        var name = keys[i];
-        var landmark = data.landmarkMarket[name];
-        var trait = landmarkTraits[landmark.type] || landmarkTraits.normal;
-        
-        var ownerTag = ""; 
-        if (roomData) {
-            var owner = util_getMajorityOwner(roomData, name);
-            if (owner && owner.data) {
-                ownerTag = "\n[" + getDisplayName(owner.data) + "]";
-            }
-        }
-        
-        var displayPrice = Number(landmark.price);
-        var statusInfo = "";
-
-        if (landmark.type === "normal") {
-            // [가격 동기화] 섹터 7의 전역 함수를 호출합니다.
-            var totalShares = util_getTotalShares(name, roomData);
-            displayPrice = fixCfg.BASE_PRICE + (totalShares * (fixCfg.BASE_PRICE * fixCfg.PER_SHARE_RATE));
-            statusInfo = " (총 " + totalShares + "지분)";
-        } else {
-            var diff = displayPrice - Number(landmark.lastPrice);
-            var rate = landmark.lastPrice > 0 ? ((diff / landmark.lastPrice) * 100).toFixed(1) : "0.0";
-            var sign = diff > 0 ? "🔺" : (diff < 0 ? "🔹" : "➖");
-            statusInfo = " (" + sign + " " + Math.abs(rate) + "%)";
-        }
-        
-        var warningMark = "";
-        if (landmark.delistTick && landmark.delistTick > 0) {
-            warningMark = " ⚠️";
-            dangerLandmarks.push(name);
-        }
-        
-        list.push(trait.icon + " " + name + ": " + fp(displayPrice) + "P" + statusInfo + warningMark + ownerTag);
-    } // for 루프 끝
-
-    var result = list.join("\n");
-
-    if (dangerLandmarks.length > 0) {
-        result += "\n\n⚠️ 부지 가치 하락으로 강제 철거 위기!\n해당 건물 : " + dangerLandmarks.join(", ");
-    }
-    
-    return result;
+    return null;
 }
 
 //==========섹터15==========
 
-/* 랜드마크 이름 생성 함수 (부동산 전용) */
-function generateLandmarkName(data) {
-    var conf = SYSTEM_CONFIG.ECO.LANDMARK;
-    var name = "";
-    for (var i = 0; i < 20; i++) {
-        var pre = conf.PREFIXES[Math.floor(Math.random() * conf.PREFIXES.length)];
-        var suf = conf.SUFFIXES[Math.floor(Math.random() * conf.SUFFIXES.length)];
-        name = pre + suf;
-        if (!data.landmarkMarket || !data.landmarkMarket[name]) break;
-    }
-    return name;
-}
-
-/* 랜드마크 타입 할당 함수 */
-function assignLandmarkType() {
-    var conf = SYSTEM_CONFIG.ECO.LANDMARK;
-    var rand = Math.random() * 100;
-    var cumulative = 0;
-    for (var type in conf.TRAITS) {
-        cumulative += conf.TRAITS[type].prob;
-        if (rand < cumulative) return type;
-    }
-    return "normal";
-}
-
-/* 랜드마크 시세 변동 로직 함수 (부동산 마켓 통합 버전) */
-function updateLandmarkPrices(data) {
-    var conf = SYSTEM_CONFIG.ECO.LANDMARK;
-    if (!data.landmarkMarket) data.landmarkMarket = {};
-    if (!data.landmarkTraffic) data.landmarkTraffic = {}; 
-
-    // 1. [고정] 사용자 지정 6대 핵심 랜드마크 강제 상장
-    var fixedSites = {
-        "광산": { price: 500000, type: "bluechip", icon: "⛏️" },
-        "낚시터": { price: 300000, type: "normal", icon: "🎣" },
-        "카지노": { price: 1000000, type: "hotspot", icon: "🎰" },
-        "중앙은행": { price: 5000000, type: "bluechip", icon: "🏦" },
-        "백화점": { price: 1500000, type: "hotspot", icon: "🏢" },
-        "경마장": { price: 800000, type: "normal", icon: "🏇" }
-    };
-    
-    for (var fName in fixedSites) {
-        if (!data.landmarkMarket[fName]) {
-            var site = fixedSites[fName];
-            data.landmarkMarket[fName] = { 
-                price: site.price, lastPrice: site.price, type: site.type, 
-                delistTick: 0, delistLimit: 9999, trend: "none", trendTick: 0, openPrice: site.price 
-            };
-        }
-    }
-
-    var mainRoom = data.rooms["내리다"];
-    var pol = util_getActivePolicy(mainRoom);
-
-    var now = new Date();
-    var currentHour = now.getHours();
-    var isMarketOpen = (currentHour >= conf.SETTINGS.OPEN_HOUR && currentHour <= conf.SETTINGS.CLOSE_HOUR);
-    
-    var totalSum = 0;
-    var count = 0;
-    for (var k in data.landmarkMarket) { totalSum += Number(data.landmarkMarket[k].price); count++; }
-    var marketAvg = count > 0 ? (totalSum / count) : 1000;
-
-    var eco = calculateEconomy(data, "내리다");
-    var activeUserCount = Math.max(1, eco.count); 
-    var ecoBaseFloor = conf.SETTINGS.ABS_DELIST_LIMIT;
-
-    var eventNews = [];
-
-    /* [1] 신규 매물 등록 처리 */
-    if (data.pendingNewLandmark && isMarketOpen) {
-        if (Object.keys(data.landmarkMarket).length < conf.SETTINGS.MAX_COUNT) {
-            var newName = generateLandmarkName(data);
-            var newType = assignLandmarkType();
-            var startPrice = Math.floor(marketAvg * ((Math.random() * 0.3) + 0.8));
-            
-            data.landmarkMarket[newName] = { 
-                price: Number(startPrice), lastPrice: Number(startPrice), 
-                type: newType, delistTick: 0, delistLimit: Math.floor(Math.random() * 4) + 2,
-                trend: "none", trendTick: 0, openPrice: startPrice,
-                isOverheated: false
-            };
-            eventNews.push("🏙️ 신규 매물 등록: " + conf.TRAITS[newType].icon + " " + newName + " (" + fp(startPrice) + "P)");
-        }
-        data.pendingNewLandmark = false;
-    }
-
-    /* [2] 조작 프리셋 설정 로드 */
-    var mani = conf.MANIPULATION;
-    var specLand = (mani && mani.ACTIVE) ? mani.TARGET : null;
-    var specFactor = (mani && mani.ACTIVE) ? (mani.IS_UP ? Math.abs(mani.RATE) : -Math.abs(mani.RATE)) : 0;
-
-    if (!specLand && data.pendingSpecialEffect && isMarketOpen) {
-        specLand = data.pendingSpecialEffect.landmark; // landmark로 키값 대응
-        specFactor = data.pendingSpecialEffect.factor;
-    }
-
-    /* [3] 시세 변동 계산 루프 */
-    var msgCount = (mainRoom.features.msgCount || 0);
-    var units = Math.floor(Math.min(msgCount, 500) / 50); 
-    var hypeFactor = 1 + (units * 0.01); 
-
-    for (var name in data.landmarkMarket) {
-        var landmark = data.landmarkMarket[name];
-        var trait = conf.TRAITS[landmark.type] || conf.TRAITS.normal;
-        var changePercent = 0;
-        
-        landmark.lastPrice = Number(landmark.price);
-
-        /* [Gemini] 랜드마크 타입(normal) 변동 제외 로직 */
-        if (landmark.type === "normal") {
-            // 랜드마크는 주식형 변동을 하지 않으므로 연산을 건너뜁니다.
-            landmark.delistTick = 0; // 강제 철거 위험 방지
-            continue; 
-        }
-
-        if (isMarketOpen) {
-            if (name === specLand) { 
-                // [조작 매물] 폭등/폭락 처리
-                changePercent = specFactor * hypeFactor;
-                eventNews.push("🚨 [변동성 알림]\n건물: " + name + "\n내용: " + (specFactor > 0 ? "🚀 시세 폭등" : "📉 시세 폭락") + " (" + (Math.abs(changePercent * 100)).toFixed(1) + "%)");
-            } else {
-                // [일반 매물] 트렌드 및 시세 변동 연산
-                if (landmark.trendTick <= 0) {
-                    // 트렌드 유지 시간 단축: 기존 2~5회 -> 수정 2~3회 (더 빠른 태세 전환)
-                    landmark.trendTick = Math.floor(Math.random() * 2) + 2; 
-                    var p = Math.random(); 
-                    landmark.trend = (p < 0.35) ? "up" : (p < 0.70 ? "down" : "volatile");
-                }
-
-                // 변동 폭 랜덤화: 고정 2.5% 대신 1.0% ~ 4.0% 사이의 무작위 배율 결정
-                var randomRate = (Math.random() * 0.03) + 0.01; 
-                var baseRate = (landmark.trend === "up" ? randomRate : (landmark.trend === "down" ? -randomRate : (Math.random() * 0.08 - 0.04)));
-                changePercent = baseRate * trait.volatility * hypeFactor;
-                
-                var traffic = data.landmarkTraffic[name] || { buy: 0, sell: 0 };
-                var trafficImpact = Math.max(-0.15, Math.min(0.15, ((traffic.buy - traffic.sell) / (activeUserCount * 5)) * 0.01));
-                changePercent += trafficImpact;
-
-                if (pol.volatilityMult) changePercent *= pol.volatilityMult;
-
-                // [v11.9.9 교정] 저항선 및 하락 압력 로직 (상승 편향 제거)
-                var refPrice = landmark.openPrice || landmark.price;
-                var growthRate = (landmark.price - refPrice) / refPrice;
-                var sConf = conf.SETTINGS;
-
-                if (growthRate > sConf.RESISTANCE_START) {
-                    var gap = growthRate - sConf.RESISTANCE_START;
-                    changePercent -= gap * sConf.GRAVITY;
-                    changePercent += (Math.random() * 0.06 - 0.03); // 대칭적 난수 발생
-                    
-                    if (growthRate >= sConf.CLOSING_LIMIT - 0.05) changePercent -= 0.08;
-                }
-                landmark.trendTick--;
-            } // else 블록 끝
-        } // if (isMarketOpen) 블록 끝
-        
-        // 최종 가격 결정 및 최저가(10P) 보장
-        landmark.price = Math.max(10, Math.round(landmark.price * (1 + changePercent))); 
-
-        // 강제 철거(상폐) 위기 체크
-        if (landmark.price < (marketAvg * conf.SETTINGS.DELIST_LIMIT) || landmark.price < ecoBaseFloor) { 
-            landmark.delistTick++; 
-        } else { 
-            landmark.delistTick = 0; 
-        }
-    } // for 루프 끝
-
-    /* 강제 철거(경매) 집행 */
-    var demolished = [];
-    for (var name in data.landmarkMarket) {
-        if (data.landmarkMarket[name].delistTick >= data.landmarkMarket[name].delistLimit) demolished.push(name);
-    }
-    
-    demolished.forEach(function(delName) { 
-        for (var r in data.rooms) {
-            for (var uid in data.rooms[r].users) {
-                var u = data.rooms[r].users[uid];
-                if (u.landHoldings) {
-                    delete u.landHoldings[delName];
-                    if (u.landAvg) delete u.landAvg[delName];
-                }
-            }
-        }
-        delete data.landmarkMarket[delName]; 
-        eventNews.push("🚨 [강제 철거] " + delName + "\n사유: 부지 가치 미달로 인한 국고 환수"); 
-    });
-
-    data.landmarkTraffic = {}; 
-    data.pendingSpecialEffect = null; 
-    return eventNews;
-}
-
-/* 부동산 시장 수동 제어 엔진 */
-function market_forceNewLandmark() {
-    var data = getDatabase();
-    data.pendingNewLandmark = true;
-    return "✅ 다음 변동 타임에 신규 매물 등록이 확정되었습니다.";
-}
-
-function market_updateLandmarkNow(roomName) {
-    var data = getDatabase();
-    var result = updateLandmarkPrices(data);
-    var body = "📈 부동산 시세 변동\n━━━━━━━━━━━━━━━\n🟢 부동산 운영중\n\n" + (generateLandmarkList(data) || "매물 정보 없음");
-    if (result.length > 0) body += "\n\n" + result.join("\n");
-    body += "\n━━━━━━━━━━━━━━━"; 
-    Api.replyRoom(roomName || "내리다", body);
-    safeSaveData(data);
-    return "✅ 부동산 시세 갱신 완료.";
-}
+function generateLandmarkName(data) { return ""; }
+function assignLandmarkType() { return "normal"; }
+function updateLandmarkPrices(data) { return []; }
+function market_forceNewLandmark() { return "폐기된 시스템입니다."; }
+function market_updateLandmarkNow(roomName) { return "폐기된 시스템입니다."; }
 
 //==========섹터16-1==========
 
@@ -5412,17 +5132,6 @@ function _runSector16Logic(data, ctx) {
                     }
                     PERF_METRICS.msgPerMin = 0; 
                 }
-
-        // [부동산] 개장 시 시가 동기화 로직
-        if (currentHour === conf.SETTINGS.OPEN_HOUR && currentMin === 0 && data.lastMarketOpenDate !== ctx.today) {
-            data.lastMarketOpenDate = ctx.today;
-            if (data.landmarkMarket) {
-                for (var lKey in data.landmarkMarket) {
-                    data.landmarkMarket[lKey].openPrice = data.landmarkMarket[lKey].price;
-                }
-                ctx.isUpdated = true;
-            }
-        }
     } catch(e) { Log.error("Sys/Save Logic Error: " + e); }
 
     /* 무역 시스템 20시간 주기 순환 시세 변동 엔진 */
@@ -5855,242 +5564,192 @@ runScheduler();
  * [v11.0] Landmark & Property Tax System
  */
 function _runSector17Logic(data, ctx) {
+    var currentHour = ctx.now.getHours();
+    var currentMin = ctx.now.getMinutes();
 
-    var currentHour = ctx.now.getHours();
-    var currentMin = ctx.now.getMinutes();
+    if (data.lastDailyReset === ctx.today) return;
+    
+    // [보안] 로직 시작 즉시 날짜 갱신하여 1초 내 중복 실행 방지
+    data.lastDailyReset = ctx.today;
+    Log.info("📅 [System] " + ctx.today + " 일일 데이터 초기화 및 경제 정산을 시작합니다.");
 
-    if (data.lastDailyReset === ctx.today) return;
-    
-    // [보안] 로직 시작 즉시 날짜 갱신하여 1초 내 중복 실행 방지
-    data.lastDailyReset = ctx.today;
-    Log.info("📅 [System] " + ctx.today + " 일일 데이터 초기화 및 경제 정산을 시작합니다.");
+    // [1] 자동 물가 기준점 보정 시스템 및 하이프 카운트 초기화
+    for (var rName in data.rooms) {
+        var rObj = data.rooms[rName];
+        var eco = calculateEconomy(data, rName);
 
-    // [부동산] 과열 상태 및 일일 변동 데이터 초기화
-    if (data.landmarkMarket) {
-        for (var lName in data.landmarkMarket) {
-                data.landmarkMarket[lName].isOverheated = false;
-            }
-            Log.info("[Landmark Engine] 부동산 영업 종료에 따른 과열 상태 초기화 완료.");
-        }
-        
-        // [1] 자동 물가 기준점 보정 시스템
-        for (var rName in data.rooms) {
-            var rObj = data.rooms[rName];
-            var eco = calculateEconomy(data, rName); // 섹터 8에서 고친 부동산 합산 엔진 사용
-
-            // [신규] 00시 기준 유저 평균 순자산 확정 (내일 대출 한도의 기준이 됨)
-            if (rObj.features && rObj.features.government) {
-                rObj.features.government.dailyAvgAsset = eco.average;
-                Log.info("[" + rName + "] 내일자 대출 유동 한도 기준점 설정: " + fp(eco.average) + "P");
-            }
-            
-            if (eco.total > 0) {
-                var oldBase = rObj.economyBase || eco.total;
-                var currentBase = rObj.economyBase || 1;
-                var rawRatio = eco.total / currentBase;
-                
-                if (eco.total > oldBase) {
-                    var weight = 0.6;
-                    rObj.economyBase = Math.floor((oldBase * (1 - weight)) + (eco.total * weight));
-                } else {
-                    rObj.economyBase = Math.floor(Math.sqrt(oldBase * eco.total));
-                }
-                Log.info("[" + rName + "] 경제 기준점 자동 조정 완료: " + fp(rObj.economyBase) + "P");
-            }
-        }
-
-        // [2] 부동산 시장 종료 처리 (전역 공지)
-        try { 
-            Api.replyRoom(ctx.targetRoom, formatAdmin("📉 장 마감 알림", "금일 부동산 시장이 종료되었습니다.\n(일일 시세 데이터가 초기화되었습니다.)")); 
-        } catch(e) {}
-
-        // [4] 피버타임 요일별 공지
-        var dayOfWeek = ctx.now.getDay(); 
-        if (dayOfWeek === 0) {
-            try { Api.replyRoom(ctx.targetRoom, formatAdmin("🔥 피버타임 시작", "일요일 한정 이벤트!\n승급 확률 +5% 상승이 적용됩니다.")); } catch(e){}
-        } else if (dayOfWeek === 1) {
-            try { Api.replyRoom(ctx.targetRoom, formatAdmin("❄️ 피버타임 종료", "이벤트가 종료되어\n승급 확률이 정상화되었습니다.")); } catch(e){}
-        }
-
-        // [3, 4번 통합] 유령 유저 청소 및 강력한 누진세(보유세) 집행 로직
-        for (var rName in data.rooms) {
-            var roomObj = data.rooms[rName];
-            var eco = calculateEconomy(data, rName);
-
-            // 하이프 카운트(채팅량) 초기화
-            if (roomObj.features) roomObj.features.msgCount = 0;
+        // [신규] 00시 기준 유저 평균 순자산 확정 (내일 대출 한도의 기준이 됨)
+        if (rObj.features && rObj.features.government) {
+            rObj.features.government.dailyAvgAsset = eco.average;
+            Log.info("[" + rName + "] 내일자 대출 유동 한도 기준점 설정: " + fp(eco.average) + "P");
+        }
+        
+        if (eco.total > 0) {
+            var oldBase = rObj.economyBase || eco.total;
+            var currentBase = rObj.economyBase || 1;
+            var rawRatio = eco.total / currentBase;
+            
+            if (eco.total > oldBase) {
+                var weight = 0.6;
+                rObj.economyBase = Math.floor((oldBase * (1 - weight)) + (eco.total * weight));
+            } else {
+                rObj.economyBase = Math.floor(Math.sqrt(oldBase * eco.total));
+            }
+            Log.info("[" + rName + "] 경제 기준점 자동 조정 완료: " + fp(rObj.economyBase) + "P");
         }
 
-        // [5] 핵심: 모든 방 유저 스탯 초기화 (지능형 금리 엔진 적용)
-        for (var rName in data.rooms) {
-            var roomObj = data.rooms[rName];
-            if (!roomObj.features) continue;
+        // 하이프 카운트(채팅량) 초기화
+        if (rObj.features) rObj.features.msgCount = 0;
+    }
 
-            // [연동] 섹터 49의 지능형 탄력 금리 승수 호출
-            var dynMult = 1.0;
-            if (typeof util_getDynamicRateMultiplier === 'function') {
-                dynMult = util_getDynamicRateMultiplier(rName);
-            }
+    // [2] 피버타임 요일별 공지
+    var dayOfWeek = ctx.now.getDay(); 
+    if (dayOfWeek === 0) {
+        try { Api.replyRoom(ctx.targetRoom, formatAdmin("🔥 피버타임 시작", "일요일 한정 이벤트!\n승급 확률 +5% 상승이 적용됩니다.")); } catch(e){}
+    } else if (dayOfWeek === 1) {
+        try { Api.replyRoom(ctx.targetRoom, formatAdmin("❄️ 피버타임 종료", "이벤트가 종료되어\n승급 확률이 정상화되었습니다.")); } catch(e){}
+    }
 
-            if (roomObj.features.lotto) {
-                roomObj.features.lotto.entries = {}; 
-                roomObj.features.lotto.dailyPool = 0;
-            }
+    // [3] 모든 방 유저 스탯 초기화 (지능형 금리 엔진 적용)
+    for (var rName in data.rooms) {
+        var roomObj = data.rooms[rName];
+        if (!roomObj.features) continue;
 
-            for (var id in roomObj.users) {
-                var u = roomObj.users[id];
+        var dynMult = 1.0;
+        if (typeof util_getDynamicRateMultiplier === 'function') {
+            dynMult = util_getDynamicRateMultiplier(rName);
+        }
 
-                /* [v11.2] 광산 재중 유저 가결산 (기존 로직 오류 수정) */
-                if (u.mining && u.mining.active === true) {
-                    var nowTs = Date.now();
-                    var durationMin = Math.floor((nowTs - u.mining.startTime) / 60000);
-                    
-                    if (durationMin >= 1) {
-                        var pol = util_getActivePolicy(roomObj);
-        var multiplier = util_getEcoMultiplier(rName) * (pol.mineMult || 1.0);
-        var midEarn = Math.floor(durationMin * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * multiplier);
-        
-        // 정산분만 합산하고 startTime은 유지하여 시간 흐름을 보존함
-        if (roomObj.features.dailyPools) {
-            var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.MINE || 0.01;
-            roomObj.features.dailyPools.mine += Math.floor(midEarn * accumRate);
-        }
-        
-        Log.info("[Mining Mid-Settlement] " + u.name + "님 00시 가결산 완료 (시간 유지)");
-                    }
-                }
+        if (roomObj.features.lotto) {
+            roomObj.features.lotto.entries = {}; 
+            roomObj.features.lotto.dailyPool = 0;
+        }
 
-                u.dailyLoanCount = 0; 
-                u.dailyGambleCount = 0;
-                u.dailyPromotionAttempts = 1; 
-                
-                // [보안강화] 시간 비례 적립 이자 정산 (0시 정각)
-                var now = Date.now();
-                // 0시 정각까지 남은 마지막 쪼가리 이자까지 합산
-                if (u.lastBankUpdateTime > 0 && Number(u.bank) > 0) {
-                    var timePassed = now - u.lastBankUpdateTime;
-                    var dayMs = 24 * 60 * 60 * 1000;
-                    var lastMinuteEarned = Number(u.bank) * SYSTEM_CONFIG.ECO.BANK.INTEREST_RATE * (timePassed / dayMs);
-                    u.accruedInterest = (u.accruedInterest || 0) + lastMinuteEarned;
-                }
+        for (var id in roomObj.users) {
+            var u = roomObj.users[id];
 
-                // 긴급 경제 조치 배율 확인
-                var emergencyMult = util_getEmergencyMultiplier(rName);
+            /* 광산 재중 유저 가결산 */
+            if (u.mining && u.mining.active === true) {
+                var nowTs = Date.now();
+                var durationMin = Math.floor((nowTs - u.mining.startTime) / 60000);
+                
+                if (durationMin >= 1) {
+                    var pol = util_getActivePolicy(roomObj);
+                    var multiplier = util_getEcoMultiplier(rName) * (pol.mineMult || 1.0);
+                    var midEarn = Math.floor(durationMin * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * multiplier);
+                    
+                    if (roomObj.features.dailyPools) {
+                        var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.MINE || 0.01;
+                        roomObj.features.dailyPools.mine += Math.floor(midEarn * accumRate);
+                    }
+                    Log.info("[Mining Mid-Settlement] " + u.name + "님 00시 가결산 완료 (시간 유지)");
+                }
+            }
 
-                // [자산왕] 칭호 효과: 이자 1.5배 보너스 적용
-                var wealthBonus = (u.title === "자산왕") ? 1.5 : 1.0;
-                // 지급할 최종 금액 (긴급 배율 및 칭호 보너스 통합 계산)
-                var finalInterest = Math.floor((u.accruedInterest || 0) * emergencyMult * wealthBonus);
+            u.dailyLoanCount = 0; 
+            u.dailyGambleCount = 0;
+            u.dailyPromotionAttempts = 1; 
+            u.dailyStimulusCount = 0; 
+            u.dailyCreditRestoreCount = 0;
+            u.dailyLadderWins = []; 
+            u.dailyBaccaratWins = []; 
+            u.lastCasinoResult = null; 
+            
+            // [보안강화] 시간 비례 적립 이자 정산 (0시 정각)
+            var now = Date.now();
+            if (u.lastBankUpdateTime > 0 && Number(u.bank) > 0) {
+                var timePassed = now - u.lastBankUpdateTime;
+                var dayMs = 24 * 60 * 60 * 1000;
+                var lastMinuteEarned = Number(u.bank) * SYSTEM_CONFIG.ECO.BANK.INTEREST_RATE * (timePassed / dayMs);
+                u.accruedInterest = (u.accruedInterest || 0) + lastMinuteEarned;
+            }
 
-                if (finalInterest > 0) {
-                    // 국고 지불 능력 확인 및 지급 로직 (이후 중괄호 닫힘 확인 필수)
-                    if (util_isBankSolvent(rName, finalInterest)) {
-                        util_updateBank(u, roomObj, finalInterest, "은행 예금 이자 지급", rName);
-                        util_updateReserve(roomObj, -finalInterest, "은행 예금 이자 지급", rName);
+            var emergencyMult = util_getEmergencyMultiplier(rName);
+            var wealthBonus = (u.title === "자산왕") ? 1.5 : 1.0;
+            var finalInterest = Math.floor((u.accruedInterest || 0) * emergencyMult * wealthBonus);
 
-                        // [v11.0] 중앙은행 최대주주 배당을 위한 일일 발생 이자 총액 누적
-                        // 설명: 유저에게 이자가 성공적으로 지급될 때마다 해당 금액을 은행 수익 장부에 합산합니다.
-                        if (roomObj.features.dailyPools) {
-                            var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.BANK || 0.05;
-                            roomObj.features.dailyPools.bank += Math.floor(finalInterest * accumRate);
-                        }
-                        
-                        // [핵심] 지급에 성공했을 때만 이자 주머니를 0으로 초기화
-                        u.accruedInterest = 0; 
-                    } else {
-                        // [핵심] 지급 실패 시 u.accruedInterest를 0으로 초기화하지 않음!
-                        // 데이터는 보존되며 내일 정산 시 오늘치 이자가 다시 더해짐 (이월)
-                        Log.info("[Bank Default] " + u.name + "님 국고 고갈로 이자 지급 보류 및 이월");
-                    }
-                }
+            if (finalInterest > 0) {
+                if (util_isBankSolvent(rName, finalInterest)) {
+                    util_updateBank(u, roomObj, finalInterest, "은행 예금 이자 지급", rName);
+                    util_updateReserve(roomObj, -finalInterest, "은행 예금 이자 지급", rName);
 
-                u.lastBankUpdateTime = now;
-                
-                // [보안강화] 지능형 차등 대출 이자 가산 (신용등급별 + 탄력 승수)
-                if (u.loan && Number(u.loan.debt) > 0) { 
-                    u.creditScore = Math.max(0, Number(u.creditScore) - 5); 
-                    
-                    // 신용등급 정보 호출 (섹터 10 연동)
-                    var cr = getCreditInfo(u.creditScore);
+                    if (roomObj.features.dailyPools) {
+                        var accumRate = SYSTEM_CONFIG.ECO.ACTIVITY_ACCUM_RATES.BANK || 0.05;
+                        roomObj.features.dailyPools.bank += Math.floor(finalInterest * accumRate);
+                    }
+                    u.accruedInterest = 0; 
+                } else {
+                    Log.info("[Bank Default] " + u.name + "님 국고 고갈로 이자 지급 보류 및 이월");
+                }
+            }
 
-                    // [기부왕] 채무 이자 감면 로직
-                    var dailyRate = (cr.rate - 1) * dynMult;
-
-                    var dailyInterest = Math.floor(Number(u.loan.debt) * dailyRate);
-                    
-                    var preDebt = Number(u.loan.debt);
-                    var expectedDebt = preDebt + dailyInterest;
-                    u.loan.debt = expectedDebt;
-                    
-                    if (isNaN(u.loan.debt) || u.loan.debt !== expectedDebt) {
-                        u.loan.debt = preDebt;
-                        Log.error("[System] " + u.name + " 대출 이자 연산 오류 차단 및 복구");
-                    }
-
-                    if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(u, rName); 
-                }
-            } 
-
-                // 주머니 초기화 로직 (활동 적립 방식은 폐기했으나, 데이터 정리를 위해 초기화 유지)
-                if (roomObj.features.dailyPools) {
-                    var pools = roomObj.features.dailyPools;
-                    for (var key in pools) { pools[key] = 0; }
+            u.lastBankUpdateTime = now;
+            
+            // 대출 이자 가산
+            if (u.loan && Number(u.loan.debt) > 0) { 
+                u.creditScore = Math.max(0, Number(u.creditScore) - 5); 
+                var cr = getCreditInfo(u.creditScore);
+                var dailyRate = (cr.rate - 1) * dynMult;
+                var dailyInterest = Math.floor(Number(u.loan.debt) * dailyRate);
+                
+                var preDebt = Number(u.loan.debt);
+                var expectedDebt = preDebt + dailyInterest;
+                u.loan.debt = expectedDebt;
+                
+                if (isNaN(u.loan.debt) || u.loan.debt !== expectedDebt) {
+                    u.loan.debt = preDebt;
+                    Log.error("[System] " + u.name + " 대출 이자 연산 오류 차단 및 복구");
                 }
 
-               // 배당 결과 발표
-                if (divReport.length > 0) {
-                    var msg = "🌙 [내리다 경제 위원회: 일일 확정 배당 보고]\n" +
-                              "━━━━━━━━━━━━━━━\n" +
-                              "금일 24시간 동안 건물을 보유하신\n" +
-                              "각 구역 최대주주분들께 배당을 완료했습니다.\n\n" +
-                              divReport.join("\n") + "\n" +
-                              "━━━━━━━━━━━━━━━\n" +
-                              "💡 시간당 " + fp(ecoCfg.HOURLY_DIVIDEND) + "P가 안정적으로 적립됩니다.";
-                    if (rName === ctx.targetRoom) {
-                                Api.replyRoom(rName, msg);
-                            }
-                }
-            }
+                if (typeof checkAndHandleDefaulter === 'function') checkAndHandleDefaulter(u, rName); 
+            }
+        } // for id in roomObj.users 끝
 
-            try {
-                // 자정 정산 시 보관용 로그와 복구용 로그를 모두 삭제하여 새날을 준비합니다.
-                var jFile = new java.io.File(JOURNAL_PATH);
-                if (jFile.exists()) jFile.delete();
-                
-                var hFile = new java.io.File(BASE_DIR + "total_history.log");
-                if (hFile.exists()) hFile.delete();
-                Log.info("[System] 일일 로그 초기화 완료.");
-            } catch(e) { Log.error("Log Rotation Error: " + e); }
+        // 배당 주머니 초기화 유지
+        if (roomObj.features.dailyPools) {
+            var pools = roomObj.features.dailyPools;
+            for (var key in pools) { pools[key] = 0; }
+        }
 
-            if (rName === ctx.targetRoom) {
-                try { 
-                    Api.replyRoom(ctx.targetRoom, formatAdmin("🎫 로또 판매 시작", "새로운 로또 판매가 시작되었습니다.\n매일 밤 22시 추첨!")); 
-                } catch(e) {}
-            }
-        }
+        try {
+            // 자정 정산 시 보관용 로그와 복구용 로그를 모두 삭제하여 새날을 준비합니다.
+            var jFile = new java.io.File(JOURNAL_PATH);
+            if (jFile.exists()) jFile.delete();
+            
+            var hFile = new java.io.File(BASE_DIR + "total_history.log");
+            if (hFile.exists()) hFile.delete();
+            Log.info("[System] 일일 로그 초기화 완료.");
+        } catch(e) { Log.error("Log Rotation Error: " + e); }
 
-        // [6] 시즌 리셋 처리 (매월 1일)
-        if (ctx.now.getDate() === 1 && data.lastSeasonReset !== ctx.season) {
-            data.lastSeasonReset = ctx.season;
-            for (var r in data.rooms) { 
-                for (var id in data.rooms[r].users) { 
-                    var u = data.rooms[r].users[id];
-                    u.tier = 0;
-                    u.gameAuthCount = 0; 
-                    u.purchasedAuthCount = 0; 
-                    u.purchasedPromotionAttempts = 0;
-                } 
-            }
-            try { 
-                Api.replyRoom(ctx.targetRoom, formatAdmin("🏆 시즌 리셋", "새로운 시즌이 시작되어 모든 티어 및 게임 인증 기록이 초기화되었습니다.")); 
-            } catch(e) {}
-        }
+        if (rName === ctx.targetRoom) {
+            try { 
+                Api.replyRoom(ctx.targetRoom, formatAdmin("🎫 로또 판매 시작", "새로운 로또 판매가 시작되었습니다.\n매일 밤 22시 추첨!")); 
+            } catch(e) {}
+        }
+    } // for rName in data.rooms 끝
 
-        // [최종] 모든 로직 수행 후 날짜 갱신 (가장 마지막에 수행해야 함)
-        data.lastDailyReset = ctx.today; 
-        ctx.isUpdated = true;
-        util_stamp("dailyReset");
-    } // _runSector17Logic 함수를 닫는 괄호
+    // [4] 시즌 리셋 처리 (매월 1일)
+    if (ctx.now.getDate() === 1 && data.lastSeasonReset !== ctx.season) {
+        data.lastSeasonReset = ctx.season;
+        for (var r in data.rooms) { 
+            for (var id in data.rooms[r].users) { 
+                var u = data.rooms[r].users[id];
+                u.tier = 0;
+                u.gameAuthCount = 0; 
+                u.purchasedAuthCount = 0; 
+                u.purchasedPromotionAttempts = 0;
+            } 
+        }
+        try { 
+            Api.replyRoom(ctx.targetRoom, formatAdmin("🏆 시즌 리셋", "새로운 시즌이 시작되어 모든 티어 및 게임 인증 기록이 초기화되었습니다.")); 
+        } catch(e) {}
+    }
+
+    // [최종] 모든 로직 수행 후 날짜 갱신
+    data.lastDailyReset = ctx.today; 
+    ctx.isUpdated = true;
+    util_stamp("dailyReset");
+}
 
 //==========섹터18==========
 
@@ -15660,342 +15319,8 @@ function _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid) {
 
 //==========섹터44==========
 
-/**
- * [게임 하위 모듈 4] 랜드마크 부동산 투자 관리 (v11.0 Landmark Edition)
- * 기능: 부동산 시세 조회, 내 부동산 확인, 지분 투자, 지분 매각
- * 설명: 폐쇄형 순환 경제 연동 - 매입금은 금고 입고, 매각금은 금고 지출
- */
+// 사용자용 부동산 거래 처리 로직 완벽 철거 (빈 함수로 대체)
 function _gameLandmarkLogic(msg, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
-    if (!roomData || !roomData.features) return false;
-
-    // 중앙은행 재원 초기화 (안전장치)
-    if (roomData.bankReserve === undefined || roomData.bankReserve === null) {
-        roomData.bankReserve = 10000;
-    }
-
-    /* [부동산 거래 시스템] */
-
-    // 1. 실시간 시세 조회 (/랜드마크)
-    if (msg === "/랜드마크") {
-        var currentHour = new Date().getHours();
-        var isMarketOpen = (currentHour >= 7 && currentHour <= 23);
-        var statusText = isMarketOpen ? "🟢 부동산 운영중 (07:00 ~ 23:59)" : "🔴 부동산 마감 (00:00~06:59)";
-        var landList = generateLandmarkList(data, roomName);
-        
-        replier.reply("🏢 실시간 부동산 시세 정보\n━━━━━━━━━━━━━━━\n" + statusText + "\n\n" + (landList || "등록된 매물이 없습니다.") + "\n━━━━━━━━━━━━━━━\n💡 [가이드]: 투자: [/투자 건물명 수량]");
-        return true;
-    }
-
-    // 2. 내 소유 부동산 확인 (/내부동산)
-    if (msg === "/내부동산") {
-        var holdings = user.landHoldings || {};
-        var keys = Object.keys(holdings);
-        var title = "🏘️ " + getDisplayName(user) + "의 소유 부동산";
-
-        var fixCfg = SYSTEM_CONFIG.ECO.LANDMARK.FIXED_POLICY; // 고정가 정책 설정 로드
-
-        if (keys.length === 0) {
-            replier.reply(formatCommand(title, null, "보유 중인 부동산 지분이 없습니다.", "투자: [/투자 건물명 수량]"));
-            return true;
-        }
-
-        var list = [];
-        var totalEvaluation = 0;
-        var totalPurchase = 0;
-
-        for (var i = 0; i < keys.length; i++) {
-            var lName = keys[i];
-            var count = Number(holdings[lName]);
-            if (count <= 0) continue;
-
-            var landmark = data.landmarkMarket[lName];
-            var isDemolished = !landmark; 
-            
-            // [가격 동기화 핵심] 타입에 따른 실시간 시세 계산
-            var curPrice = 0;
-            if (!isDemolished) {
-               if (landmark.type === "normal") {
-                    curPrice = 200000; // 랜드마크 조회가 20만P 고정
-                } else {
-                    curPrice = Math.floor(Number(landmark.price || 0));
-                }
-            }
-            var avgPrice = Math.floor(Number(user.landAvg[lName] || 0));
-            
-            var purchaseVal = Math.floor(avgPrice * count);
-            var evaluationVal = Math.floor(curPrice * count);
-            
-            totalPurchase += purchaseVal;
-            totalEvaluation += evaluationVal;
-            
-            var profit = evaluationVal - purchaseVal;
-            var profitRate = avgPrice > 0 ? ((profit / purchaseVal) * 100).toFixed(1) : "0.0";
-            var signIcon = profit > 0 ? "🔺" : (profit < 0 ? "🔹" : "➖");
-            var nameDisplay = isDemolished ? "⚠️(철거) " + lName : lName;
-            
-            list.push("• " + nameDisplay + " " + count + "지분\n" +
-                      "  수익: " + fp(Math.floor(profit)) + "P (" + signIcon + profitRate + "%)\n" +
-                      "  평단: " + fp(avgPrice) + "P ➔ 현재: " + fp(curPrice) + "P");
-        }
-
-        var totalProfit = totalEvaluation - totalPurchase;
-        var totalRate = totalPurchase > 0 ? ((totalProfit / totalPurchase) * 100).toFixed(1) : "0.0";
-        var totalSignIcon = totalProfit > 0 ? "🔺" : (totalProfit < 0 ? "🔹" : "➖");
-
-        var summary = "💎 총 평가금액: " + fp(Math.floor(totalEvaluation)) + "P\n" +
-                      "📊 전체 수익률: " + fp(Math.floor(totalProfit)) + "P (" + totalSignIcon + totalRate + "%)\n" +
-                      "💰 보유 포인트: " + fp(Math.floor(user.point)) + "P";
-
-        replier.reply(formatCommand(title, null, list.join("\n\n") + "\n\n" + summary, "매각: [/매각 건물명 수량]"));
-        return true;
-    }
-
-    // 3. 부동산 지분 매입 (/투자)
-    if (msg.indexOf("/투자 ") === 0) {
-        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
-            var bankMsg = "🚨 [국가 부동산 거래 동결]\n" +
-                          "━━━━━━━━━━━━━━━\n" +
-                          "현재 중앙은행의 지불 불능(부도) 상태가 선포되어\n" +
-                          "신규 부동산 매입이 전면 중단되었습니다.\n\n" +
-                          "📍 사유: 국고 재원 고갈\n" +
-                          "📉 조치: 부동산 시장 일시 폐쇄";
-            
-            replier.reply(formatCommand("🏗️ 투자 동결 알림", user, bankMsg, "해제 기준: 국고 50% 복구"));
-            return true;
-        }
-
-        var stateRes = util_checkUserState(user, targetUid, roomName);
-        if (!stateRes.canAction) {
-            replier.reply(formatError(user, "거래 불가", stateRes.reason));
-            return true;
-        }
-        var currentHour = new Date().getHours();
-        if (currentHour < 7) { replier.reply(formatError(user, "부동산 시장 마감", "현재는 부동산 거래 정지 시간입니다.\n(운영시간: 07:00 ~ 23:59)")); return true; }
-
-        var parts = msg.split(" ");
-        if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/투자 [건물명] [수량]")); return true; }
-        
-        var sInput = parts[1], count = parseInt(parts[2].replace(/,/g, ""));
-        var matched = util_findStockByShorthand(data.landmarkMarket, sInput);
-        
-        if (matched.length === 0) { replier.reply(formatError(user, "매물 없음", "[" + sInput + "] 건물을 찾을 수 없습니다.")); return true; }
-        if (matched.length > 1) { handleStockSelection(replier, targetUid, matched, "stock_buy", count, user, roomName); return true; }
-        
-        var sName = matched[0];
-
-        var myLandKeys = Object.keys(user.landHoldings || {});
-        if (myLandKeys.length > 0 && myLandKeys.indexOf(sName) === -1) {
-            var currentLand = myLandKeys[0];
-            replier.reply(formatError(user, "투자 제한", "이미 [" + currentLand + "]의 지분을 보유하고 있습니다.\n\n" +
-                "💡 우리 서버는 '1인 1건물' 투자 원칙을 준수합니다.\n" +
-                "다른 건물에 투자하려면 기존 지분을 모두 매각하세요."));
-            return true;
-        }
-
-        var landmark = data.landmarkMarket[sName];
-        if (isNaN(count) || count <= 0) { replier.reply(formatError(user, "수량 오류", "매입하실 지분 수량을 정확히 입력하세요.")); return true; }
-        
-        var totalPrice = 0;
-        var fixCfg = SYSTEM_CONFIG.ECO.LANDMARK.FIXED_POLICY;
-
-        if (landmark.type === "normal") {
-            /* [참조 오류 해결] 전역 함수 util_getTotalShares 호출 */
-            var currentRoomShares = util_getTotalShares(sName, roomData);
-            var unitIncr = fixCfg.BASE_PRICE * fixCfg.PER_SHARE_RATE; 
-
-            for (var i = 0; i < count; i++) {
-                totalPrice += (fixCfg.BASE_PRICE + ((currentRoomShares + i) * unitIncr));
-            }
-        } else {
-            /* [비즈니스/상가] 기존 고정 시세 매입 */
-            totalPrice = Math.floor(Number(landmark.price) * count);
-        }
-        if (Number(user.point) < totalPrice) { replier.reply(formatError(user, "자금 부족", "필요: " + fp(totalPrice) + "P")); return true; }
-        
-        /* [중앙은행 연동] 매입 대금을 국고로 입고 */
-        util_updatePoint(user, roomData, -totalPrice, "부동산 매입", roomName);
-
-        // 수량 및 평단가 업데이트 (랜드마크 타입은 평단가 기록 제외)
-        if (landmark.type === "normal") {
-            // 랜드마크(고정가) 타입은 몇 지분을 사든 평단가를 20만P로 고정
-            user.landAvg[sName] = 200000; 
-        } else {
-            // 비즈니스/상가(변동가) 타입만 가중 평균 매입가를 계산하여 기록
-            var curCount = Number(user.landHoldings[sName] || 0);
-            var curAvg = Number(user.landAvg[sName] || 0);
-            var totalCount = curCount + count;
-            
-            if (totalCount > 0) {
-                user.landAvg[sName] = Math.floor(((curAvg * curCount) + totalPrice) / totalCount);
-            } else {
-                user.landAvg[sName] = Math.floor(totalPrice / count);
-            }
-        }
-        
-        util_updateLandmark(user, sName, count, "부동산 매입", roomName);
-
-        // 누적 투자 데이터 갱신
-        var nextInvestAmount = (Number(user.totalLandInvest) || 0) + totalPrice;
-        util_setData(user, 'totalLandInvest', nextInvestAmount, "부동산 투자 총액 갱신", roomName);
-
-        var rStub = { reply: function(m) { Api.replyRoom(roomName, m); } };
-
-        // 부동산 전용 칭호 체크
-        if (user.totalLandInvest >= 10000000) {
-            util_checkAndAwardTitle(user, rStub, "투기왕", 4303, "🏙️", "내리다 토지주택공사", "누적 매입액 1,000만P", "부동산 시장을 지배하는 전설적인 거물로 등극하셨습니다.");
-        } else if (user.totalLandInvest >= 5000000) {
-            util_checkAndAwardTitle(user, rStub, "건물주", 4302, "🏢", "내리다 토지주택공사", "누적 매입액 500만P", "주요 요충지의 건물을 소유한 영향력 있는 자산가입니다.");
-        } else if (user.totalLandInvest >= 1000000) {
-            util_checkAndAwardTitle(user, rStub, "임대인", 4301, "🏠", "내리다 토지주택공사", "누적 매입액 100만P", "부동산 투자의 첫 단추를 성공적으로 끼우셨습니다.");
-        }
-        
-        if (!data.landmarkTraffic) data.landmarkTraffic = {};
-        if (!data.landmarkTraffic[sName]) data.landmarkTraffic[sName] = { buy: 0, sell: 0 };
-        data.landmarkTraffic[sName].buy += count;
-
-        var actualUnitPrice = Math.floor(totalPrice / count);
-        var buySuccessMsg = "건물: " + sName + "\n수량: " + count + " 지분\n매입가: " + fp(actualUnitPrice) + "P (총 " + fp(totalPrice) + "P)";
-
-        // [개편] 전설의 큰손 조건: 핵심 시설 투자 시 지분당 30% 확률로 주사위 굴림
-        var coreLandmarks = ["광산", "낚시터", "카지노", "중앙은행", "백화점", "경마장"];
-        if (coreLandmarks.indexOf(sName) !== -1) { 
-            var earnedInThisTrade = 0;
-            // 투자한 지분 수량(count)만큼 반복하여 확률 판정
-            for (var i = 0; i < count; i++) {
-                if (Math.random() < 0.3) earnedInThisTrade++;
-            }
-
-            if (earnedInThisTrade > 0) {
-                user.landDeedCount = (user.landDeedCount || 0) + earnedInThisTrade;
-                buySuccessMsg += "\n\n 📜 핵심 시설 투자로 '부동산 등기부'를 " + earnedInThisTrade + "장 획득했습니다!";
-                buySuccessMsg += "\n(현재 수집: " + user.landDeedCount + " / 10)";
-                
-                if (user.landDeedCount >= 10) {
-                    user.landDeedCount = 0; // 초기화
-                    util_checkAndAwardTitle(user, replier, "전설의 큰손", 888, "🏢", "내리다 의회", "등기부 10장 수집 완료", "[장착 효과]: 매일 자정 지급되는 랜드마크 배당금이 10% 추가 지급됩니다.", roomName);
-                }
-            }
-        }
-        
-        replier.reply(formatCommand("🏙️ 부동산 지분 매입 완료", user, buySuccessMsg, "내 잔액: " + fp(user.point) + "P"));
-        safeSaveData(data);
-        return true;
-    }
-
-    // 4. 부동산 지분 매각 (/매각)
-    if (msg.indexOf("/매각 ") === 0) {
-        if (typeof util_isBankruptcy === 'function' && util_isBankruptcy(roomName)) {
-            var bankMsg = "🚨 [국가 부동산 거래 동결]\n" +
-                          "━━━━━━━━━━━━━━━\n" +
-                          "현재 중앙은행의 지불 불능(부도) 상태가 선포되어\n" +
-                          "부동산 매각 대금 지급이 전면 중단되었습니다.\n\n" +
-                          "📍 사유: 국고 재원 고갈\n" +
-                          "📉 조치: 부동산 매각 일시 정지";
-            
-            replier.reply(formatCommand("🏗️ 매각 동결 알림", user, bankMsg, "해제 기준: 국고 50% 복구"));
-            return true; 
-        }
-
-        var stateRes = util_checkUserState(user, targetUid, roomName);
-        if (!stateRes.canAction) {
-            replier.reply(formatError(user, "거래 불가", stateRes.reason));
-            return true;
-        }
-
-        var parts = msg.split(" ");
-        if (parts.length < 3) { replier.reply(formatError(user, "형식 오류", "/매각 [건물명] [수량]")); return true; }
-        
-        var sInput = parts[1], count = parseInt(parts[2].replace(/,/g, ""));
-        
-        // 보유 중인 부동산 지분 리스트에서 검색
-        var matched = util_findStockByShorthand(user.landHoldings, sInput);
-        
-        if (matched.length === 0) { replier.reply(formatError(user, "보유 매물 없음", "[" + sInput + "] 지분을 보유하고 있지 않습니다.")); return true; }
-        if (matched.length > 1) { handleStockSelection(replier, targetUid, matched, "stock_sell", count, user, roomName); return true; }
-        
-        var sName = matched[0];
-        var holdings = Number(user.landHoldings[sName] || 0);
-        if (holdings < count || count <= 0) { replier.reply(formatError(user, "지분 부족", "보유하신 지분보다 많은 수량을 매각할 수 없습니다.")); return true; }
-
-        var landmark = data.landmarkMarket[sName];
-        var sellUnitPrice = 0;
-        if (landmark && landmark.type === "normal") {
-            // 랜드마크 타입: 기존의 복잡한 계산식을 삭제하고 20만P로 고정
-            sellUnitPrice = 200000; 
-        } else {
-            /* [비즈니스/상가] 현재 시장가(변동 시세) 기준 매각 */
-            sellUnitPrice = landmark ? Math.floor(Number(landmark.price)) : 0;
-        }
-        
-        var totalSell = sellUnitPrice * count;
-
-        // 세금 계산 (전설의 큰손 칭호 효과 반영)
-        var pol = util_getActivePolicy(roomData);
-        var baseTaxRate = pol.stockTax || 0.05;
-        var appliedTaxRate = baseTaxRate;
-
-        var taxBenefitMsg = "";
-        if (user.title === "기부왕") {
-            appliedTaxRate = baseTaxRate * 0.5;
-            taxBenefitMsg = "\n✨ [기부왕 특별 예우] 양도세 50% 감면 적용";
-        }
-        
-        var fee = Math.floor(totalSell * appliedTaxRate);
-        var finalPrice = totalSell - fee;
-
-        var speculationBonus = 0;
-        if (user.title === "투기왕") {
-            speculationBonus = Math.floor(finalPrice * 0.05);
-            finalPrice += speculationBonus; // 최종 지급액에 합산
-        }
-
-        // 중앙은행 지불 능력 체크 (뱅크런 방어)
-        if (!util_isBankSolvent(roomName, finalPrice)) {
-            return replier.reply("🚨 [중앙은행 지불 정지]\n중앙은행의 현금 유동성 부족으로 매각 대금을 지불할 수 없습니다.");
-        }
-
-        /* [MODIFIED] 저장된 평단가를 기반으로 수익 및 수익률 정밀 재계산 */
-        var avgPrice = Number(user.landAvg[sName] || 200000); 
-        var purchaseVal = avgPrice * count; 
-        var totalSell = sellUnitPrice * count; // 세전 총 매각액
-        var profit = totalSell - purchaseVal; 
-        var profitRate = purchaseVal > 0 ? ((profit / purchaseVal) * 100).toFixed(1) : "0.0";
-        var signIcon = (profit > 0) ? "🔺" : (profit < 0 ? "🔹" : "➖");
-
-        util_updateLandmark(user, sName, -count, "부동산 매각", roomName);
-        if (user.landHoldings[sName] <= 0) { 
-            delete user.landHoldings[sName]; 
-            if (user.landAvg) delete user.landAvg[sName]; 
-        }
-        
-        // 상환 엔진 통과 및 최종 지급
-        var res = processRepayment(user, finalPrice, targetUid, roomName); 
-        util_updatePoint(user, roomData, Number(res.actualGain), "부동산 매각 수익", roomName); // 사유 오타 교정
-        
-        if (!data.landmarkTraffic) data.landmarkTraffic = {};
-        if (!data.landmarkTraffic[sName]) data.landmarkTraffic[sName] = { buy: 0, sell: 0 };
-        data.landmarkTraffic[sName].sell += count;
-
-        // [최종 UI 교정]: 배당 칭호와 매각 칭호의 혼선을 방지하기 위해 문구 정리
-        var bonusLog = (user.title === "투기왕") ? " ✨투기왕 혜택(+" + fp(speculationBonus) + "P)" : "";
-        var taxBenefitTag = (user.title === "기부왕") ? " ✨기부왕 혜택" : "";
-        
-        var sellResult = "📉 부동산 지분 매각 완료\n" +
-                         "━━━━━━━━━━━━━━━\n" +
-                         getDisplayName(user) + "님\n" +
-                         "건물: " + sName + " " + count + "지분\n" +
-                         "수익 : " + fp(Math.abs(profit)) + "P (" + signIcon + Math.abs(profitRate).toFixed(1) + "%)\n" +
-                         "실현손익 : " + fp(finalPrice) + "P (세율 " + (appliedTaxRate * 100).toFixed(1) + "% 적용)" + 
-                         bonusLog + taxBenefitTag + (res.repayMsg || "") + "\n" +
-                         "━━━━━━━━━━━━━━━\n" +
-                         "💡 [가이드]: 내 잔액: " + fp(user.point) + "P";
-
-        replier.reply(sellResult);
-        safeSaveData(data);
-        return true;
-    }
-
     return false;
 }
 

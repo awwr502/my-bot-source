@@ -322,7 +322,6 @@ var USER_SCHEMA = [
     { key: 'challengerIconSeason', default: '', type: 'string' },
     { key: 'tierGuard', default: 0, type: 'number' },
     { key: 'mining', default: { active: false, startTime: 0, room: "" }, type: 'object' },
-    { key: 'jailReleaseTime', default: 0, type: 'number' },
     { key: 'isTransferred', default: false, type: 'boolean' },
     { key: 'lastAction', default: null, type: 'object' },
     { key: 'voyage', default: { active: false, dest: "", arrival: 0, marketSnapshot: {}, cargoSnapshot: {}, specialtySnapshot: {} }, type: 'object' },
@@ -7751,7 +7750,7 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
     if (!bankProcessState || !bankProcessState[targetUid]) return false;
 
     var state = bankProcessState[targetUid];
-    var types = ['transfer', 'deposit', 'donate', 'blackjack_bet_input'];
+    var types = ['transfer', 'deposit', 'donate'];
     if (types.indexOf(state.type) === -1) return false; // 내 담당 업무가 아니면 패스
 
     // 1. 공통 가드 (시간 초과 및 취소)
@@ -7766,38 +7765,8 @@ function _handleBankStep1(msg, user, data, replier, roomName, targetUid) {
     }
     if (msg.startsWith("/")) return false; // 명령어는 흘려보냄
 
-    // 2. 스마트 가드 (징역)
-    if (user.jailReleaseTime && Date.now() < user.jailReleaseTime) {
-        delete bankProcessState[targetUid];
-        var diff = user.jailReleaseTime - Date.now();
-        var remainMin = Math.ceil(diff / (1000 * 60));
-        replier.reply(formatError(user, "업무 불가", "현재 징역 중입니다. (" + remainMin + "분 남음)"));
-        return true;
-    }
-
     var roomData = data.rooms[roomName];
     if (roomData.bankReserve === undefined) roomData.bankReserve = SYSTEM_CONFIG.ECO.BANK.INITIAL_RESERVE;
-
-    if (state.type === 'blackjack_bet_input') {
-        var amt = parseInt(msg.replace(/,/g, ""));
-        var bjCfg = SYSTEM_CONFIG.CASINO.BLACKJACK;
-        var minB = bjCfg.MIN_BET || 2000;
-        var maxB = bjCfg.LIMIT || 50000;
-
-        if (isNaN(amt) || amt < minB || amt > maxB) {
-            replier.reply(formatError(user, "배팅 금액 오류", fp(minB) + "P ~ " + fp(maxB) + "P 사이를 입력하세요."));
-            return true;
-        }
-        if (Number(user.point) < amt) {
-            replier.reply(formatError(user, "잔액 부족", "보유 포인트가 부족합니다."));
-            return true;
-        }
-
-        delete bankProcessState[targetUid]; // 입력 세션 종료
-        // 섹터 52에 정의된 블랙잭 시작 함수 호출
-        _startBlackjackGame(user, data, replier, roomName, targetUid, amt);
-        return true;
-    }
 
     /* [기능 1] 송금 처리 */
     if (state.type === 'transfer') {
@@ -9040,19 +9009,12 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         menuWaitState[targetUid] = { type: 'help_main', time: Date.now() };
 
         var menu = "1. 📘 기초 입문 가이드\n" +
-
                    "2. 🏦 중앙은행 및 신용 경제\n" +
-
                    "3. 🏢 랜드마크 부동산 투자\n" +
-
                    "4. ⚓ 무역 및 해상 교역\n" +
-
-                   "5. 🎰 통합 카지노 및 로또\n" +
-
-                   "6. ⛏️ 생산 및 약탈 활동\n" +
-
+                   "5. 🎫 특수 복권 (로또/스피또)\n" +
+                   "6. ⛏️ 생산 및 낚시 활동\n" +
                    "7. 🎒 가방 및 아이템 수집\n" +
-
                    "8. 🏛️ 가상 정부 및 정책\n" +
                    "9. 👑 공식 작위 및 칭호 가이드";
 
@@ -9276,12 +9238,12 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
                       "💡 관련 명령어: /무역, /항해현황, /선박관리, /유물도감"
             },
             "5": { 
-                title: "🎰 [통합 카지노 및 로또 가이드]", 
-                text: "1. 중앙 카지노 (1:1 채팅 전용)\n• [사다리]: 2분 주기로 결과가 나옵니다. 단일(홀/짝) 1.9배, 조합(좌3짝 등) 4.0배의 배당을 제공합니다.\n• [바카라]: 3분 주기로 결과가 나옵니다. 플레이어(2.0배), 뱅커(1.95배), 타이(8.0배)에 배팅 가능합니다.\n• [블랙잭]: 딜러와 1:1 진검승부를 펼칩니다. 21에 가까운 수를 만드세요. [도박왕] 칭호 장착 시 모든 게임 배당에 +0.05가 추가됩니다.\n\n2. 당첨의 주인공: 로또 및 스피또\n• [로또]: 1~15 사이의 숫자 3개를 맞추는 게임입니다. 매일 22시에 추첨하며, 1등 당첨자가 없으면 잭팟 상금이 무제한 이월됩니다.\n• [스피또]: 즉석에서 긁어 확인하는 복권입니다. 낙첨 시 얻는 '위로의 편지' 15장을 모으면 1시간 동안 도박운이 상승하는 [행운의 부적]을 얻습니다.\n\n⚠️ 주의사항: 카지노와 도박은 중앙은행의 재원 상태에 따라 배당금이 국고 보전금 형식으로 지급되므로, 국가 부도 시 이용이 제한됩니다.\n\n💡 관련 명령어: /카지노, /로또정보, /스피또, /구매(7, 14)"
+                title: "🎫 [특수 복권 가이드]", 
+                text: "1. 당첨의 주인공: 로또 및 스피또\n• [로또]: 1~15 사이의 숫자 3개를 맞추는 게임입니다. 매일 22시에 추첨하며, 1등 당첨자가 없으면 잭팟 상금이 무제한 이월됩니다.\n• [스피또]: 즉석에서 긁어 확인하는 복권입니다. 낙첨 시 얻는 '위로의 편지' 15장을 모으면 [행운의 부적]을 얻습니다.\n\n💡 관련 명령어: /로또정보, /스피또"
             },
             "6": { 
-                title: "⛏️ [생산 및 약탈 활동 가이드]", 
-                text: "1. 방치형 광산 (/광산시작)\n• [수익 누적]: 시작 후 봇을 사용하지 않아도 분당 포인트가 자동 적립됩니다.\n• [채무자 버프]: 현재 빚(대출+사채)이 내 신용한도의 80%를 넘으면 절박한 근로 의지가 발동하여 채굴 효율이 1.5배로 폭증합니다.\n• [희귀 광물]: 구리, 금, 다이아몬드 발견 시 수십 배의 보너스 수익을 얻습니다.\n• [유물 조각]: 0.1% 확률로 발견하며, 50개를 모으면 [도굴왕] 작위를 수여받습니다.\n\n2. 강태공의 낚시 (/낚시)\n• [쿨타임]: 10분마다 1회 시도할 수 있습니다. \n• [어종 등급]: 송사리부터 전설의 돗돔(최대 6만P)까지 존재합니다. [낚시왕] 칭호 장착 시 판매 수익이 20% 추가됩니다.\n\n3. 그림자 활동: 도둑질 (/도둑질)\n• [강탈]: 타인의 현금 중 10%를 몰래 훔쳐옵니다. 성공까지 30초가 걸리며, 도굴왕 조각을 함께 훔칠 수도 있습니다.\n• [방어]: 피해자는 30초 내에 [잡았다요놈]을 입력하여 현행범으로 체포 가능합니다. 체포된 도둑은 벌금과 함께 1시간 동안 징역에 처해집니다.\n\n💡 관련 명령어: /광산시작, /광산정보, /광산종료, /낚시, /도둑질, 잡았다요놈"
+                title: "⛏️ [생산 및 낚시 활동 가이드]", 
+                text: "1. 방치형 광산 (/광산시작)\n• [수익 누적]: 시작 후 봇을 사용하지 않아도 분당 포인트가 자동 적립됩니다.\n• [채무자 버프]: 현재 빚(대출+사채)이 내 신용한도의 80%를 넘으면 절박한 근로 의지가 발동하여 채굴 효율이 1.5배로 폭증합니다.\n• [희귀 광물]: 구리, 금, 다이아몬드 발견 시 수십 배의 보너스 수익을 얻습니다.\n• [유물 조각]: 0.1% 확률로 발견하며, 50개를 모으면 [도굴왕] 작위를 수여받습니다.\n\n2. 강태공의 낚시 (/낚시)\n• [쿨타임]: 10분마다 1회 시도할 수 있습니다. \n• [어종 등급]: 송사리부터 전설의 돗돔(최대 6만P)까지 존재합니다. [낚시왕] 칭호 장착 시 판매 수익이 20% 추가됩니다.\n\n💡 관련 명령어: /광산시작, /광산정보, /광산종료, /낚시"
             },
             "7": { 
                 title: "🎒 [가방 및 아이템 수집 가이드]", 
@@ -9293,7 +9255,7 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
             },
             "9": {
                 title: "👑 [내리다 서버: 공식 작위 및 칭호 마스터 가이드]",
-                text: "분야별 성취를 통해 고유한 특권과 명예를 쟁취하십시오.\n※ 칭호는 반드시 장착해야 효과가 발동됩니다. ([/장착 번호])\n\n✨ [전설의 독립 작위: 고유 효과]\n분야별 정점에 도달하거나 특수 조건을 만족해야 얻을 수 있는 유일무이한 칭호입니다.\n\n• 🏰 전설의 큰손\n  - 조건: 부동산 등기부 10장 수집 완료\n  - 효과: 매일 자정 랜드마크 배당금 10% 추가 지급 (장착 시 실시간 조회 반영)\n  - ※ 닉네임 앞 전용 아이콘(🏰) 자동 표시\n\n• 🏴‍☠️ 해적왕\n  - 조건: 누적 약탈 성공 150회 달성\n  - 효과: 약탈 소요 시간 30% 단축 & 기본 일급 50% 추가 보너스\n  - ※ 닉네임 앞 전용 아이콘(🏴‍☠️) 자동 표시\n\n• ⚓ 제해왕\n  - 조건: 누적 토벌 성공 150회 달성\n  - 효과: 토벌 현상금 20% 보너스 & 기본 일급 50% 추가 보너스\n  - ※ 닉네임 앞 전용 아이콘(⚓) 자동 표시\n\n• 🔱 해상왕\n  - 조건: 누적 무역 200회 달성\n  - 효과: 항해 재해(디버프) 발생 확률 50% 감소\n  - ※ 닉네임 앞 전용 아이콘(🔱) 자동 표시\n\n• ⚜️ 도굴왕\n  - 조건: 유물 조각 50개 수집 완료\n  - 효과: 채굴 시 희귀 광물(구리/금/다이아) 발견 확률 20% 상승\n  - ※ 닉네임 앞 전용 아이콘(⚜️) 자동 표시\n\n• 🏇 경마왕\n  - 조건: 경마 전용 장비 4종 수집 완료\n  - 효과: 경마 배팅 취소 위약금(10%) 전액 면제\n\n• 🏵️ 수집대마왕\n  - 조건: 서버 내 모든 종류의 아이콘 수집 완료\n  - 효과: 모든 상점 물품 구매 시 15% 상시 할인\n  - ※ 닉네임 앞 전용 아이콘(🏵️) 자동 표시\n\n\n📈 [단계별 성취 작위: 성장 가이드]\n노력을 통해 한 단계씩 올라가는 성장형 칭호 계보입니다.\n\n① 부동산 투자 계보\n   임대인 (100만P) ➔ 건물주 (500만P) ➔ 투기왕 (1,000만P)\n   ※ 투기왕 효과: 지분 매각 시 최종 수령액의 5% 보너스 지급\n\n② 광산 근로 계보 (누적 시간)\n   두더지 (3,000분) ➔ 석공 (7,000분) ➔ 채굴왕 (10,000분)\n   ※ 채굴왕 효과: 채굴 시 분당 획득 포인트 20% 상시 상승\n\n③ 고고학 발굴 계보 (유물 조각)\n   도굴꾼 (10개) ➔ 탐사원 (20개) ➔ 발굴가 (30개) ➔ 트레저헌터 (40개) ➔ ⚜️도굴왕 (50개)\n\n④ 경제 자산 계보 (실질 순자산)\n   재벌 (50만P) ➔ 거상 (100만P) ➔ 부호 (200만P) ➔ 대부호 (350만P) ➔ 자산왕 (500만P)\n   ※ 자산왕 효과: 매일 자정 은행 예금 이자 1.5배 보너스 지급\n\n⑤ 사회 복지 계보 (누적 기부)\n   선한손길 (50만P) ➔ 기부천사 (100만P) ➔ 자선가 (300만P) ➔ 기부왕 (500만P)\n   ※ 기부왕 효과: 모든 종류의 세금(소득세/양도세 등) 50% 감면\n\n⑥ 해상 무역 계보 (누적 횟수)\n   견습선원 (50회) ➔ 항해사 (100회) ➔ 대항해사 (150회) ➔ 🔱해상왕 (200회)\n\n⑦ 강태공 낚시 계보 (성공 횟수)\n   강태공 (50회) ➔ 도시어부 (150회) ➔ 낚시왕 (300회)\n   ※ 낚시왕 효과: 물고기 판매 보상 포인트 20% 상승\n\n⑧ 그림자 길드 계보 (도둑질 성공)\n   좀도둑 (10회) ➔ 대도 (30회) ➔ 약탈왕 (50회)\n   ※ 약탈왕 효과: 도둑질 시 경찰 출동 확률 감소 (50% ➔ 30%)\n\n⑨ 🏴‍☠️ 해적 약탈 계보 (성공 횟수)\n   무법자 (30회) ➔ 바카니어 (50회) ➔ 블랙세일 (70회) ➔ 커세어 (100회) ➔ 🏴‍☠️해적왕 (150회)\n\n⑩ 👮 해군 토벌 계보 (성공 횟수)\n   해안경비대 (30회) ➔ 함대지휘관 (50회) ➔ 함대사령관 (70회) ➔ 로열네이비 (100회) ➔ ⚓제해왕 (150회)\n\n⑪ 🎰 카지노 승부사 계보 (누적 판수)\n   꾼 (100회) ➔ 타짜 (100회+승률 60%) ➔ 도박왕 (500회)\n   ※ 도박왕 효과: 모든 카지노 게임 배당률 +0.05 추가 보너스\n\n⑫ 🏛️ 국가 왕실 작위 (왕실 훈장)\n   남작 (30개) ➔ 자작 (60개) ➔ 백작 (90개) ➔ 후작 (120개) ➔ 공작 (150개)\n   ※ 공작 효과: 무역 시 특산품 발견 확률 100% 확정\n\n⑬ 📘 해양 생물 도감 계보 (수집 종류)\n   해양 탐사대 (20종) ➔ 생물학자 (40종) ➔ 대양지배자 (60종) ➔ 심해정복자 (80종) ➔ 포세이돈 (100종)\n   ※ 포세이돈 효과: 무역 물품 상점 구매가 25% 상시 할인"
+                text: "분야별 성취를 통해 고유한 특권과 명예를 쟁취하십시오.\n※ 칭호는 반드시 장착해야 효과가 발동됩니다. ([/장착 번호])\n\n✨ [전설의 독립 작위: 고유 효과]\n분야별 정점에 도달하거나 특수 조건을 만족해야 얻을 수 있는 유일무이한 칭호입니다.\n\n• 🏰 전설의 큰손\n  - 조건: 부동산 등기부 10장 수집 완료\n  - 효과: 매일 자정 랜드마크 배당금 10% 추가 지급 (장착 시 실시간 조회 반영)\n  - ※ 닉네임 앞 전용 아이콘(🏰) 자동 표시\n\n• 🏴‍☠️ 해적왕\n  - 조건: 누적 약탈 성공 150회 달성\n  - 효과: 약탈 소요 시간 30% 단축 & 기본 일급 50% 추가 보너스\n  - ※ 닉네임 앞 전용 아이콘(🏴‍☠️) 자동 표시\n\n• ⚓ 제해왕\n  - 조건: 누적 토벌 성공 150회 달성\n  - 효과: 토벌 현상금 20% 보너스 & 기본 일급 50% 추가 보너스\n  - ※ 닉네임 앞 전용 아이콘(⚓) 자동 표시\n\n• 🔱 해상왕\n  - 조건: 누적 무역 200회 달성\n  - 효과: 항해 재해(디버프) 발생 확률 50% 감소\n  - ※ 닉네임 앞 전용 아이콘(🔱) 자동 표시\n\n• ⚜️ 도굴왕\n  - 조건: 유물 조각 50개 수집 완료\n  - 효과: 채굴 시 희귀 광물(구리/금/다이아) 발견 확률 20% 상승\n  - ※ 닉네임 앞 전용 아이콘(⚜️) 자동 표시\n\n• 🏇 경마왕\n  - 조건: 경마 전용 장비 4종 수집 완료\n  - 효과: 경마 배팅 취소 위약금(10%) 전액 면제\n\n• 🏵️ 수집대마왕\n  - 조건: 서버 내 모든 종류의 아이콘 수집 완료\n  - 효과: 모든 상점 물품 구매 시 15% 상시 할인\n  - ※ 닉네임 앞 전용 아이콘(🏵️) 자동 표시\n\n\n📈 [단계별 성취 작위: 성장 가이드]\n노력을 통해 한 단계씩 올라가는 성장형 칭호 계보입니다.\n\n① 부동산 투자 계보\n   임대인 (100만P) ➔ 건물주 (500만P) ➔ 투기왕 (1,000만P)\n   ※ 투기왕 효과: 지분 매각 시 최종 수령액의 5% 보너스 지급\n\n② 광산 근로 계보 (누적 시간)\n   두더지 (3,000분) ➔ 석공 (7,000분) ➔ 채굴왕 (10,000분)\n   ※ 채굴왕 효과: 채굴 시 분당 획득 포인트 20% 상시 상승\n\n③ 고고학 발굴 계보 (유물 조각)\n   도굴꾼 (10개) ➔ 탐사원 (20개) ➔ 발굴가 (30개) ➔ 트레저헌터 (40개) ➔ ⚜️도굴왕 (50개)\n\n④ 경제 자산 계보 (실질 순자산)\n   재벌 (50만P) ➔ 거상 (100만P) ➔ 부호 (200만P) ➔ 대부호 (350만P) ➔ 자산왕 (500만P)\n   ※ 자산왕 효과: 매일 자정 은행 예금 이자 1.5배 보너스 지급\n\n⑤ 사회 복지 계보 (누적 기부)\n   선한손길 (50만P) ➔ 기부천사 (100만P) ➔ 자선가 (300만P) ➔ 기부왕 (500만P)\n   ※ 기부왕 효과: 모든 종류의 세금(소득세/양도세 등) 50% 감면\n\n⑥ 해상 무역 계보 (누적 횟수)\n   견습선원 (50회) ➔ 항해사 (100회) ➔ 대항해사 (150회) ➔ 🔱해상왕 (200회)\n\n⑦ 강태공 낚시 계보 (성공 횟수)\n   강태공 (50회) ➔ 도시어부 (150회) ➔ 낚시왕 (300회)\n   ※ 낚시왕 효과: 물고기 판매 보상 포인트 20% 상승\n\n⑧ 🏴‍☠️ 해적 약탈 계보 (성공 횟수)\n   무법자 (30회) ➔ 바카니어 (50회) ➔ 블랙세일 (70회) ➔ 커세어 (100회) ➔ 🏴‍☠️해적왕 (150회)\n\n⑨ 👮 해군 토벌 계보 (성공 횟수)\n   해안경비대 (30회) ➔ 함대지휘관 (50회) ➔ 함대사령관 (70회) ➔ 로열네이비 (100회) ➔ ⚓제해왕 (150회)\n\n⑩ 🏛️ 국가 왕실 작위 (왕실 훈장)\n   남작 (30개) ➔ 자작 (60개) ➔ 백작 (90개) ➔ 후작 (120개) ➔ 공작 (150개)\n   ※ 공작 효과: 무역 시 특산품 발견 확률 100% 확정\n\n⑪ 📘 해양 생물 도감 계보 (수집 종류)\n   해양 탐사대 (20종) ➔ 생물학자 (40종) ➔ 대양지배자 (60종) ➔ 심해정복자 (80종) ➔ 포세이돈 (100종)\n   ※ 포세이돈 효과: 무역 물품 상점 구매가 25% 상시 할인"
             }
         };
 
@@ -10736,16 +10698,9 @@ function _handleMiningLogic(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // [수정]: 포인트 복사 방지 및 락 해제를 위한 상태 선점형 종료 로직 적용
+        // 포인트 복사 방지 및 락 해제를 위한 상태 선점형 종료 로직 적용
         user.mining.active = false; // 1. 진입 즉시 비활성화하여 중복 호출 차단
         user.skipHealing = true;    // 보안 엔진 일시 허용
-
-        // [v5.9] 통합 상태 가드: 징역형 선고 시 즉시 퇴거 처리
-        var stateRes = util_checkUserState(user, targetUid);
-        if (!stateRes.canAction && stateRes.reason.indexOf("징역") !== -1) {
-            safeSaveData(data, true); // 상태 변화 즉시 강제 저장
-            return replier.reply(formatError(user, "검거 확인", "징역형 선고로 인해 광산에서 강제 퇴거되었습니다."));
-        }
 
         var now = Date.now();
         var durationMin = Math.floor((now - user.mining.startTime) / 60000); 
@@ -11517,15 +11472,6 @@ function _adminSystemLogic(msg, user, data, replier, roomName, targetUid, sender
         return true;
     }
 
-    /* 도박 제한 설정 */
-    if (msg.indexOf("/도박제한 ") === 0) {
-        var sw = msg.split(" ")[1]; 
-        data.gambleLimit = (sw === "온");
-        safeSaveData(data);
-        replier.reply(formatAdmin("설정", "도박 제한 상태: [" + sw + "]"));
-        return true;
-    }
-
     /* 관리자 등록 */
     if (msg.indexOf("/관리자등록 ") === 0) {
         var target = msg.substring(7).trim();
@@ -12008,8 +11954,9 @@ function _adminUserManageLogic(msg, user, data, replier, roomName, targetUid, se
                   "• 필터: " + (isSpam ? "차단됨 (제한 중)" : "정상") + " (Timeout: " + (isSpam ? Math.ceil((t.timeoutEndTime - now)/1000) : 0) + ")\n\n";
 
         // 2. 활동 분석
+        var isSeaJail = (t.pillageCooldownEndTime && now < t.pillageCooldownEndTime);
         report += "[⛓️ 구속 및 강제 활동]\n" +
-                  "• 징역: " + (t.jailReleaseTime && now < t.jailReleaseTime ? "수감 중 (" + Math.ceil((t.jailReleaseTime - now)/60000) + "분)" : "정상 (잔여: 0분)") + "\n\n";
+                  "• 해상 정비: " + (isSeaJail ? "수감 중 (" + Math.ceil((t.pillageCooldownEndTime - now)/60000) + "분)" : "정상 (잔여: 0분)") + "\n\n";
 
         // 3. 논리적 대기 상태 (모든 State 주머니 스캔)
         report += "[⏳ 논리적 대기 상태]\n";
@@ -16269,30 +16216,27 @@ function _gameGovernmentLogic(msg, user, data, replier, roomName, targetUid) {
     if (msg === "/의회") {
         var pol = gov.activePolicy || { stockTax: 0.05, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.2, bankInterest: 0.01 };
         
-        // [신규] 모든 정책 효과를 매핑하여 동적으로 출력하는 딕셔너리
+        // 모든 정책 효과를 매핑하여 동적으로 출력하는 딕셔너리
         var effectNames = {
-            stockTax: { label: "부동산 양도세", type: "pct" },
-            mineMult: { label: "광산 채굴 효율", type: "mult" },
-            attendMult: { label: "복지 연금 배율", type: "mult" },
-            loanLimitMult: { label: "대출 한도 배율", type: "mult" },
-            tradeSpeedMult: { label: "항해 소요 시간", type: "mult" },
-            bankInterest: { label: "은행 예금 이율", type: "pct" },
-            disasterProbMult: { label: "해상 재해 확률", type: "mult" },
-            casinoPayoutAdj: { label: "카지노 배당 보정", type: "plus" },
-            rareMineMult: { label: "희귀 광물 발견율", type: "mult" },
-            casinoTax: { label: "카지노 치안유지세", type: "pct" },
-            fishMult: { label: "낚시 판매 수익", type: "mult" },
-            tradeIncomeTax: { label: "무역 특별 소득세", type: "pct" },
-            bankInterestMult: { label: "대출 이율 배율", type: "mult" },
-            incomeTaxAdj: { label: "근로 특별 소득세", type: "pct" },
-            allProfitTax: { label: "수익 전면 환수세", type: "pct" },
-            tradeBonusMult: { label: "항구 발전 보너스", type: "mult" },
-            casinoLimitMult: { label: "카지노 한도 배율", type: "mult" },
-            artifactMult: { label: "유물 조각 발견율", type: "mult" },
-            workMult: { label: "근로 수익 전반", type: "mult" },
-            shopPriceMult: { label: "상점 물가 조정률", type: "mult" },
-            globalRewardMult: { label: "전역 보상 배율", type: "mult" }
-        };
+            stockTax: { label: "부동산 양도세", type: "pct" },
+            mineMult: { label: "광산 채굴 효율", type: "mult" },
+            attendMult: { label: "복지 연금 배율", type: "mult" },
+            loanLimitMult: { label: "대출 한도 배율", type: "mult" },
+            tradeSpeedMult: { label: "항해 소요 시간", type: "mult" },
+            bankInterest: { label: "은행 예금 이율", type: "pct" },
+            disasterProbMult: { label: "해상 재해 확률", type: "mult" },
+            rareMineMult: { label: "희귀 광물 발견율", type: "mult" },
+            fishMult: { label: "낚시 판매 수익", type: "mult" },
+            tradeIncomeTax: { label: "무역 특별 소득세", type: "pct" },
+            bankInterestMult: { label: "대출 이율 배율", type: "mult" },
+            incomeTaxAdj: { label: "근로 특별 소득세", type: "pct" },
+            allProfitTax: { label: "수익 전면 환수세", type: "pct" },
+            tradeBonusMult: { label: "항구 발전 보너스", type: "mult" },
+            artifactMult: { label: "유물 조각 발견율", type: "mult" },
+            workMult: { label: "근로 수익 전반", type: "mult" },
+            shopPriceMult: { label: "상점 물가 조정률", type: "mult" },
+            globalRewardMult: { label: "전역 보상 배율", type: "mult" }
+        };
 
         var currentPolicyStr = "";
         var keys = Object.keys(pol);
@@ -16378,61 +16322,61 @@ function gov_generateBill() {
             name: "대항해시대 전성기 법안",
             buffDesc: "모든 항해 소요 시간 20% 단축 (빠른 회전율)",
             penaltyDesc: "광산 기본 채굴 포인트 수익 30% 삭감",
-            effects: { tradeSpeedMult: 0.8, mineMult: 0.7, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02, disasterProbMult: 1.0, casinoPayoutAdj: 0.0 }
+            effects: { tradeSpeedMult: 0.8, mineMult: 0.7, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02, disasterProbMult: 1.0 }
         },
         {
-            name: "카지노 자본 유입 정책",
-            buffDesc: "카지노(사다리/바카라) 승리 배당률 +0.1 추가",
-            penaltyDesc: "무역 수익 관세(Tax) 기존 대비 2배 증가",
-            effects: { casinoPayoutAdj: 0.1, stockTax: 0.10, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.0, bankInterest: 0.02, disasterProbMult: 1.0 }
+            name: "국가 무역 진흥 정책",
+            buffDesc: "항구별 발전 레벨 수익 보너스 2배 상향",
+            penaltyDesc: "무역 정산 시 순이익의 15%를 국고로 강제 환수",
+            effects: { tradeBonusMult: 2.0, tradeIncomeTax: 0.15, stockTax: 0.05, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.0, bankInterest: 0.02, disasterProbMult: 1.0 }
         },
         {
             name: "지하 경제 활성화법",
             buffDesc: "광산 내 희귀 광물(금, 다이아) 발견 확률 2배 상승",
             penaltyDesc: "항해 중 재해(폭풍우, 화재 등) 발생 확률 1.5배 증가",
-            effects: { rareMineMult: 2.0, disasterProbMult: 1.5, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02, casinoPayoutAdj: 0.0 }
+            effects: { rareMineMult: 2.0, disasterProbMult: 1.5, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02 }
         },
         {
             name: "해상 안전 보장법",
             buffDesc: "항해 중 재해(폭풍우 등) 발생 확률 50% 감소",
-            penaltyDesc: "카지노 당첨금의 10%를 '치안 유지세'로 강제 징수",
-            effects: { disasterProbMult: 0.5, casinoTax: 0.10, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02, casinoPayoutAdj: 0.0 }
+            penaltyDesc: "부동산 양도 시 매각 차익의 10%를 징수",
+            effects: { disasterProbMult: 0.5, stockTax: 0.10, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.0, bankInterest: 0.02 }
         },
         {
             name: "강태공의 축제령",
-            buffDesc: "물고기 판매 수익 1.5배 및 유물 발견 확률 상승",
-            penaltyDesc: "무역 정산 시 순이익의 15%를 국고로 강제 환수",
-            effects: { fishMult: 1.5, tradeIncomeTax: 0.15, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02, casinoPayoutAdj: 0.0 }
+            buffDesc: "물고기 판매 수익 1.5배 상승",
+            penaltyDesc: "모든 항해 소요 시간 1.2배 증가",
+            effects: { fishMult: 1.5, tradeSpeedMult: 1.2, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02, disasterProbMult: 1.0 }
         },
         {
             name: "서민 금융 구제 정책",
             buffDesc: "은행 대출 한도 1.5배 확대 및 대출 이율 절반 인하",
             penaltyDesc: "광산 및 무역 정산 시 '특별 소득세' 5% 추가 부과",
-            effects: { loanLimitMult: 1.5, bankInterestMult: 0.5, incomeTaxAdj: 0.05, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, bankInterest: 0.02, casinoPayoutAdj: 0.0 }
+            effects: { loanLimitMult: 1.5, bankInterestMult: 0.5, incomeTaxAdj: 0.05, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, bankInterest: 0.02 }
         },
         {
             name: "복지 국가 건설안",
             buffDesc: "일일 출석 보상 기본급 2배로 고정 상승",
             penaltyDesc: "무역, 채굴, 낚시 모든 수익의 10%를 국고 환수",
-            effects: { attendMult: 2.0, allProfitTax: 0.10, mineMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02, casinoPayoutAdj: 0.0 }
+            effects: { attendMult: 2.0, allProfitTax: 0.10, mineMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02 }
         },
         {
             name: "항만 상업지구 규제법",
             buffDesc: "항구별 발전도 레벨 수익 보너스 2배 상향",
-            penaltyDesc: "카지노 회차당 최대 배팅 한도 50% 하향 제한",
-            effects: { tradeBonusMult: 2.0, casinoLimitMult: 0.5, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02, casinoPayoutAdj: 0.0 }
+            penaltyDesc: "일일 출석 보상 50% 삭감",
+            effects: { tradeBonusMult: 2.0, attendMult: 0.5, mineMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02 }
         },
         {
             name: "골동품 발굴 장려령",
             buffDesc: "광산 및 낚시 유물 조각 발견 확률 3배 폭증",
             penaltyDesc: "모든 근로 활동(채굴/무역) 기본 포인트 수익 25% 감소",
-            effects: { artifactMult: 3.0, workMult: 0.75, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02, casinoPayoutAdj: 0.0 }
+            effects: { artifactMult: 3.0, workMult: 0.75, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02 }
         },
         {
             name: "인플레이션 억제 긴급조치",
             buffDesc: "상점 내 모든 아이템 가격 20% 상시 할인",
             penaltyDesc: "모든 게임/무역/근로 활동 수익 20% 일괄 삭감",
-            effects: { shopPriceMult: 0.8, globalRewardMult: 0.8, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02, casinoPayoutAdj: 0.0 }
+            effects: { shopPriceMult: 0.8, globalRewardMult: 0.8, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02 }
         }
     ];
     return bills[Math.floor(Math.random() * bills.length)];
@@ -20801,23 +20745,21 @@ function _processPirateBail(user, data, replier, roomName, targetUid) {
     var cfg = SYSTEM_CONFIG.TRADE.JOBS.PIRATE;
     var now = Date.now();
     
-    var inJail = (user.jailReleaseTime && now < user.jailReleaseTime);
-    var inPillageCooldown = (user.pillageCooldownEndTime && now < user.pillageCooldownEndTime);
+    var inPillageCooldown = (user.pillageCooldownEndTime && now < user.pillageCooldownEndTime);
 
-    if (!inJail && !inPillageCooldown) {
+    if (!inPillageCooldown) {
         return replier.reply(formatError(user, "납부 불가", "현재 제한 상태가 아닙니다."));
     }
 
-    if (user.point < cfg.bailAmount) {
-        return replier.reply(formatError(user, "자금 부족", "보석금 " + fp(cfg.bailAmount) + "P가 부족합니다."));
-    }
+    if (user.point < cfg.bailAmount) {
+        return replier.reply(formatError(user, "자금 부족", "보석금 " + fp(cfg.bailAmount) + "P가 부족합니다."));
+    }
 
-    user.skipHealing = true;
-    util_updatePoint(user, data.rooms[roomName], -cfg.bailAmount, "해적 보석금 석방", roomName);
-    
-    // 상태 즉시 초기화
-    user.jailReleaseTime = 0;
-    user.pillageCooldownEndTime = 0;
+    user.skipHealing = true;
+    util_updatePoint(user, data.rooms[roomName], -cfg.bailAmount, "해적 보석금 석방", roomName);
+    
+    // 상태 즉시 초기화
+    user.pillageCooldownEndTime = 0;
 
     // 석방 처리가 완료되는 즉시 메뉴 응답 대기 세션(menuWait)을 종료함
     if (data.rooms[roomName].features && data.rooms[roomName].features.states.menuWait) {

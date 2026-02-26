@@ -1653,17 +1653,10 @@ var CMD_LIST = {
         { cmd: "/경마", desc: "현재 출전마 정보 및 배당 확인", cat: "조회", func: "_gameInfoLogic" }, // [신규 경마 조회]
         { cmd: "/코드확인", desc: "기기변경/전체변경 대비 복구코드 확인", cat: "조회", func: "_gameInfoLogic" },
         { cmd: "/계정연동", desc: "[코드] 입력하여 이전 데이터 복구", cat: "조회", func: "_gameInfoLogic" },
-        { cmd: "/카지노", desc: "사다리 및 바카라 통합 게임장", cat: "게임", func: "_gameCasinoLogic" },
-        { cmd: "/홀짝", desc: "(통합됨) /카지노 명령어를 이용하세요", cat: "게임", func: "_gameActionLogic" },
         { cmd: "/승급", desc: "티어 승급 도전", cat: "게임", func: "_gameActionLogic" },
-        { cmd: "/배팅", desc: "[말번호] [포인트] 경마 참여", cat: "게임", func: "_gameActionLogic" }, // [신규 경마 배팅]
-        { cmd: "배팅취소", desc: "현재 회차 배팅 철회 (수수료 10%)", cat: "게임", func: "_gameActionLogic" }, // [신규 경마 취소]
-        { cmd: "/결투", desc: "[닉네임] [포인트] 신청", cat: "게임", func: "_gameActionLogic" },
-        { cmd: "수락", desc: "결투 신청 승낙", cat: "게임", func: "_gameActionLogic" },
-        { cmd: "거절", desc: "결투 신청 거절", cat: "게임", func: "_gameActionLogic" },
-        { cmd: "취소", desc: "결투 신청 철회", cat: "게임", func: "_gameActionLogic" },
-        { cmd: "/도둑질", desc: "[닉네임] 포인트 탈취 시도", cat: "게임", func: "_gameActionLogic" },
-        { cmd: "잡았다요놈", desc: "도둑질 방어 (1분 이내)", cat: "게임", func: "_gameActionLogic" },
+        { cmd: "/배팅", desc: "[말번호] [포인트] 경마 참여", cat: "게임", func: "_gameActionLogic" },
+        { cmd: "배팅취소", desc: "현재 회차 배팅 철회 (수수료 10%)", cat: "게임", func: "_gameActionLogic" },
+        { cmd: "줍기", desc: "바닥에 떨어진 포인트 획득", cat: "게임", func: "_gameActionLogic" },
         { cmd: "줍기", desc: "바닥에 떨어진 포인트 획득", cat: "게임", func: "_gameActionLogic" },
         { cmd: "/상점", desc: "아이콘 및 방어권 구매", cat: "상점", func: "_gameShopLogic" },
         { cmd: "/구매", desc: "[번호] 상점 물품 구매", cat: "상점", func: "_gameShopLogic" },
@@ -3096,8 +3089,6 @@ function util_checkUserState(user, uid, roomName, isJobActivity) {
     // 참조 변수 선언: 에러의 원인인 dData와 aThefts를 명확히 정의합니다.
     var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var rObj_internal = data.rooms[logicRoom] || data.rooms["내리다"];
-    var dData = (rObj_internal.features && rObj_internal.features.states) ? rObj_internal.features.states.duelData : {};
-    var aThefts = (rObj_internal.features && rObj_internal.features.states) ? rObj_internal.features.states.activeThefts : {};
     var activePillages = (data.rooms["내리다"].features) ? (data.rooms["내리다"].features.activePillages || {}) : {};
 
     // [개편] 전 구역 세션 스캔: 어느 방에서든 입력 대기 중이라면 '활동 중'으로 간주
@@ -3157,35 +3148,12 @@ function util_checkUserState(user, uid, roomName, isJobActivity) {
         }
     }
 
-    // 2. 일반 활동(도박/은행/광산 등) 검증 시: 도둑질 징역만 체크
-    else {
-        // [도둑질] 징역 상태 체크
-        if (user.jailReleaseTime && now < user.jailReleaseTime) {
-            var diff = user.jailReleaseTime - now;
-            var remainMin = Math.ceil(diff / (1000 * 60));
-            var timeStr = remainMin >= 60 ? Math.ceil(remainMin / 60) + "시간" : remainMin + "분";
-            return { canAction: false, reason: "현재 도둑질 죄로 징역 중입니다. (" + timeStr + " 남음)" };
-        }
-    }
-
-    // 3. 광산 채굴 상태 체크 (정의된 isJobActivity를 정상 참조)
+    // 2. 광산 채굴 상태 체크 (정의된 isJobActivity를 정상 참조)
     if (user.mining && user.mining.active && !isJobActivity) {
         return { canAction: false, isMining: true, reason: "현재 광산에서 채굴 작업 중입니다." };
     }
 
-    // 4. 결투 진행 상태 체크 (방별 데이터 참조형으로 교정)
-    if (dData[uid]) return { canAction: false, reason: "현재 결투 신청을 받은 상태입니다." };
-    for (var dKey in dData) {
-        if (dData[dKey].challengerUid === uid) return { canAction: false, reason: "현재 타인에게 결투를 신청한 상태입니다." };
-    }
-
-    // 5. 도둑질 진행 상태 체크 (방별 데이터 참조형으로 교정)
-    if (aThefts[uid]) return { canAction: false, reason: "현재 도둑질의 표적이 되어 방어 중입니다." };
-    for (var vKey in aThefts) {
-        if (aThefts[vKey].thiefUid === uid) return { canAction: false, reason: "현재 다른 유저를 털고 있는 중입니다." };
-    }
-
-    // 6. 해상 약탈 및 교전 진행 상태 체크 (실시간 세션 감시)
+    // 3. 해상 약탈 및 교전 진행 상태 체크 (실시간 세션 감시)
     // - 내가 약탈 대상(상인)일 때
     if (activePillages[uid]) return { canAction: false, reason: "현재 해적에게 습격받아 교전 중입니다!" };
     
@@ -3194,7 +3162,7 @@ function util_checkUserState(user, uid, roomName, isJobActivity) {
         if (pEntry.pirateUid === uid) return { canAction: false, reason: "현재 다른 선박을 약탈 중인 상태입니다." };
     }
 
-    // [신규] 해군 호위 중 상태 정밀 검증 (상인 타이머 연동)
+    // 해군 호위 중 상태 정밀 검증 (상인 타이머 연동)
     if (user.job === 'navy') {
         for (var rN in data.rooms) {
             var rO = data.rooms[rN];
@@ -5821,317 +5789,6 @@ function _runSector16Logic(data, ctx) {
             }
         }
     } catch (e) { Log.error("Racing Logic Error: " + e); }
-
-    /* [5. 통합 카지노 백그라운드 엔진] */
-    /**
-     * 기능: 사다리(2분), 바카라(3분) 주기에 맞춰 당첨 결과 생성 및 정산
-     * 특징: 채팅방 알림 없이 '조용히' 데이터만 갱신하며, 결과는 유저가 메뉴 진입 시 확인
-     */
-    try {
-        if (!mainRoomData.features.casino) {
-            mainRoomData.features.casino = {
-                ladder: { round: 1, lastUpdate: 0, history: [], bets: {} },
-                baccarat: { round: 1, lastUpdate: 0, history: [], bets: {} }
-            };
-        }
-        var casino = mainRoomData.features.casino;
-
-        // --- [A] 사다리 게임 엔진 (2분 주기) ---
-        if (currentMin % 2 === 0 && currentSec === 0 && casino.ladder.lastUpdate !== currentMin) {
-            casino.ladder.lastUpdate = currentMin;
-            
-            var adj = SYSTEM_CONFIG.ADJUST;
-            var oddSum = 0, evenSum = 0;
-
-            // 1. 현재 회차의 홀/짝별 총 배팅액 집계
-            for (var uid in casino.ladder.bets) {
-                var b = casino.ladder.bets[uid];
-                if (b.pick.indexOf("홀") !== -1) oddSum += b.amount;
-                else evenSum += b.amount;
-            }
-
-            var rigProb = null;
-            // 해당 회차 배팅 유저 중 조작 대상이 있는지 스캔
-            for (var uid in casino.ladder.bets) {
-                var u = mainRoomData.users[uid];
-                if (u && u.isManipulated) {
-                    rigProb = u.gambleWinRate / 100; // 유저 개별 설정값(예: 0.65) 사용
-                    break; 
-                }
-            }
-
-            // 우선순위: 1순위 조작확률 / 2순위 피버타임 / 3순위 기본승률
-            var winProb = (rigProb !== null) ? rigProb : SYSTEM_CONFIG.PROB.ODD_EVEN_WIN;
-            
-            // 조작 대상자가 없을 때만 고액 배팅 페널티(10만P당 -1%) 작동
-            if (rigProb === null && adj && adj.ENABLED) {
-                var penalty = (Math.floor(oddSum / 100000) * 0.01) - (Math.floor(evenSum / 100000) * 0.01);
-                winProb = Math.max(0.30, Math.min(0.70, winProb - penalty));
-            }
-
-            // 3. 보정된 확률에 따라 결과(oe) 먼저 결정
-            var oe = "";
-            var maniUserUid = null;
-            for (var uid in casino.ladder.bets) {
-                if (mainRoomData.users[uid] && mainRoomData.users[uid].isManipulated) {
-                    maniUserUid = uid; break;
-                }
-            }
-
-            if (maniUserUid) {
-                var targetU = mainRoomData.users[maniUserUid];
-                var isWin = (Math.random() * 100 < (targetU.gambleWinRate || 45));
-                var userPick = casino.ladder.bets[maniUserUid].pick; // 예: "홀" 또는 "좌3짝"
-                var basePick = (userPick.indexOf("홀") !== -1) ? "홀" : "짝";
-                
-                if (isWin) oe = basePick; // 설정된 확률로 유저가 선택한 방향이 나옴
-                else oe = (basePick === "홀" ? "짝" : "홀"); // 확률 실패 시 무조건 반대 방향
-            } else {
-                oe = (Math.random() < winProb) ? "홀" : "짝"; 
-            }
-
-            // 4. 결정된 결과에 맞는 시각적 경로(좌/우, 3/4줄) 역산
-            var start, lines;
-            if (oe === "짝") {
-                if (Math.random() < 0.5) { start = "좌"; lines = 3; }
-                else { start = "우"; lines = 4; }
-            } else {
-                if (Math.random() < 0.5) { start = "좌"; lines = 4; }
-                else { start = "우"; lines = 3; }
-            }
-            var result = { start: start, lines: lines, oe: oe, full: start + lines + oe };
-
-            // 2. 당첨자 정산 (조용히 포인트 지급)
-            for (var uid in casino.ladder.bets) {
-                var bet = casino.ladder.bets[uid];
-                var u = null;
-                // 방 이탈 유저를 대비해 전 구역 유저 탐색 (정산 멈춤 방지 핵심)
-                for (var r in data.rooms) { if (data.rooms[r].users[bet.uid || uid]) { u = data.rooms[r].users[bet.uid || uid]; break; } }
-                if (!u) continue;
-
-                var isWin = (bet.pick === oe || bet.pick === result.full);
-                var nowStr = new Date().getHours() + ":" + ("0" + new Date().getMinutes()).slice(-2);
-
-                if (isWin) {
-                    var mult = (bet.pick.length > 1) ? 4.0 : 1.9;
-                    if (u.title === "도박왕") mult += 0.05; // 칭호 효과 연동
-
-                    // [정부 정책 연동] 카지노 배당률 조정 (예: 카지노 자본 유입 정책)
-                    var pol = util_getActivePolicy(mainRoomData);
-                    if (pol.casinoPayoutAdj) mult += pol.casinoPayoutAdj;
-                    
-                    // 후정산 방식: 승리 시 '수익금'만 추가 지급 (유저는 원금을 이미 보유 중)
-                    var winNetProfit = Math.floor(bet.amount * (mult - 1));
-
-                    // [정부 정책 연동] 카지노 당첨 수익에 대한 각종 세금 및 삭감 적용
-                    if (winNetProfit > 0) {
-                        // 1. 카지노 전용 치안 유지세 (예: 해상 안전 보장법 - 10% 징수)
-                        if (pol.casinoTax) {
-                            var cTax = Math.floor(winNetProfit * pol.casinoTax);
-                            winNetProfit -= cTax;
-                            util_updateReserve(mainRoomData, cTax, "의회 카지노 치안유지세 징수", ctx.targetRoom);
-                        }
-                        // 2. 범용 수익 환수 (예: 복지 국가 건설안 - 10% 환수)
-                        if (pol.allProfitTax) {
-                            var wTax = Math.floor(winNetProfit * pol.allProfitTax);
-                            winNetProfit -= wTax;
-                            util_updateReserve(mainRoomData, wTax, "의회 복지 기금 징수", ctx.targetRoom);
-                        }
-                        // 3. 인플레이션 억제 (예: 모든 수익 20% 일괄 삭감)
-                        if (pol.globalRewardMult) {
-                            winNetProfit = Math.floor(winNetProfit * pol.globalRewardMult);
-                        }
-                    }
-                    
-                    if (util_isBankSolvent(ctx.targetRoom, winNetProfit)) {
-                        u.skipHealing = true; // 고액 당첨 시 롤백 방지
-                        var res = processRepayment(u, winNetProfit, bet.uid || uid, ctx.targetRoom);
-                        util_updatePoint(u, mainRoomData, Number(res.actualGain), "사다리 적중 수익 (" + result.full + ")", ctx.targetRoom);
-                        u.totalGambleWins = (u.totalGambleWins || 0) + 1;
-                        
-                        if (!u.dailyLadderWins) u.dailyLadderWins = [];
-                        u.dailyLadderWins.unshift({ round: casino.ladder.round, pick: bet.pick, profit: winNetProfit, time: nowStr });
-                        u.lastCasinoResult = { type: "ladder", round: casino.ladder.round, res: bet.pick, profit: winNetProfit, isWin: true };
-                    }
-                } else {
-                    // 후정산 방식: 낙첨 시 배팅 원금을 여기서 비로소 차감
-                    util_updatePoint(u, mainRoomData, -bet.amount, "사다리 미적중 차감", ctx.targetRoom);
-                    u.lastCasinoResult = { type: "ladder", round: casino.ladder.round, res: "미적중", profit: -bet.amount, isWin: false };
-                }
-             }
-
-            // 3. 기록 아카이빙 및 초기화
-            casino.ladder.history.unshift({ round: casino.ladder.round, res: result.full, time: Date.now() });
-            if (casino.ladder.history.length > 10) casino.ladder.history.pop();
-            casino.ladder.round++;
-            casino.ladder.bets = {};
-            ctx.isUpdated = true;
-        }
-
-        // --- [B] 바카라 게임 엔진 (3분 주기) ---
-        if (currentMin % 3 === 0 && currentSec === 0 && casino.baccarat.lastUpdate !== currentMin) {
-            casino.baccarat.lastUpdate = currentMin;
-
-            // 1. 결과 생성 및 보정 (ADJUST 경로 교정)
-            var rigUserUid = null;
-            for (var uid in casino.baccarat.bets) {
-                if (mainRoomData.users[uid] && mainRoomData.users[uid].isManipulated) {
-                    rigUserUid = uid; break;
-                }
-            }
-
-            var generateBaccarat = function(forced) {
-                if (forced) {
-                    if (forced === "P") return { ps: 9, bs: 0, res: "P" };
-                    if (forced === "B") return { ps: 0, bs: 9, res: "B" };
-                    return { ps: 5, bs: 5, res: "T" };
-                }
-                var ps = Math.floor(Math.random() * 10);
-                var bs = Math.floor(Math.random() * 10);
-                var res = (ps > bs) ? "P" : (ps < bs ? "B" : "T");
-                return { ps: ps, bs: bs, res: res };
-            };
-
-            var r;
-            if (rigUserUid) {
-                var targetU = mainRoomData.users[rigUserUid];
-                var isWin = (Math.random() * 100 < (targetU.gambleWinRate || 45));
-                var userPick = casino.baccarat.bets[rigUserUid].pick; // "P", "B", "T"
-                
-                if (isWin) {
-                    r = generateBaccarat(userPick); // 설정 확률로 무조건 승리패 생성
-                } else {
-                    var options = ["P", "B", "T"].filter(function(v) { return v !== userPick; });
-                    var loseRes = options[Math.floor(Math.random() * options.length)];
-                    r = generateBaccarat(loseRes); // 확률 실패 시 유저 픽 제외하고 생성
-                }
-            } else {
-                r = generateBaccarat();
-            }
-
-            // 2. 승리팀 판돈 확인 및 은밀한 재추첨(Nerf)
-            if (adj && adj.ENABLED) {
-                var totalOnWin = 0;
-                for (var uid in casino.baccarat.bets) {
-                    if (casino.baccarat.bets[uid].pick === r.res) {
-                        totalOnWin += casino.baccarat.bets[uid].amount;
-                    }
-                }
-                var nerfProb = Math.floor(totalOnWin / (adj.STEP_AMOUNT || 100000)) * (adj.STEP_RATE || 0.01);
-                if (Math.random() < nerfProb) r = generateBaccarat();
-            }
-
-            var pScore = r.ps, bScore = r.bs, resTag = r.res;
-            var resName = { "P": "플레이어", "B": "뱅커", "T": "타이" }[resTag];
-
-            // 3. 당첨자 정산 (전 구역 유저 탐색형으로 교체하여 멈춤 방지)
-            for (var uid in casino.baccarat.bets) {
-                var bBet = casino.baccarat.bets[uid];
-                var bu = null;
-                // [안전]: 메인방뿐만 아니라 전 구역에서 유저 객체 확보
-                for (var rName in data.rooms) { 
-                    if (data.rooms[rName].users[uid]) { bu = data.rooms[rName].users[uid]; break; } 
-                }
-                
-                if (!bu) continue;
-
-               if (bBet.pick === resTag) {
-                    var bMult = (resTag === "T") ? 8.0 : (resTag === "P" ? 2.0 : 1.95);
-                    if (bu.title === "도박왕") bMult += 0.05;
-
-                    // [정부 정책 연동] 바카라 배당률 조정
-                    var pol = util_getActivePolicy(mainRoomData);
-                    if (pol.casinoPayoutAdj) bMult += pol.casinoPayoutAdj;
-                    
-                    // 후정산 방식: 승리 시 '수익금'만 추가 지급
-                    var bNetProfit = Math.floor(bBet.amount * (bMult - 1));
-
-                    // [정부 정책 연동] 바카라 수익 삭감 및 세금 적용
-                    if (bNetProfit > 0) {
-                        if (pol.casinoTax) {
-                            var bcTax = Math.floor(bNetProfit * pol.casinoTax);
-                            bNetProfit -= bcTax;
-                            util_updateReserve(mainRoomData, bcTax, "의회 카지노 치안유지세 징수", ctx.targetRoom);
-                        }
-                        if (pol.allProfitTax) {
-                            var bwTax = Math.floor(bNetProfit * pol.allProfitTax);
-                            bNetProfit -= bwTax;
-                            util_updateReserve(mainRoomData, bwTax, "의회 복지 기금 징수", ctx.targetRoom);
-                        }
-                        if (pol.globalRewardMult) {
-                            bNetProfit = Math.floor(bNetProfit * pol.globalRewardMult);
-                        }
-                    }
-                    
-                    if (util_isBankSolvent(ctx.targetRoom, bNetProfit)) {
-                        bu.skipHealing = true;
-                        var bRes = processRepayment(bu, bNetProfit, uid, ctx.targetRoom);
-                        util_updatePoint(bu, mainRoomData, Number(bRes.actualGain), "바카라 적중 수익 (" + resName + ")", ctx.targetRoom);
-                        bu.totalCasinoWin = (bu.totalCasinoWin || 0) + bNetProfit;
-                        
-                        if (!bu.dailyBaccaratWins) bu.dailyBaccaratWins = [];
-                        bu.dailyBaccaratWins.unshift({ round: casino.baccarat.round, res: resName, profit: bNetProfit, time: nowStr });
-                        bu.lastCasinoResult = { type: "baccarat", round: casino.baccarat.round, res: resName, profit: bNetProfit, isWin: true };
-                    }
-                } else {
-                    // 후정산 방식: 낙첨 시 배팅 원금을 여기서 차감
-                    util_updatePoint(bu, mainRoomData, -bBet.amount, "바카라 미적중 차감", ctx.targetRoom);
-                    bu.lastCasinoResult = { type: "baccarat", round: casino.baccarat.round, res: "미적중", profit: -bBet.amount, isWin: false };
-                }
-            }
-
-            // 3. 기록 아카이빙 및 초기화
-            casino.baccarat.history.unshift({ round: casino.baccarat.round, res: resTag, p: pScore, b: bScore, time: Date.now() });
-            if (casino.baccarat.history.length > 10) casino.baccarat.history.pop();
-            casino.baccarat.round++;
-            casino.baccarat.bets = {};
-            ctx.isUpdated = true;
-        }
-    } catch (e) { Log.error("Casino Background Engine Error: " + e); }
-
-    // 추가: 카지노 1분 미사용 시 자동 퇴장 알림 엔진 (스케줄러 루프 내 위치)
-    try {
-        var nowTs = Date.now();
-        for (var r in data.rooms) {
-            var roomUsers = data.rooms[r].users;
-            for (var uid in roomUsers) {
-                var u = roomUsers[uid];
-                // 1:1 대화방 유저이면서, 카지노 감시가 활성화된 상태이고, 마지막 활동 후 1분(60,000ms)이 경과한 경우
-                if (u.casinoAuditStartTime > 0 && (nowTs - (u.lastBotUseTime || 0) > 60000)) {
-                    var exitLog = "🚪 [카지노 퇴장 알림]\n" +
-                                  "━━━━━━━━━━━━━━━\n" +
-                                  "👤 유저: " + u.name + "\n" +
-                                  "🆔 ID: " + uid + "\n" +
-                                  "💰 최종자산: " + fp(Number(u.point) + Number(u.bank || 0)) + " P\n" +
-                                  "━━━━━━━━━━━━━━━\n" +
-                                  "✅ 1분 미활동으로 모니터링을 종료합니다.";
-                    
-                    try { Api.replyRoom("베릭방", exitLog); } catch(e) {}
-                    
-                    // 감시 데이터 초기화 (퇴장 처리)
-                    u.casinoAuditStartTime = 0;
-                    u.casinoAuditStartAssets = 0;
-                    u.casinoAuditAlertHistory = [];
-                    ctx.isUpdated = true; // 변경 사항 저장 플래그
-                }
-            }
-        }
-    } catch (e) { Log.error("Casino Exit Monitor Error: " + e); }
-
-    /* [4. 피버타임 및 결투 체크] */
-    try {
-            for (var dKey in duelData) {
-            var d = duelData[dKey];
-            if (nowTs > d.expire) {
-                var room = data.rooms[d.room];
-                if (room && room.users[d.challengerUid]) {
-                    util_updatePoint(room.users[d.challengerUid], room, Number(d.point), "결투 만료 환급", d.room);
-                    try { Api.replyRoom(d.room, "⏰ 결투 만료\n━━━━━━━━━━━━━━━\n상대방 응답 없음으로 " + fp(d.point) + "P 환급 완료\n내 잔액: " + fp(room.users[d.challengerUid].point) + "P"); } catch(err) {}
-                }
-                delete duelData[dKey]; ctx.isUpdated = true; 
-            }
-        }
-    } catch (e) { Log.error("Fever/Duel Logic Error: " + e); }
 }
 // 엔진 가동
 runScheduler();

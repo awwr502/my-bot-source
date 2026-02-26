@@ -3667,7 +3667,7 @@ function processRepayment(user, amount, userUid, roomName) {
 //==========섹터14==========
 
 /**
- * [게임 하위 모듈] 지하 도시 메뉴 핸들러 (숫자 입력 처리)
+ * [게임 하위 모듈] 지하 도시 메뉴 핸들러
  */
 function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];
@@ -3675,43 +3675,26 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
 
     var state = roomData.features.states.menuWait[targetUid];
     if (!state || !state.type.startsWith('city_')) return false;
-
-    // 공통 네비게이션 가드 (취소 및 뒤로가기)
-    if (msg === "취소" || msg === "❎취소") {
-        delete roomData.features.states.menuWait[targetUid];
-        replier.reply(formatCommand("🚫 작업 종료", user, "도시 관리를 종료합니다."));
-        return true;
-    }
-    if (msg === "뒤로" || msg === "↩️ 뒤로") {
-        if (state.type !== 'city_main') {
-            return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
-        } else {
-            delete roomData.features.states.menuWait[targetUid];
-            replier.reply(formatCommand("🚪 도시 퇴장", user, "지하 도시에서 빠져나왔습니다."));
-            return true;
-        }
-    }
     if (msg.startsWith("/")) return false;
 
     var choice = msg.trim();
     var city = user.undergroundCity;
+    var NAV = "\n\n↩️ 뒤로 / ❎취소";
 
     // [1단계] 메인 메뉴 분기 처리
     if (state.type === 'city_main') {
         if (choice === "1") {
-            // 개척 진행 상태 가드
             if (city.expanding && city.expanding.active) {
                 var rm = Math.ceil((city.expanding.endTime - Date.now()) / 60000);
                 replier.reply(formatError(user, "공사 진행 중", "현재 구역 확장 공사가 진행 중입니다.\n공사가 끝날 때까지 기다려주세요.\n(남은 시간: " + rm + "분)"));
                 return true;
             }
-
             if (city.slots >= CITY_CONFIG.MAX_SLOTS) {
                 replier.reply(formatError(user, "확장 불가", "더 이상 도시를 확장할 수 없습니다. (최대 " + CITY_CONFIG.MAX_SLOTS + "칸)"));
                 return true;
             }
 
-            var cost = CITY_CONFIG.EXPAND_COST_BASE * city.slots; // 슬롯당 점진적 비용 증가
+            var cost = CITY_CONFIG.EXPAND_COST_BASE * city.slots; 
             var timeMin = Math.floor(CITY_CONFIG.EXPAND_TIME_MS / 60000);
 
             var confirmBody = "지하의 단단한 암반을 뚫어 새로운 구역을 개척합니다.\n\n" +
@@ -3719,14 +3702,12 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
                               "⏳ 소요 시간: " + timeMin + "분\n\n" +
                               "진행하시겠습니까?\n\n" +
                               "1. 예 (공사 시작)\n" +
-                              "2. 아니오 (취소)\n\n" +
-                              "↩️ 뒤로 / ❎취소";
+                              "2. 아니오 (취소)" + NAV;
 
             roomData.features.states.menuWait[targetUid] = { type: 'city_expand_confirm', time: Date.now(), extra: { cost: cost } };
             replier.reply(formatCommand("⛏️ 구역 확장 확인", user, confirmBody, "번호를 입력하세요."));
         } 
         else if (choice === "2") {
-            // 건축 메뉴 진입
             var bList = [];
             var idx = 1;
             var keys = Object.keys(CITY_CONFIG.BUILDINGS);
@@ -3736,14 +3717,13 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
                 bList.push(idx + ". " + b.icon + " " + b.name + " [" + fp(b.cost) + "P] " + isBuilt + "\n   └ " + b.desc);
                 idx++;
             }
-            var bBody = "[건설 가능 목록]\n" + bList.join("\n") + "\n\n건설할 번호를 입력하세요.\n\n↩️ 뒤로 / ❎취소";
+            var bBody = "[건설 가능 목록]\n" + bList.join("\n") + "\n\n건설할 번호를 입력하세요." + NAV;
             replier.reply(formatCommand("🏗️ 도시 설계실", user, bBody));
             
             roomData.features.states.menuWait[targetUid].type = 'city_build';
             roomData.features.states.menuWait[targetUid].time = Date.now();
         }
         else if (choice === "3") {
-            // 세금 징수 로직
             if (city.vault <= 0) {
                 replier.reply(formatError(user, "징수 실패", "도시 금고가 비어있습니다. 거주민들이 세금을 납부할 때까지 기다리세요."));
             } else {
@@ -3759,13 +3739,11 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
             }
         }
         else if (choice === "4") {
-            // 영지 관리 및 보수 로직
             if (city.happiness >= 100) {
                 replier.reply(formatSimple("🛡️ 영지 관리", "현재 영지의 행복도가 100%로 최상입니다.\n별도의 보수가 필요하지 않습니다.", "이전 화면: [뒤로]"));
                 return true;
             }
-            
-            var repairCost = (100 - city.happiness) * 5000; // 잃은 행복도 1%당 5,000P 소모
+            var repairCost = (100 - city.happiness) * 5000; 
             roomData.features.states.menuWait[targetUid] = { type: 'city_repair_confirm', time: Date.now(), extra: { cost: repairCost } };
             
             var repBody = "민심을 달래고 파손된 시설을 보수하여 영지의 행복도를 100%로 복구합니다.\n\n" +
@@ -3773,8 +3751,7 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
                           "💰 필요 예산: " + fp(repairCost) + "P\n\n" +
                           "진행하시겠습니까?\n\n" +
                           "1. 예 (보수 진행)\n" +
-                          "2. 아니오 (취소)\n\n" +
-                          "↩️ 뒤로 / ❎취소";
+                          "2. 아니오 (취소)" + NAV;
             
             replier.reply(formatCommand("🛡️ 영지 긴급 보수", user, repBody, "번호를 입력하세요."));
         }
@@ -3783,7 +3760,7 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
         }
         return true;
     }
-
+    
     // [1-1단계] 구역 확장 확정 핸들러
     if (state.type === 'city_expand_confirm') {
         if (choice === "1" || choice === "예") {
@@ -3793,9 +3770,7 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
                 return true;
             }
             
-            // 비용 차감 및 타이머 세팅
             util_updatePoint(user, data.rooms["내리다"], -cost, "지하 도시 구역 확장 공사", roomName);
-            
             city.expanding.active = true;
             city.expanding.endTime = Date.now() + CITY_CONFIG.EXPAND_TIME_MS;
             
@@ -3807,7 +3782,6 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
             delete roomData.features.states.menuWait[targetUid];
             
         } else if (choice === "2" || choice === "아니오") {
-            replier.reply(formatCommand("🚫 취소", user, "구역 확장을 취소했습니다.\n다시 메인 메뉴로 돌아갑니다.", "이전 화면: [뒤로]"));
             return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
         } else {
             replier.reply(formatError(user, "번호 오류", "1번(예) 또는 2번(아니오)을 선택하세요."));
@@ -3832,14 +3806,13 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatCommand("🛠️ 보수 완료", user, "도시의 모든 시설이 정비되고 민심이 안정되었습니다!\n(행복도 100% 달성)", "도시 현황: [/도시]"));
             delete roomData.features.states.menuWait[targetUid];
         } else if (choice === "2" || choice === "아니오") {
-            replier.reply(formatCommand("🚫 취소", user, "영지 보수를 취소했습니다.", "이전 화면: [뒤로]"));
             return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
         } else {
             replier.reply(formatError(user, "번호 오류", "1번(예) 또는 2번(아니오)을 선택하세요."));
         }
         return true;
     }
-    
+
     // [2단계] 건축 선택 및 확정 로직
     if (state.type === 'city_build') {
         var bIdx = parseInt(choice) - 1;
@@ -3867,11 +3840,8 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
             return true;
         }
 
-        // 건설 대금 차감 및 건물 데이터 등록
         util_updatePoint(user, data.rooms["내리다"], -bData.cost, "지하 도시 건축: " + bData.name, roomName);
         city.buildings[bKey] = { level: 1, builtAt: Date.now() };
-        
-        // 특정 건물 건설 시 즉시 반영되는 스탯 보너스
         if (bData.popBonus) city.population += bData.popBonus;
         
         user.skipHealing = true;
@@ -3881,7 +3851,6 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
         delete roomData.features.states.menuWait[targetUid];
         return true;
     }
-    
     return false;
 }
 
@@ -3894,26 +3863,11 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
 
     var state = roomData.features.states.menuWait[targetUid];
     if (!state || !state.type.startsWith('spirit_')) return false;
-
-    var NAV = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
-
-    if (msg === "취소" || msg === "❎취소") {
-        delete roomData.features.states.menuWait[targetUid];
-        replier.reply(formatCommand("🚫 작업 종료", user, "정원 관리를 종료합니다."));
-        return true;
-    }
-    if (msg === "뒤로" || msg === "↩️ 뒤로") {
-        if (state.type !== 'spirit_main') return _gameSpiritLogic("/정령", user, data, replier, roomName, targetUid);
-        else {
-            delete roomData.features.states.menuWait[targetUid];
-            replier.reply(formatCommand("🚪 퇴장", user, "정원에서 빠져나왔습니다."));
-            return true;
-        }
-    }
     if (msg.startsWith("/")) return false;
 
     var choice = msg.trim();
     var sd = user.spiritData;
+    var NAV = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
     // [1단계] 메인 메뉴 분기
     if (state.type === 'spirit_main') {
@@ -3922,7 +3876,6 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
                 replier.reply(formatError(user, "정령 없음", "보유 중인 정령이 없습니다. 부화장에서 알을 먼저 부화시키세요." + NAV));
                 return true;
             }
-            // 보유 훈련 자동 정산 (시간 경과 시 EXP 즉시 지급)
             sd.roster.forEach(function(sp) {
                 if (sp.trainEndTime > 0 && Date.now() >= sp.trainEndTime) {
                     sp.exp += SPIRIT_CONFIG.TRAIN_EXP;
@@ -3945,7 +3898,6 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatCommand("🐾 내 정령 관리", user, list + NAV, "상세 정보를 볼 정령의 번호를 입력하세요."));
         } 
         else if (choice === "2") {
-            // 부화장 로직
             var incStr = "";
             sd.incubators.forEach(function(inc, i) {
                 if (!inc) incStr += (i+1) + "번 슬롯: ⚪ 비어있음\n";
@@ -3966,7 +3918,6 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatCommand("🥚 신비한 부화장", user, incStr + "\n[보유 알]: " + (myEggs.length > 0 ? myEggs.join(", ") : "없음") + NAV, "작업할 슬롯 번호(1~3)를 입력하세요."));
         }
         else if (choice === "3") {
-            // 교배소 로직 (에픽/전설 등급만 목록 출력)
             var elites = [];
             sd.roster.forEach(function(sp, idx) {
                 var db = SPIRIT_CONFIG.DB[sp.id];
@@ -3983,7 +3934,6 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatCommand("🧬 생명의 교배소", user, "두 마리의 영혼을 융합하여 상점에서는 얻을 수 없는 [돌연변이 알(2시간 소요)]을 얻습니다. (⚠️ 부모 정령은 소멸합니다!)\n\n" + eList + NAV, "융합할 두 마리의 번호를 띄어쓰기로 입력하세요 (예: 1 2)"));
         }
         else if (choice === "4") {
-            // 상점
             var sList = Object.keys(SPIRIT_CONFIG.ITEMS).map(function(k, i) {
                 var it = SPIRIT_CONFIG.ITEMS[k];
                 var 보유 = sd.items[k] || 0;
@@ -3996,7 +3946,6 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatCommand("🛒 정령 전용 상점", user, sList + "\n\n💰 내 잔액: " + fp(user.point) + "P" + NAV, "구매할 물품의 번호를 입력하세요."));
         }
         else if (choice === "5") {
-            // 도감
             var total = Object.keys(SPIRIT_CONFIG.DB).length;
             var collected = sd.pedia.length;
             var pct = Math.floor((collected / total) * 100);
@@ -4022,7 +3971,7 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
                      "2. ⚔️ 훈련보내기 (-30포만감, 10분 소요)\n" +
                      "3. ✨ 진화하기 (경험치 MAX 시)\n" +
                      "4. " + (sd.activeUid === sp.uid ? "💤 동행 해제" : "🐾 동행 설정") + "\n" +
-                     "5. 🗑️ 자연으로 방생하기 (복구 불가)\n" + NAV;
+                     "5. 🗑️ 자연으로 방생하기 (복구 불가)" + NAV;
                      
         state.type = 'spirit_manage';
         state.extra = { spIdx: idx };
@@ -4038,7 +3987,6 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
         var db = SPIRIT_CONFIG.DB[sp.id];
 
         if (choice === "1") {
-            // 먹이 주기 팝업
             var fList = [];
             var tempFoodKeys = [];
             for (var k in sd.items) {
@@ -4114,9 +4062,7 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
         
         var inc = sd.incubators[sIdx];
         if (inc) {
-            // 알이 있는 경우 -> 부화 수령
             if (Date.now() < inc.endTime) return replier.reply(formatError(user, "부화 중", "아직 알이 따뜻합니다. 조금 더 기다려주세요." + NAV));
-            
             if (sd.roster.length >= SPIRIT_CONFIG.MAX_ROSTER) return replier.reply(formatError(user, "공간 부족", "정원이 가득 차서 더 이상 부화시킬 수 없습니다. (최대 10마리)"));
             
             var newId = _getHatchResult(inc.eggKey);
@@ -4124,13 +4070,12 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
             var newSp = { uid: generateUUID(), id: newId, name: db.name, exp: 0, satiety: 100, trainEndTime: 0 };
             
             sd.roster.push(newSp);
-            sd.incubators[sIdx] = null; // 슬롯 비우기
-            if (sd.pedia.indexOf(newId) === -1) sd.pedia.push(newId); // 도감 등록
+            sd.incubators[sIdx] = null; 
+            if (sd.pedia.indexOf(newId) === -1) sd.pedia.push(newId); 
             
             user.skipHealing = true; safeSaveData(data, true);
             replier.reply(formatCommand("🌟 부화 성공!", user, "껍질을 깨고 " + db.el + " [" + db.name + "] (등급: " + db.rank + ")이(가) 태어났습니다!", "목록 확인: [/정령]"));
         } else {
-            // 알이 없는 경우 -> 알 올리기 팝업
             var eList = [];
             var tempEggKeys = [];
             for (var k in sd.items) {
@@ -4181,7 +4126,7 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
         sd.items[itemKey] = (sd.items[itemKey] || 0) + 1;
         
         user.skipHealing = true; safeSaveData(data, true);
-        replier.reply(formatCommand("🛒 상점 구매 완료", user, item.icon + " [" + item.name + "] 1개를 구매하여 보관함에 넣었습니다.", "추가 구매: [뒤로]"));
+        replier.reply(formatCommand("🛒 상점 구매 완료", user, item.icon + " [" + item.name + "] 1개를 구매하여 보관함에 넣었습니다.", "이전 화면: [뒤로]"));
         return true;
     }
 
@@ -4196,25 +4141,20 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
             return replier.reply(formatError(user, "선택 오류", "서로 다른 올바른 번호를 2개 선택하세요." + NAV));
         }
 
-        // 선택된 정령이 진짜 에픽/전설인지 2차 가드
         if (SPIRIT_CONFIG.DB[sd.roster[p1].id].rank === "노말" || SPIRIT_CONFIG.DB[sd.roster[p1].id].rank === "레어" || 
             SPIRIT_CONFIG.DB[sd.roster[p2].id].rank === "노말" || SPIRIT_CONFIG.DB[sd.roster[p2].id].rank === "레어") {
             return replier.reply(formatError(user, "조건 미달", "교배는 [에픽] 또는 [전설] 등급만 가능합니다."));
         }
 
-        // 역순으로 지워야 인덱스 꼬임을 방지함
         var indices = [p1, p2].sort(function(a, b){ return b - a; });
         var n1 = sd.roster[p1].name; var n2 = sd.roster[p2].name;
         
-        // 동행 중인 녀석이 소멸되면 해제
         if (sd.activeUid === sd.roster[p1].uid || sd.activeUid === sd.roster[p2].uid) sd.activeUid = null;
 
         sd.roster.splice(indices[0], 1);
         sd.roster.splice(indices[1], 1);
         
-        // 희귀 돌연변이 알(egg_mutant) 획득
         sd.items["egg_mutant"] = (sd.items["egg_mutant"] || 0) + 1;
-        // 상점에 노출되지 않는 히든 아이템 정의
         if (!SPIRIT_CONFIG.ITEMS["egg_mutant"]) {
             SPIRIT_CONFIG.ITEMS["egg_mutant"] = { name: "영롱한 돌연변이 알", type: "egg", timeMs: 120 * 60 * 1000, icon: "🌠", desc: "2시간 소요. 교배로 탄생한 빛나는 알." };
         }
@@ -9284,6 +9224,16 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         if (prevState === 'shop_detail') {
             return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
         }
+
+        // 도시 서브메뉴 -> 도시 메인 복귀
+        if (prevState.startsWith('city_') && prevState !== 'city_main') {
+            return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
+        }
+
+        // 정령 서브메뉴 -> 정령 메인 복귀
+        if (prevState.startsWith('spirit_') && prevState !== 'spirit_main') {
+            return _gameSpiritLogic("/정령", user, data, replier, roomName, targetUid);
+        }
         
         if (prevState.startsWith('help')) { 
             replier.reply("📖 이용을 종료했습니다."); 
@@ -10350,6 +10300,8 @@ if (actualFeatures && actualFeatures.states) {
             // 시스템 타입에 따라 적절한 메인 메뉴 함수 호출 (카테고리 이탈 방지)
             if (stType.startsWith('trade') || stType.indexOf('ship_') !== -1) return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
             if (stType.startsWith('shop')) return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
+            if (stType.startsWith('city_')) return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
+            if (stType.startsWith('spirit_')) return _gameSpiritLogic("/정령", user, data, replier, roomName, targetUid);
             
             replier.reply(formatCommand("🏠 처음으로", user, "메인 화면으로 돌아왔습니다.")); 
             return true;

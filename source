@@ -3692,9 +3692,41 @@ function runScheduler() {
                 var rObj = data.rooms["내리다"];
                 if (rObj && rObj.users) {
                     for (var uid in rObj.users) {
-                        if (uid.indexOf("AI_BOT_") === 0) continue; // AI 봇 무시하고 통과
-
                         var u = rObj.users[uid];
+
+                        // [v21.1] AI 상단 vs AI 해적 습격 발생 엔진 (AI 상호작용)
+                        // 설명: AI 상단 계정일 경우 예약된 시간에 맞춰 AI 해적 세션을 생성함
+                        if (uid.indexOf("AI_BOT_") === 0) {
+                            if (u.voyage && u.voyage.active && !u.isPillaged && u.voyage.scheduledPirateTime > 0) {
+                                if (Date.now() >= u.voyage.scheduledPirateTime) {
+                                    u.voyage.scheduledPirateTime = 0; // 중복 실행 방지
+                                    
+                                    var route = u.voyage.origin + "-" + u.voyage.dest;
+                                    var targetAp = data.aiPirates.find(function(ap) { 
+                                        return ap.status === 'sailing' && ap.route === route; 
+                                    });
+
+                                    if (targetAp) {
+                                        u.isPillaged = true;
+                                        if (!rObj.features.activePillages) rObj.features.activePillages = {};
+                                        rObj.features.activePillages[uid] = {
+                                            pirateUid: targetAp.uid,
+                                            pirateName: targetAp.name,
+                                            startTime: Date.now(),
+                                            room: "내리다",
+                                            isAIPirate: true,
+                                            isGlobalAI: true,
+                                            dummyPirateLevel: targetAp.shipLevel,
+                                            victimName: u.name, // 토벌 리스트 출력용
+                                            isAIVictim: true
+                                        };
+                                        Log.info("🏴‍☠️ [AI Interaction] " + targetAp.name + " ➔ " + u.name + " 습격 발생");
+                                        ctx.isUpdated = true;
+                                    }
+                                }
+                            }
+                            continue; // AI 처리가 끝났으므로 아래 유저 전용 로직(밀수/생물조우) 건너뜀
+                        }
 
                         // [v18.6] 해적 밀수 단속 엔진
                         if (u.job === 'pirate' && u.voyage && u.voyage.active && u.voyage.isSmuggling && !u.voyage.isReturning) {
@@ -4276,6 +4308,7 @@ function _runAITradeScheduler(data, ctx) {
                 // 모든 AI 상단은 정규 AI 해군의 철통 호위를 받음 (레벨 5~10 랜덤)
                 escortUid: "AI_NAVY_ELITE", 
                 escortLevel: Math.floor(Math.random() * 6) + 5 
+                scheduledPirateTime: (Math.random() < 0.50) ? Date.now() + Math.floor(Math.random() * (totalSec * 0.5) * 1000) : 0
             };
             aiUser.currentLoc = dest;
             ctx.isUpdated = true;
@@ -19333,7 +19366,15 @@ function _showBattleList(user, replier, roomData, targetUid, roomName) {
         var remainSec = Math.ceil((180000 - (Date.now() - p.startTime)) / 1000);
         if (remainSec < 0) return;
 
-        body += (i + 1) + ". 🏴‍☠️ " + p.pirateName + " ➔ 📦 " + (globalData.rooms[p.room].users[vId].name) + "\n" +
+        // [v21.1] 피해자 이름 앞에 🚢 아이콘을 붙여 AI 상단임을 표시
+        var victimName = (vId.indexOf("AI_BOT_") === 0) ? "🚢 " + p.victimName : p.victimName;
+        if (!p.victimName) { // 이름 누락 대비
+            var vObj = null;
+            for(var r in globalData.rooms){ if(globalData.rooms[r].users[vId]){ vObj = globalData.rooms[r].users[vId]; break; }}
+            victimName = vObj ? ((vId.indexOf("AI_BOT_") === 0 ? "🚢 " : "") + vObj.name) : "알 수 없는 상선";
+        }
+
+        body += (i + 1) + ". 🏴‍☠️ " + p.pirateName + " ➔ " + victimName + "\n" +
                 "   ⏳ 남은 시간: " + remainSec + "초\n";
         currentPillages.push({ victimUid: vId, pirateUid: p.pirateUid });
     });
@@ -19843,54 +19884,58 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
 
     // 3. 공통 데이터 반영 및 주머니(정산소) 적립
     if (pillageAmount > 0) {
-        if (pirate.isAI) {
-            // [신규] AI 해적이 약탈에 성공한 경우 승리 알림만 띄움. 실제 포인트 차감/국고입고는 상인의 도착 시점(_processTradeArrival)에 수행됨.
-            var successMsg = "⚔️ [해상 교전 결과 보고]\n" +
-                             "━━━━━━━━━━━━━━━\n" +
-                             "🙍‍♂️ 대상: " + pName + "\n" +
-                             "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pirate.shipLevel + ")\n\n" +
-                             "🏴‍☠️ [상단 약탈 성공]\n" +
-                             "악명 높은 '" + pirate.name + "'이(가) 상선을 제압하고 화물을 약탈해 도주했습니다!\n" +
-                             "📈 적용 약탈률: " + (pRate * 100).toFixed(1) + "%";
-                             
-            if (!pData.isSilent) {
-                Api.replyRoom(roomName || "내리다", successMsg);
-            }
-            Log.info("[Pillage] AI Pirate -> " + pName + " 성공 (정산 대기)");
-        } else {
-            var pirateCfg = (SYSTEM_CONFIG.TRADE.JOBS && SYSTEM_CONFIG.TRADE.JOBS.PIRATE) ? SYSTEM_CONFIG.TRADE.JOBS.PIRATE : { bountyInc: 15000 };
-            
-            // 데이터 업데이트
-            pirate.claimableReward = (Number(pirate.claimableReward) || 0) + pillageAmount;
-            pirate.infamy = (pirate.infamy || 0) + 10;
-            pirate.currentBounty = (Number(pirate.currentBounty) || 0) + (pirateCfg.bountyInc || 15000);
-            pirate.totalPillageSuccess = (pirate.totalPillageSuccess || 0) + 1;
-            
-            pirate.hasNotifiedReward = false;
-            pirate.pillageCooldownEndTime = Date.now() + (cfg.JOBS.PIRATE.winCooldown || 300000);
-            
-            // 칭호 체크 및 영속성 저장 (Master Logic 준수)
-            util_checkPirateTitle(pirate, null, "내리다");
-            safeSaveData(data, true);
+       if (pirate.isAI) {
+            // [v21.1] AI vs AI 정산: 두 개체 모두 AI인 경우 결과 공지 없이 조용히 국고로 환수
+            if (isAI) { 
+                util_updateReserve(data.rooms["내리다"], pillageAmount, "AI 상호 약탈 국고 환수", "내리다");
+                Log.info("[Pillage: AI to AI] " + pirate.name + " 성공 (국고 +" + pillageAmount + "P)");
+            } else {
+                // [AI 해적 ➔ 유저 상단]: 기존과 동일하게 안내 메시지 출력
+                var successMsg = "⚔️ [해상 교전 결과 보고]\n" +
+                                 "━━━━━━━━━━━━━━━\n" +
+                                 "🙍‍♂️ 대상: " + pName + "\n" +
+                                 "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pirate.shipLevel + ")\n\n" +
+                                 "🏴‍☠️ [상단 약탈 성공]\n" +
+                                 "악명 높은 '" + pirate.name + "'이(가) 상선을 제압하고 화물을 약탈해 도주했습니다!\n" +
+                                 "📈 적용 약탈률: " + (pRate * 100).toFixed(1) + "%";
+                                 
+                if (!pData.isSilent) {
+                    Api.replyRoom(roomName || "내리다", successMsg);
+                }
+                Log.info("[Pillage] AI Pirate -> " + pName + " 성공 (정산 대기)");
+            }
+        } else {
+            // [유저 해적 ➔ (유저 or AI) 상단]: 유저 해적의 수익으로 정산
+            var pirateCfg = (SYSTEM_CONFIG.TRADE.JOBS && SYSTEM_CONFIG.TRADE.JOBS.PIRATE) ? SYSTEM_CONFIG.TRADE.JOBS.PIRATE : { bountyInc: 15000 };
+            
+            pirate.claimableReward = (Number(pirate.claimableReward) || 0) + pillageAmount;
+            pirate.infamy = (pirate.infamy || 0) + 10;
+            pirate.currentBounty = (Number(pirate.currentBounty) || 0) + (pirateCfg.bountyInc || 15000);
+            pirate.totalPillageSuccess = (pirate.totalPillageSuccess || 0) + 1;
+            
+            pirate.hasNotifiedReward = false;
+            pirate.pillageCooldownEndTime = Date.now() + (cfg.JOBS.PIRATE.winCooldown || 300000);
+            
+            util_checkPirateTitle(pirate, null, "내리다");
 
-            var pLvl = pirate.shipLevel || 1;
-            var targetTypeStr = isAI ? "AI 상단" : "상단";
-            
-            var successMsg = "⚔️ [해상 교전 결과 보고]\n" +
-                             "━━━━━━━━━━━━━━━\n" +
-                             "🙍‍♂️ 대상: " + pName + "\n" +
-                             "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pLvl + ")\n\n" +
-                             "🏴‍☠️ [" + targetTypeStr + " 약탈 성공]\n" +
-                             "해적 '" + pirate.name + "'이(가) " + pName + "을(를) 완벽히 제압했습니다!\n" +
-                             "💰 이번 약탈 수익: +" + fp(pillageAmount) + "P (정산 대기)\n" +
-                             "📈 적용 약탈률: " + (pRate * 100).toFixed(1) + "%\n" +
-                             "💀 누적 현상금: " + fp(pirate.currentBounty) + "P 돌파!";
-                             
-            if (!pData.isSilent) {
-                Api.replyRoom(roomName || "내리다", successMsg);
-            }
-            Log.info("[Pillage] " + pirate.name + " -> " + pName + " 성공 (" + pillageAmount + "P)");
-        }
+            var pLvl = pirate.shipLevel || 1;
+            var targetTypeStr = isAI ? "AI 상단" : "상단";
+            
+            var successMsg = "⚔️ [해상 교전 결과 보고]\n" +
+                             "━━━━━━━━━━━━━━━\n" +
+                               "🙍‍♂️ 대상: " + pName + "\n" +
+                               "🏴‍☠️ 해적: " + pirate.name + " (Lv." + pLvl + ")\n\n" +
+                               "🏴‍☠️ [" + targetTypeStr + " 약탈 성공]\n" +
+                               "해적 '" + pirate.name + "'이(가) " + pName + "을(를) 완벽히 제압했습니다!\n" +
+                               "💰 이번 약탈 수익: +" + fp(pillageAmount) + "P (정산 대기)\n" +
+                               "📈 적용 약탈률: " + (pRate * 100).toFixed(1) + "%\n" +
+                               "💀 누적 현상금: " + fp(pirate.currentBounty) + "P 돌파!";
+                               
+            if (!pData.isSilent) {
+                Api.replyRoom(roomName || "내리다", successMsg);
+            }
+            Log.info("[Pillage] " + pirate.name + " -> " + pName + " 성공 (" + pillageAmount + "P)");
+        }
     }
 }
 

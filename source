@@ -3381,10 +3381,20 @@ var CITY_CONFIG = {
     TAX_PER_POP: 300, // [건축비 상향에 맞춘 밸런싱] 인구 1명당 시간당 생산 세금
     MAINT_PER_BLD: 15000, // 건물 1개당 시간당 소모되는 유지비
     BUILDINGS: {
-        "tent": { key: "tent", name: "천막촌", icon: "🏕️", type: "주거", cost: 1000000, popBonus: 100, desc: "기본 거주 구역 (+100명)" },
-        "market": { key: "market", name: "지하 시장", icon: "⚖️", type: "상업", cost: 3000000, taxBoost: 0.1, desc: "세금 수익률 10% 증가" },
-        "lab": { key: "lab", name: "고대 연구소", icon: "🔬", type: "연구", cost: 5000000, desc: "상위 건물 건축 조건 해금" },
-        "tower": { key: "tower", name: "경비탑", icon: "🛡️", type: "방어", cost: 2500000, defense: 50, desc: "침공 방어력 +50" }
+        // [1티어 기본 건물 - 연구소 필요 없음]
+        "tent": { key: "tent", name: "천막촌", icon: "🏕️", type: "주거", cost: 1000000, popBonus: 100, reqLab: 0, desc: "기본 거주 구역 (+100명)" },
+        "market": { key: "market", name: "지하 시장", icon: "⚖️", type: "상업", cost: 3000000, taxBoost: 0.1, reqLab: 0, desc: "세금 수익률 10% 증가" },
+        "tower": { key: "tower", name: "경비탑", icon: "🛡️", type: "방어", cost: 2500000, defense: 50, reqLab: 0, desc: "침공 방어력 +50" },
+        "lab": { key: "lab", name: "고대 연구소", icon: "🔬", type: "연구", cost: 5000000, reqLab: 0, desc: "2티어 상위 건물 해금 (연구소 1개)" },
+        
+        // [2티어 상위 건물 - 연구소 1개 이상 필요]
+        "apartment": { key: "apartment", name: "소형 아파트", icon: "🏢", type: "주거", cost: 4000000, popBonus: 350, reqLab: 1, desc: "인구 +350명 (연구소 1개 필요)" },
+        "mall": { key: "mall", name: "대형 복합몰", icon: "🏬", type: "상업", cost: 9000000, taxBoost: 0.25, reqLab: 1, desc: "수익률 25% 증가 (연구소 1개 필요)" },
+        "ballista": { key: "ballista", name: "자동 발리스타", icon: "🏹", type: "방어", cost: 7000000, defense: 150, reqLab: 1, desc: "방어력 +150 (연구소 1개 필요)" },
+        
+        // [3티어 최상위 건물 - 연구소 3개 이상 필요]
+        "mansion": { key: "mansion", name: "지하 대저택", icon: "🏰", type: "주거", cost: 15000000, popBonus: 1200, reqLab: 3, desc: "인구 +1200명 (연구소 3개 필요)" },
+        "bank": { key: "bank", name: "제국 조폐국", icon: "🏦", type: "상업", cost: 35000000, taxBoost: 0.8, reqLab: 3, desc: "수익률 80% 폭증 (연구소 3개 필요)" }
     }
 };
 
@@ -3426,7 +3436,6 @@ function _gameCityLogic(msg, user, data, replier, roomName, targetUid) {
             bCount += (city.buildings[k].count || 1); // 하위 호환: count가 없으면 1개로 간주
         }
         
-        // 2. 현재 개척 진행 중 UI 알림
         var expandStatus = "";
         if (city.expanding.active) {
             var remain = city.expanding.endTime - Date.now();
@@ -3434,13 +3443,19 @@ function _gameCityLogic(msg, user, data, replier, roomName, targetUid) {
             expandStatus = "\n⛏️ 현재 구역 확장 공사 중 (" + rm + "분 남음)";
         }
         
-        // 3. 시간당 세입 및 지출 예상치 계산 (중첩 보너스 적용)
+        // 3. 시간당 세입 및 지출 예상치 계산 (동적 테크트리 수익 모두 합산)
         var expectedTax = city.population * CITY_CONFIG.TAX_PER_POP;
         
-        // 시장을 여러 개 지으면 1개당 10%씩 수익률이 합연산으로 중첩 증가합니다.
-        var marketCount = (city.buildings["market"] && city.buildings["market"].count) ? city.buildings["market"].count : (city.buildings["market"] ? 1 : 0);
-        if (marketCount > 0) {
-            expectedTax = Math.floor(expectedTax * (1 + (0.1 * marketCount))); 
+        // 보유한 모든 건물을 순회하며 taxBoost(세금 증폭률)를 합산
+        var totalTaxBoost = 0;
+        for (var k in city.buildings) {
+            var bConfig = CITY_CONFIG.BUILDINGS[k];
+            if (bConfig && bConfig.taxBoost) {
+                totalTaxBoost += bConfig.taxBoost * (city.buildings[k].count || 1);
+            }
+        }
+        if (totalTaxBoost > 0) {
+            expectedTax = Math.floor(expectedTax * (1 + totalTaxBoost)); 
         }
         
         var expectedMaint = bCount * CITY_CONFIG.MAINT_PER_BLD;
@@ -3721,11 +3736,18 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
             var bList = [];
             var idx = 1;
             var keys = Object.keys(CITY_CONFIG.BUILDINGS);
+            
+            // 현재 도시에 지어진 '고대 연구소'의 개수를 확인 (테크트리 기준점)
+            var labCount = city.buildings["lab"] ? (city.buildings["lab"].count || 1) : 0;
+            
             for (var i = 0; i < keys.length; i++) {
                 var b = CITY_CONFIG.BUILDINGS[keys[i]];
-                // 몇 개를 보유 중인지 명확히 표시
                 var bCountStat = city.buildings[b.key] ? "(✅ " + (city.buildings[b.key].count || 1) + "개 보유)" : "";
-                bList.push(idx + ". " + b.icon + " " + b.name + " [" + fp(b.cost) + "P] " + bCountStat + "\n   └ " + b.desc);
+                
+                // 테크트리 요구치(reqLab)를 충족하지 못하면 🔒 표시
+                var reqStr = (b.reqLab > 0 && labCount < b.reqLab) ? " 🔒[연구소 " + b.reqLab + "개 필요]" : "";
+                
+                bList.push(idx + ". " + b.icon + " " + b.name + " [" + fp(b.cost) + "P] " + bCountStat + reqStr + "\n   └ " + b.desc);
                 idx++;
             }
             var bBody = "[건설 가능 목록]\n" + bList.join("\n") + "\n\n건설할 번호를 입력하세요." + NAV;
@@ -3838,8 +3860,16 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
         var bData = CITY_CONFIG.BUILDINGS[bKey];
         // 종류가 아닌 '실제 건설된 총 개수'를 계산하여 슬롯과 대조
         var curCount = 0;
+        var labCount = city.buildings["lab"] ? (city.buildings["lab"].count || 1) : 0;
+
         for (var k in city.buildings) {
             curCount += (city.buildings[k].count || 1);
+        }
+
+        // 테크트리 가드: 요구되는 연구소 개수 미달 시 건설 차단
+        if (bData.reqLab > 0 && labCount < bData.reqLab) {
+            replier.reply(formatError(user, "테크트리 미달", bData.name + "을(를) 지으려면 [고대 연구소]가 최소 " + bData.reqLab + "개 필요합니다."));
+            return true;
         }
 
         if (curCount >= city.slots) {
@@ -5600,9 +5630,18 @@ function _runSector16Logic(data, ctx) {
                         if (city.population > 0) {
                             var popTax = city.population * (CITY_CONFIG.TAX_PER_POP || 300);
                             
-                            // 시장 개수에 따라 10%씩 중첩 증가 (시장 3개면 +30%)
-                            var mCount = (city.buildings["market"] && city.buildings["market"].count) ? city.buildings["market"].count : (city.buildings["market"] ? 1 : 0);
-                            if (mCount > 0) popTax = Math.floor(popTax * (1 + (0.1 * mCount))); 
+                            // 모든 상업 건물의 taxBoost를 동적으로 합산하여 적용 (대형 마트, 조폐국 등)
+                            var totalTaxBoost = 0;
+                            for (var k in city.buildings) {
+                                var bConfig = CITY_CONFIG.BUILDINGS[k];
+                                if (bConfig && bConfig.taxBoost) {
+                                    totalTaxBoost += bConfig.taxBoost * (city.buildings[k].count || 1);
+                                }
+                            }
+                            // 최종 배율 곱연산 (예: 시장1개(10%) + 대형마트1개(25%) = 총 35% 증폭)
+                            if (totalTaxBoost > 0) {
+                                popTax = Math.floor(popTax * (1 + totalTaxBoost)); 
+                            }
                             
                             city.vault += popTax;
                             cityTaxDistributed += popTax;

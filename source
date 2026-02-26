@@ -4582,51 +4582,39 @@ function _runSector16Logic(data, ctx) {
     } catch (e) { Log.error("Relay Ping Error: " + e); }
     var conf = SYSTEM_CONFIG.ECO.LANDMARK;
 
-    // 매시간 정각 창고 보관료(원금의 1%) 자동 징수 엔진
-    try {
-        if (currentMin === 0 && data.lastWarehouseFeeHour !== currentHour) {
-            data.lastWarehouseFeeHour = currentHour;
-            var feeCollected = 0;
-            
-            for (var r in data.rooms) {
-                if (ALLOWED_ROOMS.indexOf(r) === -1) continue;
-                var rObj = data.rooms[r];
-                for (var uid in rObj.users) {
-                    var u = rObj.users[uid];
-                    var myFee = 0;
-                    
-                    // 1. 일반 화물 보관료 (평단가 * 수량 * 1%)
-                    for (var k in (u.warehouse || {})) {
-                        var q = Number(u.warehouse[k]);
-                        if (q > 0) {
-                            var avg = Number((u.warehouseAvg && u.warehouseAvg[k]) || SYSTEM_CONFIG.TRADE.GOODS_COST[k] || 10000);
-                            myFee += Math.floor(avg * q * 0.01);
-                        }
-                    }
-                    // 2. 특산품 및 기타 보관료 (고정 기본가 * 수량 * 1%)
-                    for (var s in (u.warehouseSpec || {})) {
-                        var sq = Number(u.warehouseSpec[s]);
-                        if (sq > 0) {
-                            var sBase = 20000;
-                            if (s === "_rare") sBase = 100000;
-                            else if (s === "_unknown") sBase = 10000;
-                            else {
-                                for (var rel in TRADE_RELATION) { if (TRADE_RELATION[rel].set === s) { sBase = SYSTEM_CONFIG.TRADE.SPECIALTY_COST[TRADE_RELATION[rel].produce] || 20000; break; } }
-                            }
-                            myFee += Math.floor(sBase * sq * 0.01);
-                        }
-                    }
-                    
-                    if (myFee > 0) {
-                        u.skipHealing = true;
-                        util_updatePoint(u, data.rooms["내리다"], -myFee, "물류 창고 보관료 (1%)", r);
-                        feeCollected += myFee;
-                    }
-                }
-            }
-            if (feeCollected > 0) Log.info("📦 [Warehouse] 매시간 창고 보관료 총 " + fp(feeCollected) + "P 징수 완료");
-        }
-    } catch(e) { Log.error("Warehouse Fee Error: " + e); }
+    // [개편] 매시간 정각 창고 보관료(일반 교역품 원가의 1%) 자동 징수 엔진
+    try {
+        if (currentMin === 0 && data.lastWarehouseFeeHour !== currentHour) {
+            data.lastWarehouseFeeHour = currentHour;
+            var feeCollected = 0;
+            
+            // [버그 픽스] 모든 방을 순회하여 발생하는 중복 과금을 막기 위해 메인방("내리다") 유저만 1회 처리
+            var mainUsers = (data.rooms["내리다"] && data.rooms["내리다"].users) ? data.rooms["내리다"].users : {};
+            
+            for (var uid in mainUsers) {
+                var u = mainUsers[uid];
+                var myFee = 0;
+                
+                // 1. 일반 화물 보관료 (평단가 * 수량 * 1%)
+                for (var k in (u.warehouse || {})) {
+                    var q = Number(u.warehouse[k]);
+                    if (q > 0) {
+                        var avg = Number((u.warehouseAvg && u.warehouseAvg[k]) || (SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.GOODS_COST && SYSTEM_CONFIG.TRADE.GOODS_COST[k]) || 10000);
+                        myFee += Math.floor(avg * q * 0.01);
+                    }
+                }
+                
+                // [요청 반영] 2. 특산품, 진귀한 보물, 미확인 교역품 등 특수 물품의 보관료 면제 (기존 로직 완전 삭제)
+                
+                if (myFee > 0) {
+                    u.skipHealing = true;
+                    util_updatePoint(u, data.rooms["내리다"], -myFee, "물류 창고 보관료 (1%)", "내리다");
+                    feeCollected += myFee;
+                }
+            }
+            if (feeCollected > 0) Log.info("📦 [Warehouse] 매시간 창고 보관료 총 " + fp(feeCollected) + "P 징수 완료 (일반 화물 한정)");
+        }
+    } catch(e) { Log.error("Warehouse Fee Error: " + e); }
 
     var rConf = SYSTEM_CONFIG.ECO.RACING; 
     var mani = conf.MANIPULATION;

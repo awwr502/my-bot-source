@@ -3923,20 +3923,23 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
     var NAV = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
 
     // [1단계] 메인 메뉴 분기
-    if (state.type === 'spirit_main') {
-        if (choice === "1") {
-            if (sd.roster.length === 0) {
-                replier.reply(formatError(user, "정령 없음", "보유 중인 정령이 없습니다. 부화장에서 알을 먼저 부화시키세요." + NAV));
-                return true;
-            }
-            sd.roster.forEach(function(sp) {
-                if (sp.trainEndTime > 0 && Date.now() >= sp.trainEndTime) {
-                    sp.exp += SPIRIT_CONFIG.TRAIN_EXP;
-                    var max = SPIRIT_CONFIG.DB[sp.id].maxExp;
-                    if (max > 0 && sp.exp > max) sp.exp = max;
-                    sp.trainEndTime = 0;
-                }
-            });
+    if (state.type === 'spirit_main') {
+        if (choice === "1") {
+            if (sd.roster.length === 0) {
+                replier.reply(formatError(user, "정령 없음", "보유 중인 정령이 없습니다. 부화장에서 알을 먼저 부화시키세요." + NAV));
+                return true;
+            }
+            sd.roster.forEach(function(sp) {
+                if (sp.trainEndTime > 0 && Date.now() >= sp.trainEndTime) {
+                    // [Gemini] 의회 정책(정령 훈련 경험치) 연동
+                    var pol = util_getActivePolicy(data.rooms["내리다"]);
+                    var expGain = Math.floor(SPIRIT_CONFIG.TRAIN_EXP * (pol.spiritExpMult || 1.0));
+                    sp.exp += expGain;
+                    var max = SPIRIT_CONFIG.DB[sp.id].maxExp;
+                    if (max > 0 && sp.exp > max) sp.exp = max;
+                    sp.trainEndTime = 0;
+                }
+            });
             user.skipHealing = true;
             
             var list = sd.roster.map(function(sp, i) {
@@ -4165,19 +4168,23 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
     }
 
     // [부화 시작 확정]
-    if (state.type === 'spirit_incubate') {
-        var eIdx = parseInt(choice) - 1;
-        if (isNaN(eIdx) || !state.extra.eggKeys[eIdx]) return replier.reply(formatError(user, "번호 오류", "올바른 알 번호를 선택하세요."));
-        
-        var eKey = state.extra.eggKeys[eIdx];
-        if (!sd.items[eKey] || sd.items[eKey] <= 0) return replier.reply(formatError(user, "재고 없음", "해당 알이 부족합니다."));
-        
-        var eInfo = SPIRIT_CONFIG.ITEMS[eKey] || {};
-        // 객체에 timeMs가 없으면 기본값 120분으로 세팅하여 NaN 원천 차단
-        var targetTimeMs = eInfo.timeMs || (120 * 60 * 1000); 
+    if (state.type === 'spirit_incubate') {
+        var eIdx = parseInt(choice) - 1;
+        if (isNaN(eIdx) || !state.extra.eggKeys[eIdx]) return replier.reply(formatError(user, "번호 오류", "올바른 알 번호를 선택하세요."));
+        
+        var eKey = state.extra.eggKeys[eIdx];
+        if (!sd.items[eKey] || sd.items[eKey] <= 0) return replier.reply(formatError(user, "재고 없음", "해당 알이 부족합니다."));
+        
+        var eInfo = SPIRIT_CONFIG.ITEMS[eKey] || {};
+        // 객체에 timeMs가 없으면 기본값 120분으로 세팅하여 NaN 원천 차단
+        var targetTimeMs = eInfo.timeMs || (120 * 60 * 1000); 
 
-        sd.items[eKey]--;
-        sd.incubators[state.extra.slotIdx] = { eggKey: eKey, endTime: Date.now() + targetTimeMs };
+        // [Gemini] 의회 정책(정령 알 부화 시간) 연동
+        var pol = util_getActivePolicy(data.rooms["내리다"]);
+        if (pol.spiritHatchMult) targetTimeMs = Math.floor(targetTimeMs * pol.spiritHatchMult);
+
+        sd.items[eKey]--;
+        sd.incubators[state.extra.slotIdx] = { eggKey: eKey, endTime: Date.now() + targetTimeMs };
         
         user.skipHealing = true; safeSaveData(data, true);
         var rm = Math.floor(targetTimeMs / 60000);
@@ -5648,31 +5655,35 @@ function _runSector16Logic(data, ctx) {
                         var isModified = false;
 
                         // 1. 시간당 세금 자동 적립 (인구수 비례)
-                        if (city.population > 0) {
-                            var popTax = city.population * (CITY_CONFIG.TAX_PER_POP || 300);
-                            
-                            // 모든 상업 건물의 taxBoost를 동적으로 합산하여 적용 (대형 마트, 조폐국 등)
-                            var totalTaxBoost = 0;
-                            for (var k in city.buildings) {
-                                var bConfig = CITY_CONFIG.BUILDINGS[k];
-                                if (bConfig && bConfig.taxBoost) {
-                                    totalTaxBoost += bConfig.taxBoost * (city.buildings[k].count || 1);
-                                }
-                            }
-                            // 최종 배율 곱연산 (예: 시장1개(10%) + 대형마트1개(25%) = 총 35% 증폭)
-                            if (totalTaxBoost > 0) {
-                                popTax = Math.floor(popTax * (1 + totalTaxBoost)); 
-                            }
-                            
-                            city.vault += popTax;
-                            cityTaxDistributed += popTax;
-                            isModified = true;
-                        }
+                        if (city.population > 0) {
+                            var popTax = city.population * (CITY_CONFIG.TAX_PER_POP || 300);
+                            
+                            // 모든 상업 건물의 taxBoost를 동적으로 합산하여 적용 (대형 마트, 조폐국 등)
+                            var totalTaxBoost = 0;
+                            for (var k in city.buildings) {
+                                var bConfig = CITY_CONFIG.BUILDINGS[k];
+                                if (bConfig && bConfig.taxBoost) {
+                                    totalTaxBoost += bConfig.taxBoost * (city.buildings[k].count || 1);
+                                }
+                            }
+                            // 최종 배율 곱연산 (예: 시장1개(10%) + 대형마트1개(25%) = 총 35% 증폭)
+                            if (totalTaxBoost > 0) {
+                                popTax = Math.floor(popTax * (1 + totalTaxBoost)); 
+                            }
+                            
+                            // [Gemini] 의회 정책(도시 세금 배율) 연동
+                            var pol = util_getActivePolicy(data.rooms["내리다"]);
+                            if (pol.cityTaxMult) popTax = Math.floor(popTax * pol.cityTaxMult);
 
                         // 2. 시간당 건물 유지비 징수 (건물 총 개수 비례)
-                        if (bCount > 0) {
-                            var expectedMaint = bCount * (CITY_CONFIG.MAINT_PER_BLD || 15000);
-                            var currentPoint = Number(u.point || 0);
+                        if (bCount > 0) {
+                            var expectedMaint = bCount * (CITY_CONFIG.MAINT_PER_BLD || 15000);
+                            
+                            // [Gemini] 의회 정책(도시 유지비 배율) 연동
+                            var pol = util_getActivePolicy(data.rooms["내리다"]);
+                            if (pol.cityMaintMult) expectedMaint = Math.floor(expectedMaint * pol.cityMaintMult);
+
+                            var currentPoint = Number(u.point || 0);
 
                             if (currentPoint >= expectedMaint) {
                                 // 정상 납부
@@ -16392,7 +16403,7 @@ function _gameShopLogic(msg, user, data, replier, roomName, targetUid) {
 //==========섹터47==========
 
 /**
- * [신설] 가상 정부 시스템 핵심 엔진 (v11.0 Landmark Edition)
+ * 가상 정부 시스템 핵심 엔진 (v11.0 Landmark Edition)
  * 기능: 부동산 정책 안건 생성, 티어별 가중 투표 처리, 참여 보상 지급
  */
 
@@ -16412,24 +16423,29 @@ function _gameGovernmentLogic(msg, user, data, replier, roomName, targetUid) {
         
         // 모든 정책 효과를 매핑하여 동적으로 출력하는 딕셔너리
         var effectNames = {
-            mineMult: { label: "광산 채굴 효율", type: "mult" },
+            mineMult: { label: "광산 채굴 효율", type: "mult" },
             attendMult: { label: "복지 연금 배율", type: "mult" },
             loanLimitMult: { label: "대출 한도 배율", type: "mult" },
-            tradeSpeedMult: { label: "항해 소요 시간", type: "mult" },
-            bankInterest: { label: "은행 예금 이율", type: "pct" },
-            disasterProbMult: { label: "해상 재해 확률", type: "mult" },
-            rareMineMult: { label: "희귀 광물 발견율", type: "mult" },
-            fishMult: { label: "낚시 판매 수익", type: "mult" },
-            tradeIncomeTax: { label: "무역 특별 소득세", type: "pct" },
-            bankInterestMult: { label: "대출 이율 배율", type: "mult" },
-            incomeTaxAdj: { label: "근로 특별 소득세", type: "pct" },
-            allProfitTax: { label: "수익 전면 환수세", type: "pct" },
-            tradeBonusMult: { label: "항구 발전 보너스", type: "mult" },
-            artifactMult: { label: "유물 조각 발견율", type: "mult" },
-            workMult: { label: "근로 수익 전반", type: "mult" },
-            shopPriceMult: { label: "상점 물가 조정률", type: "mult" },
-            globalRewardMult: { label: "전역 보상 배율", type: "mult" }
-        };
+            tradeSpeedMult: { label: "항해 소요 시간", type: "mult" },
+            bankInterest: { label: "은행 예금 이율", type: "pct" },
+            disasterProbMult: { label: "해상 재해 확률", type: "mult" },
+            rareMineMult: { label: "희귀 광물 발견율", type: "mult" },
+            fishMult: { label: "낚시 판매 수익", type: "mult" },
+            tradeIncomeTax: { label: "무역 특별 소득세", type: "pct" },
+            bankInterestMult: { label: "대출 이율 배율", type: "mult" },
+            incomeTaxAdj: { label: "근로 특별 소득세", type: "pct" },
+            allProfitTax: { label: "수익 전면 환수세", type: "pct" },
+            tradeBonusMult: { label: "항구 발전 보너스", type: "mult" },
+            artifactMult: { label: "유물 조각 발견율", type: "mult" },
+            workMult: { label: "근로 수익 전반", type: "mult" },
+            shopPriceMult: { label: "상점 물가 조정률", type: "mult" },
+            globalRewardMult: { label: "전역 보상 배율", type: "mult" },
+            // [Gemini] 무역, 도시, 정령 신규 테마 정책 변수 연결
+            cityTaxMult: { label: "지하 도시 세금 수익", type: "mult" },
+            cityMaintMult: { label: "지하 도시 건물 유지비", type: "mult" },
+            spiritExpMult: { label: "정령 훈련 경험치", type: "mult" },
+            spiritHatchMult: { label: "정령 알 부화 시간", type: "mult" }
+        };
 
         var currentPolicyStr = "";
         var keys = Object.keys(pol);
@@ -16510,74 +16526,74 @@ function gov_getVoteWeight(tier) {
  * 구조: 주류 혜택/다른 주류 대가 & 비주류 혜택/주류 대가
  */
 function gov_generateBill() {
-    var bills = [
-        {
-            name: "대항해시대 전성기 법안",
-            buffDesc: "모든 항해 소요 시간 20% 단축 (빠른 회전율)",
-            penaltyDesc: "광산 기본 채굴 포인트 수익 30% 삭감",
-            effects: { tradeSpeedMult: 0.8, mineMult: 0.7, attendMult: 1.0, loanLimitMult: 1.0, bankInterest: 0.02, disasterProbMult: 1.0 }
+    var bills = [
+        {
+            name: "대항해시대 전성기 법안 (무역/무역)",
+            buffDesc: "모든 항해 소요 시간 20% 단축",
+            penaltyDesc: "무리한 출항으로 해상 재해 확률 1.5배 증가",
+            effects: { tradeSpeedMult: 0.8, disasterProbMult: 1.5 }
         },
         {
-            name: "국가 무역 진흥 정책",
-            buffDesc: "항구별 발전 레벨 수익 보너스 2배 상향",
-            penaltyDesc: "무역 정산 시 순이익의 15%를 국고로 강제 환수",
-            effects: { tradeBonusMult: 2.0, tradeIncomeTax: 0.15, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.0, bankInterest: 0.02, disasterProbMult: 1.0 }
+            name: "지하 영지 집중 개발령 (도시/도시)",
+            buffDesc: "지하 도시 세금 수익 50% 폭증",
+            penaltyDesc: "인건비 상승으로 건물 유지비 50% 증가",
+            effects: { cityTaxMult: 1.5, cityMaintMult: 1.5 }
         },
         {
-            name: "지하 경제 활성화법",
-            buffDesc: "광산 내 희귀 광물(금, 다이아) 발견 확률 2배 상승",
-            penaltyDesc: "항해 중 재해(폭풍우, 화재 등) 발생 확률 1.5배 증가",
-            effects: { rareMineMult: 2.0, disasterProbMult: 1.5, mineMult: 1.0, attendMult: 1.0, loanLimitMult: 1.0, bankInterest: 0.02 }
+            name: "생명의 순환 촉진법 (정령/정령)",
+            buffDesc: "정령 훈련 시 획득 경험치 1.5배 상승",
+            penaltyDesc: "마력 쏠림으로 부화장 알 부화 소요 시간 1.5배 지연",
+            effects: { spiritExpMult: 1.5, spiritHatchMult: 1.5 }
         },
         {
-            name: "해상 안전 보장법",
-            buffDesc: "항해 중 재해(폭풍우 등) 발생 확률 50% 감소",
-            penaltyDesc: "광산 채굴 기본 포인트 수익 15% 삭감",
-            effects: { disasterProbMult: 0.5, mineMult: 0.85, attendMult: 1.0, loanLimitMult: 1.0, bankInterest: 0.02 }
+            name: "항만 상업지구 육성안 (무역/도시)",
+            buffDesc: "항구별 발전도 수익 보너스 2배 상향",
+            penaltyDesc: "투자금 징발로 인해 지하 도시 세금 수익 30% 감소",
+            effects: { tradeBonusMult: 2.0, cityTaxMult: 0.7 }
         },
-        {
-            name: "강태공의 축제령",
-            buffDesc: "물고기 판매 수익 1.5배 상승",
-            penaltyDesc: "모든 항해 소요 시간 1.2배 증가",
-            effects: { fishMult: 1.5, tradeSpeedMult: 1.2, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02, disasterProbMult: 1.0 }
-        },
-        {
-            name: "서민 금융 구제 정책",
-            buffDesc: "은행 대출 한도 1.5배 확대 및 대출 이율 절반 인하",
-            penaltyDesc: "광산 및 무역 정산 시 '특별 소득세' 5% 추가 부과",
-            effects: { loanLimitMult: 1.5, bankInterestMult: 0.5, incomeTaxAdj: 0.05, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, bankInterest: 0.02 }
-        },
-        {
-            name: "복지 국가 건설안",
-            buffDesc: "일일 출석 보상 기본급 2배로 고정 상승",
-            penaltyDesc: "무역, 채굴, 낚시 모든 수익의 10%를 국고 환수",
-            effects: { attendMult: 2.0, allProfitTax: 0.10, mineMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02 }
-        },
-        {
-            name: "항만 상업지구 규제법",
-            buffDesc: "항구별 발전도 레벨 수익 보너스 2배 상향",
-            penaltyDesc: "일일 출석 보상 50% 삭감",
-            effects: { tradeBonusMult: 2.0, attendMult: 0.5, mineMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02 }
-        },
-        {
-            name: "골동품 발굴 장려령",
-            buffDesc: "광산 및 낚시 유물 조각 발견 확률 3배 폭증",
-            penaltyDesc: "모든 근로 활동(채굴/무역) 기본 포인트 수익 25% 감소",
-            effects: { artifactMult: 3.0, workMult: 0.75, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02 }
-        },
-        {
-            name: "인플레이션 억제 긴급조치",
-            buffDesc: "상점 내 모든 아이템 가격 20% 상시 할인",
-            penaltyDesc: "모든 게임/무역/근로 활동 수익 20% 일괄 삭감",
-            effects: { shopPriceMult: 0.8, globalRewardMult: 0.8, mineMult: 1.0, attendMult: 1.0, stockTax: 0.05, loanLimitMult: 1.0, bankInterest: 0.02 }
-        }
-    ];
-    return bills[Math.floor(Math.random() * bills.length)];
+        {
+            name: "내수 경제 활성화법 (도시/무역)",
+            buffDesc: "내수 호황으로 지하 도시 세금 수익 30% 증가",
+            penaltyDesc: "무역 정산 시 순이익의 15%를 국고 특별 징수",
+            effects: { cityTaxMult: 1.3, tradeIncomeTax: 0.15 }
+        },
+        {
+            name: "왕립 탐사대 지원법 (무역/정령)",
+            buffDesc: "국가의 보호로 해상 재해 확률 50% 감소",
+            penaltyDesc: "탐사 인력 차출로 정령 훈련 획득 경험치 30% 감소",
+            effects: { disasterProbMult: 0.5, spiritExpMult: 0.7 }
+        },
+        {
+            name: "마력 폭주 억제령 (정령/무역)",
+            buffDesc: "마력 안정화로 정령 알 부화 소요 시간 30% 단축",
+            penaltyDesc: "해상 마력 경계 발령으로 모든 항해 소요 시간 20% 증가",
+            effects: { spiritHatchMult: 0.7, tradeSpeedMult: 1.2 }
+        },
+        {
+            name: "마도 공학 진흥법 (도시/정령)",
+            buffDesc: "마도 기술 보급으로 지하 도시 건물 유지비 30% 감면",
+            penaltyDesc: "마력 고갈로 인해 정령 알 부화 소요 시간 20% 지연",
+            effects: { cityMaintMult: 0.7, spiritHatchMult: 1.2 }
+        },
+        {
+            name: "자연 친화 구역 선포 (정령/도시)",
+            buffDesc: "자연 마력 농도 상승으로 정령 훈련 경험치 50% 증가",
+            penaltyDesc: "환경 부담금 의무 적용으로 지하 도시 건물 유지비 30% 증가",
+            effects: { spiritExpMult: 1.5, cityMaintMult: 1.3 }
+        },
+        {
+            name: "범국가 균형 발전안 (종합)",
+            buffDesc: "항해 속도 10% 단축 및 지하 도시 세금 20% 증가",
+            penaltyDesc: "정령 산업의 예산 축소로 훈련 획득 경험치 20% 감소",
+            effects: { tradeSpeedMult: 0.9, cityTaxMult: 1.2, spiritExpMult: 0.8 }
+        }
+    ];
+    return bills[Math.floor(Math.random() * bills.length)];
 }
 
 //==========섹터48==========
 /**
- * [신설] 즉석복권 스피또 처리 엔진
+ * 즉석복권 스피또 처리 엔진
  */
 function _gameLotteryLogic(msg, user, data, replier, roomName, targetUid) {
     var roomData = data.rooms[roomName];

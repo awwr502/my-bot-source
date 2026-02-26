@@ -19294,41 +19294,48 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         repayInfo = repayRes.repayMsg || "";
     }
 
-    var totalPayout = totalCost + profitAfterRepay;
-    util_updatePoint(user, economyRoomData, totalPayout, "무역 정산 수익", economyRoomName);
+   var finalTitle = "🌊 [항해 일지: 무역 보고]"; 
+    var disasterLogStr = (typeof disasterLog !== 'undefined' && disasterLog) ? disasterLog.trim() : "";
+    var separateEmergencyMsg = null;
 
-    // 13. 긴급 회항 여부 판독
+    // 무역 지부 귀항 시에는 포인트 환불 대신 창고로 화물을 '반환'합니다.
+    if (isHomeReturn) {
+        // 1. 포인트 정산 제외: 원금(totalCost)을 포인트로 돌려주지 않음 (중복 수령 방지)
+        var totalPayout = profitAfterRepay; 
+        util_updatePoint(user, economyRoomData, totalPayout, "무역 지부 귀항 정산", economyRoomName);
+
+        // 2. 실물 화물 창고 반환
+        if (!user.warehouse) user.warehouse = {};
+        for (var g in cargoToSell) {
+             var q = Number(cargoToSell[g] || 0);
+             if (q > 0) user.warehouse[g] = (Number(user.warehouse[g]) || 0) + q;
+        }
+        if (!user.warehouseSpec) user.warehouseSpec = {};
+        for (var s in specialtyToSell) {
+             var q = Number(specialtyToSell[s] || 0);
+             if (q > 0) user.warehouseSpec[s] = (Number(user.warehouseSpec[s]) || 0) + q;
+        }
+        disasterLog += "\n⚓ [귀항 완료]: 판매되지 않은 화물이 물류 창고로 안전하게 입고되었습니다.";
+    } else {
+        // 일반 항구 도착 시: 화물을 팔았으므로 포인트(원금+수익) 지급 후 선박 비움
+        var totalPayout = totalCost + profitAfterRepay;
+        util_updatePoint(user, economyRoomData, totalPayout, "무역 정산 수익", economyRoomName);
+        // (선박 화물은 함수 최하단에서 일괄 삭제됨)
+    }
+
+    // [공통] 정산 완료 후 선박 내 화물 데이터 완전 소각 (중복 정산 방지)
+    user.cargo = {};
+    user.cargoAvg = {};
+    user.specialties = {};
+    user.unknownCargo = 0;
+    user.rareSpecialties = 0;
+
+    // 긴급 회항 여부 판독 (기존 로직 유지)
     var isPirate = (user.job === 'pirate');
     var homePort = isPirate ? "나소" : "무역 지부";
     var currentPortInfo = (economyRoomData.features && economyRoomData.features.portData) ? economyRoomData.features.portData[user.currentLoc] : null;
     var isShipyardBuilt = (currentPortInfo && currentPortInfo.built && currentPortInfo.built.shipyard) ? true : false;
-    
     var isEmergency = (user.durability < 20 && user.currentLoc !== homePort && !isShipyardBuilt);
-    
-    var finalTitle = "🌊 [항해 일지: 무역 보고]"; 
-    var disasterLogStr = (typeof disasterLog !== 'undefined' && disasterLog) ? disasterLog.trim() : "";
-    var separateEmergencyMsg = null;
-
-    // [Gemini 요청] 긴급 회항 시 적재 완료 상태 유지 (물류 창고로 반환)
-    if (isHomeReturn) {
-        // 일반 화물 복구 (물류 창고로 반환)
-        if (!user.warehouse) user.warehouse = {};
-        for (var g in cargoToSell) {
-             var q = Number(cargoToSell[g] || 0);
-             if (q > 0) {
-                 user.warehouse[g] = (Number(user.warehouse[g]) || 0) + q;
-             }
-        }
-        // 특산품 복구 (물류 창고로 반환)
-        if (!user.warehouseSpec) user.warehouseSpec = {};
-        for (var s in specialtyToSell) {
-             var q = Number(specialtyToSell[s] || 0);
-             if (q > 0) {
-                 user.warehouseSpec[s] = (Number(user.warehouseSpec[s]) || 0) + q;
-             }
-        }
-        disasterLog += "\n⚓ [귀항 완료]: 출항 시 적재했던 화물이 모두 물류 창고로 안전하게 반환되었습니다.";
-    }
 
     var profitSign = totalNetMargin >= 0 ? "+" : "-";
     var displayMargin = fp(Math.abs(totalNetMargin)); 

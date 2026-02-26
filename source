@@ -84,9 +84,9 @@ var DUNGEON_CONFIG = {
 };
 
 var ALCHEMY_CONFIG = {
-    TIME_MS: 10 * 60 * 1000, // 연성 소요 시간 10분
+    TIME_MS: 1 * 60 * 1000, // [Gemini 요청] 연성 소요 시간 1분 단축
     RECIPES: {
-        "heal": { name: "💚 심해수 복구 키트", cargo: { "식료품": 50 }, artifact: 1, point: 100000, desc: "즉시 체력 30% 회복" },
+        "heal": { name: "💚 심해수 복구 키트", cargo: { "식료품": 50 }, artifact: 1, point: 100000, desc: "즉시 체력 30% 회복 (탐험당 3회 제한)" },
         "maxhp": { name: "🛡️ 티타늄 장갑 코팅제", cargo: { "공업품": 50, "귀금속": 20 }, artifact: 1, point: 100000, desc: "해당 탐험 중 Max HP 50% 증가" },
         "atk": { name: "⚔️ 흑색 화약 압축액", cargo: { "공업품": 50, "보석": 20 }, artifact: 1, point: 100000, desc: "해당 탐험 중 공격력 50% 증가" }
     }
@@ -4185,30 +4185,51 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // [2단계] 정령 상점 구매
-    if (state.type === 'spirit_shop') {
-        var sIdx = parseInt(choice) - 1;
-        if (isNaN(sIdx) || !state.extra.keys[sIdx]) return replier.reply(formatError(user, "번호 오류", "올바른 상점 번호를 선택하세요."));
-        
-        var itemKey = state.extra.keys[sIdx];
-        var item = SPIRIT_CONFIG.ITEMS[itemKey];
-        if (item.currency === "artifact") {
-            var pieces = Number(user.artifactPieces || 0);
-            if (pieces < item.price) return replier.reply(formatError(user, "조각 부족", "비용 " + item.price + "조각이 부족합니다." + NAV));
-            
-            user.artifactPieces = pieces - item.price;
-            util_setData(user, 'artifactPieces', user.artifactPieces, "정령 상점 구매", roomName);
-        } else {
-            if (Number(user.point) < item.price) return replier.reply(formatError(user, "잔액 부족", "비용 " + fp(item.price) + "P가 부족합니다." + NAV));
-            
-            util_updatePoint(user, data.rooms["내리다"], -item.price, "정령 상점 구매", roomName);
-        }
-        sd.items[itemKey] = (sd.items[itemKey] || 0) + 1;
-        
-        user.skipHealing = true; safeSaveData(data, true);
-        replier.reply(formatCommand("🛒 상점 구매 완료", user, item.icon + " [" + item.name + "] 1개를 구매하여 보관함에 넣었습니다.", "이전 화면: [뒤로]"));
-        return true;
-    }
+    // [2단계] 정령 상점 품목 선택 (수량 입력 대기 전환)
+    if (state.type === 'spirit_shop') {
+        var sIdx = parseInt(choice) - 1;
+        if (isNaN(sIdx) || !state.extra.keys[sIdx]) return replier.reply(formatError(user, "번호 오류", "올바른 상점 번호를 선택하세요."));
+        
+        var itemKey = state.extra.keys[sIdx];
+        var item = SPIRIT_CONFIG.ITEMS[itemKey];
+
+        // [Gemini 수량지정] 구매 확정이 아닌 수량 입력 대기 상태로 변경
+        state.type = 'spirit_shop_qty';
+        state.time = Date.now();
+        state.extra.selectedItemKey = itemKey;
+
+        var costStr = (item.currency === "artifact") ? item.price + "조각" : fp(item.price) + "P";
+        replier.reply(formatCommand("🔢 수량 입력", user, "[" + item.name + "] 구매 수량을 입력하세요.\n개당 가격: " + costStr + NAV, "숫자로 입력 (취소: [취소])"));
+        return true;
+    }
+
+    // [3단계] 정령 상점 수량 입력 및 결제
+    if (state.type === 'spirit_shop_qty') {
+        var qty = parseInt(choice);
+        if (isNaN(qty) || qty <= 0) return replier.reply(formatError(user, "수량 오류", "올바른 구매 수량을 숫자로 입력하세요." + NAV));
+
+        var itemKey = state.extra.selectedItemKey;
+        var item = SPIRIT_CONFIG.ITEMS[itemKey];
+        var totalPrice = item.price * qty;
+
+        if (item.currency === "artifact") {
+            var pieces = Number(user.artifactPieces || 0);
+            if (pieces < totalPrice) return replier.reply(formatError(user, "조각 부족", "비용 " + totalPrice + "조각이 부족합니다.\n(현재 보유: " + pieces + "개)" + NAV));
+            
+            user.artifactPieces = pieces - totalPrice;
+            util_setData(user, 'artifactPieces', user.artifactPieces, "정령 상점 다량 구매", roomName);
+        } else {
+            if (Number(user.point) < totalPrice) return replier.reply(formatError(user, "잔액 부족", "비용 " + fp(totalPrice) + "P가 부족합니다." + NAV));
+            
+            util_updatePoint(user, data.rooms["내리다"], -totalPrice, "정령 상점 다량 구매", roomName);
+        }
+        sd.items[itemKey] = (sd.items[itemKey] || 0) + qty;
+        
+        user.skipHealing = true; safeSaveData(data, true);
+        delete roomData.features.states.menuWait[targetUid];
+        replier.reply(formatCommand("🛒 상점 구매 완료", user, item.icon + " [" + item.name + "] " + qty + "개를 구매하여 보관함에 넣었습니다.", "다시 구매하려면 [/정령]"));
+        return true;
+    }
 
     // [2단계] 교배소 확정
     if (state.type === 'spirit_breed') {
@@ -5775,20 +5796,22 @@ function _runSector16Logic(data, ctx) {
         if (currentHour >= 7 && currentHour <= 23) {
             
             // 1. 스케줄 예약: TRADE_CONTRACT_CONFIG 참조로 교정 및 예약 조건 완화
-            // 3시간 간격(INTERVAL_HOURS)으로 분(Minute)이 비어있을 때 즉시 예약
-            if (currentHour % TRADE_CONTRACT_CONFIG.INTERVAL_HOURS === 0 && data.nextQuestMinute === undefined && data.lastQuestHour !== currentHour) {
-                // 이번 타임에 발송할 랜덤 분 결정
-                data.nextQuestMinute = Math.floor(Math.random() * 60);
-                ctx.isUpdated = true; 
-                Log.info("📜 [Quest Scheduled] 도시 귀족 계약 예약됨: " + currentHour + "시 " + data.nextQuestMinute + "분");
-            }
+            // 3시간 간격(INTERVAL_HOURS)으로 분(Minute)이 비어있을 때 즉시 예약
+            if (currentHour % TRADE_CONTRACT_CONFIG.INTERVAL_HOURS === 0 && data.lastQuestHour !== currentHour) {
+                // [Gemini 버그 픽스] 스케줄러 꼬임 방지를 위해 할당 안되어있으면 무조건 재할당
+                if (data.nextQuestMinute === undefined || data.nextQuestMinute < 0) {
+                    data.nextQuestMinute = Math.floor(Math.random() * 60);
+                    ctx.isUpdated = true; 
+                    Log.info("📜 [Quest Scheduled] 도시 귀족 계약 예약됨: " + currentHour + "시 " + data.nextQuestMinute + "분");
+                }
+            }
 
-            // 2. 계약 발생: 분이 일치하고, 이번 시간에 발송한 적이 없을 때 실행
-            if (data.nextQuestMinute !== undefined && currentMin === data.nextQuestMinute && data.lastQuestHour !== currentHour) {
-                // 발송 시간 기록 및 예약분 초기화 (중복 발송 방지)
-                data.lastQuestHour = currentHour;
-                var scheduledMin = data.nextQuestMinute; // 로그용 보존
-                data.nextQuestMinute = undefined; 
+            // 2. 계약 발생: 해당 분(Minute)에 도달하거나 지나쳤을 때 발송 (스킵 방지)
+            if (data.nextQuestMinute !== undefined && currentMin >= data.nextQuestMinute && data.lastQuestHour !== currentHour) {
+                // 발송 시간 기록 및 예약분 초기화 (중복 발송 방지)
+                data.lastQuestHour = currentHour;
+                var scheduledMin = data.nextQuestMinute; // 로그용 보존
+                data.nextQuestMinute = undefined;
 
                 var nations = ["포르투", "코콜라", "나폴리", "베라크루스", "킴벌리"];
                 var goods = ["식료품", "공업품", "공예품", "귀금속", "보석"];
@@ -21274,15 +21297,16 @@ function _handleDungeonSelection(choice, user, data, replier, roomName, targetUi
     user.skipHealing = true;
 
     user.dungeonExplore = {
-        depth: 100, 
-        bossCount: 0, 
+        depth: 100, 
+        bossCount: 0, 
         myHP: myHP,
         myMaxHP: myHP,
         myATK: myATK,
         loot: { points: 0, cargo: 0, medals: 0, maps: 0, artifacts: 0 },
         phase: 'event',
         lastLog: "탐조등을 켜고 어두운 심해로 하강을 시작합니다...",
-        hasRepaired: false
+        hasRepaired: false,
+        healUsed: 0 // [Gemini 요청] 포션 사용 제한 카운트 추가
     };
 
     roomData.features.states.menuWait[targetUid] = { type: 'dungeon_combat', time: Date.now() };
@@ -21493,11 +21517,12 @@ function _showDungeonTurn(user, replier, roomName) {
                 "3. 💨 긴급 탈출 (전리품 50% 상실 및 귀항)";
     } else if (e.phase === 'potion_use') {
         var p = user.potions || {heal:0, maxhp:0, atk:0};
-        body += "어떤 물약을 사용하시겠습니까? (사용 시 턴이 소모되지 않습니다!)\n\n" +
-                "1. 💚 심해수 복구 키트 (보유: " + p.heal + "개)\n" +
-                "   └ 즉시 HP 30% 회복\n" +
+        var remainHeal = Math.max(0, 3 - (e.healUsed || 0));
+       body += "어떤 물약을 사용하시겠습니까? (사용 시 턴이 소모되지 않습니다!)\n\n" +
+                "1. 💚 심해수 복구 키트 (보유: " + p.heal + "개 / 잔여: " + remainHeal + "회)\n" +
+                "   └ 즉시 HP 30% 회복\n" +
                 "2. 🛡️ 티타늄 장갑 코팅제 (보유: " + p.maxhp + "개)\n" +
-                "   └ 이번 탐험 한정 Max HP 50% 증가\n" +
+                "   └ 이번 탐험 한정 Max HP 50% 증가\n" +
                 "3. ⚔️ 흑색 화약 압축액 (보유: " + p.atk + "개)\n" +
                 "   └ 이번 탐험 한정 ATK 50% 증가\n\n" +
                 "4. ↩️ 돌아가기 (전투 화면으로)";
@@ -21653,15 +21678,17 @@ function _handleDungeonCombat(msg, user, data, replier, roomName, targetUid) {
             return;
         }
         
-        var p = user.potions || {heal:0, maxhp:0, atk:0};
+       var p = user.potions || {heal:0, maxhp:0, atk:0};
         var used = false;
-        
+        
         if (msg === "1") {
+            if ((e.healUsed || 0) >= 3) return replier.reply(formatError(user, "사용 제한", "복구 키트는 한 번의 탐험당 최대 3회까지만 사용할 수 있습니다."));
             if (p.heal <= 0) return replier.reply(formatError(user, "물약 부족", "심해수 복구 키트가 없습니다."));
             p.heal--;
+            e.healUsed = (e.healUsed || 0) + 1; // 사용 횟수 증가
             var healAmt = Math.floor(e.myMaxHP * 0.3);
             e.myHP = Math.min(e.myMaxHP, e.myHP + healAmt);
-            e.lastLog = "💚 [복구 키트 사용] 선체 내구도를 " + healAmt + "만큼 회복했습니다!";
+            e.lastLog = "💚 [복구 키트 사용] 선체 내구도를 " + healAmt + "만큼 회복했습니다! (잔여: " + (3 - e.healUsed) + "회)";
             used = true;
         } else if (msg === "2") {
             if (p.maxhp <= 0) return replier.reply(formatError(user, "물약 부족", "티타늄 장갑 코팅제가 없습니다."));

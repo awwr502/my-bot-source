@@ -3697,150 +3697,156 @@ function runScheduler() {
                         var u = rObj.users[uid];
 
                         // [v18.6] 해적 밀수 단속 엔진
-                        if (u.job === 'pirate' && u.voyage && u.voyage.active && u.voyage.isSmuggling && !u.voyage.isReturning) {
-                            if (Math.random() < SMUGGLE_CONFIG.DETECT_PROB) {
-                                u.voyage.isReturning = true;
+                        if (u.job === 'pirate' && u.voyage && u.voyage.active && u.voyage.isSmuggling && !u.voyage.isReturning) {
+                            // 패치 이전 출항 유저 하위 호환 가드 (40% 확률로 즉시 스케줄링)
+                            if (u.voyage.scheduledDetectTime === undefined) u.voyage.scheduledDetectTime = (Math.random() < 0.40) ? Date.now() + 10000 : 0;
 
-                                // 현재까지 항해한 시간(now - startTime)을 구해서
-                                // 그만큼을 현재 시각(now)에 더해 도착 예정 시각을 재설정
-                                var sailedTime = Date.now() - u.voyage.startTime;
-                                u.voyage.arrival = Date.now() + sailedTime;
-                                
-                                // [v18.9] 무결성 압류: 스냅샷뿐만 아니라 실제 인벤토리까지 즉시 소각
-                            u.cargo = {};            // 실제 일반 화물 압류
-                            u.cargoAvg = {};         // 화물 평단가 데이터 초기화
-                            u.specialties = {};      // 실제 특산품 가방 압류
-                            
-                            // 항해 데이터 스냅샷 동시 소각 (정산 방지)
-                            u.voyage.cargoSnapshot = {};
-                            u.voyage.specialtySnapshot = {};
-                            u.voyage.dest = u.voyage.origin;
-                                
-                                // 2. 강제 회항 (항해한 시간만큼 추가 소요)
-                                var elapsed = Date.now() - u.voyage.startTime;
-                                u.voyage.arrival = Date.now() + elapsed;
-                                u.voyage.dest = u.voyage.origin; // 목적지를 출발지로 변경
-                                
-                                var alertMsg = "🚨 [해군 긴급 검문 적발]\n" +
-                                               "━━━━━━━━━━━━━━━\n" +
-                                               "[" + u.name + "] 님의 선박이 밀수 도중\n" +
-                                               "정규 해군 순찰함에 적발되었습니다!\n\n" +
-                                               "❌ 조치: 모든 밀수품 전량 압수\n" +
-                                               "⚓ 상황: 출발지로 강제 압송 중\n" +
-                                               "━━━━━━━━━━━━━━━\n" +
-                                               "💡 예상 도착: " + new Date(u.voyage.arrival).toLocaleTimeString();
-                                Api.replyRoom(u.voyage.originRoom || "내리다", alertMsg);
-                            }
-                        }
-                        
-                        // 항해 중이고, 아직 도착 전이며, 조우 기록이 없고, '검거 회항 중'이 아닐 때 발생
-                        if (u.voyage && u.voyage.active && !u.voyage.hasEncountered && !u.voyage.isReturning && Date.now() < u.voyage.arrival && !u.voyage.isPatrol) {
-                            // 분당 10% 확률 (0.1)
-                            if (Math.random() < 0.1) {
-                                var rand = Math.random() * 100;
-                                var grade = "일반";
-                                var range = [1, 60]; 
-                                
-                                // [연동] 엘도라도 탐험 중이거나 '해적 밀수' 중일 경우 고등급 확률 대폭 상승
-                                var isDangerousRoute = (u.voyage.dest === "엘도라도: 잊혀진 성역" || u.voyage.isSmuggling === true);
-                                
-                                if (isDangerousRoute) {
-                                    if (rand < 50) { grade = "고대"; range = [86, 95]; }
-                                    else if (rand < 80) { grade = "희귀"; range = [61, 85]; }
-                                    else { grade = "환상"; range = [96, 100]; }
-                                } else {
-                                    if (rand < 60) { grade = "일반"; range = [1, 60]; }
-                                    else if (rand < 85) { grade = "희귀"; range = [61, 85]; }
-                                    else if (rand < 97) { grade = "고대"; range = [86, 95]; }
-                                    else { grade = "환상"; range = [96, 100]; }
-                                }
-                                
-                                var cId = Math.floor(Math.random() * (range[1] - range[0] + 1)) + range[0];
-                                var creature = MARINE_DB.find(function(c){ return c.id === cId; });
-                                
-                                if (creature) {
-                                    u.voyage.hasEncountered = true; 
-                                    u.voyage.encounter = { id: cId, name: creature.name, rank: creature.rank, time: Date.now() };
-                                    
-                                    var alertMsg = "🌊 [해상 돌발 상황: 거대 생물 조우]\n" +
-                                                   "━━━━━━━━━━━━━━━\n" +
-                                                   "[" + u.name + "] 님!\n" +
-                                                   "배 우측 현측으로 엄청난 크기의 물보라가 일어납니다!\n\n" +
-                                                   "🔭 식별 결과: [" + creature.rank + "] " + creature.name + "\n" +
-                                                   "━━━━━━━━━━━━━━━\n" +
-                                                   "💬 행동을 선택하세요\n\n" +
-                                                   "1. 📸 관찰하기 (도감 등록 + 소량 보상)\n" +
-                                                   "2. 🎣 포획시도 (도감 등록 + 대량 보상 + 내구도 감소)\n" +
-                                                   "3. ⛵ 무시하고 항해 (상황 종료)\n\n" +
-                                                   "⏳ 제한 시간: 3분 내 자동 소멸";
-                                    
-                                    // 1:1 세션 대기 상태 생성 (숫자 입력 받기 위함)
-                                    if (!rObj.features.states.menuWait) rObj.features.states.menuWait = {};
-                                    if (rObj.features.states.menuWait[uid]) {
-                                        util_terminateSession(uid, u, rObj, "내리다", 'menuWait');
-                                    }
+                            // 분당 확률(2.6%)을 폐기하고, 출항 시 부여된 예약 시간에 도달하면 무조건 1회 적발
+                            if (u.voyage.scheduledDetectTime > 0 && Date.now() >= u.voyage.scheduledDetectTime) {
+                                u.voyage.scheduledDetectTime = 0; // 중복 적발 차단
+                                u.voyage.isReturning = true;
 
-                                    rObj.features.states.menuWait[uid] = { type: 'marine_encounter', time: Date.now(), originRoom: "내리다" };
-                                    
-                                    try { Api.replyRoom("내리다", alertMsg); } catch(e) {}
-                                    ctx.isUpdated = true;
-                                }
-                            }
-                        }
-                    // AI 해적의 상선 무작위 습격 시스템 (루트 기반 정밀 매칭 엔진)
-                        if (u.voyage && u.voyage.active && !u.voyage.isReturning && Date.now() < u.voyage.arrival) {
-                            var route1 = u.voyage.origin + "-" + u.voyage.dest;
-                            var route2 = u.voyage.dest + "-" + u.voyage.origin;
-                            
-                            // [해군 순찰 임무 중]
-                            if (u.voyage.isPatrol && u.job === 'navy') {
-                                var targetAIPirate = null;
-                                for (var pi = 0; pi < data.aiPirates.length; pi++) {
-                                    var ap = data.aiPirates[pi];
-                                    if (ap.status === 'sailing' && (ap.route === route1 || ap.route === route2)) {
-                                        targetAIPirate = ap;
-                                        break;
-                                    }
-                                }
-                                
-                                if (targetAIPirate) {
-                                    var dummyPirate = { uid: targetAIPirate.uid, name: targetAIPirate.name, shipLevel: targetAIPirate.shipLevel, job: 'pirate', isAI: true, isGlobalAI: true };
-                                    if (typeof _executeSeaCombat === 'function') {
-                                        // PATROL 모드로 전투 진입 (즉시 결판)
-                                        _executeSeaCombat(dummyPirate, uid, uid, data, "내리다", "PATROL");
-                                    }
-                                    ctx.isUpdated = true;
-                                }
-                            }
-                            // [일반 상인 무역 중]
-                            else if (!u.job) {
-                                var dest = u.voyage.dest;
-                                var isStealth = (dest === "무역 지부" || dest === ELDORADO_CONFIG.NAME || u.voyage.isSmuggling);
-                                var isSafe = (data.safeRoutes && (data.safeRoutes[route1] || data.safeRoutes[route2]));
-                                var alreadyTargeted = (u.isPillaged === true || u.voyage.isPillaged === true);
-                                var isUnderAttack = !!(rObj.features.activePillages && rObj.features.activePillages[uid]);
-                                
-                                if (!isStealth && !isSafe && !alreadyTargeted && !isUnderAttack) {
-                                    var activePiratesInRoute = [];
-                                    if (data.aiPirates) {
-                                        for (var pi = 0; pi < data.aiPirates.length; pi++) {
-                                            var ap = data.aiPirates[pi];
-                                            if (ap.status === 'sailing' && (ap.route === route1 || ap.route === route2)) {
-                                                activePiratesInRoute.push(ap);
-                                            }
-                                        }
-                                    }
-                                    
-                                    if (activePiratesInRoute.length > 0) {
-                                        var remainTime = u.voyage.arrival - Date.now();
-                                        // 항해 시간이 3분 이내로 남았으면 무조건 조우, 그 외엔 분당 15% 확률로 조우 (항해 시간 내 100% 보장 메커니즘)
-                                        var encounterProb = (remainTime <= 180000) ? 1.0 : 0.15;
-                                        
-                                        if (Math.random() < encounterProb) {
-                                            var ap = activePiratesInRoute[Math.floor(Math.random() * activePiratesInRoute.length)];
-                                            var pShipLevel = ap.shipLevel;
-                                            var pName = ap.name;
-                                            var aiPirateUid = ap.uid;
+                                var sailedTime = Date.now() - u.voyage.startTime;
+                                u.voyage.arrival = Date.now() + sailedTime;
+                                
+                                u.cargo = {}; 
+                                u.cargoAvg = {}; 
+                                u.specialties = {}; 
+                                
+                                u.voyage.cargoSnapshot = {};
+                                u.voyage.specialtySnapshot = {};
+                                u.voyage.dest = u.voyage.origin;
+                                
+                                var alertMsg = "🚨 [해군 긴급 검문 적발]\n" +
+                                               "━━━━━━━━━━━━━━━\n" +
+                                               "[" + u.name + "] 님의 선박이 밀수 도중\n" +
+                                               "정규 해군 순찰함에 적발되었습니다!\n\n" +
+                                               "❌ 조치: 모든 밀수품 전량 압수\n" +
+                                               "⚓ 상황: 출발지로 강제 압송 중\n" +
+                                               "━━━━━━━━━━━━━━━\n" +
+                                               "💡 예상 도착: " + new Date(u.voyage.arrival).toLocaleTimeString();
+                                Api.replyRoom(u.voyage.originRoom || "내리다", alertMsg);
+                            }
+                        }
+                        
+                        // 해양 생물 조우 (항해 중이고 아직 도착 전이며, 조우 기록이 없고, '검거 회항 중'이 아닐 때)
+                        if (u.voyage && u.voyage.active && !u.voyage.hasEncountered && !u.voyage.isReturning && Date.now() < u.voyage.arrival && !u.voyage.isPatrol) {
+                            // 하위 호환 가드 (70% 확률로 즉시 스케줄링)
+                            if (u.voyage.scheduledEncounterTime === undefined) u.voyage.scheduledEncounterTime = (Math.random() < 0.70) ? Date.now() + 10000 : 0;
+
+                            // 분당 10% 확률을 폐기하고 예약 시간에 도달하면 발생
+                            if (u.voyage.scheduledEncounterTime > 0 && Date.now() >= u.voyage.scheduledEncounterTime) {
+                                u.voyage.scheduledEncounterTime = 0; // 중복 조우 방지
+                                
+                                var rand = Math.random() * 100;
+                                var grade = "일반";
+                                var range = [1, 60]; 
+                                
+                                // [연동] 엘도라도 탐험 중이거나 '해적 밀수' 중일 경우 고등급 확률 대폭 상승
+                                var isDangerousRoute = (u.voyage.dest === "엘도라도: 잊혀진 성역" || u.voyage.isSmuggling === true);
+                                
+                                if (isDangerousRoute) {
+                                    if (rand < 50) { grade = "고대"; range = [86, 95]; }
+                                    else if (rand < 80) { grade = "희귀"; range = [61, 85]; }
+                                    else { grade = "환상"; range = [96, 100]; }
+                                } else {
+                                    if (rand < 60) { grade = "일반"; range = [1, 60]; }
+                                    else if (rand < 85) { grade = "희귀"; range = [61, 85]; }
+                                    else if (rand < 97) { grade = "고대"; range = [86, 95]; }
+                                    else { grade = "환상"; range = [96, 100]; }
+                                }
+                                
+                                var cId = Math.floor(Math.random() * (range[1] - range[0] + 1)) + range[0];
+                                var creature = MARINE_DB.find(function(c){ return c.id === cId; });
+                                
+                                if (creature) {
+                                    u.voyage.hasEncountered = true; 
+                                    u.voyage.encounter = { id: cId, name: creature.name, rank: creature.rank, time: Date.now() };
+                                    
+                                    var alertMsg = "🌊 [해상 돌발 상황: 거대 생물 조우]\n" +
+                                                   "━━━━━━━━━━━━━━━\n" +
+                                                   "[" + u.name + "] 님!\n" +
+                                                   "배 우측 현측으로 엄청난 크기의 물보라가 일어납니다!\n\n" +
+                                                   "🔭 식별 결과: [" + creature.rank + "] " + creature.name + "\n" +
+                                                   "━━━━━━━━━━━━━━━\n" +
+                                                   "💬 행동을 선택하세요\n\n" +
+                                                   "1. 📸 관찰하기 (도감 등록 + 소량 보상)\n" +
+                                                   "2. 🎣 포획시도 (도감 등록 + 대량 보상 + 내구도 감소)\n" +
+                                                   "3. ⛵ 무시하고 항해 (상황 종료)\n\n" +
+                                                   "⏳ 제한 시간: 3분 내 자동 소멸";
+                                    
+                                    if (!rObj.features.states.menuWait) rObj.features.states.menuWait = {};
+                                    if (rObj.features.states.menuWait[uid]) {
+                                        util_terminateSession(uid, u, rObj, "내리다", 'menuWait');
+                                    }
+
+                                    rObj.features.states.menuWait[uid] = { type: 'marine_encounter', time: Date.now(), originRoom: "내리다" };
+                                    
+                                    try { Api.replyRoom("내리다", alertMsg); } catch(e) {}
+                                    ctx.isUpdated = true;
+                                }
+                            }
+                        }
+                    // AI 해적의 상선 무작위 습격 시스템 (루트 기반 정밀 매칭 엔진)
+                        if (u.voyage && u.voyage.active && !u.voyage.isReturning && Date.now() < u.voyage.arrival) {
+                            var route1 = u.voyage.origin + "-" + u.voyage.dest;
+                            var route2 = u.voyage.dest + "-" + u.voyage.origin;
+                            
+                            // [해군 순찰 임무 중]
+                            if (u.voyage.isPatrol && u.job === 'navy') {
+                                var targetAIPirate = null;
+                                for (var pi = 0; pi < data.aiPirates.length; pi++) {
+                                    var ap = data.aiPirates[pi];
+                                    if (ap.status === 'sailing' && (ap.route === route1 || ap.route === route2)) {
+                                        targetAIPirate = ap;
+                                        break;
+                                    }
+                                }
+                                
+                                if (targetAIPirate) {
+                                    var dummyPirate = { uid: targetAIPirate.uid, name: targetAIPirate.name, shipLevel: targetAIPirate.shipLevel, job: 'pirate', isAI: true, isGlobalAI: true };
+                                    if (typeof _executeSeaCombat === 'function') {
+                                        // PATROL 모드로 전투 진입 (즉시 결판)
+                                        _executeSeaCombat(dummyPirate, uid, uid, data, "내리다", "PATROL");
+                                    }
+                                    ctx.isUpdated = true;
+                                }
+                            }
+                            // [일반 상인 무역 중]
+                            else if (!u.job) {
+                                var dest = u.voyage.dest;
+                                var isStealth = (dest === "무역 지부" || dest === ELDORADO_CONFIG.NAME || u.voyage.isSmuggling);
+                                var isSafe = (data.safeRoutes && (data.safeRoutes[route1] || data.safeRoutes[route2]));
+                                var alreadyTargeted = (u.isPillaged === true || u.voyage.isPillaged === true);
+                                var isUnderAttack = !!(rObj.features.activePillages && rObj.features.activePillages[uid]);
+                                
+                                if (!isStealth && !isSafe && !alreadyTargeted && !isUnderAttack) {
+                                    // 하위 호환 가드 (100% 확률이므로 즉시 예약)
+                                    if (u.voyage.scheduledPirateTime === undefined) u.voyage.scheduledPirateTime = Date.now() + 10000;
+                                    
+                                    // 예약 시간에 도달하면 무조건 1회 습격 진행
+                                    if (u.voyage.scheduledPirateTime > 0 && Date.now() >= u.voyage.scheduledPirateTime) {
+                                        u.voyage.scheduledPirateTime = 0; // 중복 습격 차단
+                                        
+                                        var activePiratesInRoute = [];
+                                        if (data.aiPirates) {
+                                            for (var pi = 0; pi < data.aiPirates.length; pi++) {
+                                                var ap = data.aiPirates[pi];
+                                                if (ap.status === 'sailing' && (ap.route === route1 || ap.route === route2)) {
+                                                    activePiratesInRoute.push(ap);
+                                                }
+                                            }
+                                        }
+                                        
+                                        // 해당 항로에 해적이 없더라도 100% 조우 보장을 위해 전체 풀에서 랜덤 차출
+                                        var targetAp = activePiratesInRoute.length > 0 
+                                            ? activePiratesInRoute[Math.floor(Math.random() * activePiratesInRoute.length)]
+                                            : data.aiPirates[Math.floor(Math.random() * data.aiPirates.length)];
+                                        
+                                        if (targetAp) {
+                                            var pShipLevel = targetAp.shipLevel;
+                                            var pName = targetAp.name;
+                                            var aiPirateUid = targetAp.uid;
                                             
                                             if (u.voyage.escortUid) {
                                                 var nObj = null;
@@ -17011,25 +17017,49 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
     var currentQuest = (roomData.features && roomData.features.activeContract) ? JSON.parse(JSON.stringify(roomData.features.activeContract)) : null;
     var prevEncountered = (user.voyage && user.voyage.hasEncountered === true);
 
-    // 데이터 패키징 (v.arrival에 최종 계산된 값 저장, 스냅샷에 병합본 적용)
-    user.voyage = {
-        active: true, 
-        dest: dest, 
-        origin: user.currentLoc || "무역 지부",
-        arrival: arrival, 
-        startTime: Date.now(),
-        isSmuggling: !!isSmuggling,
-        hasEncountered: prevEncountered, 
-        contractSnapshot: currentQuest, 
-        marketSnapshot: JSON.parse(JSON.stringify(roomData.features.tradeMarket || {})), 
-        ecoMultSnapshot: util_getEcoMultiplier(roomName),
-        cargoSnapshot: finalCargoSnap, 
-        specialtySnapshot: finalSpecSnap,
-        escortUid: escortUid || null,
-        escortFee: escortFee || 0,
-        isSmooth: isSmooth,
-        isProcessing: false 
-    };
+    // 전체 항해 시간(totalSec) 기반 랜덤 스케줄링 엔진
+    var voyageDurationMs = totalSec * 1000;
+    
+    // 1. 해양 생물 조우 (전체 70% 확률) - 항해 시간의 10% ~ 90% 사이 랜덤 발생
+    var schedEncounter = 0;
+    if (Math.random() < 0.70) {
+        schedEncounter = Date.now() + Math.floor((Math.random() * 0.8 + 0.1) * voyageDurationMs);
+    }
+    
+    // 2. 밀수 단속 (전체 40% 확률) - 항해 시간의 10% ~ 90% 사이 랜덤 발생
+    var schedDetect = 0;
+    if (isSmuggling && Math.random() < 0.40) {
+        schedDetect = Date.now() + Math.floor((Math.random() * 0.8 + 0.1) * voyageDurationMs);
+    }
+
+    // 3. AI 해적 100% 확정 조우 (상인 한정, 스텔스 지역 제외) - 항해 시간의 10% ~ 90% 사이 랜덤 발생
+    var schedPirate = 0;
+    if (!isSmuggling && dest !== ELDORADO_CONFIG.NAME && dest !== "무역 지부" && !user.job) {
+        schedPirate = Date.now() + Math.floor((Math.random() * 0.8 + 0.1) * voyageDurationMs);
+    }
+
+    // 데이터 패키징 (v.arrival에 최종 계산된 값 저장, 스냅샷에 병합본 적용)
+    user.voyage = {
+        active: true, 
+        dest: dest, 
+        origin: user.currentLoc || "무역 지부",
+        arrival: arrival, 
+        startTime: Date.now(),
+        isSmuggling: !!isSmuggling,
+        hasEncountered: prevEncountered, 
+        contractSnapshot: currentQuest, 
+        marketSnapshot: JSON.parse(JSON.stringify(roomData.features.tradeMarket || {})), 
+        ecoMultSnapshot: util_getEcoMultiplier(roomName),
+        cargoSnapshot: finalCargoSnap, 
+        specialtySnapshot: finalSpecSnap,
+        escortUid: escortUid || null,
+        escortFee: escortFee || 0,
+        isSmooth: isSmooth,
+        isProcessing: false,
+        scheduledEncounterTime: schedEncounter,
+        scheduledDetectTime: schedDetect,
+        scheduledPirateTime: schedPirate
+    };
     
     safeSaveData(data, true); 
 

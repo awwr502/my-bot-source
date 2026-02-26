@@ -354,10 +354,12 @@ var USER_SCHEMA = [
     { key: 'warehouse', default: {}, type: 'object' },      // 창고 보관 일반 화물 { "품목": 수량 }
     { key: 'warehouseAvg', default: {}, type: 'object' },   // 창고 보관 화물 평단가
     { key: 'warehouseSpec', default: {}, type: 'object' },  // 창고 보관 특산품/보물
-    { key: 'warehouseSize', default: 500, type: 'number' }  // 창고 최대 용량 (기본 500칸)
+    { key: 'warehouseSize', default: 500, type: 'number' },  // 창고 최대 용량 (기본 500칸)
+    { key: 'undergroundCity', default: { level: 1, slots: 1, maxSlots: 5, population: 0, happiness: 100, vault: 0, buildings: {} }, type: 'object' }
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
+if (typeof globalData !== 'undefined' && !globalData.nameToIdCache) {
 if (typeof globalData !== 'undefined' && !globalData.nameToIdCache) {
     globalData.nameToIdCache = {};
 }
@@ -1622,7 +1624,8 @@ var CMD_LIST = {
         { cmd: "/스피또", desc: "즉석복권 구매 (1,000P)", cat: "상점", func: "_gameLotteryLogic" },
         { cmd: "/낚시", desc: "강가에서 물고기 낚기 (10분 쿨타임)", cat: "게임", func: "_gameActivityLogic" },
         { cmd: "/무역", desc: "가상 국가와의 해상 교역 및 선박 관리", cat: "무역", func: "_gameTradeLogic" },
-        { cmd: "/펀드", desc: "[금액] 위험 항로 벤처 투자 (5분 주기)", cat: "게임", func: "_gameActionLogic" }
+        { cmd: "/펀드", desc: "[금액] 위험 항로 벤처 투자 (5분 주기)", cat: "게임", func: "_gameActionLogic" },
+        { cmd: "/도시", desc: "나만의 지하 영지 개척 및 관리", cat: "게임", func: "_gameCityLogic" }
     ],
     admin: [
         { cmd: "/공지", desc: "[내용] 내리다 방에 공지 전송", func: "_adminSystemLogic" },
@@ -3369,7 +3372,60 @@ function util_refreshMarketRate(roomData, portName, goodName) {
 
 //==========섹터12==========
 
-// (더 이상 호출되지 않는 과거 코드로, 이 영역은 비워둡니다.)
+/* 🏛️ 지하 도시(Underground City) 상수 설정 */
+var CITY_CONFIG = {
+    EXPAND_COST_BASE: 3000000, // 슬롯 확장 기본 비용 (슬롯 수 비례 증가)
+    MAX_SLOTS: 10,
+    BUILDINGS: {
+        "tent": { key: "tent", name: "천막촌", icon: "🏕️", type: "주거", cost: 100000, popBonus: 100, desc: "기본 거주 구역 (+100명)" },
+        "market": { key: "market", name: "지하 시장", icon: "⚖️", type: "상업", cost: 300000, taxBoost: 0.1, desc: "세금 수익률 10% 증가" },
+        "lab": { key: "lab", name: "고대 연구소", icon: "🔬", type: "연구", cost: 500000, desc: "상위 건물 건축 조건 해금" },
+        "tower": { key: "tower", name: "경비탑", icon: "🛡️", type: "방어", cost: 250000, defense: 50, desc: "침공 방어력 +50" }
+    }
+};
+
+/**
+ * [게임 하위 모듈] 지하 도시 시스템 메인 진입점
+ */
+function _gameCityLogic(msg, user, data, replier, roomName, targetUid) {
+    if (msg === "/도시") {
+        var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+        var roomData = data.rooms[logicRoom];
+        
+        var stateRes = util_checkUserState(user, targetUid, roomName, true);
+        if (!stateRes.canAction) {
+            replier.reply(formatError(user, "진입 불가", stateRes.reason));
+            return true;
+        }
+
+        // 초기 데이터 세팅 (Deep-Healer 1차 보강)
+        if (!user.undergroundCity) {
+            user.undergroundCity = { level: 1, slots: 1, maxSlots: 5, population: 0, happiness: 100, vault: 0, buildings: {} };
+        }
+        var city = user.undergroundCity;
+
+        var bCount = Object.keys(city.buildings || {}).length;
+        
+        var body = "어둡고 축축한 지하 공간... 당신만의 새로운 영지가 시작되는 곳입니다.\n\n" +
+                   "👥 인구: " + city.population + " 명\n" +
+                   "😊 행복도: " + city.happiness + " %\n" +
+                   "💰 금고(세금): " + fp(city.vault) + " P\n" +
+                   "🏗️ 가용 슬롯: " + bCount + " / " + city.slots + " 칸\n" +
+                   "━━━━━━━━━━━━━━━\n" +
+                   "1. ⛏️ 구역 확장 (슬롯 확보)\n" +
+                   "2. 🏗️ 건축 및 개발\n" +
+                   "3. 💵 세금 징수 (지갑으로 이체)\n" +
+                   "4. 🛡️ 영지 관리 및 보수\n\n" +
+                   "↩️ 뒤로 / ❎취소";
+
+        replier.reply(formatCommand("🏛️ 지하 도시 (Lv." + city.level + ")", user, body, "메뉴 번호를 입력하세요."));
+        
+        if (!roomData.features.states.menuWait) roomData.features.states.menuWait = {};
+        roomData.features.states.menuWait[targetUid] = { type: 'city_main', time: Date.now(), originRoom: roomName };
+        return true;
+    }
+    return false;
+}
 
 //==========섹터13==========
 
@@ -3574,9 +3630,139 @@ function processRepayment(user, amount, userUid, roomName) {
 
 //==========섹터14==========
 
-/* 랜드마크 리스트 생성 함수 (부동산 컨셉 적용) */
-function generateLandmarkList(data, roomName) {
-    return null;
+/**
+ * [게임 하위 모듈] 지하 도시 메뉴 핸들러 (숫자 입력 처리)
+ */
+function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    if (!roomData || !roomData.features || !roomData.features.states.menuWait) return false;
+
+    var state = roomData.features.states.menuWait[targetUid];
+    if (!state || !state.type.startsWith('city_')) return false;
+
+    // 공통 네비게이션 가드 (취소 및 뒤로가기)
+    if (msg === "취소" || msg === "❎취소") {
+        delete roomData.features.states.menuWait[targetUid];
+        replier.reply(formatCommand("🚫 작업 종료", user, "도시 관리를 종료합니다."));
+        return true;
+    }
+    if (msg === "뒤로" || msg === "↩️ 뒤로") {
+        if (state.type !== 'city_main') {
+            return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
+        } else {
+            delete roomData.features.states.menuWait[targetUid];
+            replier.reply(formatCommand("🚪 도시 퇴장", user, "지하 도시에서 빠져나왔습니다."));
+            return true;
+        }
+    }
+    if (msg.startsWith("/")) return false;
+
+    var choice = msg.trim();
+    var city = user.undergroundCity;
+
+    // [1단계] 메인 메뉴 분기 처리
+    if (state.type === 'city_main') {
+        if (choice === "1") {
+            // 구역 확장 로직
+            var cost = CITY_CONFIG.EXPAND_COST_BASE * city.slots; // 슬롯당 점진적 비용 증가
+            if (city.slots >= CITY_CONFIG.MAX_SLOTS) {
+                replier.reply(formatError(user, "확장 불가", "더 이상 도시를 확장할 수 없습니다. (최대 " + CITY_CONFIG.MAX_SLOTS + "칸)"));
+            } else if (Number(user.point) < cost) {
+                replier.reply(formatError(user, "자금 부족", "구역 확장에 " + fp(cost) + "P가 필요합니다.\n(현재 잔액: " + fp(user.point) + "P)"));
+            } else {
+                util_updatePoint(user, data.rooms["내리다"], -cost, "지하 도시 구역 확장", roomName);
+                city.slots += 1;
+                user.skipHealing = true;
+                safeSaveData(data, true);
+                replier.reply(formatCommand("⛏️ 개척 완료", user, "인부들이 단단한 암반을 뚫고 새로운 구역을 확보했습니다!\n\n🏗️ 총 가용 슬롯: " + city.slots + "칸", "다시 확인하려면 [/도시]"));
+                delete roomData.features.states.menuWait[targetUid];
+            }
+        } 
+        else if (choice === "2") {
+            // 건축 메뉴 진입
+            var bList = [];
+            var idx = 1;
+            var keys = Object.keys(CITY_CONFIG.BUILDINGS);
+            for (var i = 0; i < keys.length; i++) {
+                var b = CITY_CONFIG.BUILDINGS[keys[i]];
+                var isBuilt = city.buildings[b.key] ? "(✅ 보유)" : "";
+                bList.push(idx + ". " + b.icon + " " + b.name + " [" + fp(b.cost) + "P] " + isBuilt + "\n   └ " + b.desc);
+                idx++;
+            }
+            var bBody = "[건설 가능 목록]\n" + bList.join("\n") + "\n\n건설할 번호를 입력하세요.\n\n↩️ 뒤로 / ❎취소";
+            replier.reply(formatCommand("🏗️ 도시 설계실", user, bBody));
+            
+            roomData.features.states.menuWait[targetUid].type = 'city_build';
+            roomData.features.states.menuWait[targetUid].time = Date.now();
+        }
+        else if (choice === "3") {
+            // 세금 징수 로직
+            if (city.vault <= 0) {
+                replier.reply(formatError(user, "징수 실패", "도시 금고가 비어있습니다. 거주민들이 세금을 납부할 때까지 기다리세요."));
+            } else {
+                var taxAmt = city.vault;
+                city.vault = 0;
+                user.skipHealing = true;
+                
+                util_updatePoint(user, data.rooms["내리다"], taxAmt, "지하 도시 세금 징수", roomName);
+                safeSaveData(data, true);
+                
+                replier.reply(formatCommand("💵 세금 정산 완료", user, "도시 금고에서 " + fp(taxAmt) + "P를 인출하여 지갑에 넣었습니다.", "내 잔액: " + fp(user.point) + "P"));
+                delete roomData.features.states.menuWait[targetUid];
+            }
+        }
+        else if (choice === "4") {
+            replier.reply(formatSimple("🛡️ 영지 관리", "현재 영지 유지비 및 보수 시스템은 건물 활성화 이후 다음 패치에 오픈될 예정입니다.", "이전 화면: [뒤로]"));
+        }
+        else {
+            replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 입력하세요."));
+        }
+        return true;
+    }
+    
+    // [2단계] 건축 선택 및 확정 로직
+    if (state.type === 'city_build') {
+        var bIdx = parseInt(choice) - 1;
+        var keys = Object.keys(CITY_CONFIG.BUILDINGS);
+        
+        if (isNaN(bIdx) || bIdx < 0 || bIdx >= keys.length) {
+            replier.reply(formatError(user, "번호 오류", "건설할 목록 번호를 선택하세요."));
+            return true;
+        }
+
+        var bKey = keys[bIdx];
+        var bData = CITY_CONFIG.BUILDINGS[bKey];
+        var curCount = Object.keys(city.buildings || {}).length;
+
+        if (city.buildings[bKey]) {
+            replier.reply(formatError(user, "건축 불가", "이미 해당 건물은 도시에 존재합니다. (동일 건물 중복 불가)"));
+            return true;
+        }
+        if (curCount >= city.slots) {
+            replier.reply(formatError(user, "슬롯 부족", "건물을 지을 공간이 없습니다. 먼저 구역 확장을 진행하세요."));
+            return true;
+        }
+        if (Number(user.point) < bData.cost) {
+            replier.reply(formatError(user, "자금 부족", "건설 비용 " + fp(bData.cost) + "P가 부족합니다."));
+            return true;
+        }
+
+        // 건설 대금 차감 및 건물 데이터 등록
+        util_updatePoint(user, data.rooms["내리다"], -bData.cost, "지하 도시 건축: " + bData.name, roomName);
+        city.buildings[bKey] = { level: 1, builtAt: Date.now() };
+        
+        // 특정 건물 건설 시 즉시 반영되는 스탯 보너스
+        if (bData.popBonus) city.population += bData.popBonus;
+        
+        user.skipHealing = true;
+        safeSaveData(data, true);
+        
+        replier.reply(formatCommand("🏗️ 건축 완료", user, bData.icon + " [" + bData.name + "]이(가) 도시에 새롭게 세워졌습니다!\n\n" + bData.desc, "도시 현황: [/도시]"));
+        delete roomData.features.states.menuWait[targetUid];
+        return true;
+    }
+    
+    return false;
 }
 
 //==========섹터15==========
@@ -9579,6 +9765,8 @@ if (actualFeatures && actualFeatures.states) {
     // 4. 기타 시스템 핸들러
     if (typeof _handleSelectionLogic === 'function' && _handleSelectionLogic(msg, user, data, replier, logicRoom, targetUid)) return;
     if (typeof _handleLottoInput === 'function' && _handleLottoInput(msg, user, data, replier, logicRoom, targetUid)) return;
+    // [신규] 지하 도시 메뉴 핸들러 연결
+    if (typeof _handleCityMenuStep === 'function' && _handleCityMenuStep(msg, user, data, replier, logicRoom, targetUid)) return;
 }
 
 // 5. 일반 게임 명령어 처리

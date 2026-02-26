@@ -18150,11 +18150,21 @@ function _showVoyageStatus(user, replier, data, roomName) {
     }
     var v = user.voyage;
     var remain = (v.arrival || 0) - Date.now();
-    var cfg = SYSTEM_CONFIG.TRADE;
+    if (v.isPatrol) {
+        var timeStr = remain > 0 ? Math.ceil(remain/60000) + "분" : "순찰 완료 (정산 대기)";
+        var patrolBody = "현재 [" + v.dest + "] 해역을 순찰 중입니다.\n\n" +
+                         "🛡️ 임무: 적대적 AI 해적 탐색 및 소탕\n" +
+                         "🕒 남은 시간: " + timeStr + "\n\n" +
+                         "👉 순찰 중에는 다른 행동이 제한됩니다.";
+        replier.reply(formatCommand("🚢 해역 순찰 현황", user, patrolBody, "순찰 완료 시 자동 귀항합니다."));
+        return; // 무역 계산을 하지 않고 즉시 리턴
+    }
 
-    // roomData 변수 선언 추가 (메인방 고정 참조로 교체)
-    var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-    var roomData = data.rooms[economyRoomName];
+    var cfg = SYSTEM_CONFIG.TRADE;
+
+    // roomData 변수 선언 추가 (메인방 고정 참조로 교체)
+    var economyRoomName = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var roomData = data.rooms[economyRoomName];
     
     // [v15.9] 현황판 강화 수치 연동
     var shipCapacity = cfg.SHIPS[user.shipLevel || 1].capacity + (user.enhLimit || 0);
@@ -18163,7 +18173,7 @@ function _showVoyageStatus(user, replier, data, roomName) {
     var currentCargoLines = [];
     var totalCargoInShip = 0;
 
-    var nSnap = v.marketSnapshot[v.dest] || { favorite: "N/A", hate: "N/A" };
+    var nSnap = (v.marketSnapshot && v.marketSnapshot[v.dest]) ? v.marketSnapshot[v.dest] : { favorite: "N/A", hate: "N/A" };
     var pInfo = (roomData.features && roomData.features.portData && roomData.features.portData[v.dest]) 
                 ? roomData.features.portData[v.dest] : { level: 1 };
     var portLevelBonus = Number((pInfo.level - 1) * (cfg.INVEST.BONUS_PER_LEVEL || 0.01));
@@ -18574,6 +18584,15 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
     user.currentLoc = v.dest;
 
     try { // 3. [보호막 시작]: 단 한 번의 try로 모든 로직을 감싸 문법 오류를 차단함
+
+        // 순찰 임무는 무역 정산(수익/재해/세금) 로직을 전혀 타지 않도록 최상단에서 처리 후 즉시 종료
+        if (v.isPatrol) {
+            v.isProcessing = false;
+            user.skipHealing = true;
+            replier.reply(formatCommand("⚓ 해역 순찰 완료", user, "정해진 항로의 순찰 임무를 마치고 [" + v.dest + "]에 무사히 입항했습니다.\n(항해 중 조우한 해적들과의 교전 기록은 개별 보고되었습니다.)"));
+            safeSaveData(data, true);
+            return;
+        }
 
         // [v17.3] 50% 확률: 단일 유저 유실물 100% 인양 프로세스 (try 내부로 안전하게 이동)
         var routeKey = (v.origin || "무역 지부") + "-" + v.dest;
@@ -19277,15 +19296,6 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
 
     var totalPayout = totalCost + profitAfterRepay;
     util_updatePoint(user, economyRoomData, totalPayout, "무역 정산 수익", economyRoomName);
-
-    // [v20.8] 순찰(PATROL) 모드 완료 처리
-    if (v.isPatrol) {
-        v.active = false;
-        v.isProcessing = false;
-        replier.reply(formatCommand("⚓ 순찰 임무 완료", user, "해역 순찰 임무를 마치고 [" + v.dest + "]에 무사히 입항했습니다.\n(항해 중 조우한 해적들과의 교전 기록은 개별 보고되었습니다.)"));
-        safeSaveData(data, true);
-        return;
-    }
 
     // 13. 긴급 회항 여부 판독
     var isPirate = (user.job === 'pirate');

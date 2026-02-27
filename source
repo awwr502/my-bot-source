@@ -591,12 +591,11 @@ var MARINE_DB = [
 var SYSTEM_CONFIG = {
 
     TRADE: {
-        BASELINE: 5000,             // 무역 시세 기준점 (재고 5000개일 때 시세 100%)
+        BASELINE: 20000,            // 무역 시세 기준점 (재고 20000개일 때 시세 100%)
         PRICE_CYCLE_MIN: 20,        // 시세 변동 주기 (20분)
 
         GOODS_COST: {
             "식료품": 10000,
-            "공업품": 15000,
             "공예품": 20000,
             "귀금속": 25000,
             "보석": 30000
@@ -6096,44 +6095,45 @@ function _runSector16Logic(data, ctx) {
                     
                     var currentStock = Number(inv[gName] || 0);
 
-                    // 1. 도시의 기본 생산 및 자연 소비 (탄력성 복구)
+                    // 1. 도시의 기본 생산 및 자연 소비 (기준점 2만 개에 맞춰 스케일업)
                     if (TRADE_RELATION[nName].produce === gName) {
-                        var baseProd = 150;
+                        var baseProd = 600; // 자국 특산품 기본 생산량 (150 -> 600)
                         var synergyBonus = 0;
                         if (pData.synergyStack > 0) {
-                            synergyBonus = Math.min(300, Math.floor(pData.synergyStack * 0.5));
+                            synergyBonus = Math.min(1200, Math.floor(pData.synergyStack * 0.5)); // 시너지 상한 (300 -> 1200)
                             pData.synergyStack = 0; 
                         }
                         currentStock += (baseProd + synergyBonus);
                     } else {
-                        // 자연 소비량 완화: 50~120 -> 20~60으로 줄여 급격한 재고 고갈 방지
-                        currentStock -= (Math.floor(Math.random() * 41) + 20); 
+                        // 타국 물품 자연 소비량 (20~60 -> 100~300)
+                        currentStock -= (Math.floor(Math.random() * 201) + 100); 
                     }
 
                     // 재고 회복력(Elasticity): 중앙 설정된 BASELINE으로 회귀함
-                    var baseline = (SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.BASELINE) ? SYSTEM_CONFIG.TRADE.BASELINE : 5000;
-                   // 복원력을 15%에서 7%로 하향하여 재고 불균형이 더 오래 유지되도록 변경
+                    var baseline = (SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.BASELINE) ? SYSTEM_CONFIG.TRADE.BASELINE : 20000;
+                    
+                    // 복원력 7% 유지 (우물이 깊어졌으므로 7%만으로도 묵직한 파도가 만들어집니다)
                     currentStock = currentStock + (baseline - currentStock) * 0.07; 
 
-                    // 최종 재고 저장 범위 조정 (기준점의 10% ~ 400% 범위로 확장하여 변동성 극대화)
+                    // 최종 재고 저장 범위 조정 (기준점의 10% ~ 400% 범위 자동 유지)
                     var minInv = Math.floor(baseline * 0.10);
                     var maxInv = Math.floor(baseline * 4.0);
                     inv[gName] = Math.max(minInv, Math.min(maxInv, currentStock));
 
-                    // 3. 시장 노이즈 반영 (범위를 85% ~ 115%로 확장하여 기본 변동폭 증대)
+                    // 3. 시장 노이즈 반영 (85% ~ 115%)
                     var baseRate = 0.85 + (Math.random() * 0.30); 
                     if (TRADE_RELATION[nName].produce === gName) {
                         baseRate -= (Math.random() * 0.05 + 0.05); 
                     }
 
-                    // 4. 실물 재고 비례 계수 적용 (가중치를 0.4에서 0.9로 강화하여 재고 민감도 상향)
+                    // 4. 실물 재고 비례 계수 적용 (민감도 0.9 유지)
                     var scarcityMult = 1 + ((baseline - inv[gName]) / baseline) * 0.9;
                     
                     scarcityMult = Math.max(0.6, Math.min(1.6, scarcityMult)); 
                     
                     var finalRate = baseRate * scarcityMult;
 
-                    // 5. 최종 시세 상/하한선 제한 (동적 시장을 위해 65% ~ 160%로 상한 확장)
+                    // 5. 최종 시세 상/하한선 제한 (70% ~ 130%)
                     finalRate = Math.max(0.70, Math.min(1.30, finalRate));
                     rates[gName] = Number(finalRate.toFixed(2));
                 }

@@ -12,12 +12,52 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Upload File to Google Drive
-        uses: skitionek/google-drive-upload-git-action@master
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
-          filename: "source"
-          folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
-          overwrite: "true"
+          python-version: '3.x'
+
+      - name: Install Google API Client
+        run: pip install google-api-python-client google-auth
+
+      - name: Upload to Google Drive
+        env:
+          CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+          FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          python - <<EOF
+          import os, json
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaFileUpload
+
+          try:
+              # 1. 인증 설정
+              creds_info = json.loads(os.environ['CREDENTIALS'])
+              folder_id = os.environ['FOLDER_ID']
+              creds = service_account.Credentials.from_service_account_info(creds_info)
+              service = build('drive', 'v3', credentials=creds)
+
+              # 2. 기존 파일이 있는지 확인 (덮어쓰기용)
+              query = f"name='source' and '{folder_id}' in parents and trashed=false"
+              results = service.files().list(q=query, fields='files(id)').execute()
+              files = results.get('files', [])
+
+              media = MediaFileUpload('source', resumable=True)
+
+              if files:
+                  # 기존 파일이 있으면 업데이트(덮어쓰기)
+                  file_id = files[0]['id']
+                  service.files().update(fileId=file_id, media_body=media).execute()
+                  print(f"Successfully updated file: {file_id}")
+              else:
+                  # 없으면 새로 생성
+                  file_metadata = {'name': 'source', 'parents': [folder_id]}
+                  file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+                  print(f"Successfully created new file: {file.get('id')}")
+          except Exception as e:
+              print(f"Error occurred: {e}")
+              exit(1)
+          EOF

@@ -8543,17 +8543,24 @@ function _runChatBonusLogic(msg, user, data, replier, roomName, targetUid, realR
 
 /* 정령 동행 수집(선물) 로직 */
 function _runSpiritFindLogic(msg, user, data, replier, roomName, targetUid, realRoom) {
-    // 모든 상황 발동을 위해 슬래시(/) 명령어 차단 로직(if(msg.indexOf("/")===0)return;) 삭제됨
-    if (!user || !user.spirit || !user.spirit.companion) return;
+    // 1:1방을 포함한 실제 허용된 방에서만 작동하며, 명령어(/) 에는 반응하지 않음
+    if (!realRoom || ALLOWED_ROOMS.indexOf(realRoom) === -1) return;
+    if (msg.indexOf("/") === 0) return; 
 
-    var companion = user.spirit.companion;
-    var currentTime = Date.now();
-    var lastFindTime = companion.lastFindTime || 0;
+    var sData = user.spiritData;
+    if (!sData || !sData.activeUid) return;
 
-    if (currentTime - lastFindTime < 10 * 60 * 1000) return;
+    var now = Date.now();
+    // 최초 세팅
+    if (!sData.lastFindTime) sData.lastFindTime = now;
 
-    // 포만감 검사 (최소 10 필요)
-    if ((user.spirit.hunger || 0) < 10) return;
+    // 10분(600000ms) 경과 시 수집 굴림
+    if (now - sData.lastFindTime > 600000) {
+        sData.lastFindTime = now;
+        var activeSp = sData.roster.find(function(s) { return s.uid === sData.activeUid; });
+        
+        // 포만감이 10 이상일 때만 활동 가능
+        if (activeSp && activeSp.satiety >= 10) {
             var dbInfo = SPIRIT_CONFIG.DB[activeSp.id];
             if (!dbInfo) return;
 
@@ -10977,13 +10984,8 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
 // 수정: 여기서 모든 차단 및 가드 로직을 일괄 처리 (섹터 20-2의 기능을 이관받음)
     if (!user) return; 
 
-    // 정령 보은 로직을 최상단으로 격상하여 명령어/핸들러 종료 전 무조건 실행
-if (typeof _runSpiritFindLogic === 'function') {
-    _runSpiritFindLogic(msg, user, data, replier, roomName, targetUid, realRoom);
-}
-
-var MAIN_NAME = "내리다"; 
-var is1to1 = (ALLOWED_ROOMS.indexOf(realRoom) === -1);
+    var MAIN_NAME = "내리다"; 
+    var is1to1 = (ALLOWED_ROOMS.indexOf(realRoom) === -1);
     var logicRoom = is1to1 ? MAIN_NAME : roomName; 
 
     var isGroupRoom = (ALLOWED_ROOMS.indexOf(realRoom) !== -1);

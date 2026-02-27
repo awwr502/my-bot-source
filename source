@@ -3434,9 +3434,10 @@ var CITY_CONFIG = {
         "bastion": { key: "bastion", name: "심연의 성채", icon: "🛡️", type: "방어", cost: 20000000, defense: 450, reqLab: 3, desc: "철통같은 방어력을 자랑하는 요새 (+450 / 연구소 3개 필요)" },
         
         // [3티어 최상위 건물 - 연구소 3개 이상 필요]
-        "mansion": { key: "mansion", name: "지하 대저택", icon: "🏰", type: "주거", cost: 15000000, popBonus: 600, reqLab: 3, desc: "인구 +600명 (연구소 3개 필요)" },
-        "bank": { key: "bank", name: "제국 조폐국", icon: "🏦", type: "상업", cost: 35000000, taxBoost: 0.4, reqLab: 3, desc: "수익률 40% 증가 (연구소 3개 필요)" }
-    }
+        "mansion": { key: "mansion", name: "지하 대저택", icon: "🏰", type: "주거", cost: 15000000, popBonus: 600, reqLab: 3, desc: "인구 +600명 (연구소 3개 필요)" },
+        "bank": { key: "bank", name: "제국 조폐국", icon: "🏦", type: "상업", cost: 35000000, taxBoost: 0.4, reqLab: 3, desc: "수익률 40% 증가 (연구소 3개 필요)" },
+        "guild": { key: "guild", name: "탐험대 길드", icon: "🗺️", type: "특수", cost: 10000000, reqLab: 2, desc: "심연을 조사하는 탐험대를 파견합니다 (연구소 2개 필요)" }
+    }
 };
 
 /**
@@ -3455,10 +3456,11 @@ function _gameCityLogic(msg, user, data, replier, roomName, targetUid) {
 
         // 초기 데이터 세팅 및 개척 객체 보강
         if (!user.undergroundCity) {
-            user.undergroundCity = { level: 1, slots: 1, maxSlots: 5, population: 0, happiness: 100, vault: 0, buildings: {}, expanding: { active: false, endTime: 0 } };
+            user.undergroundCity = { level: 1, slots: 1, maxSlots: 5, population: 0, happiness: 100, vault: 0, buildings: {}, expanding: { active: false, endTime: 0 }, expedition: { active: false, endTime: 0 } };
         }
         var city = user.undergroundCity;
         if (!city.expanding) city.expanding = { active: false, endTime: 0 };
+        if (!city.expedition) city.expedition = { active: false, endTime: 0 };
 
         // 1. 개척 완료 자동 정산 로직
         var expandMsg = "";
@@ -3517,9 +3519,10 @@ function _gameCityLogic(msg, user, data, replier, roomName, targetUid) {
                    "1. ⛏️ 구역 확장 (슬롯 확보)\n" +
                    "2. 🏗️ 건축 및 개발\n" +
                    "3. 💵 세금 징수 (지갑으로 이체)\n" +
-                   "4. 🛡️ 영지 관리 및 보수 (행복도 복구)\n" +
-                   "5. 🏙️ 영지 건축물 현황 (목록 조회)\n\n" +
-                   "↩️ 뒤로 / ❎취소";
+                   "4. 🛡️ 영지 관리 및 보수 (행복도 복구)\n" +
+                   "5. 🏙️ 영지 건축물 현황 (목록 조회)\n" +
+                   "6. 🗺️ 지하 탐험대 파견 (탐험대 길드 필요)\n\n" +
+                   "↩️ 뒤로 / ❎취소";
 
         replier.reply(formatCommand("🏛️ 지하 도시 (Lv." + city.level + ")", user, body, "메뉴 번호를 입력하세요."));
         
@@ -3894,52 +3897,106 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatCommand("🛡️ 영지 긴급 보수", user, repBody, "번호를 입력하세요."));
         }
         else if (choice === "5") {
-            var cityBuilds = city.buildings || {};
-            var totalBCount = 0;
-            var parsedList = [];
-            
-            for (var k in cityBuilds) {
-                var cCount = cityBuilds[k].count || 1;
-                totalBCount += cCount;
-                var bData = CITY_CONFIG.BUILDINGS[k];
-                if (bData) {
-                    var tierNum = 1;
-                    var tierStr = "1티어";
-                    if (bData.reqLab === 1) { tierNum = 2; tierStr = "2티어"; }
-                    else if (bData.reqLab === 3) { tierNum = 3; tierStr = "3티어"; }
-                    else if (k === "lab") { tierNum = 0; tierStr = "특수"; } // 연구소는 티어보다 우선 배치
-                    
-                    parsedList.push({
-                        tierNum: tierNum,
-                        text: "• " + bData.icon + " [" + tierStr + "] " + bData.name + " x" + cCount
-                    });
-                }
-            }
-            
-            // 티어별 오름차순 정렬 (특수 -> 1티어 -> 2티어 -> 3티어)
-            parsedList.sort(function(a, b) {
-                return a.tierNum - b.tierNum;
-            });
-            
-            var bList = parsedList.map(function(item) { return item.text; });
-            if (bList.length === 0) {
-                bList.push("- 건설된 건축물이 없습니다.");
-            }
-            
-            var bBody = "현재 영지에 건설된 건축물 목록입니다.\n" +
-                        "(총 사용 슬롯: " + totalBCount + " / " + city.slots + "칸)\n\n" +
-                        bList.join("\n") + NAV;
-                        
-            replier.reply(formatCommand("🏙️ 영지 건축물 현황", user, bBody, "뒤로 가려면 [뒤로] 입력"));
-            roomData.features.states.menuWait[targetUid] = { type: 'city_buildings_view', time: Date.now(), originRoom: roomName };
-        }
-        else {
-            replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 입력하세요."));
-        }
-        return true;
-    }
+            var cityBuilds = city.buildings || {};
+            var totalBCount = 0;
+            var parsedList = [];
+            
+            for (var k in cityBuilds) {
+                var cCount = cityBuilds[k].count || 1;
+                totalBCount += cCount;
+                var bData = CITY_CONFIG.BUILDINGS[k];
+                if (bData) {
+                    var tierNum = 1;
+                    var tierStr = "1티어";
+                    if (bData.reqLab === 1) { tierNum = 2; tierStr = "2티어"; }
+                    else if (bData.reqLab === 3) { tierNum = 3; tierStr = "3티어"; }
+                    else if (k === "lab") { tierNum = 0; tierStr = "특수"; }
+                    else if (k === "guild") { tierNum = 4; tierStr = "특수"; } // 길드 추가
+                    
+                    parsedList.push({
+                        tierNum: tierNum,
+                        text: "• " + bData.icon + " [" + tierStr + "] " + bData.name + " x" + cCount
+                    });
+                }
+            }
+            
+            parsedList.sort(function(a, b) {
+                return a.tierNum - b.tierNum;
+            });
+            
+            var bList = parsedList.map(function(item) { return item.text; });
+            if (bList.length === 0) {
+                bList.push("- 건설된 건축물이 없습니다.");
+            }
+            
+            var bBody = "현재 영지에 건설된 건축물 목록입니다.\n" +
+                        "(총 사용 슬롯: " + totalBCount + " / " + city.slots + "칸)\n\n" +
+                        bList.join("\n") + NAV;
+                        
+            replier.reply(formatCommand("🏙️ 영지 건축물 현황", user, bBody, "뒤로 가려면 [뒤로] 입력"));
+            roomData.features.states.menuWait[targetUid] = { type: 'city_buildings_view', time: Date.now(), originRoom: roomName };
+        }
+        else if (choice === "6") {
+            if (!city.buildings["guild"] || (city.buildings["guild"].count || 0) < 1) {
+                replier.reply(formatError(user, "건물 필요", "먼저 [탐험대 길드] 건물을 건설해야 파견이 가능합니다."));
+                return true;
+            }
+            if (city.expedition && city.expedition.active) {
+                var rm = Math.ceil((city.expedition.endTime - Date.now()) / 60000);
+                if (rm > 0) {
+                    replier.reply(formatError(user, "파견 중", "현재 탐험대가 심연을 탐사 중입니다.\n(남은 시간: " + rm + "분)"));
+                    return true;
+                }
+            }
+
+            var expBody = "숙련된 용병들로 구성된 탐험대를 깊은 심연으로 파견합니다.\n\n" +
+                          "💰 파견 비용: 3,000,000P\n" +
+                          "⏳ 소요 시간: 30분\n\n" +
+                          "🎁 [탐험 확정 전리품 (수량 변동)]\n" +
+                          "• 📦 미확인 교역품: 50 ~ 140상자\n" +
+                          "• 🧩 유물 조각: 1 ~ 10개\n" +
+                          "• 🗺️ 고대 지도: 1 ~ 3장\n" +
+                          "• 🎖️ 왕실 훈장: 1 ~ 3개\n\n" +
+                          "파견하시겠습니까?\n\n" +
+                          "1. 예 (탐험대 출발)\n" +
+                          "2. 아니오 (취소)" + NAV;
+            
+            roomData.features.states.menuWait[targetUid] = { type: 'city_expedition_confirm', time: Date.now(), originRoom: roomName };
+            replier.reply(formatCommand("🗺️ 지하 탐험대 파견", user, expBody, "번호를 입력하세요."));
+        }
+        else {
+            replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 입력하세요."));
+        }
+        return true;
+    }
+
+    // [1-1단계] 탐험대 파견 확정 핸들러
+    if (state.type === 'city_expedition_confirm') {
+        if (choice === "1" || choice === "예") {
+            var cost = 3000000;
+            if (Number(user.point) < cost) {
+                replier.reply(formatError(user, "자금 부족", "파견 비용 " + fp(cost) + "P가 부족합니다."));
+                return true;
+            }
+            
+            util_updatePoint(user, data.rooms["내리다"], -cost, "지하 도시 탐험대 파견", roomName);
+            city.expedition.active = true;
+            city.expedition.endTime = Date.now() + (30 * 60 * 1000);
+            
+            user.skipHealing = true;
+            safeSaveData(data, true);
+            
+            replier.reply(formatCommand("🗺️ 탐험대 파견 완료", user, "탐험대가 횃불을 들고 어둠 속으로 출발했습니다.\n약 30분 뒤 복귀 시 보상이 자동 정산됩니다."));
+            delete roomData.features.states.menuWait[targetUid];
+        } else if (choice === "2" || choice === "아니오") {
+            return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
+        } else {
+            replier.reply(formatError(user, "번호 오류", "1번(예) 또는 2번(아니오)을 선택하세요."));
+        }
+        return true;
+    }
     
-    // [1-1단계] 구역 확장 확정 핸들러
+    // [1-2단계] 구역 확장 확정 핸들러
     if (state.type === 'city_expand_confirm') {
         if (choice === "1" || choice === "예") {
             var cost = state.extra.cost;
@@ -3967,7 +4024,7 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // [1-2단계] 영지 보수 확정 핸들러
+    // [1-3단계] 영지 보수 확정 핸들러
     if (state.type === 'city_repair_confirm') {
         if (choice === "1" || choice === "예") {
             var cost = state.extra.cost;
@@ -10905,13 +10962,63 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     var activeSession = checkSession(localSt) || checkSession(mainSt);
     var inState = !!activeSession || (user && user.blackjackState);
 
-    // [보존] 해상 활동 알림 (누락 방지)
+    // 해상 활동 알림 (누락 방지)
     if (typeof util_notifySeaReward === 'function') util_notifySeaReward(user, replier);
 
-    // [보존] 무역 정산 격리 - 단체방에서만 정산 실행 (누락 방지)
+    // 무역 정산 격리 - 단체방에서만 정산 실행
     if (realRoom === MAIN_NAME && user && user.voyage && user.voyage.active === true) {
         if (Date.now() >= (user.voyage.arrival || 0)) {
             try { if (typeof _processTradeArrival === 'function') _processTradeArrival(user, data, replier, MAIN_NAME, targetUid); } catch (e) {}
+        }
+    }
+
+    // 지하 탐험대 복귀 및 정산 로직 (메인방 '내리다' 채팅 시에만 자동 감지)
+    if (realRoom === MAIN_NAME && user && user.undergroundCity && user.undergroundCity.expedition && user.undergroundCity.expedition.active === true) {
+        if (Date.now() >= user.undergroundCity.expedition.endTime) {
+            try {
+                user.undergroundCity.expedition.active = false;
+                user.skipHealing = true;
+                
+                var rewardLines = [];
+                
+                // 1. 미확인 교역품 (1~100%)
+                var rUnk = Math.floor(Math.random() * 100) + 1;
+                var qUnk = 150 - (Math.ceil(rUnk / 10) * 10);
+                if (!user.warehouseSpec) user.warehouseSpec = {};
+                user.warehouseSpec["_unknown"] = (Number(user.warehouseSpec["_unknown"]) || 0) + qUnk;
+                rewardLines.push("📦 미확인 교역품 " + qUnk + "상자 (물류 창고)");
+                
+                // 2. 유물 조각 (1~100%)
+                var rArt = Math.floor(Math.random() * 100) + 1;
+                var qArt = 11 - Math.ceil(rArt / 10);
+                user.artifactPieces = (Number(user.artifactPieces) || 0) + qArt;
+                rewardLines.push("🧩 유물 조각 " + qArt + "개");
+                
+                // 3. 고대 지도 (1~100%)
+                var rMap = Math.floor(Math.random() * 100) + 1;
+                var qMap = (rMap <= 19) ? 3 : (rMap <= 49 ? 2 : 1);
+                user.ancientMaps = (Number(user.ancientMaps) || 0) + qMap;
+                rewardLines.push("🗺️ 고대 지도 " + qMap + "장");
+                
+                // 4. 왕실 훈장 (1~100%)
+                var rMed = Math.floor(Math.random() * 100) + 1;
+                var qMed = (rMed <= 9) ? 3 : (rMed <= 39 ? 2 : 1);
+                user.royalMedals = (Number(user.royalMedals) || 0) + qMed;
+                rewardLines.push("🎖️ 왕실 훈장 " + qMed + "개");
+
+                var rewardText = rewardLines.join("\n");
+
+                var rMsg = "용병들이 무사히 심연에서 복귀했습니다!\n\n" +
+                           "🎁 [전리품 정산]\n" +
+                           rewardText + "\n\n" +
+                           "💡 길드에서 새로운 탐험대를 파견할 수 있습니다.";
+                
+                // 오직 '내리다' 방에서만 정산되므로 고정 출력
+                Api.replyRoom(MAIN_NAME, formatCommand("🗺️ 지하 탐험대 복귀", user, rMsg));
+                safeSaveData(data, false);
+            } catch (e) {
+                Log.error("탐험대 정산 오류: " + e);
+            }
         }
     }
 

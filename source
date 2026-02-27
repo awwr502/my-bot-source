@@ -4149,17 +4149,93 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
             
             var pAmount = fp(user.point);
             var aAmount = Number(user.artifactPieces || 0);
-            replier.reply(formatCommand("🛒 정령 전용 상점", user, sList + "\n\n💰 잔액: " + pAmount + "P | 🧩 유물: " + aAmount + "개" + NAV, "구매할 물품의 번호를 입력하세요."));
-        }
-        else if (choice === "5") {
-            var total = Object.keys(SPIRIT_CONFIG.DB).length;
-            var collected = sd.pedia.length;
-            var pct = Math.floor((collected / total) * 100);
-            replier.reply(formatSimple("📘 정령 생태 도감", "수집률: " + pct + "% (" + collected + " / " + total + "종)\n다양한 속성과 교배를 통해 모든 정령을 수집해보세요!", "이전 화면: [뒤로]"));
-        }
-        else replier.reply(formatError(user, "번호 오류", "올바른 번호를 입력하세요."));
-        return true;
-    }
+            replier.reply(formatCommand("🛒 정령 전용 상점", user, sList + "\n\n💰 잔액: " + pAmount + "P | 🧩 유물: " + aAmount + "개" + NAV, "구매할 물품의 번호를 입력하세요."));
+        }
+        else if (choice === "5") {
+            _showSpiritPediaUI(user, replier, data, roomName, targetUid);
+        }
+        else replier.reply(formatError(user, "번호 오류", "올바른 번호를 입력하세요."));
+        return true;
+    }
+
+// [신규] 정령 메인 도감 UI 출력 함수
+function _showSpiritPediaUI(user, replier, data, roomName, targetUid) {
+    var sd = user.spiritData;
+    var total = Object.keys(SPIRIT_CONFIG.DB).length;
+    var current = sd.pedia.length;
+    var pct = Math.floor((current / total) * 100);
+
+    var counts = { "노말":0, "레어":0, "희귀":0, "에픽":0, "환상":0, "신화":0 };
+    var totals = { "노말":15, "레어":9, "희귀":6, "에픽":15, "환상":105, "신화":10 }; 
+
+    sd.pedia.forEach(function(sId) {
+        var sp = SPIRIT_CONFIG.DB[sId];
+        if (sp && counts[sp.rank] !== undefined) counts[sp.rank]++;
+    });
+
+    var recentList = [];
+    var len = sd.pedia.length;
+    for(var i = 0; i < Math.min(3, len); i++) {
+        var rId = sd.pedia[len - 1 - i];
+        var sp = SPIRIT_CONFIG.DB[rId];
+        if(sp) recentList.push("• " + sp.el + " " + sp.name + " (" + sp.rank + ")");
+    }
+
+    var body = "📊 전체 수집률: " + pct + "% (" + current + " / " + total + "종)\n\n" +
+               "[등급별 수집 현황]\n" +
+               "🌱 노말: " + counts["노말"] + " / " + totals["노말"] + "\n" +
+               "🔮 레어/희귀: " + (counts["레어"] + counts["희귀"]) + " / " + (totals["레어"] + totals["희귀"]) + "\n" +
+               "👑 에픽: " + counts["에픽"] + " / " + totals["에픽"] + "\n" +
+               "🌠 환상: " + counts["환상"] + " / " + totals["환상"] + "\n" +
+               "🌌 신화: " + counts["신화"] + " / " + totals["신화"] + "\n\n" +
+               "[최근 발견한 정령]\n" + 
+               (recentList.length > 0 ? recentList.join("\n") : "(기록 없음)") + "\n" +
+               "━━━━━━━━━━━━━━━\n\n" +
+               "1. 🔍 상세 도감 보기 (수집 목록)\n\n" +
+               "↩️ 뒤로 / ❎취소";
+               
+    replier.reply(formatCommand("📘 [정령 생태 도감]", user, body, "번호를 선택하세요."));
+    var roomData = data.rooms[roomName] || data.rooms["내리다"];
+    roomData.features.states.menuWait[targetUid] = { type: 'spirit_pedia_main', time: Date.now(), originRoom: roomName };
+}
+
+// 정령 상세 도감 리스트 출력 함수 (전체보기 지원)
+function _showSpiritPediaDetail(user, replier, data, roomName, targetUid) {
+    var sd = user.spiritData;
+    var list = [];
+    var collectedCount = sd.pedia.length;
+    var total = Object.keys(SPIRIT_CONFIG.DB).length;
+
+    var keys = Object.keys(SPIRIT_CONFIG.DB).sort(function(a,b){return Number(a)-Number(b);});
+    keys.forEach(function(k) {
+        var sp = SPIRIT_CONFIG.DB[k];
+        var isFound = (sd.pedia.indexOf(sp.id) !== -1);
+        var idStr = (sp.id < 10 ? "00" : (sp.id < 100 ? "0" : "")) + sp.id;
+        
+        if (isFound) {
+            list.push(idStr + ". " + sp.el + " " + sp.name + " (" + sp.rank + ")");
+        } else {
+            list.push(idStr + ". 🔒 ??? (" + sp.rank + ")");
+        }
+    });
+
+    // 말풍선 제한을 뚫는 숨김 문자(전체보기) 삽입
+    var readMore = "\u200b".repeat(500); 
+    var body = "📊 현재 수집 현황: " + collectedCount + " / " + total + "종" + readMore + "\n\n" + 
+               list.join("\n") + 
+               "\n━━━━━━━━━━━━━━━\n" +
+               "💡 속성별 진화와 교배를 통해 빈자리를 채워보세요!\n\n" +
+               "↩️ 뒤로 / ❎취소";
+
+    replier.reply(formatCommand("📖 정령 상세 도감 목록", user, body, "뒤로 가려면 [뒤로]를 입력하세요."));
+
+    var roomData = data.rooms[roomName] || data.rooms["내리다"];
+    roomData.features.states.menuWait[targetUid] = { 
+        type: 'spirit_pedia_detail_view', 
+        time: Date.now(), 
+        originRoom: roomName 
+    };
+}
 
     // [2단계] 로스터 상세 관리
     if (state.type === 'spirit_roster') {
@@ -9644,19 +9720,31 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
     }
 
     // [도감 메인 메뉴]
-    if (state.type === 'trade_pedia_main') {
-        var choice = msg.trim();
-        if (choice === "1") { // 상세 도감 보기
-             _showPediaDetail(user, replier, data, roomName, targetUid);
-             return true;
-        } else if (choice === "2") { // 보상 받기
-             _processPediaReward(user, data, replier, roomName);
-             return true;
-        }
-    }
+    if (state.type === 'trade_pedia_main') {
+        var choice = msg.trim();
+        if (choice === "1") { // 상세 도감 보기
+             _showPediaDetail(user, replier, data, roomName, targetUid);
+             return true;
+        } else if (choice === "2") { // 보상 받기
+             _processPediaReward(user, data, replier, roomName);
+             return true;
+        }
+    }
 
-    // 처리 가능 타입 리스트 최적화 (help_main 통합)
-    var types = [
+    // [정령 도감 메인 메뉴] 핸들러 연결
+    if (state.type === 'spirit_pedia_main') {
+        var choice = msg.trim();
+        if (choice === "1") {
+            _showSpiritPediaDetail(user, replier, data, roomName, targetUid);
+            return true;
+        } else {
+            replier.reply(formatError(user, "번호 오류", "1번을 선택하세요."));
+            return true;
+        }
+    }
+
+    // 처리 가능 타입 리스트 최적화 (help_main 통합)
+    var types = [
         'shop_category', 'shop_detail', 'help_main', 
         'trade_main', 'trade_market', 'trade_depart', 'trade_status', 'trade_ship',
         'trade_select_cargo', 'trade_governor_office', 'trade_escort_select', 
@@ -9665,8 +9753,9 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         'casino_main', 'casino_ladder', 'casino_baccarat',
         'casino_ladder_sub', 'casino_baccarat_sub',
         'trade_pedia_main', 'trade_pedia_detail_view',
-        'explore_hub', 'pillar_lobby', 'pillar_combat',
-        'trade_warehouse', 'trade_warehouse_action'
+        'spirit_pedia_main', 'spirit_pedia_detail_view', // 정령 도감 세션 등록
+        'explore_hub', 'pillar_lobby', 'pillar_combat',
+        'trade_warehouse', 'trade_warehouse_action'
     ];
 
     var logicRoom = (roomName === "베릭방" || (typeof ALLOWED_ROOMS !== 'undefined' && ALLOWED_ROOMS.indexOf(roomName) === -1)) ? "내리다" : roomName;
@@ -9766,16 +9855,20 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         }
 
         // 도시 서브메뉴 -> 도시 메인 복귀
-        if (prevState.startsWith('city_') && prevState !== 'city_main') {
-            return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
-        }
+        if (prevState.startsWith('city_') && prevState !== 'city_main') {
+            return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
+        }
 
-        // 정령 서브메뉴 -> 정령 메인 복귀
-        if (prevState.startsWith('spirit_') && prevState !== 'spirit_main') {
-            return _gameSpiritLogic("/정령", user, data, replier, roomName, targetUid);
-        }
-        
-        if (prevState.startsWith('help')) { 
+        // 정령 서브메뉴 -> 정령 메인 복귀 (도감 상세 화면 예외 처리 포함)
+        if (prevState.startsWith('spirit_') && prevState !== 'spirit_main') {
+            if (prevState === 'spirit_pedia_detail_view') {
+                _showSpiritPediaUI(user, replier, data, roomName, targetUid);
+                return true;
+            }
+            return _gameSpiritLogic("/정령", user, data, replier, roomName, targetUid);
+        }
+        
+        if (prevState.startsWith('help')) {
             replier.reply("📖 이용을 종료했습니다."); 
             return true; 
         }

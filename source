@@ -8541,6 +8541,69 @@ function _runChatBonusLogic(msg, user, data, replier, roomName, targetUid, realR
     }
 }
 
+/* 정령 동행 수집(선물) 로직 */
+function _runSpiritFindLogic(msg, user, data, replier, roomName, targetUid, realRoom) {
+    // 1:1방을 포함한 실제 허용된 방에서만 작동하며, 명령어(/) 에는 반응하지 않음
+    if (!realRoom || ALLOWED_ROOMS.indexOf(realRoom) === -1) return;
+    if (msg.indexOf("/") === 0) return; 
+
+    var sData = user.spiritData;
+    if (!sData || !sData.activeUid) return;
+
+    var now = Date.now();
+    // 최초 세팅
+    if (!sData.lastFindTime) sData.lastFindTime = now;
+
+    // 10분(600000ms) 경과 시 수집 굴림
+    if (now - sData.lastFindTime > 600000) {
+        sData.lastFindTime = now;
+        var activeSp = sData.roster.find(function(s) { return s.uid === sData.activeUid; });
+        
+        // 포만감이 10 이상일 때만 활동 가능
+        if (activeSp && activeSp.satiety >= 10) {
+            var dbInfo = SPIRIT_CONFIG.DB[activeSp.id];
+            if (!dbInfo) return;
+
+            // 등급별 아이템 발견 확률 설정
+            var chance = 0.20;
+            if (dbInfo.rank === "레어" || dbInfo.rank === "희귀") chance = 0.30;
+            else if (dbInfo.rank === "에픽") chance = 0.40;
+            else if (dbInfo.rank === "환상") chance = 0.50;
+            else if (dbInfo.rank === "신화") chance = 0.60;
+
+            // 확률 통과 시 아이템 획득
+            if (Math.random() < chance) {
+                activeSp.satiety -= 10;
+                user.skipHealing = true;
+
+                var rand = Math.random() * 100;
+                var rewardMsg = "";
+
+                if (rand < 60) { // 60% 확률
+                    var amt = Math.floor(Math.random() * 3) + 1;
+                    user.artifactPieces = (Number(user.artifactPieces) || 0) + amt;
+                    rewardMsg = "🧩 유물 조각 " + amt + "개";
+                } else if (rand < 90) { // 30% 확률
+                    user.ancientMaps = (Number(user.ancientMaps) || 0) + 1;
+                    rewardMsg = "🗺️ 고대 지도 1장";
+                } else { // 10% 확률
+                    user.royalMedals = (Number(user.royalMedals) || 0) + 1;
+                    rewardMsg = "🎖️ 명예의 왕실 훈장 1개";
+                }
+
+                var resBody = "🐾 [" + activeSp.name + "]이(가) 주변을 탐색하다가 반짝이는 물건을 주워왔습니다!\n\n" +
+                              "🎁 획득: " + rewardMsg + "\n" +
+                              "🍖 포만감: -10 (잔여: " + activeSp.satiety + "/100)";
+                
+                // 알림은 명령어를 친 실제 방으로 전송
+                var targetReplyRoom = (ALLOWED_ROOMS.indexOf(realRoom) === -1) ? "내리다" : realRoom;
+                Api.replyRoom(targetReplyRoom, formatCommand("✨ 정령의 보은", user, resBody));
+                safeSaveData(data, false);
+            }
+        }
+    }
+}
+
 //==========섹터22-1==========
 
 /* [독립형 함수] 통합 업무 처리 핸들러 1단계: 송금, 예금 및 기부 */

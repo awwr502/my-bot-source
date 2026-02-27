@@ -3472,18 +3472,19 @@ function _gameCityLogic(msg, user, data, replier, roomName, targetUid) {
                    hapIcon + " 행복도: " + city.happiness + " % (50% 미만 시 인구 이탈)\n" +
                    "💰 금고(세금): " + fp(city.vault) + " P\n" +
                    "🏗️ 가용 슬롯: " + bCount + " / " + city.slots + " 칸\n" +
-                   "━━━━━━━━━━━━━━━\n" +
-                   "📈 [예상 세입]: 매시간 +" + fp(expectedTax) + "P 자동 적립\n" +
-                   "📉 [예상 지출]: 매시간 -" + fp(expectedMaint) + "P 유지비 발생\n" +
-                   expandStatus + "\n" +
-                   "━━━━━━━━━━━━━━━\n" +
-                   "1. ⛏️ 구역 확장 (슬롯 확보)\n" +
-                   "2. 🏗️ 건축 및 개발\n" +
-                   "3. 💵 세금 징수 (지갑으로 이체)\n" +
-                   "4. 🛡️ 영지 관리 및 보수 (행복도 복구)\n\n" +
-                   "↩️ 뒤로 / ❎취소";
+                   "━━━━━━━━━━━━━━━\n" +
+                   "📈 [예상 세입]: 매시간 +" + fp(expectedTax) + "P 자동 적립\n" +
+                   "📉 [예상 지출]: 매시간 -" + fp(expectedMaint) + "P 유지비 발생\n" +
+                   expandStatus + "\n" +
+                   "━━━━━━━━━━━━━━━\n" +
+                   "1. ⛏️ 구역 확장 (슬롯 확보)\n" +
+                   "2. 🏗️ 건축 및 개발\n" +
+                   "3. 💵 세금 징수 (지갑으로 이체)\n" +
+                   "4. 🛡️ 영지 관리 및 보수 (행복도 복구)\n" +
+                   "5. 🏙️ 영지 건축물 현황 (목록 조회)\n\n" +
+                   "↩️ 뒤로 / ❎취소";
 
-        replier.reply(formatCommand("🏛️ 지하 도시 (Lv." + city.level + ")", user, body, "메뉴 번호를 입력하세요."));
+        replier.reply(formatCommand("🏛️ 지하 도시 (Lv." + city.level + ")", user, body, "메뉴 번호를 입력하세요."));
         
         if (!roomData.features.states.menuWait) roomData.features.states.menuWait = {};
         roomData.features.states.menuWait[targetUid] = { type: 'city_main', time: Date.now(), originRoom: roomName };
@@ -3846,19 +3847,59 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
             roomData.features.states.menuWait[targetUid] = { type: 'city_repair_confirm', time: Date.now(), extra: { cost: repairCost } };
             
             var repBody = "민심을 달래고 파손된 시설을 보수하여 영지의 행복도를 100%로 복구합니다.\n\n" +
-                          "📉 현재 행복도: " + city.happiness + "%\n" +
-                          "💰 필요 예산: " + fp(repairCost) + "P\n\n" +
-                          "진행하시겠습니까?\n\n" +
-                          "1. 예 (보수 진행)\n" +
-                          "2. 아니오 (취소)" + NAV;
-            
-            replier.reply(formatCommand("🛡️ 영지 긴급 보수", user, repBody, "번호를 입력하세요."));
-        }
-        else {
-            replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 입력하세요."));
-        }
-        return true;
-    }
+                          "📉 현재 행복도: " + city.happiness + "%\n" +
+                          "💰 필요 예산: " + fp(repairCost) + "P\n\n" +
+                          "진행하시겠습니까?\n\n" +
+                          "1. 예 (보수 진행)\n" +
+                          "2. 아니오 (취소)" + NAV;
+            
+            replier.reply(formatCommand("🛡️ 영지 긴급 보수", user, repBody, "번호를 입력하세요."));
+        }
+        else if (choice === "5") {
+            var cityBuilds = city.buildings || {};
+            var totalBCount = 0;
+            var parsedList = [];
+            
+            for (var k in cityBuilds) {
+                var cCount = cityBuilds[k].count || 1;
+                totalBCount += cCount;
+                var bData = CITY_CONFIG.BUILDINGS[k];
+                if (bData) {
+                    var tierNum = 1;
+                    var tierStr = "1티어";
+                    if (bData.reqLab === 1) { tierNum = 2; tierStr = "2티어"; }
+                    else if (bData.reqLab === 3) { tierNum = 3; tierStr = "3티어"; }
+                    else if (k === "lab") { tierNum = 0; tierStr = "특수"; } // 연구소는 티어보다 우선 배치
+                    
+                    parsedList.push({
+                        tierNum: tierNum,
+                        text: "• " + bData.icon + " [" + tierStr + "] " + bData.name + " x" + cCount
+                    });
+                }
+            }
+            
+            // 티어별 오름차순 정렬 (특수 -> 1티어 -> 2티어 -> 3티어)
+            parsedList.sort(function(a, b) {
+                return a.tierNum - b.tierNum;
+            });
+            
+            var bList = parsedList.map(function(item) { return item.text; });
+            if (bList.length === 0) {
+                bList.push("- 건설된 건축물이 없습니다.");
+            }
+            
+            var bBody = "현재 영지에 건설된 건축물 목록입니다.\n" +
+                        "(총 사용 슬롯: " + totalBCount + " / " + city.slots + "칸)\n\n" +
+                        bList.join("\n") + NAV;
+                        
+            replier.reply(formatCommand("🏙️ 영지 건축물 현황", user, bBody, "뒤로 가려면 [뒤로] 입력"));
+            roomData.features.states.menuWait[targetUid] = { type: 'city_buildings_view', time: Date.now(), originRoom: roomName };
+        }
+        else {
+            replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 입력하세요."));
+        }
+        return true;
+    }
     
     // [1-1단계] 구역 확장 확정 핸들러
     if (state.type === 'city_expand_confirm') {

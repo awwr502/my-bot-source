@@ -3020,6 +3020,41 @@ function findUserByName(roomData, name) {
 }
 
 /**
+ * 전역 아이템 검색 및 중복 선택 핸들러
+ * 기능: 아이템 이름 일부만 입력해도 여러 개가 매칭되면 번호 선택 창을 띄웁니다.
+ */
+function handleItemSelection(replier, targetUid, foundItems, type, extra, user, roomName) {
+    var data = getDatabase();
+    var roomData = data.rooms[roomName];
+    if (!roomData || !roomData.features) return;
+
+    roomData.features.states.selectWait[targetUid] = { 
+        timestamp: Date.now(), 
+        results: foundItems, 
+        type: type, 
+        extra: extra,
+        originRoom: roomName 
+    };
+    
+    var list = [];
+    for(var i = 0; i < foundItems.length; i++) {
+        var f = foundItems[i];
+        var catStr = "";
+        if (f.type === "special") catStr = "특수재화";
+        else if (f.type === "horse") catStr = "경마장비";
+        else if (f.type === "cargo") catStr = "일반화물";
+        else if (f.type === "spec") catStr = "특산품";
+        else if (f.type === "spirit") catStr = "정령아이템";
+        else if (f.type === "potion") catStr = "연금물약";
+        else if (f.type === "shop") catStr = "상점아이템";
+        
+        list.push((i + 1) + ". [" + catStr + "] " + f.name);
+    }
+
+    replier.reply(formatCommand("🔍 중복 아이템 선택", user, "입력하신 이름과 유사한 아이템이 여러 개 발견되었습니다.\n정확히 지급할 번호를 선택해주세요.\n\n" + list.join("\n") + "\n\n(취소: [취소])", "입력 대기: 30초"));
+}
+
+/**
  * 전역 유저 검색 엔진 (Cross-Room Search)
  * 기능: 현재 방뿐만 아니라 모든 방의 데이터베이스를 뒤져서 유저를 찾습니다.
  */
@@ -8011,16 +8046,33 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             replier.reply(formatAdmin("유저 데이터 조회", JSON.stringify(targetUser, null, 2))); 
         }
        else if (type === "admin_item_give") {
-            // [v17.6.4] 중복 유저 선택 후 아이템 지급 연동
-            _executeItemGive(targetUser, extra.item, extra.qty, replier, targetRoom);
-            
-            try { 
-                Api.replyRoom("베릭방", "⚙️ [Admin Action: Selected]\n• 실행자: " + user.name + "\n• 대상: [" + targetRoom + "] " + targetUser.name + "\n• 내용: " + extra.item + " x" + extra.qty + " 지급 완료"); 
-            } catch(e) {}
-            
-            safeSaveData(data, true);
-            return true; // 세션 종료
-        }
+            // [v17.6.4] 중복 유저 선택 완료 후 아이템 검색 및 지급 엔진 호출
+            // _executeItemGive 내부에서 아이템이 여러 개일 경우 아이템 선택 창으로 이어집니다.
+            _executeItemGive(targetUser, extra.item, extra.qty, replier, targetRoom);
+            safeSaveData(data, true);
+            return true; // 세션 종료
+        }
+        else if (type === "admin_item_give_confirm") {
+            // 유저 선택이 완료된 후, 아이템 중복까지 해결(선택)하여 확정 지급하는 로직
+            var tUserUid = extra.tUserUid;
+            var tRoomStr = extra.tRoom;
+            var targetRoomDataForGive = data.rooms[tRoomStr];
+            var finalTargetUser = targetRoomDataForGive.users[tUserUid];
+
+            if (!finalTargetUser) {
+                replier.reply(formatError(user, "데이터 접근 오류", "지급 대상 유저를 찾을 수 없습니다."));
+                return true;
+            }
+
+            _finalizeItemGive(finalTargetUser, selected, extra.qty, replier, tRoomStr);
+            
+            try { 
+                Api.replyRoom("베릭방", "⚙️ [Admin Action: Selected]\n• 실행자: " + user.name + "\n• 대상: [" + tRoomStr + "] " + finalTargetUser.name + "\n• 내용: " + selected.name + " x" + extra.qty + " 지급 완료"); 
+            } catch(e) {}
+            
+            safeSaveData(data, true);
+            return true; 
+        }
         else if (type === "admin_point_give") {
             // [v17.6.4] 중복 유저 선택 후 포인트 지급 연동
             util_updatePoint(targetUser, targetRoomData, extra.amount, "관리자 지급", targetRoom);
@@ -15443,132 +15495,157 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
     return false;
 }
 
-/** * [B] 실제 지급 기계 (함수 바깥 - 전역 스코프)
- * 이 기계는 함수 바깥에 따로 있어야 중복 선택 창(섹터 11)에서도 호출할 수 있습니다.
- */
+/**  * [B] 실제 지급 탐색 기계 (함수 바깥 - 전역 스코프)
+ * 부분 일치 검색을 통해 아이템을 찾고, 중복 시 선택 창으로 유도합니다.
+ */
 function _executeItemGive(tUser, iName, count, replier, tRoom) {
-    tUser.skipHealing = true;
-    var logMsg = "";
     var cleanI = iName.replace(/\s/g,"");
-    var rStub = { reply: function(m) { Api.replyRoom(tRoom, m); } };
-    
-    // 1. 특수 재화 매핑 (이름이 고정된 시스템 필수 변수들)
-    var specialItems = {
-        "훈장": "royalMedals", "왕실훈장": "royalMedals",
-        "고대지도": "ancientMaps", "지도": "ancientMaps",
-        "유물조각": "artifactPieces", "조각": "artifactPieces",
-        "미확인교역품": "unknownCargo",
-        "진귀한보물": "rareSpecialties",
-        "박스조각": "boxFragments"
-    };
+    var matches = [];
 
-    if (specialItems[cleanI]) {
-        var field = specialItems[cleanI];
-        tUser[field] = (Number(tUser[field]) || 0) + count;
-        
-        if (field === "artifactPieces") {
-            if (tUser.artifactPieces >= 50) util_checkAndAwardTitle(tUser, rStub, "도굴왕", 2915, "⚜️", "내리다 고고학 연구소", "유물 조각 50개 달성", "[장착 효과]: 희귀 광물 발견 확률 20% 상승", tRoom);
-            else if (tUser.artifactPieces >= 10) util_checkAndAwardTitle(tUser, rStub, "도굴꾼", 2911, "🧤", "내리다 고고학 연구소", "유물 조각 10개 달성", "첫 번째 유물 칭호 획득!", tRoom);
-        }
-        if (field === "boxFragments") {
-            while (tUser.boxFragments >= 5) { tUser.boxFragments -= 5; tUser.boxTickets = (Number(tUser.boxTickets) || 0) + 1; }
-        }
-        logMsg = "[" + iName + "] " + count + "개 지급 (특수재화)";
-        return replier.reply(formatAdmin("✅ 아이템 지급 성공", "대상: [" + tRoom + "] " + tUser.name + "\n내용: " + logMsg));
-    }
+    // 1. 특수 재화 매핑
+    var specialNames = ["왕실훈장", "고대지도", "유물조각", "미확인교역품", "진귀한보물", "박스조각"];
+    specialNames.forEach(function(n) {
+        if (n.indexOf(cleanI) !== -1 || cleanI.indexOf(n) !== -1) matches.push({ type: "special", name: n });
+    });
 
-    // 경마 부품 체크
-    if (["안장", "고삐", "등자", "채찍"].indexOf(cleanI) !== -1) {
-        if (!tUser.horseParts) tUser.horseParts = [];
-        for (var m = 0; m < count; m++) { if (tUser.horseParts.indexOf(cleanI) === -1) tUser.horseParts.push(cleanI); }
-        if (tUser.horseParts.length === 4) util_checkAndAwardTitle(tUser, rStub, "경마왕", 777, "🏇", "내리다 경마 협회", "경마 장비 4종 수집", "[장착 효과]: 배팅 취소 위약금 전액 면제", tRoom);
-        logMsg = "[" + iName + "] " + count + "개 지급 (경마장비)";
-        return replier.reply(formatAdmin("✅ 아이템 지급 성공", "대상: [" + tRoom + "] " + tUser.name + "\n내용: " + logMsg));
-    }
+    // 2. 경마 부품
+    var horseParts = ["안장", "고삐", "등자", "채찍"];
+    horseParts.forEach(function(n) {
+        if (n.indexOf(cleanI) !== -1 || cleanI.indexOf(n) !== -1) matches.push({ type: "horse", name: n });
+    });
 
-    // 2. 동적 화물 (일반 교역품 - 창고행)
+    // 3. 동적 화물 (일반 교역품)
     var tradeGoods = Object.keys(SYSTEM_CONFIG.TRADE.GOODS_COST);
     if (tradeGoods.indexOf("밀수품") === -1) tradeGoods.push("밀수품");
-    var matchedGood = "";
-    for (var i = 0; i < tradeGoods.length; i++) {
-        if (iName.indexOf(tradeGoods[i]) !== -1 || cleanI.indexOf(tradeGoods[i].replace(/\s/g,"")) !== -1) {
-            matchedGood = tradeGoods[i]; break;
+    tradeGoods.forEach(function(n) {
+        if (n.indexOf(cleanI) !== -1 || cleanI.indexOf(n) !== -1) matches.push({ type: "cargo", name: n });
+    });
+
+    // 4. 동적 특산품
+    for (var n in TRADE_RELATION) {
+        var sName = TRADE_RELATION[n].set;
+        if (sName.replace(/\s/g,"").indexOf(cleanI) !== -1 || cleanI.indexOf(sName.replace(/\s/g,"")) !== -1) {
+            matches.push({ type: "spec", name: sName });
         }
     }
-    
-    if (matchedGood) {
+
+    // 5. 정령 아이템
+    if (typeof SPIRIT_CONFIG !== 'undefined' && SPIRIT_CONFIG.ITEMS) {
+        for (var sk in SPIRIT_CONFIG.ITEMS) {
+            var spName = SPIRIT_CONFIG.ITEMS[sk].name;
+            if (spName.replace(/\s/g,"").indexOf(cleanI) !== -1 || cleanI.indexOf(spName.replace(/\s/g,"")) !== -1) {
+                matches.push({ type: "spirit", name: spName, key: sk });
+            }
+        }
+    }
+
+    // 6. 연금술 포션
+    if (typeof ALCHEMY_CONFIG !== 'undefined' && ALCHEMY_CONFIG.RECIPES) {
+        for (var pk in ALCHEMY_CONFIG.RECIPES) {
+            var pName = ALCHEMY_CONFIG.RECIPES[pk].name;
+            if (pName.replace(/\s/g,"").indexOf(cleanI) !== -1 || cleanI.indexOf(pName.replace(/\s/g,"")) !== -1) {
+                matches.push({ type: "potion", name: pName, key: pk });
+            }
+        }
+    }
+
+    // 7. 상점 아이템 (아이콘, 칭호 등)
+    for (var i = 0; i < SHOP_ITEMS.length; i++) {
+        var shName = SHOP_ITEMS[i].name;
+        if (shName.replace(/\s/g,"").indexOf(cleanI) !== -1 || cleanI.indexOf(shName.replace(/\s/g,"")) !== -1) {
+            var dup = false;
+            for(var j=0; j<matches.length; j++) { if(matches[j].name === shName) dup=true; }
+            if(!dup) matches.push({ type: "shop", name: shName, item: SHOP_ITEMS[i] });
+        }
+    }
+
+    // [정밀 필터] 완전히 일치하는 항목이 있다면 중복 창을 무시하고 해당 항목으로 즉시 확정
+    var exactMatches = matches.filter(function(m) { return m.name.replace(/\s/g,"") === cleanI; });
+    if (exactMatches.length > 0) {
+        matches = exactMatches;
+    }
+
+    // 아이템 중복 발생 시 선택 핸들러 호출
+    if (matches.length > 1) {
+        if (typeof handleItemSelection === 'function') {
+            handleItemSelection(replier, tUser.uid, matches, "admin_item_give_confirm", { tUserUid: tUser.uid, tRoom: tRoom, qty: count, iName: iName }, tUser, tRoom);
+        } else {
+            replier.reply("오류: 아이템 중복 선택 핸들러를 찾을 수 없습니다.");
+        }
+        return;
+    } 
+    
+    // 일치하는 시스템 아이템이 없을 경우 기존처럼 수동 지급 처리 (창고 강제 선적용)
+    var finalItemInfo = (matches.length === 1) ? matches[0] : { type: "manual", name: iName };
+    
+    _finalizeItemGive(tUser, finalItemInfo, count, replier, tRoom);
+}
+
+/**  * [C] 단일 아이템 최종 지급 집행 기계 
+ */
+function _finalizeItemGive(tUser, matchInfo, count, replier, tRoom) {
+    tUser.skipHealing = true;
+    var logMsg = "";
+    var rStub = { reply: function(m) { try { Api.replyRoom(tRoom, m); } catch(e){} } };
+
+    if (matchInfo.type === "special") {
+        var specMap = {
+            "왕실훈장": "royalMedals",
+            "고대지도": "ancientMaps",
+            "유물조각": "artifactPieces",
+            "미확인교역품": "unknownCargo",
+            "진귀한보물": "rareSpecialties",
+            "박스조각": "boxFragments"
+        };
+        var field = specMap[matchInfo.name];
+        if (field) {
+            tUser[field] = (Number(tUser[field]) || 0) + count;
+            if (field === "artifactPieces") {
+                if (tUser.artifactPieces >= 50) util_checkAndAwardTitle(tUser, rStub, "도굴왕", 2915, "⚜️", "내리다 고고학 연구소", "유물 조각 50개 달성", "[장착 효과]: 희귀 광물 발견 확률 20% 상승", tRoom);
+                else if (tUser.artifactPieces >= 10) util_checkAndAwardTitle(tUser, rStub, "도굴꾼", 2911, "🧤", "내리다 고고학 연구소", "유물 조각 10개 달성", "첫 번째 유물 칭호 획득!", tRoom);
+            }
+            if (field === "boxFragments") {
+                while (tUser.boxFragments >= 5) { tUser.boxFragments -= 5; tUser.boxTickets = (Number(tUser.boxTickets) || 0) + 1; }
+            }
+        }
+        logMsg = "[" + matchInfo.name + "] " + count + "개 지급 (특수재화)";
+    }
+    else if (matchInfo.type === "horse") {
+        if (!tUser.horseParts) tUser.horseParts = [];
+        for (var m = 0; m < count; m++) { if (tUser.horseParts.indexOf(matchInfo.name) === -1) tUser.horseParts.push(matchInfo.name); }
+        if (tUser.horseParts.length === 4) util_checkAndAwardTitle(tUser, rStub, "경마왕", 777, "🏇", "내리다 경마 협회", "경마 장비 4종 수집", "[장착 효과]: 배팅 취소 위약금 전액 면제", tRoom);
+        logMsg = "[" + matchInfo.name + "] " + count + "개 지급 (경마장비)";
+    }
+    else if (matchInfo.type === "cargo") {
         if (!tUser.warehouse) tUser.warehouse = {};
         if (!tUser.warehouseAvg) tUser.warehouseAvg = {};
-        var oldQty = Number(tUser.warehouse[matchedGood] || 0);
-        var oldAvg = Number(tUser.warehouseAvg[matchedGood] || 0);
-        var basePrice = SYSTEM_CONFIG.TRADE.GOODS_COST[matchedGood] || 10000;
-        if (matchedGood === "밀수품") basePrice = 10000;
-        
-        tUser.warehouse[matchedGood] = oldQty + count;
-        tUser.warehouseAvg[matchedGood] = Math.floor(((oldAvg * oldQty) + (basePrice * count)) / (oldQty + count));
-        
-        logMsg = "[" + matchedGood + "] " + count + "상자 (물류 창고 지급)";
-        return replier.reply(formatAdmin("✅ 아이템 지급 성공", "대상: [" + tRoom + "] " + tUser.name + "\n내용: " + logMsg));
+        var oldQty = Number(tUser.warehouse[matchInfo.name] || 0);
+        var oldAvg = Number(tUser.warehouseAvg[matchInfo.name] || 0);
+        var basePrice = SYSTEM_CONFIG.TRADE.GOODS_COST[matchInfo.name] || 10000;
+        if (matchInfo.name === "밀수품") basePrice = 10000;
+        
+        tUser.warehouse[matchInfo.name] = oldQty + count;
+        tUser.warehouseAvg[matchInfo.name] = Math.floor(((oldAvg * oldQty) + (basePrice * count)) / (oldQty + count));
+        logMsg = "[" + matchInfo.name + "] " + count + "상자 (물류 창고 지급)";
     }
-
-    // 3. 동적 특산품 (창고행)
-    var matchedSpec = "";
-    for (var n in TRADE_RELATION) {
-        if (TRADE_RELATION[n].set.replace(/\s/g,"") === cleanI || iName.indexOf(TRADE_RELATION[n].set) !== -1) {
-            matchedSpec = TRADE_RELATION[n].set; break;
-        }
-    }
-    if (matchedSpec) {
+    else if (matchInfo.type === "spec") {
         if (!tUser.warehouseSpec) tUser.warehouseSpec = {};
-        tUser.warehouseSpec[matchedSpec] = (Number(tUser.warehouseSpec[matchedSpec]) || 0) + count;
-        logMsg = "[특산품: " + matchedSpec + "] " + count + "상자 (물류 창고 지급)";
-        return replier.reply(formatAdmin("✅ 아이템 지급 성공", "대상: [" + tRoom + "] " + tUser.name + "\n내용: " + logMsg));
+        tUser.warehouseSpec[matchInfo.name] = (Number(tUser.warehouseSpec[matchInfo.name]) || 0) + count;
+        logMsg = "[특산품: " + matchInfo.name + "] " + count + "상자 (물류 창고 지급)";
     }
-
-    // 4. 동적 정령 아이템 (알/사료 - 정령가방행)
-    if (typeof SPIRIT_CONFIG !== 'undefined' && SPIRIT_CONFIG.ITEMS) {
-        var matchedSpiritKey = "";
-        for (var sk in SPIRIT_CONFIG.ITEMS) {
-            if (SPIRIT_CONFIG.ITEMS[sk].name.replace(/\s/g,"") === cleanI || SPIRIT_CONFIG.ITEMS[sk].name.indexOf(iName) !== -1) {
-                matchedSpiritKey = sk; break;
-            }
-        }
-        if (matchedSpiritKey) {
-            if (!tUser.spiritData) tUser.spiritData = { items: {} };
-            if (!tUser.spiritData.items) tUser.spiritData.items = {};
-            tUser.spiritData.items[matchedSpiritKey] = (Number(tUser.spiritData.items[matchedSpiritKey]) || 0) + count;
-            logMsg = "[" + SPIRIT_CONFIG.ITEMS[matchedSpiritKey].name + "] " + count + "개 (정령 보관함 지급)";
-            return replier.reply(formatAdmin("✅ 아이템 지급 성공", "대상: [" + tRoom + "] " + tUser.name + "\n내용: " + logMsg));
-        }
+    else if (matchInfo.type === "spirit") {
+        if (!tUser.spiritData) tUser.spiritData = { items: {} };
+        if (!tUser.spiritData.items) tUser.spiritData.items = {};
+        tUser.spiritData.items[matchInfo.key] = (Number(tUser.spiritData.items[matchInfo.key]) || 0) + count;
+        logMsg = "[" + matchInfo.name + "] " + count + "개 (정령 보관함 지급)";
     }
-
-    // 5. 동적 연금술 포션 (제작 물약 - 물약 가방행)
-    if (typeof ALCHEMY_CONFIG !== 'undefined' && ALCHEMY_CONFIG.RECIPES) {
-        var matchedPotionKey = "";
-        for (var pk in ALCHEMY_CONFIG.RECIPES) {
-            var pName = ALCHEMY_CONFIG.RECIPES[pk].name.replace(/\s/g,"");
-            if (pName === cleanI || ALCHEMY_CONFIG.RECIPES[pk].name.indexOf(iName) !== -1) {
-                matchedPotionKey = pk; break;
-            }
-        }
-        if (matchedPotionKey) {
-            if (!tUser.potions) tUser.potions = { heal: 0, maxhp: 0, atk: 0 };
-            tUser.potions[matchedPotionKey] = (Number(tUser.potions[matchedPotionKey]) || 0) + count;
-            logMsg = "[" + ALCHEMY_CONFIG.RECIPES[matchedPotionKey].name + "] " + count + "개 (물약 가방 지급)";
-            return replier.reply(formatAdmin("✅ 아이템 지급 성공", "대상: [" + tRoom + "] " + tUser.name + "\n내용: " + logMsg));
-        }
+    else if (matchInfo.type === "potion") {
+        if (!tUser.potions) tUser.potions = { heal: 0, maxhp: 0, atk: 0 };
+        tUser.potions[matchInfo.key] = (Number(tUser.potions[matchInfo.key]) || 0) + count;
+        logMsg = "[" + matchInfo.name + "] " + count + "개 (물약 가방 지급)";
     }
-
-    // 6. 상점 아이템 (인벤토리/효과행)
-    var item = null;
-    for (var i = 0; i < SHOP_ITEMS.length; i++) {
-        var sN = SHOP_ITEMS[i].name.replace(/\s/g,"");
-        if (sN === cleanI || SHOP_ITEMS[i].name.indexOf(iName) !== -1) {
-            item = SHOP_ITEMS[i]; break;
-        }
-    }
-    
-    if (item) {
+    else if (matchInfo.type === "shop") {
+        var item = matchInfo.item;
         if (item.effect === "icon" || item.effect === "title") {
             for (var k = 0; k < count; k++) {
                 tUser.inventory.push({ id: item.id, name: item.name, icon: item.icon, effect: item.effect, title: item.title || "" });
@@ -15590,11 +15667,20 @@ function _executeItemGive(tUser, iName, count, replier, tRoom) {
             tUser.warehouse[item.value] = (Number(tUser.warehouse[item.value]) || 0) + count;
         }
         logMsg = "[" + item.name + "] " + count + "개 지급 완료";
-        return replier.reply(formatAdmin("✅ 아이템 지급 성공", "대상: [" + tRoom + "] " + tUser.name + "\n내용: " + logMsg));
+    }
+    else if (matchInfo.type === "manual") {
+        // 예외 수동 처리 (강제 창고행)
+        if (!tUser.warehouse) tUser.warehouse = {};
+        if (!tUser.warehouseAvg) tUser.warehouseAvg = {};
+        var mName = matchInfo.name;
+        var mOldQty = Number(tUser.warehouse[mName] || 0);
+        var mOldAvg = Number(tUser.warehouseAvg[mName] || 0);
+        tUser.warehouse[mName] = mOldQty + count;
+        tUser.warehouseAvg[mName] = Math.floor(((mOldAvg * mOldQty) + (10000 * count)) / (mOldQty + count));
+        logMsg = "[" + mName + "] " + count + "상자 (미등록 화물 강제 선적 완료)";
     }
 
-    // 어느 목록에서도 찾지 못했을 경우
-    replier.reply(formatAdmin("🚫 지급 실패", "[" + iName + "] 아이템을 시스템 DB에서 찾을 수 없습니다."));
+    replier.reply(formatAdmin("✅ 아이템 지급 성공", "대상: [" + tRoom + "] " + tUser.name + "\n내용: " + logMsg));
 }
 
 //==========섹터37==========

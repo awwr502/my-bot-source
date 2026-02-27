@@ -1708,8 +1708,9 @@ var CMD_LIST = {
         { cmd: "/화물복구", desc: "[닉네임] [품목] [수량] 화물 수동 복구", func: "_adminUserManageLogic" },
         { cmd: "/무역즉시완료", desc: "[닉네임] 항해 시간 즉시 종료 및 도착 처리", func: "_adminUserManageLogic" },
         { cmd: "/무역재고초기화", desc: "모든 항구의 실물 재고를 2000개로 강제 리셋", func: "_adminEconomyLogic" },
-        { cmd: "/직업복구", desc: "[닉네임] [해적|해군] 직업 수동 복구 (선박 보존)", func: "_adminUserManageLogic" },
-        { cmd: "/창고마이그레이션", desc: "전 서버 유저의 가방 화물을 물류 창고로 일괄 이관", func: "_adminEconomyLogic" }
+        { cmd: "/직업복구", desc: "[닉네임] [해적|해군] 직업 수동 복구 (선박 보존)", func: "_adminUserManageLogic" },      
+        { cmd: "/창고마이그레이션", desc: "전 서버 유저의 가방 화물을 물류 창고로 일괄 이관", func: "_adminEconomyLogic" },
+        { cmd: "/무역재고", desc: "항구별 실물 재고 및 AI 상단 동향 조회", func: "_adminEconomyLogic" }
     ]
 };
 
@@ -15178,6 +15179,80 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         }
         safeSaveData(data, true);
         replier.reply(formatAdmin("📦 창고 마이그레이션 완료", "기존 유저 " + count + "명의 무한 가방(선박 적재함) 데이터를\n모두 개인 물류 창고로 안전하게 이관했습니다.\n\n💡 용량을 초과하여 이관된 유저는 초과분만큼 창고 입고가 제한되며 출고(판매)만 가능합니다."));
+        return true;
+    }
+
+    /* [신규] 전 세계 무역 재고 및 AI 상단 동향 확인 */
+    if (msg === "/무역재고") {
+        var targetZone = "내리다"; // 어느 방에서 치든 '내리다' 방 강제 고정 참조
+        var mainRoomData = data.rooms[targetZone];
+        var pData = (mainRoomData && mainRoomData.features && mainRoomData.features.portData) ? mainRoomData.features.portData : null;
+        
+        if (!pData) {
+            replier.reply(formatAdmin("오류", "항구 데이터가 아직 생성되지 않았습니다."));
+            return true;
+        }
+
+        var report = [];
+        var nations = ["포르투", "코콜라", "나폴리", "베라크루스", "킴벌리"];
+        var goodsOrder = ["식료품", "공업품", "공예품", "귀금속", "보석"];
+        var goodsIcons = { "식료품":"🍎", "공업품":"⚙️", "공예품":"🏺", "귀금속":"🪙", "보석":"💎" };
+
+        report.push("[🏛️ 각 항구별 실물 재고]");
+        for (var i = 0; i < nations.length; i++) {
+            var nName = nations[i];
+            var inv = pData[nName] ? pData[nName].inventory : null;
+            
+            if (!inv) {
+                report.push("📍 " + nName + ": 데이터 없음");
+                continue;
+            }
+
+            var lines = [];
+            goodsOrder.forEach(function(g) {
+                var qty = Number(inv[g] || 0);
+                lines.push(goodsIcons[g] + g + ": " + fp(qty));
+            });
+            
+            report.push("📍 " + nName + "\n└ " + lines.join(" | "));
+        }
+
+        // AI 상단 동향 파악
+        var aiReports = [];
+        var now = Date.now();
+        if (mainRoomData && mainRoomData.users) {
+            for (var uid in mainRoomData.users) {
+                if (uid.indexOf("AI_BOT_") === 0) {
+                    var aiUser = mainRoomData.users[uid];
+                    if (aiUser.voyage && aiUser.voyage.active) {
+                        var remainMs = aiUser.voyage.arrival - now;
+                        var timeStr = "정산 대기 중";
+                        if (remainMs > 0) {
+                            var m = Math.floor(remainMs / 60000);
+                            var s = Math.floor((remainMs % 60000) / 1000);
+                            timeStr = m + "분 " + s + "초 남음";
+                        }
+                        aiReports.push("🚢 " + aiUser.name.replace("🚢 ", "") + " [" + aiUser.voyage.origin + " ➔ " + aiUser.voyage.dest + "] (" + timeStr + ")");
+                    } else {
+                        aiReports.push("⚓ " + aiUser.name.replace("🚢 ", "") + " [정박 중: " + (aiUser.currentLoc || "알수없음") + "]");
+                    }
+                }
+            }
+        }
+        
+        if (aiReports.length > 0) {
+            report.push("\n[🤖 AI 다국적 상단 실시간 동향]\n" + aiReports.join("\n"));
+        }
+
+        // 동적 스케일링으로 계산된 현재 시장의 100% 시세 기준점 표시
+        var tradeMarket = mainRoomData.features.tradeMarket;
+        var currentBaseline = (tradeMarket && tradeMarket.currentBaseline) 
+                              ? tradeMarket.currentBaseline 
+                              : ((SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.BASELINE) ? SYSTEM_CONFIG.TRADE.BASELINE : 20000);
+
+        var summary = "📊 활성 인구 비례 100% 시세 기준점: " + fp(currentBaseline) + "개";
+
+        replier.reply(formatAdmin("🌍 글로벌 무역 종합 관제", report.join("\n") + "\n━━━━━━━━━━━━━━━\n" + summary));
         return true;
     }
 

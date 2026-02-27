@@ -17495,26 +17495,44 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
                 tCost += (sBase * Number(v.specialtySnapshot[s]));
             }
 
-            // 2. 수수료 및 포인트 정산
-            var returnFee = Math.max(10000, Math.floor(tCost * 0.01));
-            if (Number(user.point) < returnFee) {
-                replier.reply(formatError(user, "자금 부족", "긴급회항 수수료 " + fp(returnFee) + "P가 부족합니다."));
-                return true;
-            }
+           // 2. 수수료 및 포인트 정산
+            var returnFee = Math.max(10000, Math.floor(tCost * 0.01));
+            if (Number(user.point) < returnFee) {
+                replier.reply(formatError(user, "자금 부족", "긴급회항 수수료 " + fp(returnFee) + "P가 부족합니다."));
+                return true;
+            }
 
-            user.skipHealing = true;
-            util_updatePoint(user, data.rooms["내리다"], -returnFee, "긴급회항 수수료 지불", roomName);
-            user.currentLoc = v.origin || "무역 지부";
-            v.active = false;
+            user.skipHealing = true;
+            util_updatePoint(user, data.rooms["내리다"], -returnFee, "긴급회항 수수료 지불", roomName);
+            user.currentLoc = v.origin || "무역 지부";
+            v.active = false;
 
-            // 3. UI 출력 및 세션 파기
-            var resBody = "🚨 [긴급 상황 발생: 즉시 회항]\n━━━━━━━━━━━━━━━\n" +
-                          "선단의 안전을 위해 모든 항로를 취소하고\n" +
-                          "출발 항구인 [" + user.currentLoc + "](으)로 복귀했습니다.\n\n" +
-                          "💰 지불 수수료: -" + fp(returnFee) + "P\n" +
-                          "📦 상태: 모든 화물 안전하게 보존됨";
+            // 긴급회항 시 화물을 창고가 아닌 '선박 적재함(cargo)'에 그대로 유지
+            user.cargo = JSON.parse(JSON.stringify(v.cargoSnapshot || {}));
+            user.specialties = JSON.parse(JSON.stringify(v.specialtySnapshot || {}));
 
-            replier.reply(formatCommand("⚓ 긴급 회항 완료", user, resBody, "내 잔액: " + fp(user.point) + "P"));
+            // 진귀한 보물 / 미확인 교역품 복구
+            user.rareSpecialties = Number(user.specialties["_rare"] || 0);
+            user.unknownCargo = Number(user.specialties["_unknown"] || 0);
+            if (user.specialties["_rare"] !== undefined) delete user.specialties["_rare"];
+            if (user.specialties["_unknown"] !== undefined) delete user.specialties["_unknown"];
+
+            // 선박 평단가 누락분 보정
+            if (!user.cargoAvg) user.cargoAvg = {};
+            for (var g in user.cargo) {
+                if (!user.cargoAvg[g]) {
+                    user.cargoAvg[g] = (user.warehouseAvg && user.warehouseAvg[g]) ? user.warehouseAvg[g] : (tradeCfg.GOODS_COST[g] || 10000);
+                }
+            }
+
+            // 3. UI 출력 및 세션 파기
+            var resBody = "🚨 [긴급 상황 발생: 즉시 회항]\n━━━━━━━━━━━━━━━\n" +
+                          "선단의 안전을 위해 모든 항로를 취소하고\n" +
+                          "출발 항구인 [" + user.currentLoc + "](으)로 복귀했습니다.\n\n" +
+                          "💰 지불 수수료: -" + fp(returnFee) + "P\n" +
+                          "📦 상태: 모든 화물 안전하게 보존됨 (선박 적재 유지)";
+
+            replier.reply(formatCommand("⚓ 긴급 회항 완료", user, resBody, "내 잔액: " + fp(user.point) + "P"));
             
             // 모든 연동 구역의 세션 제거 (1:1방 동기화 대응 및 명령어 먹통 방지)
             if (data.rooms[roomName].features.states.menuWait) delete data.rooms[roomName].features.states.menuWait[targetUid];

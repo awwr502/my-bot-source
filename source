@@ -3747,12 +3747,12 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
                 var labCount = city.buildings["lab"] ? (city.buildings["lab"].count || 1) : 0;
                 
                 var upgradeMap = {
-              0: "apartment": "tent",
-              1: "mansion": "apartment",
-              2: "mall": "market",
-              3: "bank": "mall",
-              4: "ballista": "tower",
-              5: "bastion": "ballista"
+                    "apartment": "tent",
+                    "mansion": "apartment",
+                    "mall": "market",
+                    "bank": "mall",
+                    "ballista": "tower",
+                    "bastion": "ballista"
                 };
 
                 // 카테고리별 그룹화 및 순서 정의
@@ -5868,9 +5868,39 @@ function _runSector16Logic(data, ctx) {
 
                         if (isModified) u.skipHealing = true;
                     }
-                }
-            }
-            if (cityFeeCollected > 0 || cityTaxDistributed > 0) {
+                    // 4. 심해 괴수 도시 침공 이벤트 (인구 100명 이상 시 10% 확률)
+                    if (city.population >= 100 && Math.random() < 0.30) {
+                        var totalDef = 0;
+                        for (var bKey in city.buildings) {
+                            var bCfg = CITY_CONFIG.BUILDINGS[bKey];
+                            if (bCfg && bCfg.defense) totalDef += (bCfg.defense * (city.buildings[bKey].count || 1));
+                        }
+
+                        var monsterAtk = Math.floor(Math.random() * (city.population / 2)) + 50;
+                        var monsterNames = ["심해 거대 게", "방사능 슬라임", "굶주린 히드라", "그림자 포식자"];
+                        var mName = monsterNames[Math.floor(Math.random() * monsterNames.length)];
+
+                        if (totalDef >= monsterAtk) {
+                            city.happiness = Math.min(100, city.happiness + 5);
+                            var winMsg = "🛡️ [도시 방어 성공]\n" + mName + "(이)가 도시를 습격했으나 강력한 방어 시설로 격퇴했습니다!\n✨ 행복도 +5% 상승";
+                            try { Api.replyRoom(u.mining.room || "내리다", formatCommand("👾 침공 방어 보고", u, winMsg)); } catch(e) {}
+                        } else {
+                            var lostVault = Math.floor(city.vault * 0.2);
+                            var lostPop = Math.floor(city.population * 0.05);
+                            city.vault -= lostVault;
+                            city.population = Math.max(0, city.population - lostPop);
+                            city.happiness = Math.max(0, city.happiness - 20);
+                            var loseMsg = "🚨 [도시 방어 실패]\n" + mName + "의 습격으로 도시가 유린당했습니다!\n\n" +
+                                          "💰 금고 손실: -" + fp(lostVault) + "P\n" +
+                                          "👥 인구 손실: -" + lostPop + "명\n" +
+              0:                           "📉 행복도 하락: -20%";
+                            try { Api.replyRoom(u.mining.room || "내리다", formatCommand("👾 침공 피해 보고", u, loseMsg)); } catch(e) {}
+                        }
+                        u.skipHealing = true;
+                    }
+                }
+            }
+            if (cityFeeCollected > 0 || cityTaxDistributed > 0) {
                 Log.info("🏛️ [Underground City] 매시간 도시 정산 완료 (유지비 징수: " + fp(cityFeeCollected) + "P / 세금 적립: " + fp(cityTaxDistributed) + "P)");
             }
         }

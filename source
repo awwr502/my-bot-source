@@ -18623,6 +18623,7 @@ function _departVoyage(user, data, replier, roomName, dest, cfg, selC, selS, esc
         hasEncountered: prevEncountered, 
         contractSnapshot: currentQuest, 
         marketSnapshot: JSON.parse(JSON.stringify(roomData.features.tradeMarket || {})), 
+        portSnapshot: JSON.parse(JSON.stringify(roomData.features.portData || {})), 
         ecoMultSnapshot: util_getEcoMultiplier(roomName),
         cargoSnapshot: finalCargoSnap, 
         specialtySnapshot: finalSpecSnap,
@@ -19404,9 +19405,9 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         // 1. 해당 특산품 품목군(parentGood)의 현재 시세(Rate)를 스냅샷에서 로드
         var parentRate = (nInfo.rates && nInfo.rates[parentGood]) ? nInfo.rates[parentGood] : 1.0;
 
-        // [신규] 목적지 항구의 특산품 대유행 여부 확인
-        var pInfoTarget = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : null;
-        var isBoom = (pInfoTarget && pInfoTarget.specialtyBoom === true);
+        // 목적지 항구의 특산품 대유행 여부 확인 (실시간 데이터 대신 박제된 스냅샷 참조)
+        var pInfoTargetSnap = (v.portSnapshot && v.portSnapshot[v.dest]) ? v.portSnapshot[v.dest] : ((economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : null);
+        var isBoom = (pInfoTargetSnap && pInfoTargetSnap.specialtyBoom === true);
 
         // 2. 자국 생산물(수출 금지) 체크: 생산지와 판매지가 같으면 매입 거부
         if (parentGood === producedByDest) { 
@@ -19459,12 +19460,12 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         efficientMargin = 0;
     }
     else {
-        // 일반 항구 정산 로직 (기존 효율 및 발전도 보너스 유지)
-        efficientMargin = Math.floor(baseMargin * shipEff);
-        var pInfo = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : { level: 1 };
-        var portLevelRate = Number((pInfo.level - 1) * 0.01);
-        pBonusTotal = efficientMargin > 0 ? Math.floor(efficientMargin * portLevelRate) : 0;
-    }
+        // 선박 효율의 역효과 가드 적용: 이익(+)일 때만 배율을 곱하고, 손실(-)일 때는 원금만 반영
+        efficientMargin = (baseMargin > 0) ? Math.floor(baseMargin * shipEff) : baseMargin;
+        var pInfo = (economyRoomData.features.portData && economyRoomData.features.portData[v.dest]) ? economyRoomData.features.portData[v.dest] : { level: 1 };
+        var portLevelRate = Number((pInfo.level - 1) * 0.01);
+        pBonusTotal = efficientMargin > 0 ? Math.floor(efficientMargin * portLevelRate) : 0;
+    }
 
     // 3단계: 최종 세전 마진 확정
     var margin = efficientMargin + pBonusTotal;

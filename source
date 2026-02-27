@@ -3375,26 +3375,44 @@ function util_refreshMarketRate(roomData, portName, goodName) {
 
 /* 🏛️ 지하 도시(Underground City) 상수 설정 */
 var CITY_CONFIG = {
-    EXPAND_COST_BASE: 3000000, // 슬롯 확장 기본 비용 (300만P x 현재 슬롯 수)
+    EXPAND_COST_BASE: 3000000, // 슬롯 확장 기본 비용
     EXPAND_TIME_MS: 30 * 60 * 1000, // 구역 개척 소요 시간 (30분)
     MAX_SLOTS: 10,
-    TAX_PER_POP: 150, // [Gemini 밸런싱] 인플레이션 억제를 위해 300 -> 150 하향
-    MAINT_PER_BLD: 15000, // 건물 1개당 시간당 소모되는 유지비
+    TAX_PER_POP: 150, // 인구 1명당 시간당 세금
+    MAINT_PER_BLD: 15000, // 건물 1개당 시간당 유지비
     BUILDINGS: {
-        // [1티어 기본 건물 - 연구소 필요 없음]
-        "tent": { key: "tent", name: "천막촌", icon: "🏕️", type: "주거", cost: 1000000, popBonus: 100, reqLab: 0, desc: "기본 거주 구역 (+100명)" },
-        "market": { key: "market", name: "지하 시장", icon: "⚖️", type: "상업", cost: 3000000, taxBoost: 0.1, reqLab: 0, desc: "세금 수익률 10% 증가" },
-        "tower": { key: "tower", name: "경비탑", icon: "🛡️", type: "방어", cost: 2500000, defense: 50, reqLab: 0, desc: "침공 방어력 +50" },
-        "lab": { key: "lab", name: "고대 연구소", icon: "🔬", type: "연구", cost: 5000000, reqLab: 0, desc: "2티어 상위 건물 해금 (연구소 1개)" },
-        
-        // [2티어 상위 건물 - 연구소 1개 이상 필요]
-        "apartment": { key: "apartment", name: "소형 아파트", icon: "🏢", type: "주거", cost: 4000000, popBonus: 250, reqLab: 1, desc: "인구 +250명 (연구소 1개 필요)" },
-        "mall": { key: "mall", name: "대형 복합몰", icon: "🏬", type: "상업", cost: 9000000, taxBoost: 0.2, reqLab: 1, desc: "수익률 20% 증가 (연구소 1개 필요)" },
-        "ballista": { key: "ballista", name: "자동 발리스타", icon: "🏹", type: "방어", cost: 7000000, defense: 150, reqLab: 1, desc: "방어력 +150 (연구소 1개 필요)" },
-        
-        // [3티어 최상위 건물 - 연구소 3개 이상 필요]
-        "mansion": { key: "mansion", name: "지하 대저택", icon: "🏰", type: "주거", cost: 15000000, popBonus: 600, reqLab: 3, desc: "인구 +600명 (연구소 3개 필요)" },
-        "bank": { key: "bank", name: "제국 조폐국", icon: "🏦", type: "상업", cost: 35000000, taxBoost: 0.4, reqLab: 3, desc: "수익률 40% 증가 (연구소 3개 필요)" }
+        "housing": {
+            name: "주거 구역",
+            tiers: [
+                { name: "천막촌", icon: "🏕️", cost: 1000000, popBonus: 100, reqLab: 0, desc: "인구 +100명" },
+                { name: "소형 아파트", icon: "🏢", cost: 4000000, popBonus: 250, reqLab: 1, desc: "인구 +250명" },
+                { name: "지하 대저택", icon: "🏰", cost: 15000000, popBonus: 600, reqLab: 2, desc: "인구 +600명" }
+            ]
+        },
+        "commercial": {
+            name: "상업 구역",
+            tiers: [
+                { name: "지하 시장", icon: "⚖️", cost: 3000000, taxBoost: 0.1, reqLab: 0, desc: "전체 수익 10% 증가" },
+                { name: "대형 복합몰", icon: "🏬", cost: 9000000, taxBoost: 0.2, reqLab: 1, desc: "전체 수익 20% 증가" },
+                { name: "제국 조폐국", icon: "🏦", cost: 35000000, taxBoost: 0.4, reqLab: 2, desc: "전체 수익 40% 증가" }
+            ]
+        },
+        "defense": {
+            name: "방어 구역",
+            tiers: [
+                { name: "경비탑", icon: "🛡️", cost: 2500000, defense: 50, reqLab: 0, desc: "방어력 +50" },
+                { name: "자동 발리스타", icon: "🏹", cost: 7000000, defense: 150, reqLab: 1, desc: "방어력 +150" },
+                { name: "마력 보호막", icon: "🔮", cost: 20000000, defense: 400, reqLab: 2, desc: "방어력 +400" }
+            ]
+        },
+        "research": {
+            name: "연구 구역",
+            tiers: [
+                { name: "고대 연구소", icon: "🔬", cost: 5000000, reqLab: 0, desc: "타 구역 2티어(Lv.2) 개방" },
+                { name: "마도 공학실", icon: "⚙️", cost: 15000000, reqLab: 1, desc: "타 구역 3티어(Lv.3) 개방" },
+                { name: "초월의 탑", icon: "🗼", cost: 45000000, reqLab: 2, desc: "향후 마스터 등급 개방" }
+            ]
+        }
     }
 };
 
@@ -3413,78 +3431,102 @@ function _gameCityLogic(msg, user, data, replier, roomName, targetUid) {
         }
 
         // 초기 데이터 세팅 및 개척 객체 보강
-        if (!user.undergroundCity) {
-            user.undergroundCity = { level: 1, slots: 1, maxSlots: 5, population: 0, happiness: 100, vault: 0, buildings: {}, expanding: { active: false, endTime: 0 } };
-        }
-        var city = user.undergroundCity;
-        if (!city.expanding) city.expanding = { active: false, endTime: 0 };
+        if (!user.undergroundCity) {
+            user.undergroundCity = { level: 1, slots: 1, maxSlots: 5, population: 0, happiness: 100, vault: 0, buildings: [], expanding: { active: false, endTime: 0 } };
+        }
+        var city = user.undergroundCity;
+        if (!city.expanding) city.expanding = { active: false, endTime: 0 };
 
-        // 1. 개척 완료 자동 정산 로직
-        var expandMsg = "";
-        if (city.expanding.active && Date.now() >= city.expanding.endTime) {
-            city.slots += 1;
-            city.expanding.active = false;
-            city.expanding.endTime = 0;
-            expandMsg = "🎉 [구역 개척 완료]\n인부들이 암반을 뚫고 새로운 구역을 확보했습니다!\n(총 가용 슬롯: " + city.slots + "칸)\n\n";
-            user.skipHealing = true;
-            safeSaveData(data, false);
-        }
+        // [Gemini 마이그레이션] 기존 딕셔너리형 건물을 배열(슬롯)형으로 자동 변환
+        if (!Array.isArray(city.buildings)) {
+            var newArr = [];
+            var oldMap = {
+                "tent": {t:"housing", l:0}, "apartment": {t:"housing", l:1}, "mansion": {t:"housing", l:2},
+                "market": {t:"commercial", l:0}, "mall": {t:"commercial", l:1}, "bank": {t:"commercial", l:2},
+                "tower": {t:"defense", l:0}, "ballista": {t:"defense", l:1},
+                "lab": {t:"research", l:0}
+            };
+            for (var k in city.buildings) {
+                if (oldMap[k]) {
+                    var cnt = city.buildings[k].count || 1;
+                    for (var i = 0; i < cnt; i++) {
+                        newArr.push({ type: oldMap[k].t, tier: oldMap[k].l });
+                    }
+                }
+            }
+            city.buildings = newArr;
+            user.skipHealing = true;
+        }
 
-       // 건물의 '종류'가 아닌 각 건물의 '중복 건설 개수'를 모두 합산하여 실제 사용 슬롯 계산
-        var bCount = 0;
-        for (var k in city.buildings) {
-            bCount += (city.buildings[k].count || 1); // 하위 호환: count가 없으면 1개로 간주
-        }
-        
-        var expandStatus = "";
-        if (city.expanding.active) {
-            var remain = city.expanding.endTime - Date.now();
-            var rm = Math.ceil(remain / 60000);
-            expandStatus = "\n⛏️ 현재 구역 확장 공사 중 (" + rm + "분 남음)";
-        }
-        
-        // 3. 시간당 세입 및 지출 예상치 계산 (동적 테크트리 수익 모두 합산)
-        var expectedTax = city.population * CITY_CONFIG.TAX_PER_POP;
-        
-        // 보유한 모든 건물을 순회하며 taxBoost(세금 증폭률)를 합산
-        var totalTaxBoost = 0;
-        for (var k in city.buildings) {
-            var bConfig = CITY_CONFIG.BUILDINGS[k];
-            if (bConfig && bConfig.taxBoost) {
-                totalTaxBoost += bConfig.taxBoost * (city.buildings[k].count || 1);
-            }
-        }
-        if (totalTaxBoost > 0) {
-            expectedTax = Math.floor(expectedTax * (1 + totalTaxBoost)); 
-        }
-        
-        var expectedMaint = bCount * CITY_CONFIG.MAINT_PER_BLD;
+        // 1. 개척 완료 자동 정산 로직
+        var expandMsg = "";
+        if (city.expanding.active && Date.now() >= city.expanding.endTime) {
+            city.slots += 1;
+            city.expanding.active = false;
+            city.expanding.endTime = 0;
+            expandMsg = "🎉 [구역 개척 완료]\n인부들이 암반을 뚫고 새로운 구역을 확보했습니다!\n(총 가용 슬롯: " + city.slots + "칸)\n\n";
+            user.skipHealing = true;
+            safeSaveData(data, false);
+        }
 
-        var hapIcon = city.happiness >= 80 ? "😊" : (city.happiness >= 50 ? "😐" : "😡");
+        var bCount = city.buildings.length;
+        
+        var expandStatus = "";
+        if (city.expanding.active) {
+            var remain = city.expanding.endTime - Date.now();
+            var rm = Math.ceil(remain / 60000);
+            expandStatus = "\n⛏️ 현재 구역 확장 공사 중 (" + rm + "분 남음)";
+        }
+        
+        // [핵심] 건물 배열을 순회하며 인구 및 세금 버프 실시간 재계산 (철거/업글 대비)
+        var maxPop = 0;
+        var totalTaxBoost = 0;
+        city.buildings.forEach(function(b) {
+            var tData = CITY_CONFIG.BUILDINGS[b.type].tiers[b.tier];
+            if (tData.popBonus) maxPop += tData.popBonus;
+            if (tData.taxBoost) totalTaxBoost += tData.taxBoost;
+        });
 
-        var body = expandMsg + 
-                   "어둡고 축축한 지하 공간... 당신만의 새로운 영지가 시작되는 곳입니다.\n\n" +
-                   "👥 인구: " + city.population + " 명\n" +
-                   hapIcon + " 행복도: " + city.happiness + " % (50% 미만 시 인구 이탈)\n" +
-                   "💰 금고(세금): " + fp(city.vault) + " P\n" +
-                   "🏗️ 가용 슬롯: " + bCount + " / " + city.slots + " 칸\n" +
-                   "━━━━━━━━━━━━━━━\n" +
-                   "📈 [예상 세입]: 매시간 +" + fp(expectedTax) + "P 자동 적립\n" +
-                   "📉 [예상 지출]: 매시간 -" + fp(expectedMaint) + "P 유지비 발생\n" +
-                   expandStatus + "\n" +
-                   "━━━━━━━━━━━━━━━\n" +
-                   "1. ⛏️ 구역 확장 (슬롯 확보)\n" +
-                   "2. 🏗️ 건축 및 개발\n" +
-                   "3. 💵 세금 징수 (지갑으로 이체)\n" +
-                   "4. 🛡️ 영지 관리 및 보수 (행복도 복구)\n\n" +
-                   "↩️ 뒤로 / ❎취소";
+        // 행복도에 따른 인구 자동 회복 및 철거에 의한 상한 컷
+        if (city.happiness >= 50 && city.population < maxPop) city.population = maxPop;
+        else if (city.population > maxPop) city.population = maxPop;
 
-        replier.reply(formatCommand("🏛️ 지하 도시 (Lv." + city.level + ")", user, body, "메뉴 번호를 입력하세요."));
-        
-        if (!roomData.features.states.menuWait) roomData.features.states.menuWait = {};
-        roomData.features.states.menuWait[targetUid] = { type: 'city_main', time: Date.now(), originRoom: roomName };
-        return true;
-    }
+        // 시간당 세입/지출 예상치
+        var expectedTax = city.population * CITY_CONFIG.TAX_PER_POP;
+        if (totalTaxBoost > 0) expectedTax = Math.floor(expectedTax * (1 + totalTaxBoost)); 
+        
+        // 의회 정책 반영
+        var pol = util_getActivePolicy(data.rooms["내리다"]);
+        if (pol.cityTaxMult) expectedTax = Math.floor(expectedTax * pol.cityTaxMult);
+
+        var expectedMaint = bCount * CITY_CONFIG.MAINT_PER_BLD;
+        if (pol.cityMaintMult) expectedMaint = Math.floor(expectedMaint * pol.cityMaintMult);
+
+        var hapIcon = city.happiness >= 80 ? "😊" : (city.happiness >= 50 ? "😐" : "😡");
+
+        var body = expandMsg + 
+                   "어둡고 축축한 지하 공간... 당신만의 새로운 영지가 시작되는 곳입니다.\n\n" +
+                   "👥 인구: " + city.population + " 명\n" +
+                   hapIcon + " 행복도: " + city.happiness + " % (50% 미만 시 인구 이탈)\n" +
+                   "💰 금고(세금): " + fp(city.vault) + " P\n" +
+                   "🏗️ 가용 슬롯: " + bCount + " / " + city.slots + " 칸\n" +
+                   "━━━━━━━━━━━━━━━\n" +
+                   "📈 [예상 세입]: 매시간 +" + fp(expectedTax) + "P 자동 적립\n" +
+                   "📉 [예상 지출]: 매시간 -" + fp(expectedMaint) + "P 유지비 발생\n" +
+                   expandStatus + "\n" +
+                   "━━━━━━━━━━━━━━━\n" +
+                   "1. ⛏️ 구역 확장 (슬롯 확보)\n" +
+                   "2. 🏗️ 영지 관리 (신규/업글/철거)\n" +
+                   "3. 💵 세금 징수 (지갑으로 이체)\n" +
+                   "4. 🛡️ 영지 관리 및 보수 (행복도 복구)\n\n" +
+                   "↩️ 뒤로 / ❎취소";
+
+        replier.reply(formatCommand("🏛️ 지하 도시 (Lv." + city.level + ")", user, body, "메뉴 번호를 입력하세요."));
+        
+        if (!roomData.features.states.menuWait) roomData.features.states.menuWait = {};
+        roomData.features.states.menuWait[targetUid] = { type: 'city_main', time: Date.now(), originRoom: roomName };
+        return true;
+    }
     return false;
 }
 
@@ -3730,33 +3772,26 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
                               "2. 아니오 (취소)" + NAV;
 
             roomData.features.states.menuWait[targetUid] = { type: 'city_expand_confirm', time: Date.now(), extra: { cost: cost } };
-            replier.reply(formatCommand("⛏️ 구역 확장 확인", user, confirmBody, "번호를 입력하세요."));
-        } 
-        else if (choice === "2") {
-            var bList = [];
-            var idx = 1;
-            var keys = Object.keys(CITY_CONFIG.BUILDINGS);
-            
-            // 현재 도시에 지어진 '고대 연구소'의 개수를 확인 (테크트리 기준점)
-            var labCount = city.buildings["lab"] ? (city.buildings["lab"].count || 1) : 0;
-            
-            for (var i = 0; i < keys.length; i++) {
-                var b = CITY_CONFIG.BUILDINGS[keys[i]];
-                var bCountStat = city.buildings[b.key] ? "(✅ " + (city.buildings[b.key].count || 1) + "개 보유)" : "";
-                
-                // 테크트리 요구치(reqLab)를 충족하지 못하면 🔒 표시
-                var reqStr = (b.reqLab > 0 && labCount < b.reqLab) ? " 🔒[연구소 " + b.reqLab + "개 필요]" : "";
-                
-                bList.push(idx + ". " + b.icon + " " + b.name + " [" + fp(b.cost) + "P] " + bCountStat + reqStr + "\n   └ " + b.desc);
-                idx++;
-            }
-            var bBody = "[건설 가능 목록]\n" + bList.join("\n") + "\n\n건설할 번호를 입력하세요." + NAV;
-            replier.reply(formatCommand("🏗️ 도시 설계실", user, bBody));
-            
-            roomData.features.states.menuWait[targetUid].type = 'city_build';
-            roomData.features.states.menuWait[targetUid].time = Date.now();
-        }
-        else if (choice === "3") {
+            replier.reply(formatCommand("⛏️ 구역 확장 확인", user, confirmBody, "번호를 입력하세요."));
+        } 
+        else if (choice === "2") {
+            // [Gemini] 슬롯 리스트 출력 UI로 개편
+            var bList = [];
+            for(var i=0; i<city.slots; i++) {
+                if (i < city.buildings.length) {
+                    var b = city.buildings[i];
+                    var tData = CITY_CONFIG.BUILDINGS[b.type].tiers[b.tier];
+                    bList.push((i+1) + ". [슬롯 " + (i+1) + "] " + tData.icon + " " + tData.name + " (Lv." + (b.tier+1) + ")");
+                } else {
+                    bList.push((i+1) + ". [슬롯 " + (i+1) + "] (빈 슬롯)");
+                }
+            }
+            var bBody = "[영지 슬롯 현황]\n" + bList.join("\n") + "\n\n관리할 슬롯 번호를 선택하세요." + NAV;
+            replier.reply(formatCommand("🏗️ 영지 관리", user, bBody));
+            roomData.features.states.menuWait[targetUid] = { type: 'city_slot_list', time: Date.now() };
+            return true;
+        }
+        else if (choice === "3") {
             if (city.vault <= 0) {
                 replier.reply(formatError(user, "징수 실패", "도시 금고가 비어있습니다. 거주민들이 세금을 납부할 때까지 기다리세요."));
             } else {
@@ -3842,70 +3877,119 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
             return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
         } else {
             replier.reply(formatError(user, "번호 오류", "1번(예) 또는 2번(아니오)을 선택하세요."));
-        }
-        return true;
-    }
+        }
+        return true;
+    }
 
-    // [2단계] 건축 선택 및 확정 로직
-    if (state.type === 'city_build') {
-        var bIdx = parseInt(choice) - 1;
-        var keys = Object.keys(CITY_CONFIG.BUILDINGS);
-        
-        if (isNaN(bIdx) || bIdx < 0 || bIdx >= keys.length) {
-            replier.reply(formatError(user, "번호 오류", "건설할 목록 번호를 선택하세요."));
-            return true;
-        }
+    // [2단계] 슬롯 선택 및 처리 (신규 건설 OR 업글/철거)
+    if (state.type === 'city_slot_list') {
+        var sIdx = parseInt(choice) - 1;
+        if (isNaN(sIdx) || sIdx < 0 || sIdx >= city.slots) return replier.reply(formatError(user, "번호 오류", "본인이 보유한 슬롯 번호를 선택하세요."));
+        
+        if (sIdx < city.buildings.length) {
+            // 해당 슬롯에 건물이 있는 경우 (관리 모드)
+            var b = city.buildings[sIdx];
+            var tData = CITY_CONFIG.BUILDINGS[b.type].tiers[b.tier];
+            var nextData = CITY_CONFIG.BUILDINGS[b.type].tiers[b.tier + 1];
+            
+            var body = "현재 슬롯에 [" + tData.icon + " " + tData.name + " (Lv." + (b.tier+1) + ")]이(가) 있습니다.\n\n";
+            if (nextData) {
+                body += "1. ⬆️ 업그레이드\n";
+                body += "   └ 대상: " + nextData.name + " (Lv." + (b.tier+2) + ")\n";
+                body += "   └ 비용: " + fp(nextData.cost) + "P\n";
+                body += "   └ 효과: " + nextData.desc + "\n";
+                var reqLabStr = nextData.reqLab > 0 ? " (연구소 Lv." + nextData.reqLab + " 이상 필요)" : "";
+                body += "   └ 조건: " + reqLabStr + "\n\n";
+            } else {
+                body += "✅ 최고 레벨 도달 (업그레이드 불가)\n\n";
+            }
+            body += (nextData ? "2. " : "1. ") + "💥 철거하기 (투자금 증발, 슬롯만 회수)\n" + NAV;
+            
+            roomData.features.states.menuWait[targetUid] = { 
+                type: 'city_slot_manage', time: Date.now(), 
+                extra: { bIdx: sIdx, hasNext: !!nextData, nextCost: nextData ? nextData.cost : 0, reqLab: nextData ? nextData.reqLab : 0 } 
+            };
+            replier.reply(formatCommand("🛠️ 건물 관리", user, body, "원하는 관리 번호를 입력하세요."));
+        } else {
+            // 빈 슬롯일 경우 (신규 건설 모드)
+            var types = ["housing", "commercial", "defense", "research"];
+            var body = "비어 있는 슬롯입니다. 어떤 구역을 배치하시겠습니까?\n\n";
+            types.forEach(function(t, i) {
+                var base = CITY_CONFIG.BUILDINGS[t].tiers[0];
+                body += (i+1) + ". " + base.icon + " " + CITY_CONFIG.BUILDINGS[t].name + " [" + fp(base.cost) + "P]\n";
+                body += "   └ " + base.desc + "\n";
+            });
+            body += NAV;
+            roomData.features.states.menuWait[targetUid] = { type: 'city_build_new', time: Date.now(), extra: { types: types } };
+            replier.reply(formatCommand("🏗️ 신규 구역 건설", user, body, "건설할 번호를 선택하세요."));
+        }
+        return true;
+    }
 
-        var bKey = keys[bIdx];
-        var bData = CITY_CONFIG.BUILDINGS[bKey];
-        // 종류가 아닌 '실제 건설된 총 개수'를 계산하여 슬롯과 대조
-        var curCount = 0;
-        var labCount = city.buildings["lab"] ? (city.buildings["lab"].count || 1) : 0;
+    // [3단계-A] 빈 슬롯 신규 건설 확정
+    if (state.type === 'city_build_new') {
+        var tIdx = parseInt(choice) - 1;
+        var types = state.extra.types;
+        if (isNaN(tIdx) || tIdx < 0 || tIdx >= types.length) return replier.reply(formatError(user, "번호 오류", "목록에 있는 번호를 선택하세요."));
+        
+        var selectedType = types[tIdx];
+        var baseData = CITY_CONFIG.BUILDINGS[selectedType].tiers[0];
+        
+        if (Number(user.point) < baseData.cost) return replier.reply(formatError(user, "자금 부족", "건설 비용 " + fp(baseData.cost) + "P가 부족합니다."));
+        
+        util_updatePoint(user, data.rooms["내리다"], -baseData.cost, "지하 도시 건설: " + baseData.name, roomName);
+        city.buildings.push({ type: selectedType, tier: 0 }); 
+        user.skipHealing = true;
+        safeSaveData(data, true);
+        
+        replier.reply(formatCommand("🏗️ 건설 완료", user, baseData.icon + " [" + baseData.name + " (Lv.1)] 배치가 완료되었습니다.\n\n" + baseData.desc, "도시 현황: [/도시]"));
+        delete roomData.features.states.menuWait[targetUid];
+        return true;
+    }
 
-        for (var k in city.buildings) {
-            curCount += (city.buildings[k].count || 1);
-        }
-
-        // 테크트리 가드: 요구되는 연구소 개수 미달 시 건설 차단
-        if (bData.reqLab > 0 && labCount < bData.reqLab) {
-            replier.reply(formatError(user, "테크트리 미달", bData.name + "을(를) 지으려면 [고대 연구소]가 최소 " + bData.reqLab + "개 필요합니다."));
-            return true;
-        }
-
-        if (curCount >= city.slots) {
-            replier.reply(formatError(user, "슬롯 부족", "건물을 지을 공간이 없습니다. 먼저 구역 확장을 진행하세요."));
-            return true;
-        }
-        if (Number(user.point) < bData.cost) {
-            replier.reply(formatError(user, "자금 부족", "건설 비용 " + fp(bData.cost) + "P가 부족합니다."));
-            return true;
-        }
-
-        // 건설 대금 차감
-        util_updatePoint(user, data.rooms["내리다"], -bData.cost, "지하 도시 건축: " + bData.name, roomName);
-        
-        // 동일 건물이 없으면 신규 생성, 있으면 count 수량 증가
-        if (!city.buildings[bKey]) {
-            city.buildings[bKey] = { level: 1, count: 1, builtAt: Date.now() };
-        } else {
-            city.buildings[bKey].count = (city.buildings[bKey].count || 1) + 1;
-        }
-        
-        // 특정 건물(천막촌 등) 건설 시 인구 즉시 펌핑
-        if (bData.popBonus) city.population += bData.popBonus;
-        
-        user.skipHealing = true;
-        safeSaveData(data, true);
-        
-        var successMsg = bData.icon + " [" + bData.name + "]을(를) 도시에 새롭게 건설했습니다!\n" +
-                         "(현재 " + city.buildings[bKey].count + "개 가동 중)\n\n" + bData.desc;
-                         
-        replier.reply(formatCommand("🏗️ 건축 완료", user, successMsg, "도시 현황: [/도시]"));
-        delete roomData.features.states.menuWait[targetUid];
-        return true;
-    }
-    return false;
-}
+    // [3단계-B] 기존 건물 업그레이드 및 철거
+    if (state.type === 'city_slot_manage') {
+        var bIdx = state.extra.bIdx;
+        var b = city.buildings[bIdx];
+        var hasNext = state.extra.hasNext;
+        var upgNum = hasNext ? "1" : "NONE";
+        var demNum = hasNext ? "2" : "1";
+        
+        if (choice === upgNum) {
+            // 테크트리 가드 검증
+            var maxLabTier = -1;
+            city.buildings.forEach(function(x) { if (x.type === "research" && x.tier > maxLabTier) maxLabTier = x.tier; });
+            var labLevel = maxLabTier + 1; // 0=Lv.1
+            
+            if (labLevel < state.extra.reqLab) {
+                return replier.reply(formatError(user, "테크트리 부족", "연구소 Lv." + state.extra.reqLab + " 이상이 필요합니다.\n(현재 내 연구소: Lv." + labLevel + ")"));
+            }
+            if (Number(user.point) < state.extra.nextCost) {
+                return replier.reply(formatError(user, "자금 부족", fp(state.extra.nextCost) + "P가 부족합니다."));
+            }
+            
+            util_updatePoint(user, data.rooms["내리다"], -state.extra.nextCost, "지하 도시 업그레이드", roomName);
+            city.buildings[bIdx].tier += 1;
+            var newTData = CITY_CONFIG.BUILDINGS[b.type].tiers[b.tier];
+            
+            user.skipHealing = true;
+            safeSaveData(data, true);
+            replier.reply(formatCommand("⬆️ 업그레이드 완료", user, newTData.icon + " [" + newTData.name + " (Lv." + (b.tier+1) + ")]으로 격상되었습니다!", "도시 현황: [/도시]"));
+            delete roomData.features.states.menuWait[targetUid];
+            return true;
+            
+        } else if (choice === demNum || choice === "철거") {
+            var tData = CITY_CONFIG.BUILDINGS[b.type].tiers[b.tier];
+            city.buildings.splice(bIdx, 1);
+            user.skipHealing = true;
+            safeSaveData(data, true);
+            replier.reply(formatCommand("💥 철거 완료", user, tData.icon + " [" + tData.name + "] 구역을 철거하여 슬롯을 반환받았습니다.", "도시 현황: [/도시]"));
+            delete roomData.features.states.menuWait[targetUid];
+            return true;
+        } else {
+            return replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 선택하세요."));
+        }
+    }
 
 /**
  * [게임 하위 모듈] 정령 시스템 메뉴 핸들러
@@ -5647,41 +5731,44 @@ function _runSector16Logic(data, ctx) {
             for (var uid in mainUsers) {
                 var u = mainUsers[uid];
                 if (u.undergroundCity) {
-                    var city = u.undergroundCity;
-                    var bCount = 0;
-                    for (var k in city.buildings) bCount += (city.buildings[k].count || 1);
-                    
-                    if (bCount > 0 || city.population > 0) {
-                        var isModified = false;
+                    var city = u.undergroundCity;
+                    
+                    // [Gemini] 안전가드: 배열 형태가 아니면 스킵 (도시 진입 시 자동 변환됨)
+                    if (!Array.isArray(city.buildings)) continue;
+                    
+                    var bCount = city.buildings.length;
+                    
+                    if (bCount > 0 || city.population > 0) {
+                        var isModified = false;
 
-                        // 1. 시간당 세금 자동 적립 (인구수 비례)
+                        // 1. 인구 및 버프 수치 동적 재계산 (철거 대응)
+                        var currentPop = 0;
+                        var totalTaxBoost = 0;
+                        city.buildings.forEach(function(b) {
+                            var tData = CITY_CONFIG.BUILDINGS[b.type].tiers[b.tier];
+                            if (tData.popBonus) currentPop += tData.popBonus;
+                            if (tData.taxBoost) totalTaxBoost += tData.taxBoost;
+                        });
+                        
+                        // 행복도 50 이상이면 인구 정상 회복, 그 외에는 최대치 캡
+                        if (city.happiness >= 50 && city.population < currentPop) city.population = currentPop;
+                        else if (city.population > currentPop) city.population = currentPop;
+
+                        // 2. 시간당 세금 자동 적립
                         if (city.population > 0) {
-                            var popTax = city.population * (CITY_CONFIG.TAX_PER_POP || 300);
+                            var popTax = city.population * (CITY_CONFIG.TAX_PER_POP || 150);
+                            
+                            if (totalTaxBoost > 0) popTax = Math.floor(popTax * (1 + totalTaxBoost)); 
                             
-                            // 모든 상업 건물의 taxBoost를 동적으로 합산하여 적용 (대형 마트, 조폐국 등)
-                            var totalTaxBoost = 0;
-                            for (var k in city.buildings) {
-                                var bConfig = CITY_CONFIG.BUILDINGS[k];
-                                if (bConfig && bConfig.taxBoost) {
-                                    totalTaxBoost += bConfig.taxBoost * (city.buildings[k].count || 1);
-                                }
-                            }
-                            // 최종 배율 곱연산 (예: 시장1개(10%) + 대형마트1개(25%) = 총 35% 증폭)
-                            if (totalTaxBoost > 0) {
-                                popTax = Math.floor(popTax * (1 + totalTaxBoost)); 
-                            }
-                            
-                            // [Gemini] 의회 정책(도시 세금 배율) 연동
                             var pol = util_getActivePolicy(data.rooms["내리다"]);
                             if (pol.cityTaxMult) popTax = Math.floor(popTax * pol.cityTaxMult);
 
-                            // 세금 누적 로직
                             city.vault += popTax;
                             cityTaxDistributed += popTax;
                             isModified = true;
                         }
 
-                        // 2. 시간당 건물 유지비 징수 (건물 총 개수 비례)
+                        // 3. 시간당 건물 유지비 징수
                         if (bCount > 0) {
                             var expectedMaint = bCount * (CITY_CONFIG.MAINT_PER_BLD || 15000);
                             

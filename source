@@ -3351,15 +3351,19 @@ function util_refreshMarketRate(roomData, portName, goodName) {
     var inv = roomData.features.portData[portName].inventory;
     if (!inv || inv[goodName] === undefined) return;
 
-    // 1. 현재 재고 확인 및 희소성 계수 계산 (중앙 설정된 BASELINE 참조)
-    var baseline = (SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.BASELINE) ? SYSTEM_CONFIG.TRADE.BASELINE : 5000;
-    var currentInv = Math.max(500, Number(inv[goodName])); 
-    var scarcityMult = baseline / currentInv; 
-    scarcityMult = Math.max(0.8, Math.min(1.5, scarcityMult));
+    // 1. 현재 재고 확인 및 희소성 계수 계산 (동적 Baseline 연동)
+    // 섹터 16-2에서 스케줄러가 저장한 동적 Baseline이 있으면 우선 사용하고, 없으면 상수의 값을 사용
+    var fallbackBaseline = (SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.BASELINE) ? SYSTEM_CONFIG.TRADE.BASELINE : 20000;
+    var currentBaseline = (roomData.features.tradeMarket.currentBaseline) ? roomData.features.tradeMarket.currentBaseline : fallbackBaseline;
+    
+    // 최하 10% 밑으로는 재고가 떨어지지 않도록 방어하여 희소성 폭주 차단
+    var currentInv = Math.max(Math.floor(currentBaseline * 0.1), Number(inv[goodName])); 
+    var scarcityMult = currentBaseline / currentInv; 
+    
+    // 민감도 조정 (동적 시장폭에 맞게 0.6 ~ 1.6으로 넓힘)
+    scarcityMult = Math.max(0.6, Math.min(1.6, scarcityMult));
 
     // 2. 기존 마켓의 기본 흐름(baseRate) 유지하며 재고 비율만 즉시 반영
-    // (기존 시세 / 이전 scarcityMult)를 통해 순수 baseRate를 역산하거나, 
-    // 여기서는 직관적으로 1.0(평형) 기준으로 실시간 변동치를 주입합니다.
     var baseRate = 1.0; 
     if (TRADE_RELATION[portName] && TRADE_RELATION[portName].produce === goodName) baseRate = 0.9;
 
@@ -6068,56 +6072,77 @@ function _runSector16Logic(data, ctx) {
             
             if (!mainRoomData.features.tradeMarket) mainRoomData.features.tradeMarket = {};
             
+            // [지능형 동적 스케일링 엔진] 활성 무역 인구 산출
+            var activeTraders = 20; // AI 상단 20개 고정 할당
+            var nowTs = Date.now();
+            
+            for (var uid in mainRoomData.users) {
+                if (uid.indexOf("AI_") === 0) continue; // AI는 이미 포함됨
+                var tu = mainRoomData.users[uid];
+                
+                // 최근 1일 내 접속 & 무역을 1회 이상 해본 실유저 카운트
+                var lastLogTs = new Date(tu.lastDate || 0).getTime() || 0;
+                if ((tu.tradeCount || 0) > 0 && (nowTs - lastLogTs < 1 * 86400000)) {
+                    activeTraders++;
+                }
+            }
+
+            // 25명 기준(AI 20 + 유저 5)일 때의 완벽한 밸런스를 1인당 계수로 분해하여 자동 스케일업
+            var dynBaseline = activeTraders * 800;        // 1인당 800 (25명 = 20000 기준점)
+            var dynProd = activeTraders * 24;             // 1인당 24 (25명 = 600 생산)
+            var dynSynergyCap = activeTraders * 48;       // 1인당 48 (25명 = 1200 시너지 상한)
+            var dynConsumpMin = activeTraders * 4;        // 1인당 4 (25명 = 최소 소비 100)
+            var dynConsumpRange = activeTraders * 8 + 1;  // 1인당 8 (25명 = 추가 소비 폭 200)
+
+            // 실시간 시세 갱신 엔진(Sector 11)이 이 값을 참조하도록 저장
+            mainRoomData.features.tradeMarket.currentBaseline = dynBaseline;
+
             // 순환 매칭을 위한 표준 배열 정의 (생산품 기준)
             var nations = ["포르투", "코콜라", "나폴리", "베라크루스", "킴벌리"];
-            var goods = ["식료품", "공업품", "공예품", "귀금속", "보석"];
-            
-            // 20분마다 1개의 항구를 무작위로 선정하여 특산품 대유행(Boom) 상태 부여
+            var goods = ["식료품", "공업품", "공예품", "귀금속", "보석"];
+            
+            // 20분마다 1개의 항구를 무작위로 선정하여 특산품 대유행(Boom) 상태 부여
             var boomNation = nations[Math.floor(Math.random() * nations.length)];
 
             for (var i = 0; i < nations.length; i++) {
                 var nName = nations[i];
-                var rates = {}; // { "식료품": 1.05, "공업품": 0.90 ... }
+                var rates = {}; 
                 
                 // 기존 방 데이터 안전 연동 가드
                 var pData = mainRoomData.features.portData[nName];
                 if (pData && !pData.inventory) {
-                    pData.inventory = {"식료품":10000, "공업품":10000, "공예품":10000, "귀금속":10000, "보석":10000};
+                    pData.inventory = {"식료품":dynBaseline/2, "공업품":dynBaseline/2, "공예품":dynBaseline/2, "귀금속":dynBaseline/2, "보석":dynBaseline/2};
                 }
                 
                 // 유행 상태 갱신 (선정된 항구만 true, 나머지는 false)
                 if (pData) pData.specialtyBoom = (nName === boomNation);
                 
-                var inv = pData ? pData.inventory : {"식료품":10000, "공업품":10000, "공예품":10000, "귀금속":10000, "보석":10000};
+                var inv = pData ? pData.inventory : {"식료품":dynBaseline/2, "공업품":dynBaseline/2, "공예품":dynBaseline/2, "귀금속":dynBaseline/2, "보석":dynBaseline/2};
 
-                for (var j = 0; j < goods.length; j++) {
-                    var gName = goods[j];
-                    
-                    var currentStock = Number(inv[gName] || 0);
+                for (var j = 0; j < goods.length; j++) {
+                    var gName = goods[j];
+                    
+                    var currentStock = Number(inv[gName] || dynBaseline/2);
 
-                    // 1. 도시의 기본 생산 및 자연 소비 (기준점 2만 개에 맞춰 스케일업)
+                    // 1. 도시의 기본 생산 및 자연 소비 (동적 스케일링 변수 적용)
                     if (TRADE_RELATION[nName].produce === gName) {
-                        var baseProd = 600; // 자국 특산품 기본 생산량 (150 -> 600)
                         var synergyBonus = 0;
                         if (pData.synergyStack > 0) {
-                            synergyBonus = Math.min(1200, Math.floor(pData.synergyStack * 0.5)); // 시너지 상한 (300 -> 1200)
+                            synergyBonus = Math.min(dynSynergyCap, Math.floor(pData.synergyStack * 0.5));
                             pData.synergyStack = 0; 
                         }
-                        currentStock += (baseProd + synergyBonus);
+                        currentStock += (dynProd + synergyBonus);
                     } else {
-                        // 타국 물품 자연 소비량 (20~60 -> 100~300)
-                        currentStock -= (Math.floor(Math.random() * 201) + 100); 
+                        // 타국 물품 자연 소비량 자동 조절
+                        currentStock -= (Math.floor(Math.random() * dynConsumpRange) + dynConsumpMin); 
                     }
 
-                    // 재고 회복력(Elasticity): 중앙 설정된 BASELINE으로 회귀함
-                    var baseline = (SYSTEM_CONFIG.TRADE && SYSTEM_CONFIG.TRADE.BASELINE) ? SYSTEM_CONFIG.TRADE.BASELINE : 20000;
-                    
-                    // 복원력 7% 유지 (우물이 깊어졌으므로 7%만으로도 묵직한 파도가 만들어집니다)
-                    currentStock = currentStock + (baseline - currentStock) * 0.07; 
+                    // 재고 회복력(Elasticity): 동적 Baseline으로 회귀 (7% 유지)
+                    currentStock = currentStock + (dynBaseline - currentStock) * 0.07; 
 
-                    // 최종 재고 저장 범위 조정 (기준점의 10% ~ 400% 범위 자동 유지)
-                    var minInv = Math.floor(baseline * 0.10);
-                    var maxInv = Math.floor(baseline * 4.0);
+                    // 최종 재고 저장 범위 조정 (10% ~ 400% 자동 연동)
+                    var minInv = Math.floor(dynBaseline * 0.10);
+                    var maxInv = Math.floor(dynBaseline * 4.0);
                     inv[gName] = Math.max(minInv, Math.min(maxInv, currentStock));
 
                     // 3. 시장 노이즈 반영 (85% ~ 115%)
@@ -6126,17 +6151,14 @@ function _runSector16Logic(data, ctx) {
                         baseRate -= (Math.random() * 0.05 + 0.05); 
                     }
 
-                    // 4. 실물 재고 비례 계수 적용 (민감도 0.9 유지)
-                    var scarcityMult = 1 + ((baseline - inv[gName]) / baseline) * 0.9;
-                    
+                    // 4. 실물 재고 비례 계수 적용 (가중치 0.9)
+                    var scarcityMult = 1 + ((dynBaseline - inv[gName]) / dynBaseline) * 0.9;
                     scarcityMult = Math.max(0.6, Math.min(1.6, scarcityMult)); 
                     
                     var finalRate = baseRate * scarcityMult;
 
                     // 5. 최종 시세 상/하한선 제한 (70% ~ 130%)
                     finalRate = Math.max(0.70, Math.min(1.30, finalRate));
-                    rates[gName] = Number(finalRate.toFixed(2));
-                }
 
                 // 기존 favorite/hate 구조 대신 rates 객체를 저장
                 mainRoomData.features.tradeMarket[nName] = {

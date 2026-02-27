@@ -3734,14 +3734,11 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
             } 
             else if (choice === "2") {
                 var bList = [];
-                var actualItems = []; // 메뉴 선택 처리를 위해 정보 저장 배열 추가
+                var actualItems = [];
                 var idx = 1;
-                var keys = Object.keys(CITY_CONFIG.BUILDINGS);
                 
-                // 현재 도시에 지어진 '고대 연구소'의 개수를 확인 (테크트리 기준점)
                 var labCount = city.buildings["lab"] ? (city.buildings["lab"].count || 1) : 0;
                 
-                // 업그레이드 트리를 정의하는 맵핑
                 var upgradeMap = {
                     "apartment": "tent",
                     "mansion": "apartment",
@@ -3750,41 +3747,61 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
                     "ballista": "tower"
                 };
 
-                for (var i = 0; i < keys.length; i++) {
-                    var bKey = keys[i];
-                    var b = CITY_CONFIG.BUILDINGS[bKey];
-                    var bCountStat = city.buildings[bKey] ? "(✅ " + (city.buildings[bKey].count || 1) + "개)" : "";
+                // 카테고리별 그룹화 및 순서 정의
+                var displayGroups = [
+                    { title: "🏠 [주거 시설]", keys: ["tent", "apartment", "mansion"] },
+                    { title: "💰 [상업 시설]", keys: ["market", "mall", "bank"] },
+                    { title: "🛡️ [방어 시설]", keys: ["tower", "ballista"] },
+                    { title: "🔬 [연구 시설]", keys: ["lab"] }
+                ];
+
+                for (var g = 0; g < displayGroups.length; g++) {
+                    var group = displayGroups[g];
+                    var groupLines = [];
                     
-                    var baseKey = upgradeMap[bKey];
+                    for (var i = 0; i < group.keys.length; i++) {
+                        var bKey = group.keys[i];
+                        var b = CITY_CONFIG.BUILDINGS[bKey];
+                        var baseKey = upgradeMap[bKey];
+                        
+                        var isExposed = false;
+                        if (!baseKey) {
+                            // 1티어는 무조건 노출
+                            isExposed = true; 
+                        } else {
+                            // 상위 건물은 하위 건물을 1개 이상 보유 중일 때만 노출 (지저분한 목록 제거)
+                            if (city.buildings[baseKey] && city.buildings[baseKey].count > 0) {
+                                isExposed = true;
+                            }
+                        }
+
+                        if (isExposed) {
+                            var bCountStat = city.buildings[bKey] ? "(✅" + (city.buildings[bKey].count || 1) + "개)" : "";
+                            var reqStr = (b.reqLab > 0 && labCount < b.reqLab) ? " 🔒[연구소 " + b.reqLab + " 부족]" : "";
+                            
+                            if (!baseKey) {
+                                groupLines.push(idx + ". " + b.icon + " " + b.name + " 건설 [" + fp(b.cost) + "P] " + bCountStat);
+                                groupLines.push("   └ " + b.desc);
+                            } else {
+                                var baseName = CITY_CONFIG.BUILDINGS[baseKey].name;
+                                groupLines.push(idx + ". ⬆️ [" + baseName + "] 개조 ➔ " + b.icon + b.name + " [" + fp(b.cost) + "P] " + bCountStat + reqStr);
+                                groupLines.push("   └ " + b.desc);
+                            }
+                            actualItems.push({ key: bKey, isUpgrade: !!baseKey, baseKey: baseKey });
+                            idx++;
+                        }
+                    }
                     
-                    if (!baseKey) {
-                        // 1티어 기본 건물 및 연구소
-                        bList.push(idx + ". " + b.icon + " " + b.name + " 건설 [" + fp(b.cost) + "P] " + bCountStat + "\n   └ " + b.desc);
-                        actualItems.push({ key: bKey, isUpgrade: false });
-                        idx++;
-                    } else {
-                        // 2,3티어 업그레이드 목록 (모두 노출하되 조건 미달 시 태그 표시)
-                        var baseCount = city.buildings[baseKey] ? (city.buildings[baseKey].count || 1) : 0;
-                        var hasBase = baseCount > 0;
-                        var baseName = CITY_CONFIG.BUILDINGS[baseKey].name;
-                        
-                        var reqTags = [];
-                        if (!hasBase) reqTags.push("❌" + baseName + " 필요");
-                        if (b.reqLab > 0 && labCount < b.reqLab) reqTags.push("🔒연구소 " + b.reqLab + "개 필요");
-                        
-                        var reqStr = reqTags.length > 0 ? " " + reqTags.join(", ") : "";
-                        var arrow = (hasBase && labCount >= b.reqLab) ? "⬆️" : "🚧";
-                        
-                        bList.push(idx + ". " + arrow + " [" + baseName + "] 개조 ➔ " + b.icon + b.name + " [" + fp(b.cost) + "P] " + bCountStat + reqStr + "\n   └ " + b.desc);
-                        actualItems.push({ key: bKey, isUpgrade: true, baseKey: baseKey });
-                        idx++;
+                    if (groupLines.length > 0) {
+                        bList.push(group.title);
+                        bList.push(groupLines.join("\n"));
+                        bList.push(""); // 그룹 간 띄어쓰기
                     }
                 }
                 
                 var bBody = "기본 건물을 상위 건물로 개조하면 기존 슬롯을 유지한 채 업그레이드됩니다.\n\n" + 
-                            "[건설 및 업그레이드 목록]\n" + bList.join("\n") + "\n\n실행할 번호를 입력하세요." + NAV;
+                            bList.join("\n").trim() + "\n\n실행할 번호를 입력하세요." + NAV;
                             
-                // formatCommand의 4번째 인자를 사용하여 공통 양식인 하단 가이드 출력 준수
                 replier.reply(formatCommand("🏗️ 도시 설계실", user, bBody, "메뉴 번호를 입력하세요."));
                 
                 roomData.features.states.menuWait[targetUid].type = 'city_build';

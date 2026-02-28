@@ -6067,12 +6067,31 @@ function _runSector16Logic(data, ctx) {
                         }
 
                         // 3. 행복도 하락에 따른 인구 이탈 처리
-                        if (city.happiness < 50 && city.population > 0) {
-                            var runaway = Math.floor(city.population * 0.1); // 매시간 10%씩 인구 이탈
-                            if (runaway < 1) runaway = 1; // 최소 1명씩은 이탈
-                            city.population = Math.max(0, city.population - runaway);
-                            isModified = true;
-                        }
+                        if (city.happiness < 50 && city.population > 0) {
+                            var runaway = Math.floor(city.population * 0.1); // 매시간 10%씩 인구 이탈
+                            if (runaway < 1) runaway = 1; // 최소 1명씩은 이탈
+                            city.population = Math.max(0, city.population - runaway);
+                            isModified = true;
+                        }
+                        
+                        // 3-1. 행복도 80% 이상 시 자연 인구 유입 (최대 수용량까지 자동 복구)
+                        if (city.happiness >= 80) {
+                            var maxPop = 0;
+                            // 도시에 지어진 주거 건물들의 인구 보너스(popBonus) 총합을 구하여 최대 수용량 산출
+                            for (var bKey in city.buildings) {
+                                var bCfg = CITY_CONFIG.BUILDINGS[bKey];
+                                if (bCfg && bCfg.popBonus) {
+                                    maxPop += (bCfg.popBonus * (city.buildings[bKey].count || 1));
+                                }
+                            }
+                            // 현재 인구가 수용량 미만일 때만 매시간 10%씩 유입
+                            if (city.population < maxPop) {
+                                var growth = Math.floor(maxPop * 0.1); 
+                                if (growth < 1) growth = 1;
+                                city.population = Math.min(maxPop, city.population + growth);
+                                isModified = true;
+                            }
+                        }
 
                         if (isModified) u.skipHealing = true;
                     }
@@ -8550,60 +8569,65 @@ function _runSpiritFindLogic(msg, user, data, replier, roomName, targetUid, real
     if (!realRoom || ALLOWED_ROOMS.indexOf(realRoom) === -1) return;
 
     var sData = user.spiritData;
-    if (!sData || !sData.activeUid) return;
+    if (!sData || !sData.activeUid) return;
 
-    var now = Date.now();
-    // 최초 세팅
-    if (!sData.lastFindTime) sData.lastFindTime = now;
+    var now = Date.now();
+    // 최초 세팅
+    if (!sData.lastFindTime) {
+        sData.lastFindTime = now;
+        return; // 첫 장착 시에는 시간만 초기화
+    }
 
-    // 10분(600000ms) 경과 시 수집 굴림
-    if (now - sData.lastFindTime > 600000) {
-        sData.lastFindTime = now;
-        var activeSp = sData.roster.find(function(s) { return s.uid === sData.activeUid; });
-        
-        // 포만감이 10 이상일 때만 활동 가능
-        if (activeSp && activeSp.satiety >= 10) {
-            var dbInfo = SPIRIT_CONFIG.DB[activeSp.id];
-            if (!dbInfo) return;
+    // 10분(600000ms) 경과 시 수집 굴림
+    if (now - sData.lastFindTime > 600000) {
+        sData.lastFindTime = now; // 쿨타임 즉시 갱신
+        
+        var activeSp = sData.roster.find(function(s) { return s.uid === sData.activeUid; });
+        
+        // 포만감이 10 이상일 때만 활동 가능
+        if (activeSp && activeSp.satiety >= 10) {
+            var dbInfo = SPIRIT_CONFIG.DB[activeSp.id];
+            if (!dbInfo) return;
 
-            // 등급별 아이템 발견 확률 설정
-            var chance = 0.20;
-            if (dbInfo.rank === "레어" || dbInfo.rank === "희귀") chance = 0.30;
-            else if (dbInfo.rank === "에픽") chance = 0.40;
-            else if (dbInfo.rank === "환상") chance = 0.50;
-            else if (dbInfo.rank === "신화") chance = 0.60;
+            // 등급별 아이템 발견 확률 설정
+            var chance = 0.20;
+            if (dbInfo.rank === "레어" || dbInfo.rank === "희귀") chance = 0.30;
+            else if (dbInfo.rank === "에픽") chance = 0.40;
+            else if (dbInfo.rank === "환상") chance = 0.50;
+            else if (dbInfo.rank === "신화") chance = 0.60;
 
-            // 확률 통과 시 아이템 획득
-            if (Math.random() < chance) {
-                activeSp.satiety -= 10;
-                user.skipHealing = true;
+            // 확률 통과 시 아이템 획득
+            if (Math.random() < chance) {
+                activeSp.satiety -= 10;
+                user.skipHealing = true;
 
-                var rand = Math.random() * 100;
-                var rewardMsg = "";
+                var rand = Math.random() * 100;
+                var rewardMsg = "";
 
-                if (rand < 60) { // 60% 확률
-                    var amt = Math.floor(Math.random() * 3) + 1;
-                    user.artifactPieces = (Number(user.artifactPieces) || 0) + amt;
-                    rewardMsg = "🧩 유물 조각 " + amt + "개";
-                } else if (rand < 90) { // 30% 확률
-                    user.ancientMaps = (Number(user.ancientMaps) || 0) + 1;
-                    rewardMsg = "🗺️ 고대 지도 1장";
-                } else { // 10% 확률
-                    user.royalMedals = (Number(user.royalMedals) || 0) + 1;
-                    rewardMsg = "🎖️ 명예의 왕실 훈장 1개";
-                }
+                if (rand < 60) { // 60% 확률
+                    var amt = Math.floor(Math.random() * 3) + 1;
+                    user.artifactPieces = (Number(user.artifactPieces) || 0) + amt;
+                    rewardMsg = "🧩 유물 조각 " + amt + "개";
+                } else if (rand < 90) { // 30% 확률
+                    user.ancientMaps = (Number(user.ancientMaps) || 0) + 1;
+                    rewardMsg = "🗺️ 고대 지도 1장";
+                } else { // 10% 확률
+                    user.royalMedals = (Number(user.royalMedals) || 0) + 1;
+                    rewardMsg = "🎖️ 명예의 왕실 훈장 1개";
+                }
 
-                var resBody = "🐾 [" + activeSp.name + "]이(가) 주변을 탐색하다가 반짝이는 물건을 주워왔습니다!\n\n" +
-                              "🎁 획득: " + rewardMsg + "\n" +
-                              "🍖 포만감: -10 (잔여: " + activeSp.satiety + "/100)";
-                
-                // 알림은 명령어를 친 실제 방으로 전송
-                var targetReplyRoom = (ALLOWED_ROOMS.indexOf(realRoom) === -1) ? "내리다" : realRoom;
-                Api.replyRoom(targetReplyRoom, formatCommand("✨ 정령의 보은", user, resBody));
-                safeSaveData(data, false);
-            }
-        }
-    }
+                var resBody = "🐾 [" + activeSp.name + "]이(가) 주변을 탐색하다가 반짝이는 물건을 주워왔습니다!\n\n" +
+                              "🎁 획득: " + rewardMsg + "\n" +
+                              "🍖 포만감: -10 (잔여: " + activeSp.satiety + "/100)";
+                
+                // 1:1방을 가리지 않고 현재 메시지가 발생한 곳에 정상 출력
+                var targetReplyRoom = (ALLOWED_ROOMS.indexOf(realRoom) === -1) ? "내리다" : realRoom;
+                Api.replyRoom(targetReplyRoom, formatCommand("✨ 정령의 보은", user, resBody));
+            }
+            // [핵심] 성공이든 실패든 10분 타이머가 갱신되었으므로 반드시 저장 처리!
+            safeSaveData(data, false);
+        }
+    }
 }
 
 //==========섹터22-1==========

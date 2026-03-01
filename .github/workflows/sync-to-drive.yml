@@ -34,29 +34,49 @@ jobs:
           from googleapiclient.http import MediaFileUpload
 
           try:
-              # 1. 인증 설정
+              # 1. 인증 및 서비스 연결
               creds_info = json.loads(os.environ['CREDENTIALS'])
               folder_id = os.environ['FOLDER_ID']
               creds = service_account.Credentials.from_service_account_info(creds_info)
               service = build('drive', 'v3', credentials=creds)
 
-              # 2. 기존 파일이 있는지 확인 (덮어쓰기용)
-              query = f"name='source.txt' and '{folder_id}' in parents and trashed=false"
-              results = service.files().list(q=query, fields='files(id)').execute()
-              files = results.get('files', [])
+              # 2. 로컬 파일(source) 읽기 및 3등분 분할
+              with open('source', 'r', encoding='utf-8') as f:
+                  lines = f.readlines()
+              
+              third = len(lines) // 3
+              parts = [
+                  lines[:third],               # part1
+                  lines[third:third*2],        # part2
+                  lines[third*2:]              # part3
+              ]
 
-              media = MediaFileUpload('source', mimetype='text/plain', resumable=True)
+              # 3. 분할된 파일들을 순회하며 구글 드라이브에 업로드
+              for i, part_lines in enumerate(parts):
+                  file_name = f'source_part{i+1}.txt'
+                  
+                  # 분할된 내용을 임시 텍스트 파일로 저장
+                  with open(file_name, 'w', encoding='utf-8') as temp_f:
+                      temp_f.writelines(part_lines)
+                  
+                  # 구글 드라이브에 기존 동일한 이름의 파일이 있는지 검색
+                  query = f"name='{file_name}' and '{folder_id}' in parents and trashed=false"
+                  results = service.files().list(q=query, fields='files(id)').execute()
+                  files = results.get('files', [])
 
-              if files:
-                  # 기존 파일이 있으면 업데이트(덮어쓰기)
-                  file_id = files[0]['id']
-                  service.files().update(fileId=file_id, media_body=media).execute()
-                  print(f"Successfully updated file: {file_id}")
-              else:
-                  # 없으면 새로 생성
-                  file_metadata = {'name': 'source.txt', 'parents': [folder_id]}
-                  file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-                  print(f"Successfully created new file: {file.get('id')}")
+                  media = MediaFileUpload(file_name, mimetype='text/plain', resumable=True)
+
+                  if files:
+                      # 기존 파일 덮어쓰기
+                      file_id = files[0]['id']
+                      service.files().update(fileId=file_id, media_body=media).execute()
+                      print(f"Updated {file_name} (ID: {file_id})")
+                  else:
+                      # 없으면 새 파일 생성
+                      file_metadata = {'name': file_name, 'parents': [folder_id]}
+                      created_file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+                      print(f"Created {file_name} (ID: {created_file.get('id')})")
+
           except Exception as e:
               print(f"Error occurred: {e}")
               exit(1)

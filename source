@@ -4314,6 +4314,10 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
             for (var k in sd.items) {
                 if (k.indexOf("food_") === 0 && sd.items[k] > 0) {
                     var fInfo = SPIRIT_CONFIG.ITEMS[k];
+                    if (!fInfo) {
+                        delete sd.items[k]; // 존재하지 않는 유령 데이터 즉시 소각
+                        continue;
+                    }
                     fList.push((fList.length+1) + ". " + fInfo.icon + " " + fInfo.name + " (보유: " + sd.items[k] + ")");
                     tempFoodKeys.push(k);
                 }
@@ -4372,6 +4376,7 @@ function _handleSpiritMenuStep(msg, user, data, replier, roomName, targetUid) {
         
         sd.items[fKey]--;
         var fInfo = SPIRIT_CONFIG.ITEMS[fKey];
+        if (!fInfo) return replier.reply(formatError(user, "데이터 오류", "존재하지 않는 사료 데이터입니다."));
         sp.satiety = Math.min(100, sp.satiety + fInfo.val);
         user.skipHealing = true; safeSaveData(data, true);
         replier.reply(formatCommand("🍖 먹이주기", user, sp.name + "에게 " + fInfo.name + "을 먹여 포만감이 " + sp.satiety + "/100 이 되었습니다!", "이전 화면: [뒤로]"));
@@ -8137,7 +8142,7 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
        else if (type === "admin_item_give") {
             // [v17.6.4] 중복 유저 선택 완료 후 아이템 검색 및 지급 엔진 호출
             // _executeItemGive 내부에서 아이템이 여러 개일 경우 아이템 선택 창으로 이어집니다.
-            _executeItemGive(targetUser, extra.item, extra.qty, replier, targetRoom);
+            _executeItemGive(targetUser, extra.item, extra.qty, replier, targetRoom, user, targetUid, roomName);
             safeSaveData(data, true);
             return true; // 세션 종료
         }
@@ -15452,9 +15457,7 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         var targetUser = found[0].data;
         var targetRoom = found[0].roomName;
 
-        // 기존의 하드코딩된 아이템 판별 로직을 완전히 제거하고, 
-        // 모든 처리를 범용 아이템 지급 엔진(_executeItemGive)으로 위임합니다.
-        _executeItemGive(targetUser, itemName, qty, replier, targetRoom);
+        _executeItemGive(targetUser, itemName, qty, replier, targetRoom, user, targetUid, roomName);
 
         safeSaveData(data, true);
         return true;
@@ -15757,8 +15760,8 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
 /**  * [B] 실제 지급 탐색 기계 (함수 바깥 - 전역 스코프)
  * 부분 일치 검색을 통해 아이템을 찾고, 중복 시 선택 창으로 유도합니다.
  */
-function _executeItemGive(tUser, iName, count, replier, tRoom) {
-    var cleanI = iName.replace(/\s/g,"");
+function _executeItemGive(tUser, iName, count, replier, tRoom, adminUser, adminUid, adminRoom) {
+    var cleanI = iName.replace(/\s/g,"");
     var matches = [];
 
     // 1. 특수 재화 매핑
@@ -15827,7 +15830,7 @@ function _executeItemGive(tUser, iName, count, replier, tRoom) {
     // 아이템 중복 발생 시 선택 핸들러 호출
     if (matches.length > 1) {
         if (typeof handleItemSelection === 'function') {
-            handleItemSelection(replier, tUser.uid, matches, "admin_item_give_confirm", { tUserUid: tUser.uid, tRoom: tRoom, qty: count, iName: iName }, tUser, tRoom);
+            handleItemSelection(replier, adminUid, matches, "admin_item_give_confirm", { tUserUid: tUser.uid, tRoom: tRoom, qty: count, iName: iName }, adminUser, adminRoom);
         } else {
             replier.reply("오류: 아이템 중복 선택 핸들러를 찾을 수 없습니다.");
         }

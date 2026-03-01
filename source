@@ -8051,22 +8051,33 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
         var type = state.type;
         var extra = state.extra;
         
-        // [핵심 교정]: 복사본이 아닌 유저가 실제 속한 방의 실시간 데이터를 직접 참조
-        var targetRoom = selected.roomName || "내리다";
-        var targetRoomData = data.rooms[targetRoom];
-        
-        if (!targetRoomData) {
-            replier.reply(formatError(user, "데이터 접근 오류", "해당 방(" + targetRoom + ")의 데이터를 찾을 수 없습니다."));
-            delete selectWaitState[targetUid];
-            return true;
-        }
+        // 아이템 선택인지 유저 선택인지 구분하여 타겟 유저와 방을 정확히 추출합니다.
+            var targetRoom = "";
+            var targetRoomData = null;
+            var targetUser = null;
 
-        var targetUser = targetRoomData.users[selected.id];
-        
-        if (!targetUser) return true;
-        if (typeof util_fastClean === 'function') util_fastClean(targetUser);
-        
-        delete selectWaitState[targetUid];
+            if (type === "admin_item_give_confirm") {
+                // 아이템 중복 선택 시에는 extra에 저장해둔 타겟 유저 정보를 사용
+                targetRoom = extra.tRoom;
+                targetRoomData = data.rooms[targetRoom];
+                if (targetRoomData) targetUser = targetRoomData.users[extra.tUserUid];
+            } else {
+                // 일반적인 유저 중복 선택 시
+                targetRoom = selected.roomName || "내리다";
+                targetRoomData = data.rooms[targetRoom];
+                if (targetRoomData) targetUser = targetRoomData.users[selected.id];
+            }
+            
+            if (!targetRoomData) {
+                replier.reply(formatError(user, "데이터 접근 오류", "해당 방(" + targetRoom + ")의 데이터를 찾을 수 없습니다."));
+                delete selectWaitState[targetUid];
+                return true;
+            }
+
+            if (!targetUser) return true; // 타겟이 없으면 조용히 리턴 (에러 방지)
+            if (typeof util_fastClean === 'function') util_fastClean(targetUser);
+            
+            delete selectWaitState[targetUid];
 
         if (type === "admin_mani_select") {
             var mode = extra.mode;
@@ -8147,26 +8158,16 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             return true; // 세션 종료
         }
         else if (type === "admin_item_give_confirm") {
-            // 유저 선택이 완료된 후, 아이템 중복까지 해결(선택)하여 확정 지급하는 로직
-            var tUserUid = extra.tUserUid;
-            var tRoomStr = extra.tRoom;
-            var targetRoomDataForGive = data.rooms[tRoomStr];
-            var finalTargetUser = targetRoomDataForGive.users[tUserUid];
-
-            if (!finalTargetUser) {
-                replier.reply(formatError(user, "데이터 접근 오류", "지급 대상 유저를 찾을 수 없습니다."));
-                return true;
-            }
-
-            _finalizeItemGive(finalTargetUser, selected, extra.qty, replier, tRoomStr);
-            
-            try { 
-                Api.replyRoom("베릭방", "⚙️ [Admin Action: Selected]\n• 실행자: " + user.name + "\n• 대상: [" + tRoomStr + "] " + finalTargetUser.name + "\n• 내용: " + selected.name + " x" + extra.qty + " 지급 완료"); 
+            // 타겟 유저와 방 정보는 위에서 명확하게 추출되었으므로 바로 지급 집행
+            _finalizeItemGive(targetUser, selected, extra.qty, replier, targetRoom);
+            
+            try { 
+                Api.replyRoom("베릭방", "⚙️ [Admin Action: Selected]\n• 실행자: " + user.name + "\n• 대상: [" + targetRoom + "] " + targetUser.name + "\n• 내용: " + selected.name + " x" + extra.qty + " 지급 완료"); 
             } catch(e) {}
-            
+            
             safeSaveData(data, true);
-            return true; 
-        }
+            return true;
+
         else if (type === "admin_point_give") {
             // [v17.6.4] 중복 유저 선택 후 포인트 지급 연동
             util_updatePoint(targetUser, targetRoomData, extra.amount, "관리자 지급", targetRoom);

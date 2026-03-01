@@ -3955,20 +3955,18 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
                 }
             }
 
-            var expBody = "숙련된 용병들로 구성된 탐험대를 깊은 심연으로 파견합니다.\n\n" +
-                          "💰 파견 비용: 3,000,000P\n" +
-                          "⏳ 소요 시간: 30분\n\n" +
-                          "🎁 [탐험 확정 전리품 (수량 변동)]\n" +
-                          "• 📦 미확인 교역품: 50 ~ 140상자\n" +
-                          "• 🧩 유물 조각: 1 ~ 10개\n" +
-                          "• 🗺️ 고대 지도: 1 ~ 3장\n" +
-                          "• 🎖️ 왕실 훈장: 1 ~ 3개\n\n" +
-                          "파견하시겠습니까?\n\n" +
-                          "1. 예 (탐험대 출발)\n" +
-                          "2. 아니오 (취소)" + NAV;
-            
-            roomData.features.states.menuWait[targetUid] = { type: 'city_expedition_confirm', time: Date.now(), originRoom: roomName };
-            replier.reply(formatCommand("🗺️ 지하 탐험대 파견", user, expBody, "번호를 입력하세요."));
+            var expBody = "어디로 탐험대를 파견하시겠습니까?\n\n" +
+                          "1. 🌊 얕은 수맥 (비용 100만P / 15분)\n" +
+                          "   └ 성공률 100%: 안전하지만 소량의 전리품 획득\n\n" +
+                          "2. 🕳️ 심연의 단층 (비용 300만P / 30분)\n" +
+                          "   └ 성공률 80%: 표준 탐사 (실패 시 전리품 반토막)\n\n" +
+                          "3. 🏛️ 잊혀진 고대 도시 (비용 1,000만P / 30분)\n" +
+                          "   └ 성공률 50%: 신비한알+대량의 전리품 잭팟!\n" +
+                          "   └ 실패 시: 탐험대 전멸 및 행복도 대폭 하락\n\n" +
+                          "↩️ 뒤로 / ❎취소";
+            
+            roomData.features.states.menuWait[targetUid] = { type: 'city_expedition_area', time: Date.now(), originRoom: roomName };
+            replier.reply(formatCommand("🗺️ 지하 탐험대 파견지 선택", user, expBody, "원하시는 구역 번호를 입력하세요."));
         }
         else {
             replier.reply(formatError(user, "번호 오류", "올바른 메뉴 번호를 입력하세요."));
@@ -3977,30 +3975,38 @@ function _handleCityMenuStep(msg, user, data, replier, roomName, targetUid) {
     }
 
     // [1-1단계] 탐험대 파견 확정 핸들러
-    if (state.type === 'city_expedition_confirm') {
-        if (choice === "1" || choice === "예") {
-            var cost = 3000000;
-            if (Number(user.point) < cost) {
-                replier.reply(formatError(user, "자금 부족", "파견 비용 " + fp(cost) + "P가 부족합니다."));
-                return true;
-            }
-            
-            util_updatePoint(user, data.rooms["내리다"], -cost, "지하 도시 탐험대 파견", roomName);
-            city.expedition.active = true;
-            city.expedition.endTime = Date.now() + (30 * 60 * 1000);
-            
-            user.skipHealing = true;
-            safeSaveData(data, true);
-            
-            replier.reply(formatCommand("🗺️ 탐험대 파견 완료", user, "탐험대가 횃불을 들고 어둠 속으로 출발했습니다.\n약 30분 뒤 복귀 시 보상이 자동 정산됩니다."));
-            delete roomData.features.states.menuWait[targetUid];
-        } else if (choice === "2" || choice === "아니오") {
-            return _gameCityLogic("/도시", user, data, replier, roomName, targetUid);
-        } else {
-            replier.reply(formatError(user, "번호 오류", "1번(예) 또는 2번(아니오)을 선택하세요."));
-        }
-        return true;
-    }
+    if (state.type === 'city_expedition_area') {
+        var areaIdx = parseInt(choice);
+        if (isNaN(areaIdx) || areaIdx < 1 || areaIdx > 3) {
+            replier.reply(formatError(user, "번호 오류", "1~3번 구역 중 하나를 선택하세요."));
+            return true;
+        }
+
+        var cost = 0;
+        var timeMin = 0;
+        var areaName = "";
+
+        if (areaIdx === 1) { cost = 1000000; timeMin = 15; areaName = "얕은 수맥"; }
+        else if (areaIdx === 2) { cost = 3000000; timeMin = 30; areaName = "심연의 단층"; }
+        else if (areaIdx === 3) { cost = 10000000; timeMin = 30; areaName = "잊혀진 고대 도시"; }
+
+        if (Number(user.point) < cost) {
+            replier.reply(formatError(user, "자금 부족", "파견 비용 " + fp(cost) + "P가 부족합니다."));
+            return true;
+        }
+        
+        util_updatePoint(user, data.rooms["내리다"], -cost, "지하 도시 파견: " + areaName, roomName);
+        city.expedition.active = true;
+        city.expedition.endTime = Date.now() + (timeMin * 60 * 1000);
+        city.expedition.area = areaIdx; // 정산 로직을 위해 파견 구역 정보 저장
+        
+        user.skipHealing = true;
+        safeSaveData(data, true);
+        
+        replier.reply(formatCommand("🗺️ 탐험대 파견 완료", user, "탐험대가 횃불을 들고 [" + areaName + "](으)로 출발했습니다!\n약 " + timeMin + "분 뒤 복귀 시 돌발 이벤트와 함께 정산됩니다."));
+        delete roomData.features.states.menuWait[targetUid];
+        return true;
+    }
     
     // [1-2단계] 구역 확장 확정 핸들러
     if (state.type === 'city_expand_confirm') {
@@ -11108,38 +11114,75 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
                 
                 var rewardLines = [];
                 
-                // 1. 미확인 교역품 (발견 확률 100%)
-                if (Math.random() * 100 < 100) {
-                    var rUnk = Math.floor(Math.random() * 100) + 1;
-                    var qUnk = 150 - (Math.ceil(rUnk / 10) * 10);
-                    if (!user.warehouseSpec) user.warehouseSpec = {};
-                    user.warehouseSpec["_unknown"] = (Number(user.warehouseSpec["_unknown"]) || 0) + qUnk;
-                    rewardLines.push("📦 미확인 교역품 " + qUnk + "상자 (물류 창고)");
-                }
-                
-                // 2. 유물 조각 (발견 확률 70%)
-                if (Math.random() * 100 < 70) {
-                    var rArt = Math.floor(Math.random() * 100) + 1;
-                    var qArt = 11 - Math.ceil(rArt / 10);
-                    user.artifactPieces = (Number(user.artifactPieces) || 0) + qArt;
-                    rewardLines.push("🧩 유물 조각 " + qArt + "개");
-                }
-                
-                // 3. 고대 지도 (발견 확률 50%)
-                if (Math.random() * 100 < 50) {
-                    var rMap = Math.floor(Math.random() * 100) + 1;
-                    var qMap = (rMap <= 19) ? 3 : (rMap <= 49 ? 2 : 1);
-                    user.ancientMaps = (Number(user.ancientMaps) || 0) + qMap;
-                    rewardLines.push("🗺️ 고대 지도 " + qMap + "장");
-                }
-                
-                // 4. 왕실 훈장 (발견 확률 40%)
-                if (Math.random() * 100 < 40) {
-                    var rMed = Math.floor(Math.random() * 100) + 1;
-                    var qMed = (rMed <= 9) ? 3 : (rMed <= 39 ? 2 : 1);
-                    user.royalMedals = (Number(user.royalMedals) || 0) + qMed;
-                    rewardLines.push("🎖️ 왕실 훈장 " + qMed + "개");
-                }
+                var area = user.undergroundCity.expedition.area || 2; // 구버전 호환용 기본값 2
+                var eventText = "";
+                
+                var qUnk = 0, qArt = 0, qMap = 0, qMed = 0, qEgg = 0;
+                var isFail = false;
+
+                if (area === 1) { // 얕은 수맥
+                    qUnk = Math.floor(Math.random() * 31) + 20; // 20~50
+                    qArt = Math.floor(Math.random() * 3) + 1;   // 1~3
+                    if (Math.random() < 0.5) qMap = 1;
+                    if (Math.random() < 0.5) qMed = 1;
+                    eventText = "🌊 [탐사 성공] 얕은 수맥을 안전하게 탐사하고 복귀했습니다.";
+                } 
+                else if (area === 2) { // 심연의 단층
+                    var baseUnk = Math.floor(Math.random() * 91) + 50; // 50~140
+                    var baseArt = 0, baseMap = 0, baseMed = 0;
+                    if (Math.random() < 0.7) baseArt = Math.floor(Math.random() * 10) + 1;
+                    if (Math.random() < 0.5) baseMap = Math.floor(Math.random() * 3) + 1;
+                    if (Math.random() < 0.4) baseMed = Math.floor(Math.random() * 3) + 1;
+
+                    if (Math.random() < 0.8) { // 80% 성공
+                        qUnk = baseUnk; qArt = baseArt; qMap = baseMap; qMed = baseMed;
+                        eventText = "✨ [탐사 성공] 심연의 수호자를 처치하고 무사히 전리품을 확보했습니다!";
+                    } else { // 20% 실패 (반토막)
+                        qUnk = Math.floor(baseUnk / 2); qArt = Math.floor(baseArt / 2); 
+                        qMap = Math.floor(baseMap / 2); qMed = Math.floor(baseMed / 2);
+                        eventText = "🌪️ [조난] 거센 해류에 휩쓸려 물자의 절반을 유실하고 간신히 복귀했습니다.";
+                    }
+                }
+                else if (area === 3) { // 고대 도시
+                    if (Math.random() < 0.5) { // 50% 성공 잭팟
+                        qUnk = Math.floor(Math.random() * 151) + 150; // 150~300
+                        qArt = Math.floor(Math.random() * 11) + 10;   // 10~20
+                        qMap = Math.floor(Math.random() * 3) + 3;     // 3~5
+                        qMed = Math.floor(Math.random() * 3) + 3;     // 3~5
+                        qEgg = 1; // 신비한 정령의 알
+                        eventText = "🔥 [대성공 잭팟!] 잊혀진 고대 도시를 정복하고 막대한 보물을 털어왔습니다!";
+                    } else { // 50% 실패 전멸
+                        isFail = true;
+                        user.undergroundCity.happiness = Math.max(0, user.undergroundCity.happiness - 30);
+                        eventText = "💀 [탐험대 전멸] 잊혀진 고대 도시의 함정에 빠져 탐험대가 돌아오지 못했습니다...\n도시의 민심이 흉흉해집니다. (행복도 -30%)";
+                    }
+                }
+
+                if (!isFail) {
+                    if (qUnk > 0) {
+                        if (!user.warehouseSpec) user.warehouseSpec = {};
+                        user.warehouseSpec["_unknown"] = (Number(user.warehouseSpec["_unknown"]) || 0) + qUnk;
+                        rewardLines.push("📦 미확인 교역품 " + qUnk + "상자 (물류 창고)");
+                    }
+                    if (qArt > 0) {
+                        user.artifactPieces = (Number(user.artifactPieces) || 0) + qArt;
+                        rewardLines.push("🧩 유물 조각 " + qArt + "개");
+                    }
+                    if (qMap > 0) {
+                        user.ancientMaps = (Number(user.ancientMaps) || 0) + qMap;
+                        rewardLines.push("🗺️ 고대 지도 " + qMap + "장");
+                    }
+                    if (qMed > 0) {
+                        user.royalMedals = (Number(user.royalMedals) || 0) + qMed;
+                        rewardLines.push("🎖️ 왕실 훈장 " + qMed + "개");
+                    }
+                    if (qEgg > 0) {
+                        if (!user.spiritData) user.spiritData = { items: {} };
+                        if (!user.spiritData.items) user.spiritData.items = {};
+                        user.spiritData.items["egg_rare"] = (Number(user.spiritData.items["egg_rare"]) || 0) + qEgg;
+                        rewardLines.push("🔮 신비한 정령의 알 " + qEgg + "개 (정령 보관함)");
+                    }
+                }
 
                 // 혹시 모를 배열 빈값 예외처리 (모두 미발견 시)
                 var rewardText = rewardLines.length > 0 ? rewardLines.join("\n") : "💀 운이 나빴습니다... 유의미한 전리품을 찾지 못했습니다.";

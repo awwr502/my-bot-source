@@ -686,15 +686,6 @@ var SYSTEM_CONFIG = {
         LIMIT_WINDOW: 3000,    // 도배 판정 시간 범위 (3000ms = 3초)
         TIMEOUT_MS: 300000     // 도배 적발 시 봇 이용이 제한되는 시간 (5분)
     },
-
-    PROB: { // [핵심 게임 확률 엔진]
-        ODD_EVEN_WIN: 0.47,        // 홀짝 기본 승률 (45%)
-        ODD_EVEN_PAYOUT: 0.90,     // 홀짝 기본 배당률 (사용자 정의)
-        ODD_EVEN_FEVER: 0.50,      // 피버타임 시 홀짝 기본 승률 (50%)
-        STOCK_NEW_LISTING: 0.8,    // 매 변동 타임마다 신규 종목이 상장될 확률 (50%)
-        STOCK_SPECIAL: 0.5,        // 특정 종목에 특수 이벤트(폭등/폭락)가 발생할 확률 (50%)
-        STOCK_UP_CHANCE: 0.45      // 특수 이벤트 발생 시 '상승'일 확률 (45%, 하락이 조금 더 높음)
-    },
     
     MSG: { // [시스템 메시지 설정]
         PREFIX: {
@@ -1487,10 +1478,6 @@ var sprayData = {
     isActive: false, 
     timer: null 
 };
-
-/* 섹터1에 없는 변수만 신규 선언 */ 
-// var selectWaitState = {}; 
-// var bankProcessState = {};
 
 //==========섹터7==========
 
@@ -3893,8 +3880,7 @@ function _sendToDashboard(data, ctx) {
 
     var payload = {
         total_money: totalPoints,
-        user_count: userCount,
-        landmarks: data.landmarkMarket || {}
+        user_count: userCount
     };
 
     Executor.execute(new java.lang.Runnable({
@@ -4822,184 +4808,6 @@ function _runSector16Logic(data, ctx) {
             }
         }
     } catch (e) { Log.error("Loan/Bank Logic Error: " + e); }
-
-    /* [3. 경마 시스템 통합 스케줄러] */
-    try {
-        // A. 개장 알림
-        if (currentHour === rConf.OPEN_HOUR && currentMin === 0) {
-            if (racingData.lastOpenDate !== ctx.today) {
-                racingData.isOperating = true;
-                racingData.isResultProcessed = false; 
-                racingData.isDeadlineNotified = false;
-                racingData.lastOpenDate = ctx.today;
-                var startMsg = "🏇 [내리다 경마장 개장 알림]\n━━━━━━━━━━━━━━━\n지금부터 제 " + racingData.round + "회차 경마 배팅이 가능합니다!\n\n🕒 배팅 시간: 매시 00분 ~ 49분 59초\n🏁 결과 발표: 매시 00분 00초\n🚫 운영 종료: 23:59 (00:00 최종 결과)\n━━━━━━━━━━━━━━━\n💡 현황 확인: [/경마] 입력";
-                Api.replyRoom(ctx.targetRoom, startMsg);
-            }
-        }
-
-        // B. 배팅 마감 알림
-        if (currentMin === 50 && !racingData.isDeadlineNotified) {
-            if (currentHour >= rConf.OPEN_HOUR && currentHour <= rConf.CLOSE_HOUR) {
-            // 귀족 세력의 AI 배팅 펌핑 (중앙은행 재원 활용)
-                var mainRoom = data.rooms[ctx.targetRoom];
-                if (mainRoom && mainRoom.bankReserve > 100000) {
-                    var pumpAmt = Math.floor(mainRoom.bankReserve * 0.05); // 국고의 5% 투입
-                    if (pumpAmt > 300000) pumpAmt = 300000; // 최대 30만P 제한
-                    if (pumpAmt >= rConf.MIN_BET) {
-                        util_updateReserve(mainRoom, -pumpAmt, "귀족 경마 배팅 출자", ctx.targetRoom);
-                        racingData.totalPool += pumpAmt;
-                        var targetHorse = Math.floor(Math.random() * 5) + 1; // 1~5번 말 중 랜덤
-                        racingData.bets["AI_NOBLE_1"] = { uid: "AI_NOBLE_1", horseId: targetHorse, amount: pumpAmt, name: "👑 익명의 귀족" };
-                    }
-                }
-                racingData.isOperating = true; 
-                racingData.isDeadlineNotified = true;
-                var deadlineMsg = "📢 [경마 배팅 마감 알림]\n━━━━━━━━━━━━━━━\n제 " + racingData.round + "회차 배팅이 종료되었습니다!\n\n🏦 최종 집계 포인트: " + fp(racingData.totalPool) + "P\n🏁 우승마 판독 및 정산 진행 중...\n━━━━━━━━━━━━━━━\n🏇 잠시 후 정각(00분)에 결과가 발표됩니다!";
-                Api.replyRoom(ctx.targetRoom, deadlineMsg);
-                ctx.isUpdated = true;
-            }
-        }
-
-        // C. 결과 발표 및 정산
-        var isRaceTime = (currentHour >= rConf.OPEN_HOUR && currentHour <= 23) || currentHour === 0;
-        if (isRaceTime && currentMin === 0 && currentHour !== rConf.OPEN_HOUR) {
-            if (racingData.lastProcessedHour !== currentHour) {
-                racingData.isOperating = (currentHour >= rConf.OPEN_HOUR && currentHour <= 23);
-                racingData.lastProcessedHour = currentHour;
-
-                // 배팅 밀집도에 따른 확률 역보정 (배팅이 몰릴수록 우승 확률 감소)
-                if (racingData.totalPool > 0) {
-                    racingData.horses.forEach(function(h) {
-                        var horseBetAmt = 0;
-                        for (var uid in racingData.bets) {
-                            if (racingData.bets[uid].horseId === h.id) {
-                                horseBetAmt += Number(racingData.bets[uid].amount);
-                            }
-                        }
-                        var betRatio = horseBetAmt / racingData.totalPool;
-                        
-                        // 밀집도 보정 계수: 배팅 비율의 80%만큼 가중치 삭감 (역배 유도)
-                        // 예: 한 말에 100% 몰리면 우승 확률이 기존의 20% 수준으로 급락
-                        var penalty = 1 - (betRatio * 0.5);
-                        h.weight = Math.max(0.1, h.weight * penalty); 
-                    });
-                }
-
-                /* [조작 엔진] 특정 유저의 배팅마 우승 가중치 부여 */
-                for (var uid in racingData.bets) {
-                    var betUser = roomData.users[uid];
-                    // 조작이 켜져 있고 경마 보정치가 설정된 경우
-                    if (betUser && betUser.isManipulated && (betUser.horseWinRate || 0) > 0) {
-                        var targetHorseId = racingData.bets[uid].horseId;
-                        var horse = racingData.horses[targetHorseId - 1];
-                        
-                        // [밸런스 조정]: 100배 대신 설정값의 0.2배를 가산 (70% 설정 시 +14.0 가중치)
-                        // 보통 말의 가중치가 1.0 내외이므로, 14.0만 더해져도 압도적인 우승 후보가 됩니다.
-                        horse.weight += (betUser.horseWinRate * 0.2); 
-                    }
-                }
-                
-                var totalW = 0; racingData.horses.forEach(function(h){ totalW += h.weight; });
-                var rVal = Math.random() * totalW; var accum = 0; var winner = racingData.horses[0];
-                for(var i=0; i<racingData.horses.length; i++){ accum += racingData.horses[i].weight; if(rVal < accum){ winner = racingData.horses[i]; break; } }
-
-                var tax = Math.floor(racingData.totalPool * rConf.TAX_RATE);
-                var basePool = racingData.totalPool - tax + racingData.carryOver;
-                var winPool = 0; var winnerUids = [];
-                for(var uid in racingData.bets){ if(racingData.bets[uid].horseId === winner.id){ winPool += racingData.bets[uid].amount; winnerUids.push(uid); } }
-
-                var mainRoom = data.rooms[ctx.targetRoom];
-                // [교체] 직접 연산 대신 보안 엔진 사용 (수수료 입고)
-                if(mainRoom) util_updateReserve(mainRoom, tax, "경마 수수료 입고", ctx.targetRoom);
-
-                var resultHeader = "🏁 [제 " + racingData.round + "회 경마 결과 및 새 경기 안내]\n━━━━━━━━━━━━━━━\n[🏆 지난 경기 결과]\n\"마지막 직선 주로에서 " + winner.id + "번 " + winner.name + "가 골인!\"\n\n🥇 우승마: [" + winner.id + "번 " + winner.name + "]\n";
-                var resultBody = "";
-                
-                if(winnerUids.length > 0) {
-                    // [동기화]: 최저 보장 배율을 최대 상한 배율(MAX_PAYOUT_MULT)과 일치시킵니다.
-                    var targetMult = Number(rConf.MAX_PAYOUT_MULT || 7); 
-                    var totalRequiredForPrize = Math.floor(winPool * targetMult);
-                    
-                    var subsidyNeeded = Math.max(0, totalRequiredForPrize - basePool);
-                    var actualSubsidy = 0;
-                    if (subsidyNeeded > 0 && mainRoom) {
-                        actualSubsidy = Math.min(subsidyNeeded, mainRoom.bankReserve || 0);
-                        util_updateReserve(mainRoom, -actualSubsidy, "경마 보전금 지출", ctx.targetRoom);
-                    }
-                    var finalDistributePool = basePool + actualSubsidy;
-                    var totalActuallyPaid = 0;
-
-                    resultBody += "🏛️ 국고 수수료(10%): " + fp(tax) + "P 입고\n";
-                    if (actualSubsidy > 0) {
-                        resultBody += "🛡️ " + targetMult + "배 배당 보전 지원: " + fp(actualSubsidy) + "P\n";
-                    } else if (racingData.carryOver > 0) {
-                        resultBody += "💰 이월금 포함: " + fp(racingData.carryOver) + "P 방출!\n";
-                    }
-                    
-                    resultBody += "\n[🎖️ 주요 당첨자]";
-                    winnerUids.forEach(function(uId){
-                        var b = racingData.bets[uId]; var u = null;
-                        for(var r in data.rooms){ if(data.rooms[r].users[uId]){ u = data.rooms[r].users[uId]; break; } }
-                        if(u){
-                            var share = b.amount / winPool;
-                            var prize = Math.floor(share * finalDistributePool);
-                            
-                            // [고정 배당 핵심]: 상한선과 보장액을 동일하게 설정 (targetMult 배 고정)
-                            var fixedLimit = b.amount * targetMult; 
-                            
-                            // 계산된 당첨금이 보장액보다 크면 보장액(7배)으로 깎고, 
-                            // 부족하면 보전금이 포함된 prize를 그대로 지급하여 결과적으로 7배를 맞춤
-                            if (prize > fixedLimit) prize = fixedLimit;
-
-                            if (!util_isBankSolvent(ctx.targetRoom, prize)) {
-                                try { Api.replyRoom(ctx.targetRoom, "🚨 [국고 부도] 경마 당첨금 지급 능력이 부족하여 이월 처리됩니다."); } catch(e){}
-                                return;
-                            }
-
-                            var res = processRepayment(u, prize, uId, ctx.targetRoom);
-                            util_updatePoint(u, mainRoomData, Number(res.actualGain), "경마 당첨금", ctx.targetRoom);
-                            totalActuallyPaid += prize;
-                            
-                            resultBody += "\n• " + b.name + " (+" + fp(res.actualGain) + "P) ✨" + targetMult + "배보장";
-                        }
-                    });
-                    
-                    // 정산 후 남은 금액은 다음 회차로 이월 (판돈이 넘쳤을 경우 대비)
-                    racingData.carryOver = Math.max(0, finalDistributePool - totalActuallyPaid);
-                    if (racingData.carryOver > 10) {
-                        resultBody += "\n\n💰 상한 초과분 " + fp(racingData.carryOver) + "P는\n다음 회차 배당으로 이월되었습니다!";
-                    }
-               } else {
-                    var currentRoundNetPool = racingData.totalPool - tax; 
-                    var toBank = Math.floor(currentRoundNetPool * rConf.WINLESS_BANK_RATE); 
-                    racingData.carryOver = (currentRoundNetPool - toBank) + racingData.carryOver;
-                    if(mainRoom) util_updateReserve(mainRoom, toBank, "경마 무승자 국고 환수", ctx.targetRoom);
-                    resultBody += "💀 당첨 유저 없음\n💰 이월금 보전 완료: " + fp(racingData.carryOver) + "P\n" +
-                                 "🏛️ 금기 판돈 국고 귀속(" + (rConf.WINLESS_BANK_RATE * 100).toFixed(0) + "%): " + fp(toBank) + "P";
-                }
-
-                var isClosing = (currentHour === 0);
-                if (isClosing) {
-                    racingData.isOperating = false;
-                    resultBody += "\n━━━━━━━━━━━━━━━\n💤 금일 경마 운영이 종료되었습니다.\n다음 경기는 오전 09:00에 시작됩니다.";
-                } else {
-                    resultBody += "\n━━━━━━━━━━━━━━━\n✨ [제 " + (racingData.round + 1) + "회 경기 시작] ✨\n지금부터 다음 경기 배팅이 가능합니다.";
-                }
-
-                Api.replyRoom(ctx.targetRoom, resultHeader + resultBody);
-                util_stamp("racingLogic");
-
-                racingData.round++; 
-                racingData.bets = {}; 
-                racingData.totalPool = 0;
-                racingData.isDeadlineNotified = false;
-                
-                var conds = [{l:"🚀 최상",w:1.5},{l:"☀️ 양호",w:1.2},{l:"☁️ 보통",w:1.0},{l:"💧 부진",w:0.7}];
-                racingData.horses.forEach(function(h){ var c=conds[Math.floor(Math.random()*conds.length)]; h.icon=c.l; h.weight=c.w; });
-                ctx.isUpdated = true;
-            }
-        }
-    } catch (e) { Log.error("Racing Logic Error: " + e); }
 }
 // 엔진 가동
 runScheduler();
@@ -6028,66 +5836,10 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             
             delete selectWaitState[targetUid];
 
-        if (type === "admin_mani_select") {
-            var mode = extra.mode;
-            if (mode === "ON") {
-                targetUser.isManipulated = true;
-                targetUser.gambleWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_GAMBLE;
-                targetUser.fishLuck = SYSTEM_CONFIG.MANIPULATION.DEFAULT_FISH;
-                targetUser.horseWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_RACING;
-                targetUser.spittoWinRate = SYSTEM_CONFIG.MANIPULATION.DEFAULT_SPITTO;
-                targetUser.skipHealing = true; // 보안 엔진 롤백 방지
-                replier.reply(formatAdmin("🎯 조작 가동", "[" + targetRoom + "] " + targetUser.name + "님의 조작을 [기본값]으로 활성화했습니다."));
-            } else if (mode === "OFF") {
-                targetUser.isManipulated = false;
-                targetUser.skipHealing = true;
-                replier.reply(formatAdmin("🎯 조작 해제", "[" + targetRoom + "] " + targetUser.name + "님의 모든 조작을 종료했습니다."));
-            } else {
-                var status = "👤 대상: [" + targetRoom + "] " + targetUser.name + "\n" +
-                              "✨ 상태: " + (targetUser.isManipulated ? "🟢 가동 중" : "⚪ 미가동") + "\n\n" +
-                              "1. 🎣 낚시 보정: " + (targetUser.fishLuck || 0) + "%\n" +
-                              "2. 🏇 경마 보정: " + (targetUser.horseWinRate || 0) + "%\n" +
-                              "3. 🧧 스피또 보정: " + (targetUser.spittoWinRate || 0) + "%\n" +
-                              "4. ❌ 조작 전체 해제\n\n" +
-                              "💡 수정할 번호를 입력하세요.";
-                
-                var currentMenuWait = data.rooms[roomName].features.states.menuWait;
-                currentMenuWait[targetUid] = { 
-                    type: 'admin_mani_menu', 
-                    time: Date.now(), 
-                    extra: { targetId: selected.id, targetRoom: targetRoom } 
-                };
-                replier.reply(formatAdmin("🎯 조작 설정 센터", status));
-            }
-            safeSaveData(data, true); // 변경 사항 즉시 파일에 박제
-            return true;
-        }
-        else if (type === "stock_buy" || type === "stock_sell") {
-            var landName = selected; 
-            var cmdPrefix = (type === "stock_buy") ? "/투자 " : "/매각 ";
-            _gameLandmarkLogic(cmdPrefix + landName + " " + extra.amount, targetUser, data, replier, targetRoom, selected.id);
-            return true;
-        }
-        else if (type === "info") {
+        if (type === "info") {
             var cr = getCreditInfo(targetUser.creditScore);
-            var info = "📍 소속: " + targetRoom + "\n💰 포인트: " + fp(targetUser.point) + "P\n🏦 예금: " + fp(targetUser.bank) + "P\n💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n🏅 티어: " + (TIERS[targetUser.tier] || "아이언");
+            var info = "📍 소속: " + targetRoom + "\n💰 포인트: " + fp(targetUser.point) + "P\n🏦 예금: " + fp(targetUser.bank) + "P\n💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)";
             replier.reply(formatCommand("🔍 유저 상세 정보", targetUser, info, null));
-        }
-        else if (type === "mining_info") {
-            var isMin = (targetUser.mining && targetUser.mining.active === true);
-            var dur = isMin ? Math.floor((Date.now() - targetUser.mining.startTime) / 60000) : 0;
-            var tot = (targetUser.totalMiningTime || 0) + dur;
-            var pol = util_getActivePolicy(targetRoomData);
-            var mult = util_getEcoMultiplier(targetRoom) * (pol.mineMult || 1.0);
-            if (targetUser.loan && Number(targetUser.loan.debt) > 0) mult *= 1.5;
-            var est = isMin ? Math.floor(dur * SYSTEM_CONFIG.ECO.MINE.BASE_PER_MIN * mult) : 0;
-
-            var body = "\n" + (isMin ? "채굴 진행: " + dur + "분째...\n" : "✨ 상태: 현재 휴식 중입니다.\n") +
-                       "📈 누적 채굴: " + fp(tot) + "분 경과\n" +
-                       "💰 예상 수익: +" + fp(est) + "P\n" +
-                       "⚖️ 정책 효과: x" + mult.toFixed(1) + " (적용 중)\n\n" +
-                       "✨ 광물 발견 수익은 종료 시 합산됩니다.";
-            replier.reply(formatCommand("🔍 유저 광산 진행 현황", targetUser, body, null));
         }
         else if (type === "transfer") {
             if (selected.id === targetUid) return replier.reply(formatError(user, "송금 불가", "자기 자신에게는 송금할 수 없습니다."));
@@ -6194,47 +5946,23 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
             if (refundCount > 0) refundLog += "\n⚠️ 사채 보전 완료: " + refundCount + "건 (" + fp(totalRefunded) + "P)";
             
             // 캐시 삭제
-            if (typeof uidCache !== 'undefined') {
-                for (var key in uidCache) { if (uidCache[key] === targetId) delete uidCache[key]; }
-            }
-            // [교정] 실제 유저가 있는 방에서 삭제
-            delete targetRoomData.users[targetId];
-            try {
-                var regFile = new java.io.File(REGISTRY_PATH);
-                if (regFile.exists()) {
-                    var regData = JSON.parse(FileStream.read(REGISTRY_PATH));
-                    // [교정] 타겟 방 이름 키로 명부 삭제
-                    delete regData[targetRoom + "_" + tName];
-                    FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
-                }
-            } catch (e) { Log.error("Registry Delete Error: " + e); }
-            replier.reply(formatAdmin("유저 삭제 완료", "[" + targetRoom + "] 방에서 [" + tName + "]님의 데이터를 영구 삭제했습니다." + refundLog));
+        if (typeof uidCache !== 'undefined') {
+            for (var key in uidCache) { if (uidCache[key] === targetId) delete uidCache[key]; }
         }
-
-        else if (type === "admin_land_take") {
-            var holdings = targetUser.landHoldings || {};
-            var matchedLand = util_findStockByShorthand(holdings, extra.land);
-            
-            if (matchedLand.length === 0) {
-                replier.reply(formatAdmin("🚫 회수 실패", "[" + targetUser.name + "]님은 해당 지분이 없습니다."));
-            } else {
-                var sName = matchedLand[0];
-                var currentQty = Number(holdings[sName] || 0);
-                var takeQty = (extra.qty === "전부") ? currentQty : parseInt(extra.qty.replace(/,/g, ""));
-                if (takeQty > currentQty) takeQty = currentQty;
-
-                targetUser.skipHealing = true;
-                util_updateLandmark(targetUser, sName, -takeQty, "관리자 강제 회수", targetRoom);
-                
-                if (Number(targetUser.landHoldings[sName]) <= 0) {
-                    delete targetUser.landHoldings[sName];
-                    if (targetUser.landAvg) delete targetUser.landAvg[sName];
-                }
-                replier.reply(formatAdmin("⚙️ 부동산 회수 완료", "[" + targetRoom + "] " + targetUser.name + "님의 [" + sName + "] 지분을 회수했습니다."));
+        // [교정] 실제 유저가 있는 방에서 삭제
+        delete targetRoomData.users[targetId];
+        try {
+            var regFile = new java.io.File(REGISTRY_PATH);
+            if (regFile.exists()) {
+                var regData = JSON.parse(FileStream.read(REGISTRY_PATH));
+                delete regData[targetRoom + "_" + tName];
+                FileStream.write(REGISTRY_PATH, JSON.stringify(regData));
             }
-        }
+        } catch (e) { Log.error("Registry Delete Error: " + e); }
+        replier.reply(formatAdmin("유저 삭제 완료", "[" + targetRoom + "] 방에서 [" + tName + "]님의 데이터를 영구 삭제했습니다." + refundLog));
+    }
 
-        else if (type === "admin_attend_reset") {
+    else if (type === "admin_attend_reset") {
             targetUser.lastDate = "";
             replier.reply(formatAdmin("출석 초기화", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님의 오늘 출석 기록을 삭제했습니다."));
         }
@@ -6265,7 +5993,7 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
 
                 if (!rawBackupUser) throw new Error("백업본에 해당 데이터(ID:" + sourceCode + ")가 없습니다.");
 
-                // [수정] 백업 유저 객체 전체 복제 (Deep Clone)
+                // 백업 유저 객체 전체 복제 (Deep Clone)
                 var backupUser = JSON.parse(JSON.stringify(rawBackupUser));
                 
                 // 데이터 검증용 스냅샷 (출력용)
@@ -8492,36 +8220,6 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    /* [기능 1-1] 상점 상세 선택 (복권 카테고리 내 번호 선택 처리) */
-    else if (state.type === 'shop_detail') {
-        delete menuWaitState[targetUid]; // 상세 선택 진입 시 메뉴 대기 해제
-        
-        if (state.category === '5') { // 복권 카테고리인 경우
-            if (choice === "1") { // 로또 선택 시
-                var lottoItem = null;
-                for(var i=0; i<SHOP_ITEMS.length; i++) { 
-                    if(SHOP_ITEMS[i].effect === "lotto") { lottoItem = SHOP_ITEMS[i]; break; } 
-                }
-                // 로또는 단권 구매이므로 바로 구매 확인 단계로 이동
-                bankProcessState[targetUid] = { type: 'shop_buy', time: Date.now(), extra: { items: [lottoItem] } };
-                _handleBankStep5("1", user, data, replier, roomName, targetUid);
-            } 
-            else if (choice === "2") { // 스피또 선택 시
-                var spittoItem = null;
-                for(var i=0; i<SHOP_ITEMS.length; i++) { 
-                    if(SHOP_ITEMS[i].effect === "spitto") { spittoItem = SHOP_ITEMS[i]; break; } 
-                }
-                // 스피또는 여러 개 구매가 가능하므로 수량 입력 단계로 이동
-                bankProcessState[targetUid] = { type: 'shop_quantity', time: Date.now(), extra: { item: spittoItem } };
-                replier.reply(formatCommand("🔢 스피또 수량 입력", user, "구매하실 [스피또 복권]의 수량을 입력해주세요.", "취소: [취소]"));
-            } 
-            else {
-                replier.reply(formatError(user, "번호 오류", "1번(로또) 또는 2번(스피또)을 선택해주세요."));
-            }
-        }
-        return true;
-    }
-
     // [v17.4.2] 목적지 선택 및 인덱스 매칭 버그 수정
     else if (state.type === 'trade_depart') {
         if (!tradeCfg) return false; 
@@ -8727,9 +8425,6 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         replier.reply(formatCommand("📘 해양 생물 상세 정보", user, detailBody));
         return true;
     }
-    else if (state.type.startsWith('casino_')) {
-        return _gameCasinoLogic(msg, user, data, replier, roomName, targetUid);
-    }
 
     return false;
 }
@@ -8906,9 +8601,8 @@ if (actualFeatures && actualFeatures.states) {
         // '뒤로' 입력 시에는 각 Step별 핸들러(섹터 23-4 등)가 계층을 판단할 수 있도록 로직을 하단으로 통과시킵니다.
     }
 
-    // 1. 관리자 및 조작 핸들러 (네비게이션 바로 다음 우선순위)
+    // 1. 관리자 핸들러 (네비게이션 바로 다음 우선순위)
     if (typeof _handleAdminMain === 'function' && _handleAdminMain(msg, user, data, replier, roomName, targetUid)) return;
-    if (typeof _handleAdminManiStep === 'function' && _handleAdminManiStep(msg, user, data, replier, roomName, targetUid)) return;
     
     // 2. 공용 메뉴 핸들러 (Step 1~4)
     if (typeof _handleMenuStep1 === 'function' && _handleMenuStep1(msg, user, data, replier, logicRoom, targetUid)) return;
@@ -11814,64 +11508,9 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
     
     var roomData = targetRoomData; // 변수명 통일
 
-    // 1. 방 데이터 및 기능 템플릿 존재 여부 체크 (안전 가드)
+    // 방 데이터 및 기능 템플릿 존재 여부 체크 (안전 가드)
     if (!roomData || !roomData.features) return false;
 
-    // 2. [핵심 고정] 전역 변수가 아닌 이 함수 전용 지역 변수로 데이터 연결
-    // 이 코드가 있어야 /경마, /로또 등의 명령어가 먹통이 되지 않습니다.
-    var racingData = roomData.features.racing;
-    var rConf = (SYSTEM_CONFIG.ECO && SYSTEM_CONFIG.ECO.RACING) ? SYSTEM_CONFIG.ECO.RACING : (SYSTEM_CONFIG.RACING || {});
-    
-    // 만약 상수가 아예 로드되지 않았을 경우를 대비한 최소한의 기본값 보정
-    if (!rConf.MIN_BET) {
-        rConf.MIN_BET = 10000;
-        rConf.MAX_BET = 30000;
-        rConf.TAX_RATE = 0.1;
-        rConf.CANCEL_FEE = 0.1;
-    }
-
-    /* [Gemini 요청 사항] 경마 정보 실시간 브리핑 기능 통합 (내 배팅 정보 포함) */
-    if (msg === "/경마") {
-        if (!racingData.isOperating) {
-            replier.reply(formatSimple("🏇 경마장 휴장 안내", "현재 경마 운영 시간이 아닙니다.\n(운영시간: 09:00 ~ 23:59)", "오전 9시 정각에 개장합니다."));
-            return true;
-        }
-
-        var hList = racingData.horses.map(function(h) {
-            var horseBetSum = 0;
-            for (var uid in racingData.bets) {
-                if (racingData.bets[uid].horseId === h.id) horseBetSum += Number(racingData.bets[uid].amount);
-            }
-            return h.id + ". " + h.name + " [" + h.icon + "]\n    └ 현 배팅액: " + fp(horseBetSum) + "P";
-        }).join("\n");
-
-        var now = new Date();
-        var nowMin = now.getMinutes();
-        var remainMin = 49 - nowMin;
-        var remainSec = 59 - now.getSeconds();
-        if (remainMin < 0) { remainMin = 0; remainSec = 0; }
-
-        var myBet = racingData.bets[targetUid];
-        var myBetInfo = "";
-        if (myBet) {
-            var myHorse = racingData.horses[myBet.horseId - 1]; 
-            myBetInfo = "👤 내 배팅: " + myBet.horseId + "번 " + myHorse.name + " (" + fp(myBet.amount) + "P)";
-        } else {
-            myBetInfo = "👤 내 배팅: 참여 내역 없음";
-        }
-
-        var raceHeader = (nowMin >= 50) ? "🏁 배팅 마감 및 정산 중" : "제 " + racingData.round + "회차 경기 배팅 진행 중";
-        var totalPrizePool = racingData.totalPool + racingData.carryOver;
-        var racingBody = raceHeader + "\n\n" +
-                         "[🏇 출전마 라인업]\n" + hList + "\n\n" +
-                         myBetInfo + "\n" +
-                         "💰 현재 총 배당금: " + fp(totalPrizePool) + "P\n" +
-                         (racingData.carryOver > 0 ? "✨ 이월 적립금: " + fp(racingData.carryOver) + "P 포함\n" : "") +
-                         "🕒 배팅 마감: " + remainMin + "분 " + remainSec + "초 남음";
-
-        replier.reply(formatCommand("🏇 내리다 중앙 경마장", user, racingBody, "배팅: [/배팅 번호 금액]"));
-        return true;
-    }
 
     /* 봇 응답 속도 체크 */
     if (msg === "/핑") {
@@ -12208,16 +11847,11 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
 function _gameActionLogic(msg, user, data, replier, roomName, targetUid) {
     var cmd = msg.split(" ")[0]; // 명령어 첫 단어 추출
     
-    if (cmd === "/승급" || cmd === "/배팅" || cmd === "배팅취소" || cmd === "/펀드") {
+    if (cmd === "/펀드") {
         return _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid);
     }
     
-    // 뿌리기 줍기 로직 단독 유지 (Part3)
-    if (cmd === "줍기") {
-        return _gameActionLogic_Part3(msg, user, data, replier, roomName, targetUid);
-    }
-    
-    return false; // 해당되는 명령어가 없음
+    return false; 
 }
 
 //==========섹터41==========
@@ -12344,83 +11978,6 @@ function util_getDynamicRateMultiplier(roomName) {
     // [하한선 조정]: 최저 배율을 0.5 ➔ 0.8로 상향하여 이자 반토막 현상 방지
     return Math.max(0.8, Math.min(3.0, multiplier));
     }
-
-/**
- * 조작 시스템 2단계 입력 처리 엔진
- */
-function _handleAdminManiStep(msg, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
-    var menuWaitState = roomData.features.states.menuWait;
-    var bankProcessState = roomData.features.states.bankProcess;
-    
-    // 1단계: 메뉴 번호 선택
-    if (menuWaitState[targetUid] && menuWaitState[targetUid].type === 'admin_mani_menu') {
-        var state = menuWaitState[targetUid];
-        if (Date.now() - state.time > 30000) {
-            delete menuWaitState[targetUid];
-            replier.reply(formatAdmin("🎯 조작 설정 종료", "선택 시간이 초과되어 메뉴를 닫습니다."));
-            return true;
-        }
-        var choice = msg.trim();
-        if (choice === "취소") { delete menuWaitState[targetUid]; replier.reply("조작 설정을 취소했습니다."); return true; }
-        
-        if (choice === "4") {
-            var targetUser = data.rooms[state.extra.targetRoom].users[state.extra.targetId];
-            targetUser.isManipulated = false;
-            delete menuWaitState[targetUid];
-            replier.reply(formatAdmin("🎯 조작 해제", targetUser.name + "님의 조작이 종료되었습니다."));
-            return true;
-        }
-
-        var cats = ["", "낚시 보정", "경마 보정", "스피또 보정"];
-        if (["1","2","3"].indexOf(choice) !== -1) {
-            bankProcessState[targetUid] = { 
-                type: 'admin_mani_input', 
-                time: Date.now(), 
-                extra: { cat: choice, targetId: state.extra.targetId, targetRoom: state.extra.targetRoom } 
-            };
-            delete menuWaitState[targetUid];
-            var configKey = (choice == "1" ? "FISH" : (choice == "2" ? "RACING" : "SPITTO"));
-            replier.reply(formatAdmin("🎯 " + cats[parseInt(choice)] + " 설정", "변경할 수치를 입력하세요. (0~100)\n* 현재 기본값: " + SYSTEM_CONFIG.MANIPULATION["DEFAULT_" + configKey] + "%"));
-            return true;
-        }
-    }
-
-    // 2단계: 실제 퍼센트 수치 입력
-    if (bankProcessState[targetUid] && bankProcessState[targetUid].type === 'admin_mani_input') {
-        var state = bankProcessState[targetUid];
-        if (msg === "취소") { 
-            delete bankProcessState[targetUid]; 
-            if (data.rooms["내리다"].features.states.bankProcess[targetUid]) delete data.rooms["내리다"].features.states.bankProcess[targetUid];
-            return true; 
-        }
-        
-        var val = parseInt(msg.replace(/[^0-9]/g, ""));
-        if (isNaN(val) || val < 0 || val > 100) { 
-            replier.reply("0~100 사이의 숫자를 입력하세요."); 
-            return true; 
-        }
-        
-        var targetUser = data.rooms[state.extra.targetRoom].users[state.extra.targetId];
-        targetUser.isManipulated = true;
-        targetUser.skipHealing = true;
-        
-        if (state.extra.cat === "1") targetUser.fishLuck = val;
-        else if (state.extra.cat === "2") targetUser.horseWinRate = val;
-        else if (state.extra.cat === "3") targetUser.spittoWinRate = val;
-        
-        // [핵심] 현재 방과 메인 방 양쪽에서 세션을 완벽히 제거 (좀비 방지)
-        delete bankProcessState[targetUid];
-        if (data.rooms["내리다"].features.states.bankProcess) {
-            delete data.rooms["내리다"].features.states.bankProcess[targetUid];
-        }
-
-        replier.reply(formatAdmin("✅ 설정 완료", "[" + state.extra.targetRoom + "] " + targetUser.name + "님의 수치를 " + val + "%로 확정했습니다."));
-        safeSaveData(data, true); 
-        return true;
-    }
-    return false;
-}
 
 //==========섹터51==========
 

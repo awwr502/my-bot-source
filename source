@@ -5306,9 +5306,14 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
 if (!data) return;
 
 // 1. [최우선 실체화] 리다이렉트 전, 메시지가 발생한 '물리적 방' 객체부터 생성
-if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
-if (!data.rooms[roomName].features) {
+if (!data.rooms) data.rooms = {};
+if (!data.rooms[roomName]) {
+    data.rooms[roomName] = { users: {} };
     data.rooms[roomName].features = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
+}
+// '내리다' 방이 어떤 이유로든 증발했을 경우 자동 복구
+if (!data.rooms["내리다"]) {
+    data.rooms["내리다"] = { users: {}, features: ROOM_FEATURE_TEMPLATE() };
 }
 // 하위 states 구조 강제 보강 (물리 방용)
 if (!data.rooms[roomName].features.states) {
@@ -9182,18 +9187,17 @@ function _adminSystemLogic(msg, user, data, replier, roomName, targetUid, sender
 
     /* ☢️ 시스템 공장 초기화 (완전 리셋 Nuke) */
     if (msg === "/공장초기화") {
-        var confirmMsg = "관리자 권한으로 시스템 초기화를 시작합니다...\n(기존 데이터 접근 차단 완료)";
-        replier.reply(formatAdmin("시스템 초기화", confirmMsg));
+        var confirmMsg = "☢️ 관리자 권한으로 서버 공장 초기화를 시작합니다.\n(모든 유저 데이터 및 명부 소각 중...)";
+        replier.reply(formatAdmin("시스템 초기화 가동", confirmMsg));
 
-        // 1. 메모리(두뇌) 강제 초기화
-        globalData = { rooms: {}, admins: ["관리자"], botActive: true, nickHistory: {}, adminLogs: [], nameToIdCache: {}, _isInitialized: true };
-        
-        // 2. 디스크 파일(data 폴더 내부) 전체 삭제 재귀 함수
+        // 1. 디스크 파일(data 폴더 내부) 전체 삭제 재귀 함수 실행
         var deleteFolderRecursive = function(fileOrDir) {
             if (fileOrDir.isDirectory()) {
                 var children = fileOrDir.listFiles();
-                for (var i = 0; i < children.length; i++) {
-                    deleteFolderRecursive(children[i]);
+                if (children) {
+                    for (var i = 0; i < children.length; i++) {
+                        deleteFolderRecursive(children[i]);
+                    }
                 }
             }
             fileOrDir.delete();
@@ -9203,19 +9207,39 @@ function _adminSystemLogic(msg, user, data, replier, roomName, targetUid, sender
             var baseDir = new java.io.File(BASE_DIR);
             if (baseDir.exists()) {
                 var files = baseDir.listFiles();
-                for (var i = 0; i < files.length; i++) {
-                    deleteFolderRecursive(files[i]);
+                if (files) {
+                    for (var i = 0; i < files.length; i++) {
+                        deleteFolderRecursive(files[i]);
+                    }
                 }
             }
         } catch(e) { Log.error("공장초기화 파일 삭제 실패: " + e); }
+
+        // 2. [핵심 교정] 메모리 초기화 시 '내리다' 방을 즉시 재생성하여 에러 방지
+        var freshData = { 
+            rooms: {}, 
+            admins: ["관리자"], 
+            botActive: true, 
+            nickHistory: {}, 
+            adminLogs: [], 
+            nameToIdCache: {}, 
+            _isInitialized: true 
+        };
         
+        // 메인 룸 '내리다' 즉시 실체화
+        freshData.rooms["내리다"] = { users: {}, features: ROOM_FEATURE_TEMPLATE() };
+        globalData = freshData;
+
         // 3. 상태 대기열 및 식별 캐시 초기화
         uidCache = {};
         menuWaitState = {};
         bankProcessState = {};
         selectWaitState = {};
         
-        replier.reply(formatAdmin("☢️ 서버 공장 초기화 완료", "메모리와 디스크의 모든 유저 데이터, 영구 명부, 백업 파일이 완전히 소각되었습니다.\n\n지금부터 채팅을 입력하는 모든 유저는 '신규 가입'으로 처리되어 정착금을 받게 됩니다."));
+        // 4. 즉시 물리 저장 (초기 구조 확정)
+        safeSaveData(globalData, true);
+
+        replier.reply(formatAdmin("☢️ 서버 공장 초기화 완료", "모든 데이터가 소각되고 클린 엔진이 재배포되었습니다.\n\n✅ 메인 룸('내리다') 구조 재건 완료\n✅ 모든 유저 신규 가입 대기 상태"));
         return true;
     }
 

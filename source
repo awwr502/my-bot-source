@@ -5326,11 +5326,14 @@ if (!data) return;
 // 1. [최우선 실체화] 리다이렉트 전, 메시지가 발생한 '물리적 방' 객체부터 생성
 if (!data.rooms) data.rooms = {};
 
-// [마스터 가드] 필수 구역(내리다/베릭방) 및 현재 방 객체 선제 생성
+// [마스터 가드] 필수 구역(내리다/베릭방) 및 현재 방의 'users' 명단 강제 실체화
 var checkRooms = ["내리다", "베릭방", roomName];
 checkRooms.forEach(function(r) {
     if (!data.rooms[r]) {
-        data.rooms[r] = { users: {} };
+        data.rooms[r] = { users: {} }; // 방 자체가 없으면 유저 명단과 함께 생성
+    }
+    if (!data.rooms[r].users) {
+        data.rooms[r].users = {}; // 방은 있는데 유저 명단(users)이 없으면 강제 생성
     }
     if (!data.rooms[r].features) {
         data.rooms[r].features = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
@@ -9201,18 +9204,22 @@ function _adminSystemLogic(msg, user, data, replier, roomName, targetUid, sender
 
     /* ☢️ 시스템 공장 초기화 (완전 리셋 Nuke) */
     if (msg === "/공장초기화") {
-        replier.reply(formatAdmin("시스템 초기화", "글로벌 데이터 폴더의 모든 잔재를 소각합니다..."));
+        replier.reply(formatAdmin("시스템 초기화", "글로벌 데이터와 명부를 소각한 뒤 구조를 즉시 재건합니다..."));
 
-        // 1. 메모리(RAM) 즉시 정화 및 필수 그릇 생성
-        globalData = { 
+        // 1. 메모리(RAM) 즉시 정화 및 필수 방(users 포함) 재생성
+        var freshData = { 
             rooms: {
                 "내리다": { users: {}, features: ROOM_FEATURE_TEMPLATE() },
                 "베릭방": { users: {}, features: ROOM_FEATURE_TEMPLATE() }
             }, 
-            admins: ["관리자"], botActive: true, nameToIdCache: {}, _isInitialized: true 
+            admins: ["관리자"], 
+            botActive: true, 
+            nameToIdCache: {}, 
+            _isInitialized: true 
         };
+        globalData = freshData;
 
-        // 2. 글로벌 물리 파일(sdcard/msgbot/data/) 전체 삭제
+        // 2. 물리 파일(Disk) 재귀 삭제 로직
         var nukeFolder = function(path) {
             var dir = new java.io.File(path);
             var files = dir.listFiles();
@@ -9225,13 +9232,13 @@ function _adminSystemLogic(msg, user, data, replier, roomName, targetUid, sender
         };
         try { nukeFolder(BASE_DIR); } catch(e) { Log.error("초기화 파일 삭제 결함: " + e); }
 
-        // 3. 엔진 및 캐시 초기화
+        // 3. 상태 변수 전면 초기화
         uidCache = {}; menuWaitState = {}; bankProcessState = {}; selectWaitState = {};
         
-        // 4. 즉시 물리 저장 (초기 구조 파일 생성)
+        // 4. 즉시 물리 저장 (초기 구조 확정)
         safeSaveData(globalData, true);
 
-        replier.reply(formatAdmin("☢️ 서버 공장 초기화 완료", "모든 글로벌 데이터가 소각되고 청정 구조가 재건되었습니다.\n\n✅ 메인 룸('내리다', '베릭방') 건설 완료\n💰 신규 가입 보상: 1,000,000P 승인"));
+        replier.reply(formatAdmin("☢️ 서버 공장 초기화 완료", "모든 유저 데이터와 명부가 완전히 삭제되었습니다.\n\n✅ 메인 룸('내리다', '베릭방') 재건 완료\n💰 정착 지원금: 1,000,000P 세팅 완료"));
         return true;
     }
 

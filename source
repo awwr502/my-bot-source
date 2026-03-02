@@ -5323,33 +5323,36 @@ if (!data) return;
 
 // 1. [최우선 실체화] 리다이렉트 전, 메시지가 발생한 '물리적 방' 객체부터 생성
 if (!data.rooms) data.rooms = {};
-if (!data.rooms["내리다"]) data.rooms["내리다"] = { users: {}, features: ROOM_FEATURE_TEMPLATE() };
-if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
 
-if (!data.rooms[roomName].features) {
-    data.rooms[roomName].features = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
-}
-// 하위 states 구조 강제 보강 (물리 방용)
-if (!data.rooms[roomName].features.states) {
-    data.rooms[roomName].features.states = { 
-        menuWait: {}, bankProcess: {}, selectWait: {}, lottoPurchase: {},
-        mining: {}, loanRegister: {}, loanContractWait: {} 
-    };
-}
+// [v22.1] 무결성 마스터 가드: 어떤 방에서든 'users' 명단과 'features'를 강제 실체화
+var essentialRooms = ["내리다", "베릭방", roomName];
+essentialRooms.forEach(function(r) {
+    if (!data.rooms[r]) data.rooms[r] = { users: {} };
+    if (!data.rooms[r].users) data.rooms[r].users = {};
+    if (!data.rooms[r].features) {
+        data.rooms[r].features = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
+    }
+    // 하위 states 구조 누락 방지
+    if (data.rooms[r].features && !data.rooms[r].features.states) {
+        data.rooms[r].features.states = { 
+            menuWait: {}, bankProcess: {}, selectWait: {}, lottoPurchase: {},
+            mining: {}, loanRegister: {}, loanContractWait: {} 
+        };
+    }
+});
 
-// 2. [참조 변수 선언] 이후 유저 데이터 처리를 위한 논리적 roomData 연결
+// 2. [참조 변수 선언] 이제 모든 객체가 존재하므로 undefined 에러가 발생하지 않습니다.
 var currentImgHash = (function(){ try { return imageDB ? imageDB.getProfileHash() : null; } catch(e){ return null; } })();
-var isIdentityRecovered = false;
 var cacheKey = "GLOBAL_" + cleanSender;
 
-// [핵심 패치] 지갑 데이터는 '내리다' 고정, 세션 데이터는 '현재 방' 고정
-var walletRoomData = data.rooms["내리다"]; 
+// 지갑 데이터는 '내리다' 고정 (지갑 방이 없을 경우를 대비해 한 번 더 체크)
+var walletRoomData = data.rooms["내리다"] || { users: {} }; 
 var sessionRoomData = data.rooms[roomName] || data.rooms["내리다"];
 
-// 하단 로직 호환성을 위해 roomData는 기존처럼 유지하되, 세션 접근 시 sessionRoomData를 쓰도록 유도
+// 하단 호환용 roomData 정의
 var roomData = (roomName === "베릭방" || ALLOWED_ROOMS.indexOf(roomName) === -1) 
                ? data.rooms["내리다"] 
-               : (data.rooms[roomName] || { users: {} });
+               : data.rooms[roomName];
 
 if (!roomData) roomData = { users: {} };
 if (ALLOWED_ROOMS.indexOf(roomName) !== -1 && roomName !== "베릭방") {

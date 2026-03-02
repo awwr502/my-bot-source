@@ -346,15 +346,9 @@ var SD_PATH = android.os.Environment.getExternalStorageDirectory().getAbsolutePa
 var BASE_DIR = SD_PATH + "/msgbot/data/"; 
 var FILE_PATH = BASE_DIR + "attendance.json"; 
 var REGISTRY_PATH = BASE_DIR + "user_registry.json";
-var JOURNAL_PATH = BASE_DIR + "transaction.log"; 
+var JOURNAL_PATH = BASE_DIR + "transaction.log"; // [v5.8] 실시간 거래 기록용 블랙박스 경로
 var BACKUP_DIR = BASE_DIR + "backup/"; 
 
-// [안전 가드] 경로가 없을 경우를 대비한 폴더 강제 생성
-var dirs = [BASE_DIR, BACKUP_DIR, BASE_DIR + "logs/"];
-dirs.forEach(function(p) {
-    var f = new java.io.File(p);
-    if (!f.exists()) f.mkdirs();
-});
 
 /**
  * [v10.2] 로그 무결성 및 시스템 권한 자가진단
@@ -5324,49 +5318,37 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
 if (!data) return;
 
 // 1. [최우선 실체화] 리다이렉트 전, 메시지가 발생한 '물리적 방' 객체부터 생성
-if (!data.rooms) data.rooms = {};
+if (!data.rooms[roomName]) data.rooms[roomName] = { users: {} };
+if (!data.rooms[roomName].features) {
+    data.rooms[roomName].features = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
+}
+// 하위 states 구조 강제 보강 (물리 방용)
+if (!data.rooms[roomName].features.states) {
+    data.rooms[roomName].features.states = { 
+        menuWait: {}, bankProcess: {}, selectWait: {}, lottoPurchase: {},
+        mining: {}, loanRegister: {}, loanContractWait: {} 
+    };
+}
 
-// [마스터 가드] 필수 구역(내리다/베릭방) 및 현재 방의 데이터 구조를 '모든 변수 할당'보다 먼저 생성합니다.
-var checkRooms = ["내리다", "베릭방", roomName];
-checkRooms.forEach(function(r) {
-    if (!data.rooms[r]) {
-        data.rooms[r] = { users: {} }; 
-    }
-    if (!data.rooms[r].users) {
-        data.rooms[r].users = {}; 
-    }
-    if (!data.rooms[r].features) {
-        data.rooms[r].features = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
-    }
-    // 하위 states 구조 누락 방지 가드
-    if (!data.rooms[r].features.states) {
-        data.rooms[r].features.states = { 
-            menuWait: {}, bankProcess: {}, selectWait: {}, lottoPurchase: {},
-            mining: {}, loanRegister: {}, loanContractWait: {} 
-        };
-    }
-});
-
-// 2. [참조 변수 선언] 구조가 완벽히 재건된 '후'에 변수에 담아야 undefined 에러가 발생하지 않습니다.
+// 2. [참조 변수 선언] 이후 유저 데이터 처리를 위한 논리적 roomData 연결
 var currentImgHash = (function(){ try { return imageDB ? imageDB.getProfileHash() : null; } catch(e){ return null; } })();
+var isIdentityRecovered = false;
 var cacheKey = "GLOBAL_" + cleanSender;
 
 // [핵심 패치] 지갑 데이터는 '내리다' 고정, 세션 데이터는 '현재 방' 고정
 var walletRoomData = data.rooms["내리다"]; 
-var sessionRoomData = data.rooms[roomName];
+var sessionRoomData = data.rooms[roomName] || data.rooms["내리다"];
 
-// 하단 로직 호환성을 위한 roomData 정의 (1:1방은 메인방 참조)
-// 이제 위에서 생성 가드를 거쳤으므로 이 변수는 절대 undefined가 될 수 없습니다.
+// 하단 로직 호환성을 위해 roomData는 기존처럼 유지하되, 세션 접근 시 sessionRoomData를 쓰도록 유도
 var roomData = (roomName === "베릭방" || ALLOWED_ROOMS.indexOf(roomName) === -1) 
                ? data.rooms["내리다"] 
-               : data.rooms[roomName];
+               : (data.rooms[roomName] || { users: {} });
 
 if (!roomData) roomData = { users: {} };
 if (ALLOWED_ROOMS.indexOf(roomName) !== -1 && roomName !== "베릭방") {
     data.rooms[roomName] = roomData;
 }
 
-// 3. [유저 식별] 메인 서버 연동 확인
 if (ALLOWED_ROOMS.indexOf(roomName) === -1) {
     var mainUsers = (data.rooms["내리다"] && data.rooms["내리다"].users) ? data.rooms["내리다"].users : {};
     var cleanTarget = cleanSender.replace(/\s/g, "");

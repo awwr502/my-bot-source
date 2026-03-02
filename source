@@ -342,13 +342,13 @@ var PERF_METRICS = {
 var Lock = java.util.concurrent.locks.ReentrantLock; 
 var lock = new Lock(); 
 var logLock = new Lock(); // [v5.8] 저널링(블랙박스) 전용 독립 락 추가
-var BASE_DIR = "sdcard/msgbot/Bots/" + Api.getContext().getPackageName().split('.').pop() + "/data/";
+var BASE_DIR = "sdcard/msgbot/data/";
 var FILE_PATH = BASE_DIR + "attendance.json"; 
 var REGISTRY_PATH = BASE_DIR + "user_registry.json";
 var JOURNAL_PATH = BASE_DIR + "transaction.log"; 
 var BACKUP_DIR = BASE_DIR + "backup/"; 
 
-// 경로 유효성 검사 및 디렉토리 자동 생성
+// 실행 시 필수 폴더 자동 생성 (경로 무결성 보장)
 var dirs = [BASE_DIR, BACKUP_DIR, BASE_DIR + "logs/"];
 dirs.forEach(function(p) {
     var f = new java.io.File(p);
@@ -9200,59 +9200,37 @@ function _adminSystemLogic(msg, user, data, replier, roomName, targetUid, sender
 
     /* ☢️ 시스템 공장 초기화 (완전 리셋 Nuke) */
     if (msg === "/공장초기화") {
-        var confirmMsg = "☢️ 관리자 권한으로 서버 공장 초기화를 시작합니다.\n(모든 유저 데이터 및 명부 소각 중...)";
-        replier.reply(formatAdmin("시스템 초기화 가동", confirmMsg));
+        replier.reply(formatAdmin("시스템 초기화", "글로벌 데이터 폴더의 모든 잔재를 소각합니다..."));
 
-        // 1. 디스크 파일(data 폴더 내부) 전체 삭제 재귀 함수 실행
-        var deleteFolderRecursive = function(fileOrDir) {
-            if (fileOrDir.isDirectory()) {
-                var children = fileOrDir.listFiles();
-                if (children) {
-                    for (var i = 0; i < children.length; i++) {
-                        deleteFolderRecursive(children[i]);
-                    }
+        // 1. 메모리(RAM) 즉시 정화 및 필수 그릇 생성
+        globalData = { 
+            rooms: {
+                "내리다": { users: {}, features: ROOM_FEATURE_TEMPLATE() },
+                "베릭방": { users: {}, features: ROOM_FEATURE_TEMPLATE() }
+            }, 
+            admins: ["관리자"], botActive: true, nameToIdCache: {}, _isInitialized: true 
+        };
+
+        // 2. 글로벌 물리 파일(sdcard/msgbot/data/) 전체 삭제
+        var nukeFolder = function(path) {
+            var dir = new java.io.File(path);
+            var files = dir.listFiles();
+            if (files) {
+                for (var i = 0; i < files.length; i++) {
+                    if (files[i].isDirectory()) nukeFolder(files[i].getAbsolutePath());
+                    files[i].delete();
                 }
             }
-            fileOrDir.delete();
         };
-        
-        try {
-            var baseDir = new java.io.File(BASE_DIR);
-            if (baseDir.exists()) {
-                var files = baseDir.listFiles();
-                if (files) {
-                    for (var i = 0; i < files.length; i++) {
-                        deleteFolderRecursive(files[i]);
-                    }
-                }
-            }
-        } catch(e) { Log.error("공장초기화 파일 삭제 실패: " + e); }
+        try { nukeFolder(BASE_DIR); } catch(e) { Log.error("초기화 파일 삭제 결함: " + e); }
 
-        // 2. [핵심 교정] 메모리 초기화 시 '내리다' 방을 즉시 재생성하여 에러 방지
-        var freshData = { 
-            rooms: {}, 
-            admins: ["관리자"], 
-            botActive: true, 
-            nickHistory: {}, 
-            adminLogs: [], 
-            nameToIdCache: {}, 
-            _isInitialized: true 
-        };
+        // 3. 엔진 및 캐시 초기화
+        uidCache = {}; menuWaitState = {}; bankProcessState = {}; selectWaitState = {};
         
-        // 메인 룸 '내리다' 즉시 실체화
-        freshData.rooms["내리다"] = { users: {}, features: ROOM_FEATURE_TEMPLATE() };
-        globalData = freshData;
-
-        // 3. 상태 대기열 및 식별 캐시 초기화
-        uidCache = {};
-        menuWaitState = {};
-        bankProcessState = {};
-        selectWaitState = {};
-        
-        // 4. 즉시 물리 저장 (초기 구조 확정)
+        // 4. 즉시 물리 저장 (초기 구조 파일 생성)
         safeSaveData(globalData, true);
 
-        replier.reply(formatAdmin("☢️ 서버 공장 초기화 완료", "모든 데이터가 소각되고 클린 엔진이 재배포되었습니다.\n\n✅ 메인 룸('내리다') 구조 재건 완료\n✅ 모든 유저 신규 가입 대기 상태"));
+        replier.reply(formatAdmin("☢️ 서버 공장 초기화 완료", "모든 글로벌 데이터가 소각되고 청정 구조가 재건되었습니다.\n\n✅ 메인 룸('내리다', '베릭방') 건설 완료\n💰 신규 가입 보상: 1,000,000P 승인"));
         return true;
     }
 

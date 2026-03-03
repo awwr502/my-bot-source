@@ -11,6 +11,24 @@ var SCHEDULER_KEY = "kakaobot_scheduler_v5";
 var WATCHDOG_KEY = "kakaobot_watchdog_v1";
 var MY_INSTANCE_ID = java.lang.System.identityHashCode(this) + "";
 
+/* [블랙마켓(무기상) 전역 설정] */
+var BM_CONFIG = {
+    START_KRW: 500000, // 초기 지원금 50만 원화
+    MAX_CAPACITY: 100, // 무기고 최대 적재량
+    WEAPONS: {
+        "소총": { name: "🔫 돌격 소총", price: 5000 },
+        "전술장비": { name: "🦺 전술 장비", price: 10000 },
+        "폭발물": { name: "💣 전술 폭발물", price: 15000 },
+        "중화기": { name: "🚀 중화기", price: 50000 }
+    },
+    REGIONS: {
+        "USD": { name: "🇺🇸 북미", baseRate: 1300, icon: "🇺🇸" },
+        "EUR": { name: "🇪🇺 동유럽", baseRate: 1450, icon: "🇪🇺" },
+        "RUB": { name: "🇷🇺 러시아", baseRate: 600, icon: "🇷🇺" },
+        "AED": { name: "🇦🇪 중동", baseRate: 350, icon: "🇦🇪" }
+    }
+};
+
 /* [v15.7] 함선 초월 강화 밸런스 설정값 */
 var SHIP_ENHANCE_CONFIG = {
     LIMIT:  { min: -3, max: 2 },  // 적재량 범위
@@ -159,6 +177,15 @@ if (typeof globalData.aiPirates === 'undefined') {
 }
 if (typeof globalData.safeRoutes === 'undefined') {
     globalData.safeRoutes = {};
+}
+
+if (typeof globalData.bmWorld === 'undefined') {
+    globalData.bmWorld = {
+        rates: { "USD": 1300, "EUR": 1450, "RUB": 600, "AED": 350 },
+        tensions: { "USD": "➖ 안정", "EUR": "➖ 안정", "RUB": "➖ 안정", "AED": "➖ 안정" },
+        contracts: [],
+        lastUpdateMin: -1
+    };
 }
 
 /**
@@ -376,7 +403,8 @@ var USER_SCHEMA = [
     { key: 'dgnBag', default: [], type: 'array' }, // 최대 20칸 제한
     { key: 'dgnState', default: null, type: 'object' }, // 현재 진행중인 던전 상태
     { key: 'dgnGuild', default: { rank: 'F', exp: 0, clearCount: 0 }, type: 'object' },
-    { key: 'dgnGold', default: 0, type: 'number' } // 던전 전용 재화 금화
+    { key: 'dgnGold', default: 0, type: 'number' }, // 던전 전용 재화 금화
+    { key: 'bm', default: { isRegistered: false, krw: 0, weapons: {"소총":0, "전술장비":0, "폭발물":0, "중화기":0}, vaults: {"USD":0, "EUR":0, "RUB":0, "AED":0} }, type: 'object' }
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -1489,7 +1517,8 @@ var CMD_LIST = {
         { cmd: "/무역", desc: "가상 국가와의 해상 교역 및 선박 관리", cat: "무역", func: "_gameTradeLogic" },
         { cmd: "/펀드", desc: "[금액] 왕립 상선단 투자 (5분 주기 확정 수익)", cat: "경제", func: "_gameActionLogic" },
         { cmd: "/하역", desc: "항구 부두에서 짐을 나르고 품삯을 받습니다 (5분 쿨타임)", cat: "경제", func: "_gameActionLogic" },
-        { cmd: "/던전", desc: "미지의 해저 동굴을 탐험합니다 (로그라이크)", cat: "게임", func: "_gameDungeonLogic" }
+        { cmd: "/던전", desc: "미지의 해저 동굴을 탐험합니다 (로그라이크)", cat: "게임", func: "_gameDungeonLogic" },
+        { cmd: "/블랙마켓", desc: "글로벌 언더그라운드 무기상 (거시경제 환율 시스템)", cat: "게임", func: "_gameBlackMarketLogic" }
     ],
     admin: [
         { cmd: "/공지", desc: "[내용] 내리다 방에 공지 전송", func: "_adminSystemLogic" },
@@ -3510,6 +3539,11 @@ function runScheduler() {
             // AI 다국적 상단 실시간 무역 엔진 가동
             if (typeof _runAITradeScheduler === 'function') {
                 _runAITradeScheduler(data, ctx);
+            }
+
+            // 🌐 블랙마켓 환율 및 글로벌 의뢰 스케줄러 가동 (10분 주기)
+            if (typeof _runBlackMarketScheduler === 'function') {
+                _runBlackMarketScheduler(data, ctx);
             }
 
             // [v18.7] 지연 시간(18.3s) 해결을 위한 부하 분산 패치
@@ -8695,6 +8729,9 @@ if (actualFeatures && actualFeatures.states) {
     if (typeof _handleMenuStep2 === 'function' && _handleMenuStep2(msg, user, data, replier, logicRoom, targetUid)) return;
     if (typeof _handleMenuStep3 === 'function' && _handleMenuStep3(msg, user, data, replier, logicRoom, targetUid)) return;
     if (typeof _handleMenuStep4 === 'function' && _handleMenuStep4(msg, user, data, replier, logicRoom, targetUid)) return;
+
+    // 블랙마켓 세션 라우터 연결
+    if (typeof _handleBMStep === 'function' && _handleBMStep(msg, user, data, replier, logicRoom, targetUid)) return;
 
     // 3. 은행 업무 및 수량 핸들러
     if (typeof _handleBankStep1 === 'function' && _handleBankStep1(msg, user, data, replier, logicRoom, targetUid)) return;
@@ -17699,4 +17736,340 @@ function _showMarinePediaUI(user, replier, data, roomName, targetUid) {
     // 세션 전환
     var roomData = data.rooms[roomName] || data.rooms["내리다"];
     roomData.features.states.menuWait[targetUid] = { type: 'trade_pedia_main', time: Date.now(), originRoom: roomName };
+}
+
+//==========섹터55==========
+
+/**
+ * 🌐 [블랙마켓] 스케줄러: 환율 변동 및 의뢰 생성 (10분 주기)
+ */
+function _runBlackMarketScheduler(data, ctx) {
+    var bm = data.bmWorld;
+    if (!bm) return;
+    
+    var currentMin = ctx.now.getMinutes();
+    // 10분 단위로 환율 갱신 및 의뢰 초기화
+    if (currentMin % 10 === 0 && bm.lastUpdateMin !== currentMin) {
+        bm.lastUpdateMin = currentMin;
+        bm.contracts = [];
+        
+        var currencies = ["USD", "EUR", "RUB", "AED"];
+        var weaponKeys = ["소총", "전술장비", "폭발물", "중화기"];
+
+        currencies.forEach(function(cur) {
+            // 1. 환율 변동 (기준가 대비 ±30% 변동)
+            var base = BM_CONFIG.REGIONS[cur].baseRate;
+            var fluctuation = (Math.random() * 0.6) - 0.3; // -30% ~ +30%
+            var newRate = Math.floor(base * (1 + fluctuation));
+            bm.rates[cur] = Math.max(10, newRate); // 최소 방어선 10원
+            
+            // 2. 텐션(정세) 텍스트 결정
+            var status = "➖ 안정";
+            if (fluctuation > 0.15) status = "🔺 반등 호조";
+            else if (fluctuation < -0.15) status = "📉 가치 폭락";
+            else if (Math.random() < 0.1) status = "🔥 내전 발발 (무기수요 급증)";
+            bm.tensions[cur] = status;
+
+            // 3. 브로커 의뢰 생성 (각 국가별 1~2개)
+            var contractCount = Math.floor(Math.random() * 2) + 1;
+            for (var i = 0; i < contractCount; i++) {
+                var wKey = weaponKeys[Math.floor(Math.random() * weaponKeys.length)];
+                var reqQty = Math.floor(Math.random() * 20) + 10; // 10~30개 요구
+                var isWar = (status.indexOf("내전") !== -1);
+                
+                var wPrice = BM_CONFIG.WEAPONS[wKey].price;
+                // 내전 중이면 마진율 폭등 (기본 1.5배 ~ 내전 3배)
+                var margin = isWar ? (Math.random() * 1.0 + 2.0) : (Math.random() * 0.5 + 1.2); 
+                var krwValue = wPrice * reqQty * margin;
+                // 보상(현지 화폐) = (원화가치) / 현재환율
+                var rewardLocal = Math.floor(krwValue / bm.rates[cur]);
+                
+                // 내전 중이면 적발 위험(risk)도 높아짐
+                var risk = isWar ? Math.floor(Math.random() * 20 + 20) : Math.floor(Math.random() * 15 + 5); // 5~35%
+
+                bm.contracts.push({
+                    id: generateUUID().substring(0, 8),
+                    region: cur,
+                    item: wKey,
+                    qty: reqQty,
+                    reward: rewardLocal,
+                    risk: risk
+                });
+            }
+        });
+        ctx.isUpdated = true;
+        Log.info("🕶️ [BlackMarket] 글로벌 환율 및 브로커 의뢰망 갱신 완료.");
+    }
+}
+
+/**
+ * 🌐 [블랙마켓] 메인 라우터 (단일 진입점)
+ */
+function _gameBlackMarketLogic(msg, user, data, replier, roomName, targetUid) {
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var roomData = data.rooms[logicRoom];
+
+    // 스키마 누락 방지 가드
+    if (!user.bm) {
+        user.bm = { isRegistered: false, krw: 0, weapons: {"소총":0, "전술장비":0, "폭발물":0, "중화기":0}, vaults: {"USD":0, "EUR":0, "RUB":0, "AED":0} };
+    }
+
+    var menuWaitState = roomData.features.states.menuWait;
+
+    // 1. 등록 프로세스
+    if (!user.bm.isRegistered) {
+        menuWaitState[targetUid] = { type: 'bm_register', time: Date.now(), originRoom: roomName };
+        var regMsg = "🕶️ [언더그라운드 신디케이트]\n\n" +
+                     "당신은 어둠의 세계에 발을 들였습니다.\n" +
+                     "이곳에서는 기존의 통화(Point)가 아닌 전용 자금(KRW)과 각국의 외환만이 취급됩니다.\n\n" +
+                     "무기 판매상으로 정식 등록하시겠습니까?\n" +
+                     "(등록 시 초기 정착 자금 " + fp(BM_CONFIG.START_KRW) + " 원화가 지급됩니다.)\n\n" +
+                     "1. 예\n2. 아니오";
+        replier.reply(formatCommand("⚠️ 딥웹 브로커망 접속", user, regMsg, "번호를 입력하세요."));
+        return true;
+    }
+
+    // 2. 메인 대시보드
+    _showBMMain(user, replier, data, targetUid, roomName);
+    return true;
+}
+
+function _showBMMain(user, replier, data, targetUid, roomName) {
+    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
+    var roomData = data.rooms[logicRoom];
+    var bm = data.bmWorld;
+
+    var curWeapons = 0;
+    for (var k in user.bm.weapons) curWeapons += Number(user.bm.weapons[k]);
+
+    var rateBoard = "";
+    for (var c in BM_CONFIG.REGIONS) {
+        rateBoard += "• " + BM_CONFIG.REGIONS[c].icon + " " + c + ": " + fp(bm.rates[c]) + " 원 (" + bm.tensions[c] + ")\n";
+    }
+
+    var v = user.bm.vaults;
+    var vaultStr = "[USD: " + fp(v.USD) + "] [EUR: " + fp(v.EUR) + "] [RUB: " + fp(v.RUB) + "] [AED: " + fp(v.AED) + "]";
+
+    var body = "💰 스위스 비밀계좌: " + fp(user.bm.krw) + " KRW (원화)\n" +
+               "💼 해외 은닉자산: " + vaultStr + "\n" +
+               "🔫 무기고 적재량: " + curWeapons + " / " + BM_CONFIG.MAX_CAPACITY + " 칸\n\n" +
+               "[📊 실시간 글로벌 환율 및 정세]\n" + rateBoard + "\n" +
+               "[명령 하달]\n" +
+               "1. 🛒 딥웹 무기상 (원화로 무기 매입)\n" +
+               "2. 📡 브로커 의뢰소 (무기 납품 및 외화 획득)\n" +
+               "3. 💼 비밀 외환금고 (외화를 원화로 환전)\n\n" +
+               "↩️ 닫기 (취소)";
+
+    roomData.features.states.menuWait[targetUid] = { type: 'bm_main', time: Date.now(), originRoom: roomName };
+    replier.reply(formatCommand("🕶️ 섀도우 브로커 대시보드", user, body, "메뉴 번호를 입력하세요."));
+}
+
+/**
+ * 🌐 [블랙마켓] 중앙 상태 분배기 (Dispatcher)
+ * 섹터 24에 연동될 핸들러
+ */
+function _handleBMStep(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[roomName];
+    if (!roomData || !roomData.features || !roomData.features.states.menuWait) return false;
+
+    var state = roomData.features.states.menuWait[targetUid];
+    if (!state || !state.type.startsWith('bm_')) return false;
+
+    var NAV_BAR = "\n\n↩️ 뒤로 / 🏠 처음으로 / ❎취소";
+    var input = msg.trim();
+
+    // 네비게이션 가드
+    if (input === "취소" || input === "❎취소") {
+        delete roomData.features.states.menuWait[targetUid];
+        replier.reply(formatCommand("🚫 통신 종료", user, "블랙마켓 접속을 해제합니다."));
+        return true;
+    }
+    if (input === "뒤로" || input === "↩️ 뒤로" || input === "처음으로" || input === "🏠 처음으로") {
+        if (state.type === 'bm_register') {
+            delete roomData.features.states.menuWait[targetUid];
+            replier.reply("가입을 취소했습니다.");
+            return true;
+        }
+        return _gameBlackMarketLogic("/블랙마켓", user, data, replier, roomName, targetUid);
+    }
+    if (input.startsWith("/")) return false;
+
+    var choice = parseInt(input.replace(/[^0-9]/g, ""));
+
+    /* 1. 가입 등록 */
+    if (state.type === 'bm_register') {
+        if (choice === 1) {
+            user.bm.isRegistered = true;
+            user.bm.krw = BM_CONFIG.START_KRW;
+            user.skipHealing = true;
+            safeSaveData(data, true);
+            replier.reply(formatCommand("✅ 브로커망 등록 완료", user, "어둠의 세계에 오신 것을 환영합니다.\n초기 자금 " + fp(BM_CONFIG.START_KRW) + " 원화가 입금되었습니다."));
+            _gameBlackMarketLogic("/블랙마켓", user, data, replier, roomName, targetUid);
+        } else {
+            delete roomData.features.states.menuWait[targetUid];
+            replier.reply("등록을 거절하셨습니다.");
+        }
+        return true;
+    }
+
+    /* 2. 메인 분기 */
+    if (state.type === 'bm_main') {
+        if (choice === 1) { // 무기상
+            var sBody = "원화(KRW)로 납품할 무기를 매입합니다.\n\n";
+            var idx = 1;
+            var wKeys = Object.keys(BM_CONFIG.WEAPONS);
+            wKeys.forEach(function(k) {
+                sBody += idx + ". " + BM_CONFIG.WEAPONS[k].name + " : " + fp(BM_CONFIG.WEAPONS[k].price) + " 원\n";
+                idx++;
+            });
+            sBody += "\n입력: [번호] [수량] (예: 1 10)" + NAV_BAR;
+            state.type = 'bm_shop';
+            state.time = Date.now();
+            replier.reply(formatCommand("🛒 딥웹 무기 거래소", user, sBody, "내 자금: " + fp(user.bm.krw) + " 원"));
+        } else if (choice === 2) { // 브로커 의뢰소
+            var cBody = "현재 암시장에 등록된 납품 의뢰입니다.\n(성공 시 현지 비밀 금고로 외화가 입금됩니다)\n\n";
+            var contracts = data.bmWorld.contracts;
+            if (contracts.length === 0) cBody += "- 현재 등록된 의뢰가 없습니다. (10분마다 갱신) -\n";
+            
+            contracts.forEach(function(c, i) {
+                var wName = BM_CONFIG.WEAPONS[c.item].name;
+                var rName = BM_CONFIG.REGIONS[c.region].icon + " " + BM_CONFIG.REGIONS[c.region].name;
+                cBody += (i+1) + ". [" + rName + "]\n" +
+                         "   └ 납품: " + wName + " x" + c.qty + "개\n" +
+                         "   └ 보상: " + fp(c.reward) + " " + c.region + "\n" +
+                         "   └ ⚠️ 적발 위험: " + c.risk + "%\n\n";
+            });
+            cBody += "수행할 의뢰 번호를 입력하세요." + NAV_BAR;
+            state.type = 'bm_broker';
+            state.time = Date.now();
+            replier.reply(formatCommand("📡 글로벌 브로커 네트워크", user, cBody));
+        } else if (choice === 3) { // 외환 금고 (환전)
+            var vBody = "현지 화폐를 원화(KRW)로 환전하여 스위스 계좌로 송금합니다.\n\n";
+            var idx = 1;
+            var cKeys = Object.keys(BM_CONFIG.REGIONS);
+            cKeys.forEach(function(cur) {
+                var rate = data.bmWorld.rates[cur];
+                var amt = user.bm.vaults[cur];
+                vBody += idx + ". " + BM_CONFIG.REGIONS[cur].icon + " " + cur + "\n" +
+                         "   └ 현재 환율: 1 " + cur + " = " + fp(rate) + " 원\n" +
+                         "   └ 보유 외환: " + fp(amt) + " " + cur + " (환전 시 +" + fp(amt * rate) + " 원)\n\n";
+                idx++;
+            });
+            vBody += "입력: [번호] [수량 또는 '전부'] (예: 1 전부)" + NAV_BAR;
+            state.type = 'bm_vault';
+            state.time = Date.now();
+            replier.reply(formatCommand("💼 스위스 비밀 금고", user, vBody));
+        } else {
+            replier.reply(formatError(user, "번호 오류", "1~3번을 선택하세요."));
+        }
+        return true;
+    }
+
+    /* 3. 무기상 (매입) */
+    if (state.type === 'bm_shop') {
+        var parts = input.split(/\s+/);
+        var idx = parseInt(parts[0]) - 1;
+        var qty = parts.length > 1 ? parseInt(parts[1]) : 1;
+        var wKeys = Object.keys(BM_CONFIG.WEAPONS);
+
+        if (isNaN(idx) || idx < 0 || idx >= wKeys.length) return replier.reply(formatError(user, "번호 오류", "정확한 번호를 입력하세요."));
+        if (isNaN(qty) || qty <= 0) return replier.reply(formatError(user, "수량 오류", "정확한 수량을 입력하세요."));
+
+        var wKey = wKeys[idx];
+        var cost = BM_CONFIG.WEAPONS[wKey].price * qty;
+
+        var curWeapons = 0;
+        for (var k in user.bm.weapons) curWeapons += Number(user.bm.weapons[k]);
+
+        if (curWeapons + qty > BM_CONFIG.MAX_CAPACITY) {
+            return replier.reply(formatError(user, "공간 부족", "무기고 최대 적재량(" + BM_CONFIG.MAX_CAPACITY + "개)을 초과할 수 없습니다."));
+        }
+        if (user.bm.krw < cost) {
+            return replier.reply(formatError(user, "자본 부족", "원화가 부족합니다. (필요: " + fp(cost) + " 원)"));
+        }
+
+        user.bm.krw -= cost;
+        user.bm.weapons[wKey] = (Number(user.bm.weapons[wKey]) || 0) + qty;
+        user.skipHealing = true;
+        safeSaveData(data, true);
+
+        replier.reply(formatCommand("✅ 매입 완료", user, BM_CONFIG.WEAPONS[wKey].name + " " + qty + "개를 무기고에 입고했습니다.\n(지불: -" + fp(cost) + " 원)", "뒤로가기: [뒤로]"));
+        state.time = Date.now();
+        return true;
+    }
+
+    /* 4. 브로커 의뢰 (납품) */
+    if (state.type === 'bm_broker') {
+        var idx = parseInt(input) - 1;
+        var contracts = data.bmWorld.contracts;
+        
+        if (isNaN(idx) || idx < 0 || idx >= contracts.length) return replier.reply(formatError(user, "번호 오류", "목록에 있는 의뢰 번호를 선택하세요."));
+        
+        var c = contracts[idx];
+        if (Number(user.bm.weapons[c.item] || 0) < c.qty) {
+            return replier.reply(formatError(user, "무기 부족", "무기고에 [" + BM_CONFIG.WEAPONS[c.item].name + "]이(가) 부족합니다."));
+        }
+
+        // 의뢰 수행 (즉시 결판)
+        user.bm.weapons[c.item] -= c.qty; // 무기 차감
+        
+        // 적발 롤
+        var isCaught = (Math.random() * 100) < c.risk;
+        if (isCaught) {
+            var failMsg = "🚨 [긴급 상황: 인터폴 적발]\n\n" +
+                          "국경을 넘는 도중 세관에 적발되었습니다!\n" +
+                          "납품하려던 [" + BM_CONFIG.WEAPONS[c.item].name + "] " + c.qty + "개를 전량 압수당했습니다.";
+            replier.reply(formatError(user, "납품 실패", failMsg, "뒤로가기: [뒤로]"));
+        } else {
+            user.bm.vaults[c.region] = (Number(user.bm.vaults[c.region]) || 0) + c.reward;
+            var succMsg = "📦 [작전 성공: 무기 납품 완료]\n\n" +
+                          "포위망을 뚫고 무사히 물건을 전달했습니다.\n" +
+                          "대금은 현지 비밀 금고에 안전하게 보관되었습니다.\n\n" +
+                          "💰 획득: +" + fp(c.reward) + " " + c.region;
+            replier.reply(formatCommand("✅ 거래 완료", user, succMsg, "뒤로가기: [뒤로]"));
+        }
+
+        // 해당 의뢰는 완료되었으므로 삭제 (경쟁)
+        data.bmWorld.contracts.splice(idx, 1);
+        user.skipHealing = true;
+        safeSaveData(data, true);
+        state.time = Date.now();
+        return true;
+    }
+
+    /* 5. 비밀 금고 (환전) */
+    if (state.type === 'bm_vault') {
+        var parts = input.split(/\s+/);
+        var idx = parseInt(parts[0]) - 1;
+        var qtyStr = parts.length > 1 ? parts[1] : "";
+        var cKeys = Object.keys(BM_CONFIG.REGIONS);
+
+        if (isNaN(idx) || idx < 0 || idx >= cKeys.length) return replier.reply(formatError(user, "번호 오류", "정확한 국가 번호를 입력하세요."));
+        if (!qtyStr) return replier.reply(formatError(user, "수량 누락", "환전할 수량을 함께 입력하세요. (예: 1 전부)"));
+
+        var cur = cKeys[idx];
+        var maxAmt = Number(user.bm.vaults[cur] || 0);
+        var qty = (qtyStr === "전부" || qtyStr === "올인") ? maxAmt : parseInt(qtyStr.replace(/[^0-9]/g, ""));
+
+        if (isNaN(qty) || qty <= 0) return replier.reply(formatError(user, "수량 오류", "정확한 환전 수량을 입력하세요."));
+        if (qty > maxAmt) return replier.reply(formatError(user, "외환 부족", "해당 국가의 외환이 부족합니다. (보유: " + fp(maxAmt) + " " + cur + ")"));
+
+        var rate = data.bmWorld.rates[cur];
+        var convertedKrw = Math.floor(qty * rate);
+
+        user.bm.vaults[cur] -= qty;
+        user.bm.krw += convertedKrw;
+        user.skipHealing = true;
+        safeSaveData(data, true);
+
+        var exMsg = "현지 화폐를 원화(KRW)로 안전하게 세탁하여 본국으로 송금했습니다.\n\n" +
+                    "📉 사용 외환: -" + fp(qty) + " " + cur + "\n" +
+                    "📈 적용 환율: " + fp(rate) + "\n" +
+                    "💰 송금 완료: +" + fp(convertedKrw) + " 원";
+        replier.reply(formatCommand("💼 자금 세탁 및 송금 완료", user, exMsg, "뒤로가기: [뒤로]"));
+        state.time = Date.now();
+        return true;
+    }
+
+    return false;
 }

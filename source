@@ -408,10 +408,6 @@ if (typeof globalData === 'undefined' || globalData === null) {
 }
 
 /* [안정화] 핵심 게임 엔진 및 상태 참조 전역 선언 */
-var racingData = null;      // 경마 실시간 데이터 참조용
-var lotto = null;           // 로또 실시간 데이터 참조용
-var marketOpenPrice = globalData.marketOpenPrice || 0;    // 랜드마크 시가 참조용
-var sprinkleData = {};      // 뿌리기 상태 참조용
 var _msgReceiveTime = 0;    // 응답속도 측정을 위한 전역 타임스탬프
 
 /* [안정화] 입력 대기 및 활동 상태 변수 초기 선언 */
@@ -1727,9 +1723,24 @@ function util_calculateNetWorth(user, roomData) {
     if (!user) return 0;
     try {
         var data = getDatabase(); 
+        
+        // 1. 유동 자산 (현금 + 예금)
         var liquidAssets = Number(user.point || 0) + Number(user.bank || 0);
-        var landmarkAssets = 0;
+        
+        // 2. 실물 자산 (무역 화물, 특산품, 진귀한 보물 가치 합산) - 기존 부동산 대체
+        var physicalAssets = 0;
+        for (var k in (user.cargo || {})) physicalAssets += Number(user.cargo[k] || 0) * Number((user.cargoAvg && user.cargoAvg[k]) || 10000);
+        for (var k in (user.warehouse || {})) physicalAssets += Number(user.warehouse[k] || 0) * Number((user.warehouseAvg && user.warehouseAvg[k]) || 10000);
+        for (var s in (user.specialties || {})) physicalAssets += Number(user.specialties[s] || 0) * 20000;
+        for (var s in (user.warehouseSpec || {})) {
+            if (s === "_rare") physicalAssets += Number(user.warehouseSpec[s] || 0) * 100000;
+            else if (s === "_unknown") physicalAssets += Number(user.warehouseSpec[s] || 0) * 10000;
+            else physicalAssets += Number(user.warehouseSpec[s] || 0) * 20000;
+        }
+        physicalAssets += Number(user.rareSpecialties || 0) * 100000;
+        physicalAssets += Number(user.unknownCargo || 0) * 10000;
 
+        // 3. 채권 및 채무 (은행 빚 및 사채)
         var bankDebt = (user.loan && user.loan.debt) ? Number(user.loan.debt) : 0;
         var sacheDebt = 0;
         var sacheClaims = 0; 
@@ -1741,7 +1752,9 @@ function util_calculateNetWorth(user, roomData) {
                 if (c.lenderUid === user.uid) sacheClaims += Number(c.currentDebt || 0);
             }
         }
-        return Math.max(0, Math.floor(liquidAssets + landmarkAssets + sacheClaims - bankDebt - sacheDebt));
+        
+        // 총 순자산 = 유동자산 + 실물자산 + 미수채권 - 은행빚 - 사채빚
+        return Math.max(0, Math.floor(liquidAssets + physicalAssets + sacheClaims - bankDebt - sacheDebt));
     } catch(e) {
         Log.error("NetWorth Calculation Error for " + user.name + ": " + e);
         return Number(user.point || 0); 
@@ -2134,9 +2147,6 @@ function calculateEconomy(data, roomName) {
 
     if (!data || !data.rooms) return { total: 0, count: 0, average: 0, base: 0 };
     var roomsToScan = roomName ? [roomName] : Object.keys(data.rooms);
-    
-    // 1. 전역 잭팟 판돈 합산
-    if (!roomName) totalAssets += Number(data.lotto_jackpot_pool || 0);
 
     for (var i = 0; i < roomsToScan.length; i++) {
         var r = roomsToScan[i];
@@ -2146,29 +2156,22 @@ function calculateEconomy(data, roomName) {
         // 물가 기준점 확보
         economyBase = Number(roomData.economyBase || 0);
 
-        // A. 시스템 금고 및 진행 중인 판돈 합산
+        // A. 시스템 금고 (중앙은행 재원) 통화량 편입
         totalAssets += Number(roomData.bankReserve || 0);
-        if (roomData.features) {
-            if (roomData.features.racing) {
-                totalAssets += Number(roomData.features.racing.totalPool || 0);
-                totalAssets += Number(roomData.features.racing.carryOver || 0);
-            }
-            if (roomData.features.lotto) totalAssets += Number(roomData.features.lotto.dailyPool || 0);
-        }
 
         // B. 유저 데이터 합산 루프
         for (var uid in roomData.users) {
             // AI 봇(유령 개체)은 경제 지표 합산에서 완전히 제외 (인플레 왜곡 방지)
-            if (String(uid).indexOf("AI_") === 0) continue;
+            if (String(uid).indexOf("AI_") === 0) continue;
 
-            var u = roomData.users[uid];
-            if (!u) continue;
+            var u = roomData.users[uid];
+            if (!u) continue;
 
-            // 1. [평균자산용]: 채권/채무가 포함된 유저의 실질 순자산 합산 (지니계수 및 랭킹용 유지)
+            // 1. [평균자산용]: 무역 실물 화물 + 채권/채무가 포함된 유저의 실질 순자산 합산
             totalUserWealth += util_calculateNetWorth(u, roomData);
 
-            // 2. [물가용]: 부동산 거품에 의한 인플레이션 방지를 위해 순수 '유동성 현금'만 합산
-            var cash = Number(u.point || 0);
+            // 2. [물가용]: 인플레이션 기준이 되는 순수 '유동성(현금+예금)'만 합산
+            var cash = Number(u.point || 0) + Number(u.bank || 0);
             totalAssets += cash;
             
             userCount++;
@@ -10571,8 +10574,8 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
         var ecoMsg = "📊 [" + targetZone + " 경제 대시보드]\n" +
                      "━━━━━━━━━━━━━━━\n" +
                      "🔎 [시장 통화지표]\n" +
-                     "• 유동성(현금+판돈): " + fp(eco.total) + "P\n" +
-                     "• 사회 총 자산가치: " + fp(totalSocialWealth) + "P\n\n" +
+                     "• 유동성(현금+예금+국고): " + fp(eco.total) + "P\n" +
+                     "• 사회 총 자산(실물포함): " + fp(totalSocialWealth) + "P\n\n" +
                      "⚖️ [물가 및 금리 정책]\n" +
                      "• 현재 물가배율: x" + multiplier.toFixed(2) + " (" + statusIcon + ")\n" +
                      "• 물가 안정 기준점: " + fp(base) + "P\n\n" +

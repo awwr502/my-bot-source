@@ -1445,7 +1445,6 @@ function _performPhysicalSave(data, isForceBackup) {
 
 /* 관리자 및 시스템 설정 */
 var FIXED_ADMINS = ["95 남 광어", "베릭"]; // 여기에 본인의 정확한 닉네임을 입력하세요
-var TIERS = ["아이언", "브론즈", "실버", "골드", "플레티넘", "에메랄드", "다이아몬드", "마스터", "그랜드마스터", "챌린저"];
 var ALLOWED_ROOMS = ["내리다", "테스트", "베릭방"]; 
 var CASINO_RELAY_ROOM = "중계방";
 
@@ -2024,45 +2023,6 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
     }
 
     user.point = expectedPoint; 
-
-    // [감시 엔진] 1:1 대화방 카지노 어뷰징 실시간 모니터링 (구분선 제거 및 최적화)
-    if (delta > 0 && ALLOWED_ROOMS.indexOf(roomName) === -1 && user.casinoAuditStartTime > 0) {
-        var auditNow = Date.now();
-        // 1) 2분 이내 수익인지 검사
-        if (auditNow - user.casinoAuditStartTime <= 120000) {
-            var currentTotalAssets = Number(user.point) + Number(user.bank || 0);
-            
-            var lastCheckpoint = (user.casinoAuditAlertHistory && user.casinoAuditAlertHistory.length > 0)
-                ? user.casinoAuditAlertHistory[user.casinoAuditAlertHistory.length - 1]
-                : user.casinoAuditStartAssets;
-
-            // 2) 기준점 대비 2배 초과 달성 판정
-            if (currentTotalAssets >= lastCheckpoint * 2 && currentTotalAssets >= user.casinoAuditStartAssets * 2) {
-                if (!user.casinoAuditAlertHistory) user.casinoAuditAlertHistory = [];
-                user.casinoAuditAlertHistory.push(currentTotalAssets);
-
-                var alertLog = user.casinoAuditAlertHistory.map(function(val, idx) {
-                    return "• 알림" + (idx + 1) + "회: " + fp(val) + " P";
-                }).join("\n");
-
-                var alertTitle = user.casinoAuditAlertHistory.length === 1 ? "카지노 고수익 감지" : "고액 수익 지속 발생";
-                
-                var reportBody = "🚨 [" + alertTitle + "]\n" +
-                                 "━━━━━━━━━━━━━━━\n" +
-                                 "👤 대상자: " + user.name + " (ID: " + user.uid + ")\n" +
-                                 "📍 발생장소: 1:1 대화방 (" + roomName + ")\n" +
-                                 "💰 현재 잔액: " + fp(currentTotalAssets) + " P\n\n" +
-                                 "📈 발생사유: " + (reason || "카지노 게임 결과") + "\n\n" +
-                                 "📊 유저 현황:\n" +
-                                 "• 시작자산: " + fp(user.casinoAuditStartAssets) + " P\n" +
-                                 alertLog + "\n\n" + // 요청하신 대로 중간 구분선을 제거했습니다.
-                                 "⚠️ 관리자는 어뷰징 여부를 확인하십시오.\n" +
-                                 "━━━━━━━━━━━━━━━";
-
-                try { Api.replyRoom("베릭방", reportBody); } catch(e) { Log.error("Audit Alert Fail: " + e); }
-            }
-        }
-    }
 
     if (!GLOBAL_STAGING.active[user.uid]) {
         var lossRate = prePoint > 0 ? (prePoint - user.point) / prePoint : 0;
@@ -4854,7 +4814,7 @@ function _runSector16Logic(data, ctx) {
 
                 if (reserve < disasterLimit && roomData.lastBankAlert !== "disaster") {
                     roomData.lastBankAlert = "disaster";
-                    var disasterMsg = "🚨 [국가 부도 선포] 🚨\n━━━━━━━━━━━━━━━\n중앙은행의 국고가 바닥났습니다(10% 미만).\n\n🚫 동결: 부동산 매매, 카지노, 경마 등 모든 투자 활동이 전면 금지됩니다.\n🏥 제한: 출석 및 복지 포인트가 50% 삭감됩니다.\n\n⚠️ 해제 조건: 국고가 기준점의 50%(" + fp(normalLimit) + "P) 이상 충전되어야 합니다.";
+                    var disasterMsg = "🚨 [국가 부도 선포] 🚨\n━━━━━━━━━━━━━━━\n중앙은행의 국고가 바닥났습니다(10% 미만).\n\n🚫 동결: 펀드 투자 등 모든 경제 활동이 전면 금지됩니다.\n🏥 제한: 각종 복지 및 지원금이 삭감되거나 제한됩니다.\n\n⚠️ 해제 조건: 국고가 기준점의 50%(" + fp(normalLimit) + "P) 이상 충전되어야 합니다.";
                     Api.replyRoom(rName, disasterMsg);
                     ctx.isUpdated = true;
                 }
@@ -4866,7 +4826,7 @@ function _runSector16Logic(data, ctx) {
                 }
                 else if (reserve >= normalLimit && (roomData.lastBankAlert === "warning" || roomData.lastBankAlert === "disaster")) {
                     roomData.lastBankAlert = "normal";
-                    var normalMsg = "✅ [국가 부도 해제]\n━━━━━━━━━━━━━━━\n국고가 안정권(50% 이상)으로 복구되어 모든 경제 활동이 정상화되었습니다.\n\n🔓 해제: 부동산, 도박, 경마 시스템 재가동\n💰 복지: 모든 보상이 정상 지급으로 전환됩니다.";
+                    var normalMsg = "✅ [국가 부도 해제]\n━━━━━━━━━━━━━━━\n국고가 안정권(50% 이상)으로 복구되어 모든 경제 활동이 정상화되었습니다.\n\n🔓 해제: 펀드 및 투자 시스템 재가동\n💰 복지: 모든 보상이 정상 지급으로 전환됩니다.";
                     Api.replyRoom(rName, normalMsg);
                     ctx.isUpdated = true;
                 }
@@ -5522,9 +5482,6 @@ if (user) {
     if (user.replier) delete user.replier;
     if (user.imageDB) delete user.imageDB;
 }
-
-// 추가: 카지노 VIP 안내 가드용 물리 방 상태 저장 (수정)
-if (user) user.isGroupChatTemp = isGroupChat;
 
 // 2. [신분 복구] 식별 실패 시 영구 명부(Registry) 대조
 var isIdentityRecovered = false;
@@ -8129,76 +8086,34 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         return true;
     }
 
-    // 3. 통합 네비게이션: 처음으로 이동
-
-    if (msg === "처음으로" || msg === "🏠 처음으로") 
+   // 3. 통합 네비게이션: 처음으로 이동
+    if (msg === "처음으로" || msg === "🏠 처음으로") {
         if (state.type.startsWith('help')) return _handleHelpEntry(replier, targetUid, menuWaitState);
         if (state.type.startsWith('guide')) return _handleGuideEntry(replier, targetUid, menuWaitState);
-        if (state.type.startsWith('shop')) { delete menuWaitState[targetUid]; return _gameShopLogic("/상점", user, data, replier, roomName, targetUid); 
         if (state.type.startsWith('trade')) { delete menuWaitState[targetUid]; return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid); }
-        if (state.type.startsWith('casino')) { delete menuWaitState[targetUid]; return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid); }
         if (state.type.startsWith('bm_')) { delete menuWaitState[targetUid]; return _gameBlackMarketLogic("/블랙마켓", user, data, replier, roomName, targetUid); }
     }
 
-
-
     // 4. 통합 네비게이션: 뒤로가기 이동
-
     if (msg === "뒤로" || msg === "↩️ 뒤로") {
-
+        var prevState = state.type;
         // A. 무역 서브메뉴 -> 무역 메인
-
         if (state.type.startsWith('trade_') && state.type !== 'trade_main') {
-
             // [3단계 -> 2단계] 하역 설정 중이라면 출항지 선택 화면으로 복귀
-
             if (state.type === 'trade_select_cargo') {
-
                 state.type = 'trade_depart'; 
-
                 state.depth = 2; 
-
                 state.time = Date.now();
-
                 _prepareVoyage(user, replier, SYSTEM_CONFIG.TRADE, data.rooms[logicRoom]);
-
                 return true;
-
             }
-
             
-
             // [2단계 -> 1단계] 그 외 모든 서브메뉴(총독실, 시세 등)에서는 무역 메인으로 복귀
-
             delete menuWaitState[targetUid];
-
             return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
-
         }
 
-
-
-        // B. 카지노 서브메뉴 -> 카지노 메인
-
-        if (state.type.startsWith('casino_') && state.type !== 'casino_main') {
-
-            return _gameCasinoLogic("/카지노", user, data, replier, roomName, targetUid);
-
-        }
-
-
-
-        // C. 상점 상세 -> 상점 카테고리
-
-        if (state.type === 'shop_detail') {
-
-            return _gameShopLogic("/상점", user, data, replier, roomName, targetUid);
-
-        }
-
-
-
-        // D. 조회형 메뉴 (도움말/가이드) 계층 이동
+        // B. 조회형 메뉴 (도움말/가이드) 계층 이동
 
         if (state.type === 'help_cat') return _handleHelpEntry(replier, targetUid, menuWaitState);
 

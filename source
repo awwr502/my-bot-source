@@ -8515,6 +8515,13 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         }
     }
 
+    // 블랙마켓 정산 격리 - 단체방에서만 정산 실행 (10분 배송 완료 감지)
+    if (realRoom === MAIN_NAME && user && user.bm && user.bm.delivery && user.bm.delivery.active === true) {
+        if (Date.now() >= (user.bm.delivery.arrival || 0)) {
+            try { if (typeof _processBMArrival === 'function') _processBMArrival(user, data, replier, MAIN_NAME); } catch (e) {}
+        }
+    }
+
 // 현재 채팅 중인 물리적인 방의 데이터 (1:1 방 그 자체)
 var physicalRoom = data.rooms[roomName];
 var actualFeatures = physicalRoom ? physicalRoom.features : null;
@@ -17725,7 +17732,9 @@ function _gameBlackMarketLogic(msg, user, data, replier, roomName, targetUid) {
 
     // 스키마 누락 방지 가드 (유저 개인 지갑)
     if (!user.bm) {
-        user.bm = { isRegistered: false, krw: 0, weapons: {"소총":0, "전술장비":0, "폭발물":0, "중화기":0}, vaults: {"USD":0, "EUR":0, "RUB":0, "AED":0} };
+        user.bm = { isRegistered: false, krw: 0, weapons: {"소총":0, "전술장비":0, "폭발물":0, "중화기":0}, vaults: {"USD":0, "EUR":0, "RUB":0, "AED":0}, delivery: null };
+    } else if (user.bm.delivery === undefined) {
+        user.bm.delivery = null; // 기존 유저 마이그레이션
     }
 
     var menuWaitState = roomData.features.states.menuWait;
@@ -17764,9 +17773,22 @@ function _showBMMain(user, replier, data, targetUid, roomName) {
     var v = user.bm.vaults;
     var vaultStr = "[USD: " + fp(v.USD) + "] [EUR: " + fp(v.EUR) + "] [RUB: " + fp(v.RUB) + "] [AED: " + fp(v.AED) + "]";
 
+    var deliveryStatus = "";
+    if (user.bm.delivery && user.bm.delivery.active) {
+        var remain = user.bm.delivery.arrival - Date.now();
+        if (remain > 0) {
+            deliveryStatus = "🚚 납품 진행 중: " + Math.ceil(remain/60000) + "분 남음\n\n";
+        } else {
+            deliveryStatus = "🚚 납품 진행 중: ⚓ 도착 완료 (정산 대기)\n\n";
+        }
+    } else {
+        deliveryStatus = "\n";
+    }
+
     var body = "💰 스위스 비밀계좌: " + fp(user.bm.krw) + " KRW (원화)\n" +
                "💼 해외 은닉자산: " + vaultStr + "\n" +
-               "🔫 무기고 적재량: " + curWeapons + " / " + BM_CONFIG.MAX_CAPACITY + " 칸\n\n" +
+               "🔫 무기고 적재량: " + curWeapons + " / " + BM_CONFIG.MAX_CAPACITY + " 칸\n" +
+               deliveryStatus +
                "[📊 실시간 글로벌 환율 및 정세]\n" + rateBoard + "\n" +
                "[명령 하달]\n" +
                "1. 🛒 딥웹 무기상 (원화로 무기 매입)\n" +
@@ -17828,6 +17850,11 @@ function _handleBMStep(msg, user, data, replier, roomName, targetUid) {
             state.time = Date.now();
             replier.reply(formatCommand("🛒 딥웹 무기 거래소", user, sBody, "내 자금: " + fp(user.bm.krw) + " 원"));
         } else if (choice === 2) { // 브로커 의뢰소
+            if (user.bm.delivery && user.bm.delivery.active) {
+                replier.reply(formatError(user, "수주 불가", "현재 진행 중인 납품 작전이 있습니다.\n배송이 완료된 후 다시 시도하세요."));
+                return true;
+            }
+
             var cBody = "현재 암시장에 등록된 납품 의뢰입니다.\n(성공 시 현지 비밀 금고로 외화가 입금됩니다)\n\n";
             var contracts = data.bmWorld.contracts;
             if (contracts.length === 0) cBody += "- 현재 등록된 의뢰가 없습니다. (10분마다 갱신) -\n";
@@ -17915,26 +17942,24 @@ function _handleBMStep(msg, user, data, replier, roomName, targetUid) {
             return replier.reply(formatError(user, "무기 부족", "무기고에 [" + BM_CONFIG.WEAPONS[c.item].name + "]이(가) 부족합니다."));
         }
 
-        // 의뢰 수행 (즉시 결판)
-        user.bm.weapons[c.item] -= c.qty; // 무기 차감
+        // 무기 선차감 및 10분 배송 상태로 전환
+        user.bm.weapons[c.item] -= c.qty; 
         
-        // 적발 롤
-        var isCaught = (Math.random() * 100) < c.risk;
-        if (isCaught) {
-            var failMsg = "🚨 [긴급 상황: 인터폴 적발]\n\n" +
-                          "국경을 넘는 도중 세관에 적발되었습니다!\n" +
-                          "납품하려던 [" + BM_CONFIG.WEAPONS[c.item].name + "] " + c.qty + "개를 전량 압수당했습니다.";
-            replier.reply(formatError(user, "납품 실패", failMsg, "뒤로가기: [뒤로]"));
-        } else {
-            user.bm.vaults[c.region] = (Number(user.bm.vaults[c.region]) || 0) + c.reward;
-            var succMsg = "📦 [작전 성공: 무기 납품 완료]\n\n" +
-                          "포위망을 뚫고 무사히 물건을 전달했습니다.\n" +
-                          "대금은 현지 비밀 금고에 안전하게 보관되었습니다.\n\n" +
-                          "💰 획득: +" + fp(c.reward) + " " + c.region;
-            replier.reply(formatCommand("✅ 거래 완료", user, succMsg, "뒤로가기: [뒤로]"));
-        }
+        user.bm.delivery = {
+            active: true,
+            arrival: Date.now() + 600000, // 10분 대기 (600,000ms)
+            contract: JSON.parse(JSON.stringify(c)), // 수주 시점의 보상/위험 스냅샷 박제
+            isProcessing: false
+        };
 
-        // 해당 의뢰는 완료되었으므로 삭제 (경쟁)
+        var startMsg = "🚚 [납품 작전 개시]\n\n" +
+                       "📍 목적지: " + c.region + "\n" +
+                       "📦 품목: " + BM_CONFIG.WEAPONS[c.item].name + " x" + c.qty + "\n" +
+                       "⏳ 소요 시간: 10분\n\n" +
+                       "💡 국경을 넘기 위해 출발했습니다. 도착 후 첫 채팅 시 결과가 보고됩니다.";
+        replier.reply(formatCommand("✅ 의뢰 수주 완료", user, startMsg, "대시보드로 복귀: [뒤로]"));
+
+        // 해당 의뢰는 수주되었으므로 시장에서 삭제 (경쟁 시스템 유지)
         data.bmWorld.contracts.splice(idx, 1);
         user.skipHealing = true;
         safeSaveData(data, true);
@@ -17967,6 +17992,8 @@ function _handleBMStep(msg, user, data, replier, roomName, targetUid) {
         user.skipHealing = true;
         safeSaveData(data, true);
 
+        safeSaveData(data, true);
+
         var exMsg = "현지 화폐를 원화(KRW)로 안전하게 세탁하여 본국으로 송금했습니다.\n\n" +
                     "📉 사용 외환: -" + fp(qty) + " " + cur + "\n" +
                     "📈 적용 환율: " + fp(rate) + "\n" +
@@ -17977,4 +18004,48 @@ function _handleBMStep(msg, user, data, replier, roomName, targetUid) {
     }
 
     return false;
+}
+
+/**
+ * 🌐 [블랙마켓] 정산 시스템: 10분 뒤 유저가 채팅을 쳤을 때 결과 판독
+ */
+function _processBMArrival(user, data, replier, roomName) {
+    if (!user || !user.bm || !user.bm.delivery || !user.bm.delivery.active) return;
+    
+    var d = user.bm.delivery;
+    if (d.isProcessing) return;
+    d.isProcessing = true;
+
+    try {
+        var c = d.contract;
+        var wName = BM_CONFIG.WEAPONS[c.item].name;
+        // 출발 시점에 박제된 risk 기반 롤 굴림
+        var isCaught = (Math.random() * 100) < c.risk;
+
+        var resMsg = "📍 목적지: " + c.region + "\n" +
+                     "📦 품목: " + wName + " x" + c.qty + "\n\n";
+
+        if (isCaught) {
+            resMsg += "🚨 [긴급 상황: 인터폴 적발]\n" +
+                      "국경을 넘는 도중 세관에 적발되었습니다!\n" +
+                      "납품하려던 물건을 전량 압수당하고 빈손으로 도주했습니다.\n\n" +
+                      "❌ 작전 실패 (보상금 소실)";
+            replier.reply(formatError(user, "납품 실패 보고", resMsg));
+        } else {
+            user.bm.vaults[c.region] = (Number(user.bm.vaults[c.region]) || 0) + c.reward;
+            resMsg += "✅ [작전 성공]\n" +
+                      "포위망을 뚫고 무사히 물건을 전달했습니다.\n" +
+                      "대금은 현지 비밀 금고에 안전하게 보관되었습니다.\n\n" +
+                      "💰 획득: +" + fp(c.reward) + " " + c.region;
+            replier.reply(formatCommand("🚚 무기 납품 완료", user, resMsg));
+        }
+
+        // 정산 완료 후 상태 완전 초기화 (쿨타임 없음)
+        d.active = false;
+        user.skipHealing = true;
+        safeSaveData(data, true);
+    } catch(e) {
+        d.isProcessing = false;
+        Log.error("BM Arrival Error: " + e);
+    }
 }

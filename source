@@ -1072,9 +1072,6 @@ function getDatabase() {
                     targetRoom.features = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
                 } else {
                     var template = (typeof ROOM_FEATURE_TEMPLATE === 'function') ? ROOM_FEATURE_TEMPLATE() : {};
-                    if (!targetRoom.features.racing) targetRoom.features.racing = template.racing;
-                    if (!targetRoom.features.lotto) targetRoom.features.lotto = template.lotto;
-                    if (!targetRoom.features.stockMarket) targetRoom.features.stockMarket = template.stockMarket;
                     if (!targetRoom.features.portData) targetRoom.features.portData = template.portData;
                     if (!targetRoom.features.states) {
                         targetRoom.features.states = template.states;
@@ -2003,22 +2000,6 @@ function util_updatePoint(user, roomData, delta, reason, roomName) {
             if (bankInput.some(function(r){ return reason.indexOf(r) !== -1; })) brDelta = Math.abs(actualDelta);
         }
 
-       /* [v11.9.24] 배당 주머니: 포인트가 아닌 '원금(Revenue)' 누적으로 변경 */
-        if (roomData.features && roomData.features.dailyPools) {
-            var dp = roomData.features.dailyPools;
-            var r = reason || "";
-            var absAmt = Math.abs(actualDelta);
-
-            // [교정]: 상수를 여기서 곱하지 않고 원금(absAmt)만 그대로 더합니다.
-            if (r.indexOf("광산") !== -1) dp.mine += absAmt;
-            else if (r.indexOf("낚시") !== -1) dp.fish += absAmt;
-            else if (r.indexOf("카지노") !== -1 || r.indexOf("사다리") !== -1 || r.indexOf("바카라") !== -1 || r.indexOf("홀짝") !== -1 || r.indexOf("적중") !== -1) {
-                dp.casino += absAmt;
-            }
-            else if (r.indexOf("상점") !== -1 || r.indexOf("구매") !== -1) dp.shop += absAmt;
-            else if (r.indexOf("이자") !== -1) dp.bank += absAmt;
-            else if (r.indexOf("경마") !== -1 || r.indexOf("배팅") !== -1) dp.race += absAmt;
-        }
         util_updateReserve(roomData, brDelta, reason, roomName);
     }
 
@@ -5006,12 +4987,6 @@ function _runSector17Logic(data, ctx) {
             }
         } // for id in roomObj.users 끝
 
-        // 배당 주머니 초기화 유지
-        if (roomObj.features.dailyPools) {
-            var pools = roomObj.features.dailyPools;
-            for (var key in pools) { pools[key] = 0; }
-        }
-
         try {
             // 자정 정산 시 보관용 로그와 복구용 로그를 모두 삭제하여 새날을 준비합니다.
             var jFile = new java.io.File(JOURNAL_PATH);
@@ -5161,16 +5136,9 @@ this.msgbot_main_logic = function(room, msg, sender, isGroupChat, replier, image
                         // (이곳에 필요한 1:1 전용 추가 로직 배치 가능)
                     } 
 
-                    // 4. 실시간 하이프(채팅량) 기록 및 배당 주머니 복구 (모든 방 공통 로직)
+                    // 4. 실시간 하이프(채팅량) 기록 (모든 방 공통 로직)
                     if (roomData && roomData.features) {
                         roomData.features.msgCount = (roomData.features.msgCount || 0) + 1;
-
-                        /* [v11.0] 6대 랜드마크 일일 배당금 누적 주머니 자동 복구 */
-                        if (!roomData.features.dailyPools) {
-                            roomData.features.dailyPools = { 
-                                mine: 0, fish: 0, casino: 0, bank: 0, shop: 0, race: 0 
-                            };
-                        }
                     }
 
                 // 설명: 섹터 1의 템플릿에 새로운 기능이 추가되면, 기존 방에도 즉시 해당 공간을 만들어줍니다.
@@ -11761,7 +11729,6 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             
             var resBody = "과거 자산 정보를 현재 계정으로 안전하게 복사해왔습니다.\n\n" +
                          "💰 복제 잔액: " + fp(user.point) + "P\n" +
-                         "🏅 복제 티어: " + (TIERS[user.tier] || "아이언") + "\n" +
                          "📦 인벤토리: " + (user.inventory ? user.inventory.length : 0) + "개 항목 이관";
 
             replier.reply(formatCommand("✅ 데이터 정밀 복제 완료", user, resBody, "고유 코드는 현재 코드를 그대로 유지합니다."));
@@ -11824,11 +11791,10 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
                 }
             }
 
-            var info = "💰 포인트: " + fp(targetUser.point) + "P\n" +
+           var info = "💰 포인트: " + fp(targetUser.point) + "P\n" +
                        "🏦 예금: " + fp(targetUser.bank) + "P\n" +
                        (sClaims >= 1 ? "🤝 미수 채권: " + fp(sClaims) + "P\n" : "") +
                        "💳 신용: " + cr.label + " (" + targetUser.creditScore + "점)\n" +
-                       "🏅 티어: " + (TIERS[targetUser.tier] || "아이언") + "\n" +
                        "📅 출석: " + (targetUser.totalAttendance || 0) + "일";
             
             var bDebt = (targetUser.loan && targetUser.loan.debt) ? Math.floor(Number(targetUser.loan.debt)) : 0;

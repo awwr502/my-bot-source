@@ -16362,11 +16362,6 @@ function util_checkNavyTitle(user, replier, roomName) {
 function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
     var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var roomData = data.rooms[logicRoom];
-    
-    // 무역 항해 중 진입 불가 가드
-    if (user.voyage && user.voyage.active) {
-        return replier.reply(formatError(user, "진입 불가", "선박이 항해 중일 때는 해저 동굴에 진입할 수 없습니다.\n정박 후 시도해주세요."));
-    }
 
     // 던전 스키마 무결성 검사 (업데이트 전 생성된 유저 대비)
     if (!user.dgnStat) {
@@ -16374,12 +16369,24 @@ function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
         user.dgnEquip = { weapon: null, armor: null, acc: null };
         user.dgnBag = [];
         user.dgnGuild = { rank: 'F', exp: 0, clearCount: 0 };
+        user.dgnGold = 0;
     }
 
-    // 만약 탐험 중이라면 즉시 턴 화면으로 복귀
+    // [세이브포인트 연동] 탐험 중이거나 휴식 중이었을 경우 자동 복구
     if (user.dgnState && user.dgnState.inProgress) {
-        roomData.features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
-        return _showDungeonTurn(user, replier);
+        if (user.dgnState.isResting) {
+            _processDungeonWakeUp(user, data, replier, logicRoom, targetUid);
+            return true;
+        }
+        
+        if (user.dgnState.combat) {
+            roomData.features.states.menuWait[targetUid] = { type: 'dgn_combat_main', time: Date.now(), originRoom: roomName };
+            _showDgnCombatMain(user, replier, "⚠️ 탐험을 재개합니다. 적이 눈앞에 있습니다!");
+        } else {
+            roomData.features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
+            _showDungeonTurn(user, replier);
+        }
+        return true;
     }
 
     _showDungeonLobby(user, replier, roomData, targetUid, roomName);
@@ -16409,6 +16416,11 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
     var choice = msg.trim();
     var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var roomData = data.rooms[logicRoom];
+
+    // [세이브포인트] 휴식 대기열 응답 (아무 채팅이나 치면 기상)
+    if (state.type === 'dgn_rest') {
+        return _processDungeonWakeUp(user, data, replier, logicRoom, targetUid);
+    }
 
     if (state.type === 'dgn_lobby') {
         if (choice === "1") _startDungeon(user, data, replier, logicRoom, targetUid);
@@ -16585,24 +16597,38 @@ function _processDungeonTurn(choice, user, data, replier, roomName, targetUid) {
 
         // 행동 판정 (조우 여부 결정)
         if (Math.random() < encounterProb) {
-            var isBossEncounter = (d.depth >= 10 && Math.random() < 0.2); // 10층 이상 엘리트/보스 조우율 증가
-            var monList = DGN_MONSTER_DB[d.zone] || DGN_MONSTER_DB["SWAMP"];
+            // [무한의 탑 스폰 로직] 10층마다 엘리트, 50층마다 보스 확정 출현
+            var isBossEncounter = (d.depth % 50 === 0); 
+            var isEliteEncounter = (!isBossEncounter && d.depth % 10 === 0);
             
             var encounterType = Math.random() * 100;
             
-            // [60% 확률: 몬스터 조우]
-            if (encounterType < 60 || !isExplore) {
+            if (encounterType < 60 || !isExplore || isBossEncounter || isEliteEncounter) {
                 var targetMonster;
+                var monList = DGN_MONSTER_DB[d.zone] || DGN_MONSTER_DB["SWAMP"];
+                
                 if (isBossEncounter) {
-                    var bosses = monList.filter(function(m) { return m.type === "boss" || m.type === "elite"; });
+                    var bosses = monList.filter(function(m) { return m.type === "boss"; });
                     targetMonster = bosses[Math.floor(Math.random() * bosses.length)] || monList[0];
+                } else if (isEliteEncounter) {
+                    var elites = monList.filter(function(m) { return m.type === "elite"; });
+                    targetMonster = elites[Math.floor(Math.random() * elites.length)] || monList[0];
                 } else {
                     var normals = monList.filter(function(m) { return m.type === "normal"; });
                     targetMonster = normals[Math.floor(Math.random() * normals.length)];
                 }
 
+                // [무한의 탑 난이도 스케일링] 10층을 넘길 때마다 몬스터 스탯 50%씩 누적 증가
+                var scaleMult = 1 + Math.floor((d.depth - 1) / 10) * 0.5;
+                var scaledMob = JSON.parse(JSON.stringify(targetMonster));
+                scaledMob.maxHp = Math.floor(scaledMob.maxHp * scaleMult);
+                scaledMob.hp = scaledMob.maxHp;
+                scaledMob.atk = Math.floor(scaledMob.atk * scaleMult);
+                scaledMob.gold[0] = Math.floor(scaledMob.gold[0] * scaleMult);
+                scaledMob.gold[1] = Math.floor(scaledMob.gold[1] * scaleMult);
+
                 d.combat = {
-                    mob: JSON.parse(JSON.stringify(targetMonster)),
+                    mob: scaledMob,
                     turn: 1
                 };
                 user.skipHealing = true;
@@ -16613,7 +16639,8 @@ function _processDungeonTurn(choice, user, data, replier, roomName, targetUid) {
                 d.combat.bossAtkDirs = hintObj.attacks;
                 
                 safeSaveData(data, false);
-                return _showDgnCombatMain(user, replier, "⚠️ [적 출현] " + targetMonster.name + "이(가) 앞을 가로막습니다!");
+                var encounterTitle = isBossEncounter ? "👑 [보스 출현]" : (isEliteEncounter ? "👹 [엘리트 출현]" : "⚠️ [적 출현]");
+                return _showDgnCombatMain(user, replier, encounterTitle + " " + scaledMob.name + "이(가) 앞을 가로막습니다!");
             }
 
             // [25% 확률: 채집물 발견]
@@ -16642,6 +16669,7 @@ function _processDungeonTurn(choice, user, data, replier, roomName, targetUid) {
                 }
                 movedDown = true;
             } 
+
             // [15% 확률: 랜덤 이벤트 (제단/미믹 등)]
             else {
                 var evtRand = Math.random();
@@ -16674,9 +16702,20 @@ function _processDungeonTurn(choice, user, data, replier, roomName, targetUid) {
             movedDown = true;
         }
 
-        // 층수 이동 시 구역 특성 발동 및 깊이 증가
+        // 층수 이동 시 구역 루프 및 특성 발동
         if (movedDown) {
             d.depth++;
+            
+            // [무한의 탑 맵 루프] 10층마다 다음 구역으로 배경 순환 변경
+            var zones = SYSTEM_CONFIG.DUNGEON.ZONE_ORDER;
+            var zoneIdx = Math.floor((d.depth - 1) / 10) % zones.length;
+            var prevZone = d.zone;
+            d.zone = zones[zoneIdx];
+            
+            if (prevZone !== d.zone) {
+                d.log += "\n\n✨ 주변 환경이 [" + SYSTEM_CONFIG.DUNGEON.ZONES[d.zone].name + "](으)로 변했습니다!";
+            }
+
             if (d.zone === "DESERT" && Math.random() < 0.15) {
                 var stormDmg = Math.floor(s.maxHp * 0.1);
                 s.hp -= stormDmg;
@@ -16700,70 +16739,24 @@ function _processDungeonTurn(choice, user, data, replier, roomName, targetUid) {
 
         if (s.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
 
-        // 구역(Zone) 이동 처리
-        var zInfo = SYSTEM_CONFIG.DUNGEON.ZONES[d.zone];
-        if (d.depth > zInfo.end) {
-            var order = SYSTEM_CONFIG.DUNGEON.ZONE_ORDER;
-            var nextIdx = order.indexOf(d.zone) + 1;
-            if (nextIdx < order.length) {
-                d.zone = order[nextIdx];
-                d.log += "\n\n✨ 새로운 구역 [" + SYSTEM_CONFIG.DUNGEON.ZONES[d.zone].name + "](으)로 진입했습니다!";
-            } else {
-                d.log += "\n\n🏆 모든 던전 구역을 클리어했습니다! (임시 귀환)";
-                return _processDungeonTurn("5", user, data, replier, roomName, targetUid); // 임시 자동 귀환
-            }
-        }
-
         user.skipHealing = true;
         safeSaveData(data, false);
         data.rooms[roomName].features.states.menuWait[targetUid].time = Date.now();
         _showDungeonTurn(user, replier);
     } 
     else if (choice === "3") {
-        // [특성: 늪지대 해충 및 휴식 시스템]
+        // [실시간 캠핑 시스템 도입]
         var hasTent = user.dgnBag.some(function(it) { return it.name === "휴식용 텐트"; });
-        var ambushProb = hasTent ? 0.05 : 0.30;
-        var healRate = 0.30; // 기본 30% 회복
         
-        if (d.zone === "SWAMP" && (s.hp/s.maxHp >= 0.5 || s.stam/s.maxStam >= 0.5)) {
-            healRate = 0.15; // 절반 감소
-            ambushProb += 0.20; // 습격 확률 20% 증가
-            d.log = "🪰 [해충] 습한 환경과 벌레 탓에 제대로 쉬지 못했습니다.\n";
-        } else {
-            d.log = "⛺ 안전한 곳을 찾아 휴식을 취합니다.\n";
-        }
-
-        if (Math.random() < ambushProb) {
-            // [수정] 기습 전투 실제 돌입 로직
-            var monList = DGN_MONSTER_DB[d.zone] || DGN_MONSTER_DB["SWAMP"];
-            var normals = monList.filter(function(m) { return m.type === "normal"; });
-            var targetMonster = normals[Math.floor(Math.random() * normals.length)];
-
-            d.combat = {
-                mob: JSON.parse(JSON.stringify(targetMonster)),
-                turn: 1
-            };
-            var hintObj = d.combat.mob.hints[Math.floor(Math.random() * d.combat.mob.hints.length)];
-            d.combat.bossHintText = hintObj.text;
-            d.combat.bossAtkDirs = hintObj.attacks;
-
-            user.skipHealing = true;
-            data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_combat_main', time: Date.now(), originRoom: roomName };
-            safeSaveData(data, false);
-            return _showDgnCombatMain(user, replier, d.log + "⚠️ 휴식 중 [" + targetMonster.name + "]의 기습을 받았습니다!");
-        } else {
-            s.hp = Math.min(s.maxHp, s.hp + Math.floor(s.maxHp * healRate));
-            s.stam = Math.min(s.maxStam, s.stam + Math.floor(s.maxStam * healRate));
-            s.hunger -= 10;
-            d.log += "✅ 체력과 스태미나를 " + (healRate*100) + "% 회복했습니다. (허기 -10)";
-        }
+        d.isResting = true;
+        d.restStartTime = Date.now();
+        d.hasTent = hasTent;
         
-        if (s.hunger < 0) s.hunger = 0; // 휴식 중 아사는 방지
-
         user.skipHealing = true;
+        data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_rest', time: Date.now(), originRoom: roomName };
         safeSaveData(data, false);
-        data.rooms[roomName].features.states.menuWait[targetUid].time = Date.now();
-        _showDungeonTurn(user, replier);
+        
+        return replier.reply(formatCommand("⛺ 캠프 구축", user, "동굴 한켠에 자리를 잡고 휴식에 들어갑니다.\n(최대 30분간 분당 HP/ST/허기가 지속 회복됩니다.)\n\n탐험을 재개하려면 준비가 끝난 후 아무 채팅이나 입력하세요."));
     }
     else if (choice === "4") {
         // 가방 열기 (턴 소모 안함, 메뉴만 이동)
@@ -16819,6 +16812,60 @@ function _handlePlayerDeath(user, data, replier, roomName, targetUid) {
                    "💡 길드 창고에 귀중품을 보관하는 습관을 들이세요.";
                    
     replier.reply(formatCommand("🪦 탐험 실패", user, deathMsg));
+}
+
+function _processDungeonWakeUp(user, data, replier, roomName, targetUid) {
+    var d = user.dgnState;
+    var s = user.dgnStat;
+    var now = Date.now();
+    var restedMs = now - (d.restStartTime || now);
+    var restedMin = Math.min(30, Math.floor(restedMs / 60000)); // 최대 30분 인정
+    
+    // 분당 회복량: HP 5, ST 2, 허기 2 (텐트가 있으면 회복 효율 2배)
+    var eff = d.hasTent ? 2 : 1;
+    var hpHeal = restedMin * 5 * eff;
+    var stHeal = restedMin * 2 * eff;
+    var hgHeal = restedMin * 2 * eff;
+    
+    s.hp = Math.min(s.maxHp, s.hp + hpHeal);
+    s.stam = Math.min(s.maxStam, s.stam + stHeal);
+    s.hunger = Math.min(s.maxHunger, s.hunger + hgHeal);
+    
+    d.isResting = false;
+    
+    var ambushProb = d.hasTent ? 0.05 : 0.30;
+    if (d.zone === "SWAMP") ambushProb += 0.20; // 늪지대 페널티
+    
+    // 최소 1분 이상 쉬었을 때만 기습 판정
+    if (restedMin >= 1 && Math.random() < ambushProb) {
+        var monList = DGN_MONSTER_DB[d.zone] || DGN_MONSTER_DB["SWAMP"];
+        var normals = monList.filter(function(m) { return m.type === "normal"; });
+        var targetMonster = normals[Math.floor(Math.random() * normals.length)];
+
+        var scaleMult = 1 + Math.floor((d.depth - 1) / 10) * 0.5;
+        var scaledMob = JSON.parse(JSON.stringify(targetMonster));
+        scaledMob.maxHp = Math.floor(scaledMob.maxHp * scaleMult);
+        scaledMob.hp = scaledMob.maxHp;
+        scaledMob.atk = Math.floor(scaledMob.atk * scaleMult);
+
+        d.combat = { mob: scaledMob, turn: 1 };
+        var hintObj = d.combat.mob.hints[Math.floor(Math.random() * d.combat.mob.hints.length)];
+        d.combat.bossHintText = hintObj.text;
+        d.combat.bossAtkDirs = hintObj.attacks;
+
+        d.log = "⛺ " + restedMin + "분간 휴식 후 기상했습니다. (HP+" + hpHeal + ", ST+" + stHeal + ")\n⚠️ 앗! 눈을 뜨자마자 기습을 받았습니다!";
+        
+        user.skipHealing = true;
+        data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_combat_main', time: Date.now(), originRoom: roomName };
+        safeSaveData(data, false);
+        return _showDgnCombatMain(user, replier, d.log);
+    } else {
+        d.log = "⛺ " + restedMin + "분간 안전하게 휴식했습니다.\n(HP+" + hpHeal + ", ST+" + stHeal + ", 허기+" + hgHeal + ")\n상쾌한 기분으로 탐험을 이어갑니다.";
+        user.skipHealing = true;
+        data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
+        safeSaveData(data, false);
+        return _showDungeonTurn(user, replier);
+    }
 }
 
 /* --- 통합 전투 로직 (방향 수싸움) --- */
@@ -17028,17 +17075,26 @@ function _winDgnCombat(user, data, replier, roomName, targetUid, combatLog) {
 
     var logMsg = combatLog + "\n🎉 [" + c.mob.name + "] 토벌 성공!\n💰 획득 금화: +" + gold + " G\n";
     
-    // 드랍템 처리
-    if (c.mob.drop && Math.random() < 0.6) { // 60% 확률 임시
-        var dropInfo = DGN_ITEM_DB[c.mob.drop];
-        var itemColor = (dropInfo && dropInfo.rank === "희귀") ? "🔵" : "⚪";
-        d.loots.items.push(c.mob.drop);
-        user.dgnBag.push({ name: c.mob.drop, type: dropInfo.type, rank: dropInfo.rank });
-        logMsg += "🎁 전리품 획득: " + itemColor + "[" + c.mob.drop + "]\n";
-    }
+    // [무한의 탑 드랍 스케일링] 20층을 돌파할 때마다 드랍 기회(주사위)가 1번씩 늘어남
+    var dropChances = 1 + Math.floor((d.depth - 1) / 20);
+    
+    for (var i = 0; i < dropChances; i++) {
+        if (c.mob.drop && Math.random() < 0.6) { 
+            var dropInfo = DGN_ITEM_DB[c.mob.drop];
+            var itemColor = (dropInfo && dropInfo.rank === "희귀") ? "🔵" : "⚪";
+            d.loots.items.push(c.mob.drop);
+            
+            if (user.dgnBag.length < SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) {
+                user.dgnBag.push({ name: c.mob.drop, type: dropInfo.type, rank: dropInfo.rank });
+                logMsg += "🎁 전리품 획득: " + itemColor + "[" + c.mob.drop + "]\n";
+            } else {
+                logMsg += "⚠️ 전리품(" + c.mob.drop + ")을 발견했으나 가방이 가득 차 버렸습니다.\n";
+            }
+        }
+    }
 
-    d.combat = null;
-    d.log = logMsg; // 다음 턴 탐사 화면에 띄워줄 로그
+    d.combat = null;
+    d.log = logMsg;
     
     user.skipHealing = true;
     data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };

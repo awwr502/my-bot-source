@@ -134,7 +134,12 @@ var DGN_ITEM_DB = {
     "스태미나 포션": { type: "potion", rank: "일반", price: 3000, stat: { stam: 30 } },
     "휴식용 텐트": { type: "consumable", rank: "일반", price: 10000, effect: "safe_rest" },
     "횃불": { type: "consumable", rank: "일반", price: 3000, effect: "light" },
-    "귀환 주문서": { type: "consumable", rank: "희귀", price: 20000, effect: "escape" }
+    "귀환 주문서": { type: "consumable", rank: "희귀", price: 20000, effect: "escape" },
+    // 4. 채집 도구 및 채집물
+    "낡은 곡괭이": { type: "tool", rank: "일반", price: 5000, usage: 5 },
+    "채집용 낫": { type: "tool", rank: "일반", price: 5000, usage: 5 },
+    "철광석": { type: "mat", rank: "일반", price: 1500 },
+    "마력 깃든 약초": { type: "mat", rank: "희귀", price: 2500 }
 };
 
 if (typeof globalData === 'undefined' || globalData === null) {
@@ -16396,12 +16401,15 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
     // [길드 라우터]
     else if (state.type === 'dgn_guild_main') {
         if (choice === "1") _showDgnStorage(user, replier, roomData, targetUid, logicRoom);
-        else if (choice === "2") replier.reply(formatSimple("의뢰 게시판", "현재 수주 가능한 퀘스트가 없습니다.", "길드 지부 메인: [뒤로]"));
-        else replier.reply(formatError(user, "입력 오류", "정확한 번호를 입력하세요."));
-    }
-    else if (state.type === 'dgn_guild_storage') {
-        _processDgnStorage(choice, user, data, replier, logicRoom, targetUid);
-    }
+        else if (choice === "2") _showDgnGuildQuest(user, replier, roomData, targetUid, logicRoom);
+        else replier.reply(formatError(user, "입력 오류", "정확한 번호를 입력하세요."));
+    }
+    else if (state.type === 'dgn_guild_storage') {
+        _processDgnStorage(choice, user, data, replier, logicRoom, targetUid);
+    }
+    else if (state.type === 'dgn_guild_quest') {
+        _processDgnGuildQuest(choice, user, data, replier, logicRoom, targetUid);
+    }
     // [상점 라우터]
     else if (state.type === 'dgn_shop_main') {
         _processDgnShop(choice, user, data, replier, logicRoom, targetUid);
@@ -16419,6 +16427,21 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
     else if (state.type === 'dgn_turn') {
         _processDungeonTurn(choice, user, data, replier, logicRoom, targetUid);
     }
+    else if (state.type === 'dgn_merchant') {
+        if (choice === "1") {
+            if (user.point < 50000) return replier.reply(formatError(user, "자금 부족", "포인트가 부족합니다."));
+            util_updatePoint(user, data.rooms["내리다"], -50000, "던전 떠돌이 상인 거래", logicRoom);
+            user.ancientMaps = (user.ancientMaps || 0) + 1;
+            user.skipHealing = true;
+            replier.reply(formatCommand("💰 거래 완료", user, "떠돌이 상인에게서 '고대 지도' 1장을 구매했습니다!\n상인은 안개 속으로 사라집니다."));
+            delete roomData.features.states.menuWait[targetUid];
+            safeSaveData(data, true);
+        } else {
+            replier.reply(formatCommand("🚶 거래 거절", user, "상인을 무시하고 갈 길을 갑니다."));
+            roomData.features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: logicRoom };
+            _showDungeonTurn(user, replier);
+        }
+    }
     else if (state.type === 'dgn_combat_normal') {
         _processDgnCombatNormal(choice, user, data, replier, logicRoom, targetUid);
     }
@@ -16428,6 +16451,7 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
     else if (state.type === 'dgn_boss_def') {
         _processDgnBossDef(choice, user, data, replier, logicRoom, targetUid);
     }
+ }
 
 function _startDungeon(user, data, replier, roomName, targetUid) {
     // 1. 입장권 검사 (현재는 임시로 10000P 차감으로 대체, 추후 인벤토리 입장권 아이템으로 변경 가능)
@@ -16534,39 +16558,90 @@ function _processDungeonTurn(choice, user, data, replier, roomName, targetUid) {
             var isBossEncounter = (d.depth >= 10 && Math.random() < 0.2); // 10층 이상 엘리트/보스 조우율 증가
             var monList = DGN_MONSTER_DB[d.zone] || DGN_MONSTER_DB["SWAMP"];
             
-            var targetMonster;
-            if (isBossEncounter) {
-                var bosses = monList.filter(function(m) { return m.type === "boss" || m.type === "elite"; });
-                targetMonster = bosses[Math.floor(Math.random() * bosses.length)] || monList[0];
-            } else {
-                var normals = monList.filter(function(m) { return m.type === "normal"; });
-                targetMonster = normals[Math.floor(Math.random() * normals.length)];
-            }
+            var encounterType = Math.random() * 100;
+            
+            // [60% 확률: 몬스터 조우]
+            if (encounterType < 60 || !isExplore) {
+                var targetMonster;
+                if (isBossEncounter) {
+                    var bosses = monList.filter(function(m) { return m.type === "boss" || m.type === "elite"; });
+                    targetMonster = bosses[Math.floor(Math.random() * bosses.length)] || monList[0];
+                } else {
+                    var normals = monList.filter(function(m) { return m.type === "normal"; });
+                    targetMonster = normals[Math.floor(Math.random() * normals.length)];
+                }
 
-            // 전투 세션 세팅 (스탯 딥카피)
-            d.combat = {
-                mob: JSON.parse(JSON.stringify(targetMonster)),
-                turn: 1
-            };
-            user.skipHealing = true;
-            safeSaveData(data, false);
+                d.combat = {
+                    mob: JSON.parse(JSON.stringify(targetMonster)),
+                    turn: 1
+                };
+                user.skipHealing = true;
+                safeSaveData(data, false);
 
-            if (targetMonster.type === "boss") {
-                data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_boss_atk', time: Date.now(), originRoom: roomName };
-                return _showDgnBossCombat(user, replier, "⚠️ [강적 출현] " + targetMonster.name + "이(가) 길을 막아섰습니다!");
-            } else {
-                data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_combat_normal', time: Date.now(), originRoom: roomName };
-                return _showDgnNormalCombat(user, replier, "⚔️ 야생의 " + targetMonster.name + "와(과) 조우했습니다!");
-            }
-        }
+                if (targetMonster.type === "boss") {
+                    data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_boss_atk', time: Date.now(), originRoom: roomName };
+                    return _showDgnBossCombat(user, replier, "⚠️ [강적 출현] " + targetMonster.name + "이(가) 길을 막아섰습니다!");
+                } else {
+                    data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_combat_normal', time: Date.now(), originRoom: roomName };
+                    return _showDgnNormalCombat(user, replier, "⚔️ 야생의 " + targetMonster.name + "와(과) 조우했습니다!");
+                }
+            } 
+            // [25% 확률: 채집물 발견]
+            else if (encounterType < 85) {
+                var isOre = Math.random() < 0.5;
+                var reqTool = isOre ? "낡은 곡괭이" : "채집용 낫";
+                var rewardItem = isOre ? "철광석" : "마력 깃든 약초";
+                
+                var toolIdx = -1;
+                for (var i = 0; i < user.dgnBag.length; i++) {
+                    if (user.dgnBag[i].name === reqTool) { toolIdx = i; break; }
+                }
 
-        // 조우하지 않았을 경우
-        if (!isExplore) {
-            d.log += "⏩ 몬스터를 피해 빠르게 다음 층 계단을 찾아 내려갔습니다!";
-            movedDown = true;
+                if (toolIdx !== -1) {
+                    user.dgnBag[toolIdx].usage = (user.dgnBag[toolIdx].usage || 5) - 1;
+                    if (user.dgnBag[toolIdx].usage <= 0) user.dgnBag.splice(toolIdx, 1); // 내구도 0 파괴
+                    
+                    if (user.dgnBag.length < SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) {
+                        user.dgnBag.push({ name: rewardItem, type: "mat", rank: (isOre ? "일반" : "희귀") });
+                        d.log += "⛏️ [" + reqTool + "]를 사용하여 [" + rewardItem + "]을(를) 채집했습니다!";
+                    } else {
+                        d.log += "⛏️ 채집에 성공했으나 가방이 꽉 차서 챙기지 못했습니다.";
+                    }
+                } else {
+                    d.log += "🌿 신비한 자원을 발견했으나 [" + reqTool + "] 도구가 없어 채집하지 못했습니다.";
+                }
+            } 
+            // [15% 확률: 랜덤 이벤트 (제단/미믹 등)]
+            else {
+                var evtRand = Math.random();
+                if (evtRand < 0.2) {
+                    data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_merchant', time: Date.now(), originRoom: roomName };
+                    return replier.reply(formatCommand("💰 떠돌이 상인", user, "어둠 속에서 떠돌이 상인을 만났습니다!\n\"진귀한 '고대 지도'를 50,000P에 사겠나?\"\n\n1. 구매한다 (5만P 차감)\n2. 무시한다", "번호를 입력하세요."));
+                } else if (evtRand < 0.5) {
+                    var healAmt = Math.floor(s.maxHp * 0.3);
+                    s.hp = Math.min(s.maxHp, s.hp + healAmt);
+                    d.log += "⛲ [여신의 제단] 맑은 샘물을 마시고 체력을 " + healAmt + " 회복했습니다!";
+                } else if (evtRand < 0.8) {
+                    var dropGold = Math.floor(Math.random() * 5000) + 1000;
+                    d.loots.points += dropGold;
+                    d.log += "🏺 [오래된 상자] 먼지 쌓인 상자에서 " + dropGold + "P를 발견했습니다!";
+                } else {
+                    var trapDmg = Math.floor(s.maxHp * 0.2);
+                    s.hp -= trapDmg;
+                    d.log += "💥 [미믹의 함정] 보물상자인 줄 알았으나 함정이었습니다! (-" + trapDmg + " HP)";
+                }
+                if (s.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
+            }
         } else {
-            d.log += "🔍 바닥을 샅샅이 뒤졌으나 별다른 소득이 없었습니다. 더 깊이 전진합니다.";
-            movedDown = true;
+
+            // 조우하지 않았을 경우
+            if (!isExplore) {
+                d.log += "⏩ 몬스터를 피해 빠르게 다음 층 계단을 찾아 내려갔습니다!";
+                movedDown = true;
+            } else {
+                d.log += "🔍 바닥을 샅샅이 뒤졌으나 별다른 소득이 없었습니다. 더 깊이 전진합니다.";
+                movedDown = true;
+            }
         }
 
         // 층수 이동 시 구역 특성 발동 (사막, 바위협곡)
@@ -16719,13 +16794,32 @@ function _processDgnCombatNormal(choice, user, data, replier, roomName, targetUi
     var s = user.dgnStat;
     var logMsg = "";
 
-    var pAtk = s.str * 10; // 임시 기본 데미지 
-    var mAtk = c.mob.atk;
+    // [상태이상] 맹독 슬라임 조우 시 30% 확률로 맹독 부여 (매턴 체력 감소)
+    if (c.mob.name.indexOf("맹독 슬라임") !== -1 && Math.random() < 0.3 && !c.ailment) {
+        c.ailment = "poison";
+        logMsg += "☠️ 슬라임의 점액에 닿아 [맹독] 상태에 빠졌습니다!\n";
+    }
 
     if (choice === "1") {
         c.mob.hp -= pAtk;
         logMsg += "🗡️ " + c.mob.name + "에게 " + pAtk + "의 피해를 입혔습니다!\n";
-    } else if (choice === "4") {
+    } 
+    else if (choice === "2") {
+        isDefending = true;
+        logMsg += "🛡️ 방어 태세를 갖추어 받는 피해를 절반으로 줄입니다!\n";
+    } 
+    else if (choice === "3") {
+        if (s.stam < 15) {
+            logMsg += "⚡ 스태미나가 부족하여 스킬을 쓸 수 없습니다! (기본 공격 발동)\n";
+            c.mob.hp -= pAtk;
+        } else {
+            s.stam -= 15;
+            var skillDmg = Math.floor(pAtk * 1.5 + (s.int * 5)); // 지능(INT) 비례 추가 데미지
+            c.mob.hp -= skillDmg;
+            logMsg += "✨ 스킬 발동! " + c.mob.name + "에게 " + skillDmg + "의 치명적인 피해!\n";
+        }
+    }
+    else if (choice === "4") {
         if (Math.random() * 100 < s.agi * 2) {
             user.dgnState.combat = null;
             user.dgnState.log = "🏃 몬스터로부터 무사히 도망쳤습니다.";
@@ -16733,21 +16827,50 @@ function _processDgnCombatNormal(choice, user, data, replier, roomName, targetUi
             safeSaveData(data, false);
             return _showDungeonTurn(user, replier);
         } else {
-            logMsg += "🏃 도망에 실패했습니다!\n";
+            logMsg += "🏃 도망에 실패하여 틈을 보였습니다!\n";
         }
-    } else {
-        return replier.reply(formatError(user, "명령 거부", "현재는 1(공격), 4(도망)만 구현되어 있습니다."));
+    } 
+    else if (choice === "5") {
+        var potionIdx = -1;
+        for (var i = 0; i < user.dgnBag.length; i++) {
+            if (user.dgnBag[i].name.indexOf("체력 포션") !== -1) { potionIdx = i; break; }
+        }
+        if (potionIdx !== -1) {
+            var pName = user.dgnBag[potionIdx].name;
+            var healAmt = DGN_ITEM_DB[pName].stat.hp;
+            s.hp = Math.min(s.maxHp, s.hp + healAmt);
+            user.dgnBag.splice(potionIdx, 1);
+            logMsg += "🧪 [" + pName + "] 사용! 체력을 " + healAmt + " 회복했습니다.\n";
+        } else {
+            logMsg += "🎒 가방에 사용할 체력 포션이 없습니다! 턴을 낭비했습니다.\n";
+        }
+    } 
+    else {
+        return replier.reply(formatError(user, "명령 거부", "1~5 사이의 번호를 입력해주세요."));
     }
 
-    // 몹 사망 처리
-    if (c.mob.hp <= 0) return _winDgnCombat(user, data, replier, roomName, targetUid, logMsg);
+    // 몹 사망 처리 (퀘스트 연동)
+    if (c.mob.hp <= 0) {
+        if (user.dgnGuild.quest && user.dgnGuild.quest.type === "hunt" && user.dgnGuild.quest.targetMob === c.mob.name) {
+            user.dgnGuild.quest.current++;
+        }
+        return _winDgnCombat(user, data, replier, roomName, targetUid, logMsg);
+    }
 
-    // 몹 반격
+    // 몹 반격 (방어 시 데미지 50% 반감)
     var taken = Math.max(1, mAtk - Math.floor(s.str * 2));
+    if (isDefending) taken = Math.floor(taken * 0.5);
     s.hp -= taken;
     logMsg += "💥 " + c.mob.name + "의 공격! " + taken + "의 피해를 입었습니다.\n";
 
-    if (s.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
+    // 상태이상 맹독 틱 데미지
+    if (c.ailment === "poison") {
+        var poisonDmg = Math.floor(s.maxHp * 0.05);
+        s.hp -= poisonDmg;
+        logMsg += "🟢 [맹독] 독이 퍼져 체력이 깎입니다. (-" + poisonDmg + " HP)\n";
+    }
+
+    if (s.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
 
     c.turn++;
     data.rooms[roomName].features.states.menuWait[targetUid].time = Date.now();
@@ -17117,6 +17240,103 @@ function _processDgnUnequip(user, data, replier, roomName, targetUid) {
     user.skipHealing = true;
     safeSaveData(data, false);
     _showDgnInfoMain(user, replier, data.rooms[roomName], targetUid, roomName);
+}
+
+/* -----------------------------------------
+   [던전] 길드 의뢰 게시판 (AI 퀘스트)
+----------------------------------------- */
+function _showDgnGuildQuest(user, replier, roomData, targetUid, roomName) {
+    var g = user.dgnGuild;
+    
+    // 1. 현재 진행 중인 의뢰가 있는 경우 (달성 여부 판정)
+    if (g.quest) {
+        var isClear = false;
+        
+        if (g.quest.type === "hunt" && g.quest.current >= g.quest.target) isClear = true;
+        if (g.quest.type === "collect") {
+            var count = 0;
+            user.dgnBag.forEach(function(it) { if (it.name === g.quest.targetItem) count++; });
+            if (count >= g.quest.target) isClear = true;
+        }
+
+        if (isClear) {
+            var rwd = g.quest.reward;
+            util_updatePoint(user, globalData.rooms["내리다"], rwd, "길드 의뢰 완료", roomName);
+            g.exp += 10;
+            g.clearCount++;
+            
+            // 수집 퀘스트일 경우 가방에서 아이템 삭제
+            if (g.quest.type === "collect") {
+                var removed = 0;
+                for (var i = user.dgnBag.length - 1; i >= 0; i--) {
+                    if (user.dgnBag[i].name === g.quest.targetItem && removed < g.quest.target) {
+                        user.dgnBag.splice(i, 1);
+                        removed++;
+                    }
+                }
+            }
+            g.quest = null;
+            replier.reply(formatCommand("✨ 의뢰 달성", user, "길드의 의뢰를 성공적으로 완수했습니다!\n\n💰 보상: +" + fp(rwd) + "P\n📈 길드 경험치: +10"));
+        } else {
+            var curStat = (g.quest.type === "hunt") ? g.quest.current : "가방 소지품 확인";
+            replier.reply(formatCommand("🏃 진행 중인 의뢰", user, "목표: " + g.quest.desc + "\n현황: " + curStat + " / " + g.quest.target + "\n\n(조건을 달성한 후 다시 길드를 방문하세요.)", "길드 지부 메인: [뒤로]"));
+        }
+        return;
+    }
+
+    // 2. 의뢰가 없을 경우 AI 무작위 퀘스트 생성 (F랭크 기준)
+    var qList = [
+        { id: 1, type: "hunt", target: 3, targetMob: "맹독 슬라임", desc: "늪지대 맹독 슬라임 3마리 토벌", reward: 15000 },
+        { id: 2, type: "collect", target: 2, targetItem: "고블린의 뼈", desc: "고블린의 뼈 2개 수집", reward: 10000 },
+        { id: 3, type: "hunt", target: 1, targetMob: "거대 고블린 족장", desc: "[보스 토벌] 거대 고블린 족장 처치", reward: 50000 }
+    ];
+
+    var body = "게시판에 새로운 의뢰가 3건 등록되어 있습니다.\n\n";
+    qList.forEach(function(q, i) { body += (i+1) + ". " + q.desc + " (보상: " + fp(q.reward) + "P)\n"; });
+    body += "\n수주할 의뢰 번호를 입력하세요.\n↩️ 뒤로 / ❎취소";
+
+    roomData.features.states.menuWait[targetUid] = { type: 'dgn_guild_quest', time: Date.now(), extra: { quests: qList }, originRoom: roomName };
+    replier.reply(formatCommand("📜 AI 의뢰 게시판", user, body));
+}
+
+function _processDgnGuildQuest(choice, user, data, replier, roomName, targetUid) {
+    var state = data.rooms[roomName].features.states.menuWait[targetUid];
+    var idx = parseInt(choice) - 1;
+    var list = state.extra.quests;
+
+    if (isNaN(idx) || idx < 0 || idx >= list.length) return replier.reply(formatError(user, "번호 오류", "1~3번 의뢰 중 하나를 선택하세요."));
+
+    var selQ = list[idx];
+    selQ.current = 0; // 진행도 초기화
+    user.dgnGuild.quest = selQ;
+    user.skipHealing = true;
+    safeSaveData(data, false);
+
+    delete data.rooms[roomName].features.states.menuWait[targetUid];
+    replier.reply(formatCommand("✅ 의뢰 수주 완료", user, "다음 의뢰를 수주했습니다.\n[" + selQ.desc + "]\n\n던전을 탐험하여 조건을 달성하세요."));
+}
+
+/* -----------------------------------------
+   [시스템 헬퍼] 세트 효과 적용 로직
+   (장비 장착/해제 시마다 자동으로 호출됨)
+----------------------------------------- */
+function _applySetEffects(user) {
+    var eq = user.dgnEquip;
+    var s = user.dgnStat;
+    
+    // 기본 장비 스탯은 장착 시마다 누적되므로, 여기서는 '세트 조건'이 맞을 때만 특수 패시브(스탯 추가)를 부여합니다.
+    // 기존 세트 효과 중첩 방지를 위해 임시 보너스 필드를 0으로 초기화
+    s.setBonusAgi = 0;
+    
+    var wName = eq.weapon ? eq.weapon.name : "";
+    var aName = eq.armor ? eq.armor.name : "";
+
+    // [세트효과: 고블린 족장의 위엄] 투구 + 무기(족장의 몽둥이-예시) 등 조건 충족 시 AGI 15 증가
+    // 현재 DB엔 '족장의 투구'만 있으므로, 무기가 '초보자의 검'일 때 발동하는 초보자 세트로 임시 구현
+    if (wName === "초보자의 검" && aName === "가죽 갑옷") {
+        s.setBonusAgi += 5; 
+        // 실시간 민첩성 상승으로 회피/도망 확률이 높아집니다.
+    }
 }
 
 //==========섹터54==========

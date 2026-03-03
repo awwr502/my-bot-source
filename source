@@ -321,7 +321,8 @@ var USER_SCHEMA = [
     { key: 'warehouse', default: {}, type: 'object' },      
     { key: 'warehouseAvg', default: {}, type: 'object' },   
     { key: 'warehouseSpec', default: {}, type: 'object' },  
-    { key: 'warehouseSize', default: 500, type: 'number' }  
+    { key: 'warehouseSize', default: 500, type: 'number' },
+    { key: 'lastWorkTime', default: 0, type: 'number' }
 ];
 
 /* [초고속 엔진] 전역 UID-닉네임 캐시 초기화 */
@@ -663,12 +664,18 @@ var SYSTEM_CONFIG = {
             LABELS: ["1등급", "2등급", "3등급", "4등급", "5등급", "신용불량자"], 
             ICONS: ["👑", "💎", "🥇", "🥈", "🥉", "🚫"] 
         },
-        VENTURE: { // [위험 항로 펀드 시스템]
-            MIN_BET: 10000,     // 최소 투자 금액
-            MAX_BET: 1000000,   // 최대 투자 금액
+
+        VENTURE: { // [왕립 상선단 확정 수익 펀딩 시스템]
+            MIN_BET: 1000,      // 최소 투자 금액 (1,000P)
+            MAX_BET: 100000,    // 기본 최대 한도 (100,000P + 물가 연동)
             OPEN_HOUR: 7,       // 시작 시각 (07:00)
             CLOSE_HOUR: 23,     // 마감 시각 (23:59까지 모집, 00:00 마지막 정산)
-            FLEETS: ["스페인 무적함대", "네덜란드 동인도 회사", "영국 왕립 무역선", "포르투갈 인도 함대", "프랑스 해운 조합", "전설의 심해 탐사대", "카리브 붉은 돛 상단", "흑수염의 유령선", "바이킹 해적단", "오스만 제국 상단"]
+            FLEETS: ["영국 왕립 상선단", "스페인 무적함대", "네덜란드 동인도 회사", "포르투갈 인도 함대", "프랑스 해운 조합"]
+        },
+        WORK: { // [부두 하역장 알바]
+            COOLDOWN_MIN: 5,    // 5분 쿨타임
+            MIN_REWARD: 2000,   // 최소 지급액
+            MAX_REWARD: 5000    // 최대 지급액
         }
     },
 
@@ -1412,7 +1419,8 @@ var CMD_LIST = {
         { cmd: "/대출한도", desc: "신용 등급별 한도 확인", cat: "경제", func: "_gameInfoLogic" },
         { cmd: "/상환", desc: "[금액] 대출금 직접 상환", cat: "경제", func: "_gameBankLogic" },
         { cmd: "/무역", desc: "가상 국가와의 해상 교역 및 선박 관리", cat: "무역", func: "_gameTradeLogic" },
-        { cmd: "/펀드", desc: "[금액] 위험 항로 벤처 투자 (5분 주기)", cat: "게임", func: "_gameActionLogic" }
+        { cmd: "/펀드", desc: "[금액] 왕립 상선단 투자 (5분 주기 확정 수익)", cat: "경제", func: "_gameActionLogic" },
+        { cmd: "/하역", desc: "항구 부두에서 짐을 나르고 품삯을 받습니다 (5분 쿨타임)", cat: "경제", func: "_gameActionLogic" }
     ],
     admin: [
         { cmd: "/공지", desc: "[내용] 내리다 방에 공지 전송", func: "_adminSystemLogic" },
@@ -4261,88 +4269,65 @@ function _runSector16Logic(data, ctx) {
     var currentHour = ctx.now.getHours();
     var currentMin = ctx.now.getMinutes();
     var currentSec = ctx.now.getSeconds();
-    /* 🚢 위험 항로 펀드 스케줄러 (5분 주기) */
+    /* 🚢 왕립 상선단 펀드 스케줄러 (5분 주기 확정 수익 시스템) */
     try {
         var vCfg = SYSTEM_CONFIG.ECO.VENTURE;
         var mainRoomData = data.rooms[ctx.targetRoom];
         if (mainRoomData && mainRoomData.features) {
             var venture = mainRoomData.features.ventureFund;
             if (!venture) {
-                mainRoomData.features.ventureFund = { round: 1, status: 'closed', fleetName: "", survivalRate: 0, payoutMult: 0, bets: {}, totalPool: 0, lastUpdateMin: -1, lastCloseMin: -1 };
+                mainRoomData.features.ventureFund = { round: 1, status: 'closed', fleetName: "", survivalRate: 100, payoutMult: 0, bets: {}, totalPool: 0, lastUpdateMin: -1, lastCloseMin: -1 };
                 venture = mainRoomData.features.ventureFund;
             }
 
             var isVentureTime = (currentHour >= vCfg.OPEN_HOUR && currentHour <= vCfg.CLOSE_HOUR) || (currentHour === 0 && currentMin === 0);
 
             if (isVentureTime) {
-                // 1. [0분, 5분, 10분...] 정산 및 다음 회차 모집
+                // 1. [0분, 5분, 10분...] 이전 회차 100% 확정 정산 및 새로운 모집 오픈
                 if (currentMin % 5 === 0 && venture.lastUpdateMin !== currentMin) {
                     venture.lastUpdateMin = currentMin;
 
-                    // 이전 회차 정산 (참여자가 있거나, 모집 중인 상태였을 때만)
-                    if (Object.keys(venture.bets).length > 0 || venture.status === 'open') {
-                        var isSuccess = (Math.random() * 100) < venture.survivalRate;
-                        var resultMsg = "🚢 [제 " + venture.round + "회 위험 항로 결과]\n━━━━━━━━━━━━━━━\n" +
-                                        "함대: " + venture.fleetName + "\n생존 확률: " + venture.survivalRate + "%\n\n";
-
-                        if (isSuccess) {
-                            resultMsg += "🎉 무사히 귀항했습니다!\n투자금의 " + venture.payoutMult.toFixed(2) + "배가 배당됩니다.\n";
-                            var totalPaid = 0;
-                            var winLog = [];
-                            for(var uid in venture.bets) {
-                                var betAmt = venture.bets[uid];
-                                var payout = Math.floor(betAmt * venture.payoutMult);
-                                var u = mainRoomData.users[uid];
-                                if (u) {
-                                    util_updatePoint(u, mainRoomData, payout, "위험 항로 펀드 배당", ctx.targetRoom);
-                                    totalPaid += payout;
-                                    winLog.push("• " + u.name + " +" + fp(payout) + "P");
-                                }
+                    // 이전 회차 정산 (참여자가 있거나, 모집 마감된 상태였을 때)
+                    if (Object.keys(venture.bets).length > 0 || venture.status === 'closed') {
+                        var resultMsg = "🚢 [제 " + venture.round + "회 왕립 상선단 귀항]\n━━━━━━━━━━━━━━━\n" +
+                                        "상선단: " + venture.fleetName + "\n\n" +
+                                        "🎉 무사히 교역을 마치고 귀항했습니다!\n" +
+                                        "투자금의 " + venture.payoutMult.toFixed(2) + "배가 배당됩니다.\n";
+                        
+                        var totalPaid = 0;
+                        var winLog = [];
+                        for(var uid in venture.bets) {
+                            var betAmt = venture.bets[uid];
+                            var payout = Math.floor(betAmt * venture.payoutMult);
+                            var u = mainRoomData.users[uid];
+                            if (u) {
+                                util_updatePoint(u, mainRoomData, payout, "왕립 상선단 펀드 배당", ctx.targetRoom);
+                                totalPaid += payout;
+                                winLog.push("• " + u.name + " +" + fp(payout) + "P");
                             }
-                            resultMsg += "\n💰 총 지급액: " + fp(totalPaid) + "P\n" + (winLog.length > 0 ? winLog.join("\n") : "당첨자 없음");
-                        } else {
-                            resultMsg += "💀 폭풍우와 심해 괴수의 습격으로 침몰했습니다...\n투자금이 전액 국고로 귀속됩니다.\n";
-                            util_updateReserve(mainRoomData, venture.totalPool, "위험 항로 펀드 국고 환수", ctx.targetRoom);
-                            resultMsg += "\n🏦 국고 귀속: " + fp(venture.totalPool) + "P";
                         }
+                        resultMsg += "\n💰 총 지급액: " + fp(totalPaid) + "P\n" + (winLog.length > 0 ? winLog.join("\n") : "당첨자 없음");
                         Api.replyRoom(ctx.targetRoom, resultMsg);
                     }
 
-                    // 00:00(자정 정각)이면 마지막 정산만 하고 휴장, 그 외엔 다음 회차 모집
+                    // 00:00(자정 정각)이면 마지막 정산만 하고 휴장
                     if (currentHour !== 0) {
                         venture.round++;
                         venture.bets = {};
                         venture.totalPool = 0;
                         venture.status = 'open';
                         venture.fleetName = vCfg.FLEETS[Math.floor(Math.random() * vCfg.FLEETS.length)];
+                        
+                        // 생존율 100% 확정 및 수익률 3~10% (1.03 ~ 1.10) 랜덤 설정
+                        venture.survivalRate = 100;
+                        var rawMult = 1.0 + (Math.floor(Math.random() * 8) + 3) / 100; 
+                        venture.payoutMult = Math.max(1.03, Math.floor(rawMult * 100) / 100);
 
-                       // [개편] 50% 기준(1.4배 확정) 양극화 배당 엔진 (Extreme Risk-Reward)
-                        var sr = Math.floor(Math.random() * 81) + 10; // 10%~90%
-                        venture.survivalRate = sr;
-
-                        var rawMult = 1.0;
-                        if (sr <= 20) {
-                            // [1구간: 초고위험] 10%~20% (배당 11.0배 ~ 5.5배) - 기존 유지
-                            rawMult = 110 / sr;
-                        } else if (sr <= 50) {
-                            // [2구간: 중/고위험] 21%~50% (배당 5.2배 ~ 1.4배)
-                            // 2차 곡선 보간법: sr=50일 때 정확히 1.4배 확정
-                            rawMult = 1.4 + 4.1 * Math.pow((50 - sr) / 30, 2);
-                        } else {
-                            // [3구간: 저위험] 51%~90% (배당 1.38배 ~ 1.01배)
-                            // 50%를 초과할수록 수익률이 바닥으로 급강하
-                            rawMult = 1.01 + 0.39 * Math.pow((90 - sr) / 40, 2);
-                        }
-
-                        // 최종 배당 확정 (최소 1.01배 ~ 소수점 2자리 반내림)
-                        venture.payoutMult = Math.max(1.01, Math.floor(rawMult * 100) / 100);
-
-                        var closeMin = currentMin + 3; 
+                        var closeMin = currentMin + 4; 
                         var nextMinStr = closeMin < 10 ? "0" + closeMin : closeMin;
-                        var openMsg = "🚢 [제 " + venture.round + "회 위험 항로 펀드 모집]\n━━━━━━━━━━━━━━━\n" +
-                                      "[" + venture.fleetName + "]이(가) 미지의 해역으로 출항을 준비합니다.\n\n" +
-                                      "📈 생존 확률: " + venture.survivalRate + "%\n" +
-                                      "💰 성공 배당: " + venture.payoutMult.toFixed(2) + "배\n\n" +
+                        var openMsg = "🚢 [제 " + venture.round + "회 왕립 상선단 펀드 모집]\n━━━━━━━━━━━━━━━\n" +
+                                      "국가 보증 [" + venture.fleetName + "]이(가) 출항을 준비합니다.\n\n" +
+                                      "📈 보장 수익률: 확정 " + ((venture.payoutMult - 1.0) * 100).toFixed(0) + "%\n" +
                                       "🕒 투자 마감: " + currentHour + "시 " + nextMinStr + "분 59초\n" +
                                       "💡 참여: [/펀드 금액]";
                         Api.replyRoom(ctx.targetRoom, openMsg);
@@ -4350,16 +4335,16 @@ function _runSector16Logic(data, ctx) {
                         venture.status = 'closed';
                         venture.bets = {};
                         venture.totalPool = 0;
-                        Api.replyRoom(ctx.targetRoom, "💤 금일 위험 항로 펀드 투자가 모두 종료되었습니다.\n다음 출항은 오전 07:00에 시작됩니다.");
+                        Api.replyRoom(ctx.targetRoom, "💤 금일 왕립 상선단 펀드가 모두 종료되었습니다.\n다음 출항은 오전 07:00에 시작됩니다.");
                     }
                     ctx.isUpdated = true;
                 }
 
-                // 2. [4분, 9분, 14분...] 배팅 마감 알림
+                // 2. [4분, 9분, 14분...] 배팅 마감 알림 및 출항
                 if (currentHour !== 0 && currentMin % 5 === 4 && venture.status === 'open' && venture.lastCloseMin !== currentMin) {
                     venture.lastCloseMin = currentMin;
                     venture.status = 'closed'; // 이 시점부터 배팅 락(Lock)
-                    Api.replyRoom(ctx.targetRoom, "⚠️ [제 " + venture.round + "회 투자 마감]\n함대가 통신 반경을 벗어났습니다.\n결과는 잠시 후 발표됩니다.\n\n🏦 모인 투자금: " + fp(venture.totalPool) + "P");
+                    Api.replyRoom(ctx.targetRoom, "⚠️ [제 " + venture.round + "회 펀드 모집 마감]\n상선단이 닻을 올리고 출항했습니다!\n1분 뒤 정산결과가 발표됩니다.\n\n🏦 모인 투자금: " + fp(venture.totalPool) + "P");
                     ctx.isUpdated = true;
                 }
             }
@@ -11941,7 +11926,10 @@ function _gameActionLogic(msg, user, data, replier, roomName, targetUid) {
     var cmd = msg.split(" ")[0]; // 명령어 첫 단어 추출
     
     if (cmd === "/펀드") {
-        return _gameActionLogic_Part1(msg, user, data, replier, roomName, targetUid);
+        return _gameActionLogic_Fund(msg, user, data, replier, roomName, targetUid);
+    }
+    if (cmd === "/하역") {
+        return _gameActionLogic_Work(msg, user, data, replier, roomName, targetUid);
     }
     
     return false; 
@@ -11953,7 +11941,101 @@ function _gameActionLogic(msg, user, data, replier, roomName, targetUid) {
 
 //==========섹터42==========
 
+function _gameActionLogic_Fund(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[(ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName];
+    var venture = roomData.features.ventureFund;
+    var vCfg = SYSTEM_CONFIG.ECO.VENTURE;
 
+    if (!venture || venture.status !== 'open') {
+        return replier.reply(formatError(user, "투자 불가", "현재 펀드 모집 기간이 아닙니다.\n(매 5분 주기 모집: 0~4분 사이)"));
+    }
+
+    var parts = msg.split(" ");
+    if (parts.length < 2) return replier.reply(formatError(user, "입력 오류", "투자할 금액을 입력하세요. (예: /펀드 10000)"));
+
+    // 서버 물가 배율 연동 한도 계산: 10만P * 물가배율 (1만P 단위 절사)
+    var ecoMult = util_getEcoMultiplier(roomName);
+    var baseMax = vCfg.MAX_BET || 100000;
+    var maxLimit = Math.floor((baseMax * ecoMult) / 10000) * 10000;
+    var minLimit = vCfg.MIN_BET || 1000;
+    
+    var amtStr = parts[1].replace(/,/g, "");
+    var amt = 0;
+    if (amtStr === "전부" || amtStr === "올인" || amtStr === "최대") {
+        amt = Math.min(Number(user.point), maxLimit);
+    } else {
+        amt = parseInt(amtStr);
+    }
+
+    if (isNaN(amt) || amt < minLimit) {
+        return replier.reply(formatError(user, "금액 오류", "최소 " + fp(minLimit) + "P 이상 투자 가능합니다."));
+    }
+
+    // 기존 투자금이 있다면 합산해서 한도 체크
+    var currentBet = Number(venture.bets[targetUid] || 0);
+    if (currentBet + amt > maxLimit) {
+        return replier.reply(formatError(user, "한도 초과", "현재 서버 물가가 반영된 최대 투자 한도는 " + fp(maxLimit) + "P 입니다.\n\n잔여 한도: " + fp(Math.max(0, maxLimit - currentBet)) + "P"));
+    }
+
+    if (Number(user.point) < amt) {
+        return replier.reply(formatError(user, "자금 부족", "보유 포인트가 부족합니다."));
+    }
+
+    util_updatePoint(user, roomData, -amt, "왕립 상선단 펀드 투자", roomName);
+    venture.bets[targetUid] = currentBet + amt;
+    venture.totalPool += amt;
+    user.skipHealing = true;
+    safeSaveData(data);
+
+    var resMsg = venture.fleetName + " 펀드에 " + fp(amt) + "P를 투자했습니다.\n\n" +
+                 "📈 확정 수익률: +" + ((venture.payoutMult - 1) * 100).toFixed(0) + "%\n" +
+                 "💵 나의 총 투자금: " + fp(venture.bets[targetUid]) + "P";
+    replier.reply(formatCommand("💰 펀드 투자 완료", user, resMsg, "내 잔액: " + fp(user.point) + "P"));
+    return true;
+}
+
+function _gameActionLogic_Work(msg, user, data, replier, roomName, targetUid) {
+    var roomData = data.rooms[(ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName];
+    
+    // 상태 검증 (활동 가능한지)
+    var stateRes = util_checkUserState(user, targetUid, roomName, false);
+    if (!stateRes.canAction) return replier.reply(formatError(user, "작업 불가", stateRes.reason));
+
+    var now = Date.now();
+    var conf = SYSTEM_CONFIG.ECO.WORK || { COOLDOWN_MIN: 5, MIN_REWARD: 2000, MAX_REWARD: 5000 };
+    var cdMs = conf.COOLDOWN_MIN * 60 * 1000;
+
+    if (user.lastWorkTime && now - user.lastWorkTime < cdMs) {
+        var remain = cdMs - (now - user.lastWorkTime);
+        var rm = Math.floor(remain / 60000);
+        var rs = Math.floor((remain % 60000) / 1000);
+        return replier.reply(formatError(user, "피로 누적", "아직 체력이 회복되지 않았습니다.\n" + rm + "분 " + rs + "초 뒤에 다시 하역 작업을 할 수 있습니다."));
+    }
+
+    user.lastWorkTime = now;
+    var ecoMult = util_getEcoMultiplier(roomName);
+    var baseReward = Math.floor(Math.random() * (conf.MAX_REWARD - conf.MIN_REWARD + 1)) + conf.MIN_REWARD;
+    var finalReward = Math.floor(baseReward * ecoMult);
+
+    util_updatePoint(user, roomData, finalReward, "부두 하역 알바", roomName);
+
+    var bonusMsg = "";
+    // 5% 확률로 식료품 1개 획득 (물류 창고로 지급)
+    if (Math.random() < 0.05) {
+        if (!user.warehouse) user.warehouse = {};
+        user.warehouse["식료품"] = (Number(user.warehouse["식료품"]) || 0) + 1;
+        bonusMsg = "\n🎁 상단 주인이 수고했다며 팁으로 [식료품 상자] 1개를 창고에 넣어주었습니다!";
+    }
+
+    var loc = user.currentLoc || "무역 지부";
+    var body = loc + " 항구 부두에서 열심히 화물을 날랐습니다.\n\n" +
+               "💰 품삯: +" + fp(finalReward) + "P" + bonusMsg;
+
+    user.skipHealing = true;
+    safeSaveData(data);
+    replier.reply(formatCommand("💦 부두 하역 작업", user, body, "5분 뒤에 다시 작업할 수 있습니다."));
+    return true;
+}
 
 //==========섹터43==========
 

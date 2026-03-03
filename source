@@ -16814,61 +16814,6 @@ function _handlePlayerDeath(user, data, replier, roomName, targetUid) {
     replier.reply(formatCommand("🪦 탐험 실패", user, deathMsg));
 }
 
-function _processDungeonWakeUp(user, data, replier, roomName, targetUid) {
-    var d = user.dgnState;
-    var s = user.dgnStat;
-    var now = Date.now();
-    var restedMs = now - (d.restStartTime || now);
-    var restedMin = Math.min(30, Math.floor(restedMs / 60000)); // 최대 30분 인정
-    
-    // 분당 회복량: HP 5, ST 2, 허기 2 (텐트가 있으면 회복 효율 2배)
-    var eff = d.hasTent ? 2 : 1;
-    var hpHeal = restedMin * 5 * eff;
-    var stHeal = restedMin * 2 * eff;
-    var hgHeal = restedMin * 2 * eff;
-    
-    s.hp = Math.min(s.maxHp, s.hp + hpHeal);
-    s.stam = Math.min(s.maxStam, s.stam + stHeal);
-    s.hunger = Math.min(s.maxHunger, s.hunger + hgHeal);
-    
-    d.isResting = false;
-    
-    var ambushProb = d.hasTent ? 0.05 : 0.30;
-    if (d.zone === "SWAMP") ambushProb += 0.20; // 늪지대 페널티
-    
-    // 최소 1분 이상 쉬었을 때만 기습 판정
-    if (restedMin >= 1 && Math.random() < ambushProb) {
-        var monList = DGN_MONSTER_DB[d.zone] || DGN_MONSTER_DB["SWAMP"];
-        var normals = monList.filter(function(m) { return m.type === "normal"; });
-        var targetMonster = normals[Math.floor(Math.random() * normals.length)];
-
-        var scaleMult = 1 + Math.floor((d.depth - 1) / 10) * 0.5;
-        var scaledMob = JSON.parse(JSON.stringify(targetMonster));
-        scaledMob.maxHp = Math.floor(scaledMob.maxHp * scaleMult);
-        scaledMob.hp = scaledMob.maxHp;
-        scaledMob.atk = Math.floor(scaledMob.atk * scaleMult);
-
-        d.combat = { mob: scaledMob, turn: 1 };
-        var hintObj = d.combat.mob.hints[Math.floor(Math.random() * d.combat.mob.hints.length)];
-        d.combat.bossHintText = hintObj.text;
-        d.combat.bossAtkDirs = hintObj.attacks;
-
-        d.log = "⛺ " + restedMin + "분간 휴식 후 기상했습니다. (HP+" + hpHeal + ", ST+" + stHeal + ")\n⚠️ 앗! 눈을 뜨자마자 기습을 받았습니다!";
-        
-        user.skipHealing = true;
-        data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_combat_main', time: Date.now(), originRoom: roomName };
-        safeSaveData(data, false);
-        return _showDgnCombatMain(user, replier, d.log);
-    } else {
-        d.log = "⛺ " + restedMin + "분간 안전하게 휴식했습니다.\n(HP+" + hpHeal + ", ST+" + stHeal + ", 허기+" + hgHeal + ")\n상쾌한 기분으로 탐험을 이어갑니다.";
-        user.skipHealing = true;
-        data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
-        safeSaveData(data, false);
-        return _showDungeonTurn(user, replier);
-    }
-}
-
-/* --- 통합 전투 로직 (방향 수싸움) --- */
 function _showDgnCombatMain(user, replier, extraMsg) {
     var c = user.dgnState.combat;
     var s = user.dgnStat;
@@ -16880,7 +16825,6 @@ function _showDgnCombatMain(user, replier, extraMsg) {
                mIcon + " [" + c.mob.name + "] (HP: " + c.mob.hp + ")\n" +
                "👤 내 체력: " + s.hp + " / " + s.maxHp + " | ST: " + s.stam + "\n" +
                "━━━━━━━━━━━━━━━\n" +
-               "⚠️ 적의 행동: \"" + c.bossHintText + "\"\n\n" +
                "어떻게 대처하시겠습니까?\n" +
                "1. ⚔️ 공격 (방향 선택)\n" +
                "2. 🛡️ 방어 (방향 선택)\n" +
@@ -16924,13 +16868,12 @@ function _processDgnCombatMain(choice, user, data, replier, roomName, targetUid)
             var healAmt = DGN_ITEM_DB[pName].stat.hp;
             s.hp = Math.min(s.maxHp, s.hp + healAmt);
             user.dgnBag.splice(potionIdx, 1);
-            _resolveCombatTurn(user, data, replier, roomName, targetUid, "🧪 [" + pName + "] 사용! 체력을 " + healAmt + " 회복했습니다.\n", false);
+            _resolveCombatTurn(user, data, replier, roomName, targetUid, "🧪 [" + pName + "] 사용! 체력을 " + healAmt + " 회복했습니다.\n", false, 0);
         } else {
             return replier.reply(formatError(user, "아이템 없음", "가방에 체력 포션이 없습니다."));
         }
     }
     else if (choice === "5") {
-        // 도망 확률: 일반 몬스터는 높고, 보스는 낮게 설정
         var runProb = (c.mob.type === "boss") ? (s.agi) : (s.agi * 2);
         if (Math.random() * 100 < runProb) { 
             user.dgnState.combat = null;
@@ -16939,7 +16882,7 @@ function _processDgnCombatMain(choice, user, data, replier, roomName, targetUid)
             safeSaveData(data, false);
             return _showDungeonTurn(user, replier);
         } else {
-            _resolveCombatTurn(user, data, replier, roomName, targetUid, "🏃 도망에 실패했습니다!\n", false);
+            _resolveCombatTurn(user, data, replier, roomName, targetUid, "🏃 도망에 실패했습니다!\n", false, 0);
         }
     } else {
         replier.reply(formatError(user, "명령 거부", "1~5 사이의 번호를 입력해주세요."));
@@ -16947,10 +16890,19 @@ function _processDgnCombatMain(choice, user, data, replier, roomName, targetUid)
 }
 
 function _processDgnCombatDir(choice, user, data, replier, roomName, targetUid) {
-    var c = user.dgnState.combat;
-    var s = user.dgnStat;
     var pDir = parseInt(choice);
     if (isNaN(pDir) || pDir < 1 || pDir > 4) return replier.reply(formatError(user, "방향 오류", "1~4번 중 하나를 선택하세요."));
+
+    var c = user.dgnState.combat;
+    var isDefending = (c.nextAction === "def");
+
+    _resolveCombatTurn(user, data, replier, roomName, targetUid, "", isDefending, pDir);
+}
+
+function _resolveCombatTurn(user, data, replier, roomName, targetUid, prevLog, isDefending, pDir) {
+    var c = user.dgnState.combat;
+    var s = user.dgnStat;
+    var logMsg = prevLog + ""; 
 
     var calcDmg = function(base) {
         var variance = base * 0.1;
@@ -16960,15 +16912,18 @@ function _processDgnCombatDir(choice, user, data, replier, roomName, targetUid) 
         return { dmg: Math.max(1, Math.floor(finalDmg)), crit: isCrit };
     };
 
-    var pBaseAtk = s.str * 10; 
-    var logMsg = "";
-    var isDefending = (c.nextAction === "def");
-
+    // 몬스터 3턴 행동 패턴 엔진 (공격 1회, 방어 2회 랜덤 배치)
+    if (!c.mobPattern || c.mobPattern.length === 0) {
+        c.mobPattern = ["atk", "def", "def"];
+        c.mobPattern.sort(function() { return Math.random() - 0.5; });
+    }
+    var curMobAct = c.mobPattern.shift(); // "atk" 또는 "def" 추출
+    var mDir = Math.floor(Math.random() * 4) + 1; // 몬스터가 선택한 무작위 방향
     var opposites = { 1:2, 2:1, 3:4, 4:3 }; 
-    var bDef = Math.floor(Math.random() * 4) + 1; // 몬스터의 방어 방향
 
-    // 1. 플레이어 공격 페이즈
-    if (c.nextAction === "atk" || c.nextAction === "skill") {
+    // 1. 플레이어 공격 페이즈 (포션/도망 등 pDir이 0이 아닐 때만 실행)
+    if (pDir > 0 && !isDefending) {
+        var pBaseAtk = s.str * 10; 
         if (c.nextAction === "skill") {
             s.stam -= 15;
             pBaseAtk = pBaseAtk * 1.5 + (s.int * 5);
@@ -16977,19 +16932,26 @@ function _processDgnCombatDir(choice, user, data, replier, roomName, targetUid) 
         var pAtk = pAtkRes.dmg;
         var cStr = pAtkRes.crit ? " ⚡[기본치명타!]" : "";
 
-        logMsg += "당신은 " + _getDirStr(pDir) + "을(를) 향해 " + (c.nextAction === "skill" ? "스킬을 " : "") + "공격했습니다!\n적은 " + _getDirStr(bDef) + "을(를) 방어했습니다.\n";
+        logMsg += "당신은 " + _getDirStr(pDir) + "을(를) 향해 " + (c.nextAction === "skill" ? "스킬을 " : "") + "공격했습니다!\n";
 
-        if (pDir === bDef) {
-            pAtk = Math.floor(pAtk * 0.1);
-            logMsg += "🛡️ 적이 공격을 막아냈습니다! (" + pAtk + " 데미지)\n";
-        } else if (pDir === opposites[bDef]) {
-            pAtk = Math.floor(pAtk * 1.5);
-            logMsg += "💥 방어의 허점을 완벽히 찔렀습니다! (" + pAtk + " 데미지)" + cStr + " 🎯[약점공격!]\n";
+        if (curMobAct === "def") {
+            logMsg += "적은 " + _getDirStr(mDir) + "을(를) 방어했습니다.\n";
+            if (pDir === mDir) {
+                pAtk = Math.floor(pAtk * 0.1);
+                logMsg += "🛡️ 적이 공격을 막아냈습니다! (" + pAtk + " 데미지)\n";
+            } else if (pDir === opposites[mDir]) {
+                pAtk = Math.floor(pAtk * 1.5);
+                logMsg += "💥 방어의 허점을 완벽히 찔렀습니다! (" + pAtk + " 데미지)" + cStr + " 🎯[약점공격!]\n";
+            } else {
+                logMsg += "💥 유효타를 입혔습니다! (" + pAtk + " 데미지)" + cStr + "\n";
+            }
         } else {
-            logMsg += "💥 유효타를 입혔습니다! (" + pAtk + " 데미지)" + cStr + "\n";
+            // 적이 이번 턴에 공격을 선택해 방어를 하지 않았을 때
+            logMsg += "적이 방어하지 않아 공격이 온전히 들어갔습니다!\n";
+            logMsg += "💥 (" + pAtk + " 데미지)" + cStr + "\n";
         }
         c.mob.hp -= pAtk;
-    } else {
+    } else if (pDir > 0 && isDefending) {
         logMsg += "당신은 " + _getDirStr(pDir) + " 방향을 철저히 방어합니다.\n";
     }
 
@@ -17000,45 +16962,30 @@ function _processDgnCombatDir(choice, user, data, replier, roomName, targetUid) 
         return _winDgnCombat(user, data, replier, roomName, targetUid, logMsg);
     }
 
-    // 2. 몬스터 공격 페이즈
-    _resolveCombatTurn(user, data, replier, roomName, targetUid, logMsg, isDefending, pDir);
-}
+    // 2. 몬스터 반격 페이즈
+    if (curMobAct === "atk") {
+        logMsg += "적이 " + _getDirStr(mDir) + "(으)로 반격했습니다!\n";
+        var bBase = c.mob.atk;
+        if (c.mob.type === "boss" && c.mob.hp < (c.mob.maxHp || 600) * 0.3) {
+            bBase = Math.floor(bBase * 1.5); 
+        }
+        var mAtkRes = calcDmg(bBase);
+        var mAtk = mAtkRes.dmg;
+        var cStr2 = mAtkRes.crit ? " ⚡[치명타!]" : "";
 
-function _resolveCombatTurn(user, data, replier, roomName, targetUid, prevLog, isDefending, pDefDir) {
-    var c = user.dgnState.combat;
-    var s = user.dgnStat;
-    var logMsg = prevLog + "\n";
-
-    var calcDmg = function(base) {
-        var variance = base * 0.1;
-        var finalDmg = base - variance + (Math.random() * variance * 2);
-        var isCrit = Math.random() < 0.2;
-        if (isCrit) finalDmg *= 1.5;
-        return { dmg: Math.max(1, Math.floor(finalDmg)), crit: isCrit };
-    };
-
-    var actualBossAtk = c.bossAtkDirs[Math.floor(Math.random() * c.bossAtkDirs.length)];
-    var bBase = c.mob.atk;
-    
-    // 보스 광폭화
-    if (c.mob.type === "boss" && c.mob.hp < (c.mob.maxHp || 600) * 0.3) {
-        bBase = Math.floor(bBase * 1.5); 
-    }
-
-    var bAtkRes = calcDmg(bBase);
-    var bDmg = bAtkRes.dmg;
-    var cStr = bAtkRes.crit ? " ⚡[치명타!]" : "";
-
-    logMsg += "적이 " + _getDirStr(actualBossAtk) + "(으)로 공격했습니다!\n";
-
-    if (isDefending && pDefDir === actualBossAtk) {
-        bDmg = Math.floor(bDmg * 0.1);
-        logMsg += "🛡️ 정확히 막아냈습니다! 피해를 최소화합니다. (" + bDmg + " 피해)\n";
+        if (isDefending && pDir === mDir) {
+            mAtk = Math.floor(mAtk * 0.1);
+            logMsg += "🛡️ 정확히 막아냈습니다! 피해를 최소화합니다. (" + mAtk + " 피해)\n";
+        } else {
+            var pDef = Math.floor(s.str * 0.5);
+            var taken = Math.max(1, mAtk - pDef);
+            logMsg += "🩸 타격을 입습니다! (" + taken + " 피해)" + cStr2 + "\n";
+            s.hp -= taken;
+        }
     } else {
-        var pDef = Math.floor(s.str * 0.5);
-        var taken = Math.max(1, bDmg - pDef);
-        logMsg += "🩸 타격을 입습니다! (" + taken + " 피해)" + cStr + "\n";
-        s.hp -= taken;
+        if (isDefending || pDir === 0) {
+            logMsg += "적은 이번 턴에 공격하지 않았습니다.\n";
+        }
     }
 
     if (c.ailment === "poison") {
@@ -17050,10 +16997,6 @@ function _resolveCombatTurn(user, data, replier, roomName, targetUid, prevLog, i
     if (s.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
 
     c.turn++;
-    var hintObj = c.mob.hints[Math.floor(Math.random() * c.mob.hints.length)];
-    c.bossHintText = hintObj.text;
-    c.bossAtkDirs = hintObj.attacks;
-
     data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_combat_main', time: Date.now(), originRoom: roomName };
     safeSaveData(data, false);
     _showDgnCombatMain(user, replier, logMsg);

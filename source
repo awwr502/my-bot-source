@@ -66,32 +66,6 @@ var INFRA_CONFIG = {
     }
 };
 
-var DUNGEON_CONFIG = {
-    COST: 3, // 던전 입장 시 지도 소모량 고정
-    LEVELS: {
-        MERCHANT: [0, 1, 2, 3],
-        JOB: [0, 3, 6, 10]
-    },
-    ENEMIES: [
-        { name: "유령선", hp: 300, atk: 25, desc: "오래된 망령들이 깃든 함선" },
-        { name: "심해 크라켄", hp: 800, atk: 55, desc: "거대한 촉수로 함선을 휘감는 괴수" },
-        { name: "레비아탄", hp: 2000, atk: 110, desc: "전설 속 바다의 지배자" }
-    ],
-    REWARDS: {
-        GOODS: [0, {min: 10, max: 15}, {min: 16, max: 22}, {min: 23, max: 30}],
-        POINTS: [0, 150000, 350000, 750000] // 직업군 상응 포인트
-    }
-};
-
-var ALCHEMY_CONFIG = {
-    TIME_MS: 1 * 60 * 1000, // [Gemini 요청] 연성 소요 시간 1분 단축
-    RECIPES: {
-        "heal": { name: "💚 심해수 복구 키트", cargo: { "식료품": 50 }, artifact: 1, point: 100000, desc: "즉시 체력 30% 회복 (탐험당 3회 제한)" },
-        "maxhp": { name: "🛡️ 티타늄 장갑 코팅제", cargo: { "공업품": 50, "귀금속": 20 }, artifact: 1, point: 100000, desc: "해당 탐험 중 Max HP 50% 증가" },
-        "atk": { name: "⚔️ 흑색 화약 압축액", cargo: { "공업품": 50, "보석": 20 }, artifact: 1, point: 100000, desc: "해당 탐험 중 공격력 50% 증가" }
-    }
-};
-
 if (typeof globalData === 'undefined' || globalData === null) {
     globalData = { rooms: {}, botActive: true, statusCheck: {} };
 }
@@ -312,15 +286,9 @@ var USER_SCHEMA = [
     { key: 'unknownCargo', default: 0, type: 'number' },
     { key: 'discoveredCreatures', default: [], type: 'array' }, 
     { key: 'pediaRewardLevel', default: 0, type: 'number' },    
-    { key: 'potions', default: { heal: 0, maxhp: 0, atk: 0 }, type: 'object' }, 
-    { key: 'brewing', default: { active: false, type: "", endTime: 0 }, type: 'object' }, 
-    { key: 'abyssEmblems', default: 0, type: 'number' },        
-    { key: 'abyssBlessing', default: 0, type: 'number' },       
-    { key: 'pillarFloor', default: 1, type: 'number' },         
-    { key: 'pillarBest', default: 0, type: 'number' },            
     { key: 'warehouse', default: {}, type: 'object' },      
     { key: 'warehouseAvg', default: {}, type: 'object' },   
-    { key: 'warehouseSpec', default: {}, type: 'object' },  
+    { key: 'warehouseSpec', default: {}, type: 'object' },
     { key: 'warehouseSize', default: 500, type: 'number' },
     { key: 'lastWorkTime', default: 0, type: 'number' }
 ];
@@ -7327,7 +7295,7 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
                    "2. 🏦 중앙은행 및 신용 경제\n" +
                    "3. ⚓ 무역 기초 및 선박 관리\n" +
                    "4. 🏴‍☠️ 해상 직업 및 전투 (해적/해군)\n" +
-                   "5. 🌀 해상 탐험 (던전/엘도라도/도감)\n" +
+                   "5. 🌀 해상 탐험 (엘도라도/도감)\n" +
                    "6. 👑 공식 작위 및 칭호 가이드\n" +
                    "7. 📋 전체 명령어 자동 조회";
 
@@ -7415,7 +7383,6 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         'trade_job_enlist', 'trade_pirate_menu', 'trade_navy_menu', 
         'trade_raid_list', 'trade_battle_list', 'trade_escort_confirm',
         'trade_pedia_main', 'trade_pedia_detail_view',
-        'explore_hub', 'pillar_lobby', 'pillar_combat',
         'trade_warehouse', 'trade_warehouse_action'
     ];
 
@@ -7481,27 +7448,16 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
             _showMarinePediaUI(user, replier, data, roomName, targetUid);
             return true;
         }
-        // 8. 연금술 공방 -> 던전 로비
-        if (prevState === 'dungeon_alchemy') {
-            // 연금술 공방에서 뒤로가기 시 균열 로비로 바로 이동
-            _showRiftLobby(user, data, replier, roomName, targetUid);
-            return true;
-        }
-        // 9. 탐험 상세 로비 -> 탐험 허브 메인
-        if (prevState === 'dungeon_lobby' || prevState === 'dungeon_resume' || prevState === 'pillar_lobby') {
-            return _gameDungeonLogic("/무역", user, data, replier, roomName, targetUid);
-        }
-
-        // 10. 창고 입출고 수량 입력 화면 -> 창고 메인으로 복귀
+        // 8. 창고 입출고 수량 입력 화면 -> 창고 메인으로 복귀
         if (prevState === 'trade_warehouse_action') {
             roomData.features.states.menuWait[targetUid] = { type: 'trade_warehouse', time: Date.now(), originRoom: roomName };
             if (typeof _showWarehouseUI === 'function') _showWarehouseUI(user, replier, roomData);
             return true;
         }
 
-        // --- [B] 2단계 메뉴에서 1단계(최상단 메인)로 복귀 ---
-// [수정] 무역 메인으로 돌아가는 리스트에 'trade_warehouse' (창고) 추가
-        var toTradeMain = ['trade_depart', 'trade_status', 'trade_market', 'trade_ship', 'trade_governor_main', 'trade_pirate_menu', 'trade_navy_menu', 'trade_job_enlist', 'trade_royal_office', 'trade_pedia_main', 'explore_hub', 'trade_warehouse'];
+        // --- [B] 2단계 메뉴에서 1단계(최상단 메인)로 복귀 ---
+        // 무역 메인으로 돌아가는 리스트
+        var toTradeMain = ['trade_depart', 'trade_status', 'trade_market', 'trade_ship', 'trade_governor_main', 'trade_pirate_menu', 'trade_navy_menu', 'trade_job_enlist', 'trade_royal_office', 'trade_pedia_main', 'trade_warehouse'];
         
         if (toTradeMain.indexOf(prevState) !== -1) {
             return _gameTradeLogic("/무역", user, data, replier, roomName, targetUid);
@@ -7579,7 +7535,7 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
             },
             "5": { 
                 title: "🌀 [해상 탐험 및 도감 가이드]",
-                text: "1. 엘도라도 (잊혀진 성역)\n• '고대 지도' 10장을 모아 영구 해금합니다. 일반 교역 수익이 2배로 고정되며 진귀한 보물(성배)을 얻습니다. (재입항 대기 6시간)\n\n2. 심해의 균열 및 기둥 (해상 탐험)\n• [균열]: 지도 3장을 소모해 심해를 탐사하며, 수압(데미지)과 거대 괴수를 돌파해 전리품을 인양합니다. 연금술로 물약을 만들어 생존율을 높이세요.\n• [기둥]: 무한 하강 컨텐츠로, 심연의 인장을 모아 캐릭터의 기본 산소량을 영구 강화하는 '심연의 축복'을 얻을 수 있습니다.\n\n3. 해양 생물 도감\n• 항해 중 무작위로 만나는 해양 생물을 '관찰'하거나 '포획(내구도 감소)'하여 도감 100종을 채울 수 있습니다. 수집률에 따라 수리비 할인, 구매 할인 등 강력한 상시 버프가 제공됩니다.\n\n💡 관련 명령어: /무역, /유물도감 (지도 제작)"
+                text: "1. 엘도라도 (잊혀진 성역)\n• '고대 지도' 10장을 모아 영구 해금합니다. 일반 교역 수익이 2배로 고정되며 진귀한 보물(성배)을 얻습니다. (재입항 대기 6시간)\n\n2. 해양 생물 도감\n• 항해 중 무작위로 만나는 해양 생물을 '관찰'하거나 '포획(내구도 감소)'하여 도감 100종을 채울 수 있습니다. 수집률에 따라 수리비 할인, 구매 할인 등 강력한 상시 버프가 제공됩니다.\n\n💡 관련 명령어: /무역, /유물도감 (지도 제작)"
             },
             "6": {
                 title: "👑 [공식 작위 및 칭호 마스터 가이드]",
@@ -7720,19 +7676,13 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         }
         curIdx++;
 
-        // [가변 8] 던전 메뉴 (항상 존재) - 여기서 8번이 잡혀야 함
-        if (choiceNum === curIdx) { 
-            return _gameDungeonLogic(choice, user, data, replier, roomName, targetUid); 
-        }
-        curIdx++;
-
-        // [가변 9] 왕실 집무실 (조건부: 상인 전용)
+        // [가변 8] 왕실 집무실 (조건부: 상인 전용)
         if (isMerchant) {
             if (choiceNum === curIdx) { _showRoyalOffice(user, replier, roomName, targetUid); return true; }
             curIdx++;
         }
 
-        // [가변 10] 해양 도감 메뉴 추가
+        // [가변 9] 해양 도감 메뉴
         if (choiceNum === curIdx) {
             _showMarinePediaUI(user, replier, data, roomName, targetUid);
             return true;
@@ -8323,20 +8273,6 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         _handleWarehouseAction(msg, user, data, replier, roomName, targetUid);
         return true;
     }
-
-    /* [v17.6] 탐험 허브 및 던전 난이도 메뉴 라우팅 */
-    else if (state.type === 'dungeon_main' || state.type === 'dungeon_resume' || state.type === 'dungeon_lobby' || state.type === 'dungeon_alchemy' || state.type === 'explore_hub') {
-        _handleDungeonSelection(choice, user, data, replier, roomName, targetUid);
-        return true;
-    }
-    else if (state.type === 'dungeon_combat') {
-        _handleDungeonCombat(choice, user, data, replier, roomName, targetUid);
-        return true;
-    }
-    else if (state.type === 'pillar_lobby' || state.type === 'pillar_combat') {
-        _handlePillarSelection(choice, user, data, replier, roomName, targetUid);
-        return true;
-    }
 
     else if (state.type === 'trade_pedia_detail_view') {
         var cId = parseInt(choice);
@@ -11184,16 +11120,6 @@ function _executeItemGive(tUser, iName, count, replier, tRoom, adminUser, adminU
         }
     }
 
-    // 4. 연금술 포션
-    if (typeof ALCHEMY_CONFIG !== 'undefined' && ALCHEMY_CONFIG.RECIPES) {
-        for (var pk in ALCHEMY_CONFIG.RECIPES) {
-            var pName = ALCHEMY_CONFIG.RECIPES[pk].name;
-            if (pName.replace(/\s/g,"").indexOf(cleanI) !== -1 || cleanI.indexOf(pName.replace(/\s/g,"")) !== -1) {
-                matches.push({ type: "potion", name: pName, key: pk });
-            }
-        }
-    }
-
     // 5. 상점 아이템 (무역 상점)
     for (var i = 0; i < SHOP_ITEMS.length; i++) {
         var shName = SHOP_ITEMS[i].name;
@@ -11275,17 +11201,6 @@ function _finalizeItemGive(tUser, matchInfo, count, replier, tRoom) {
         if (!tUser.warehouseSpec) tUser.warehouseSpec = {};
         tUser.warehouseSpec[matchInfo.name] = (Number(tUser.warehouseSpec[matchInfo.name]) || 0) + count;
         logMsg = "[특산품: " + matchInfo.name + "] " + count + "상자 (물류 창고 지급)";
-    }
-    else if (matchInfo.type === "spirit") {
-        if (!tUser.spiritData) tUser.spiritData = { items: {} };
-        if (!tUser.spiritData.items) tUser.spiritData.items = {};
-        tUser.spiritData.items[matchInfo.key] = (Number(tUser.spiritData.items[matchInfo.key]) || 0) + count;
-        logMsg = "[" + matchInfo.name + "] " + count + "개 (정령 보관함 지급)";
-    }
-    else if (matchInfo.type === "potion") {
-        if (!tUser.potions) tUser.potions = { heal: 0, maxhp: 0, atk: 0 };
-        tUser.potions[matchInfo.key] = (Number(tUser.potions[matchInfo.key]) || 0) + count;
-        logMsg = "[" + matchInfo.name + "] " + count + "개 (물약 가방 지급)";
     }
     else if (matchInfo.type === "shop") {
         var item = matchInfo.item;
@@ -11496,16 +11411,7 @@ function _gameInfoLogic(msg, user, data, replier, roomName, targetUid) {
             statusList.push("🚢 무역: 💤 대기 중");
         }
 
-        // 2. 연금술
-        if (user.brewing && user.brewing.active) {
-            var bRem = user.brewing.endTime - now;
-            if (bRem > 0) statusList.push("🧪 연금술 연성: " + Math.ceil(bRem/60000) + "분 남음");
-            else statusList.push("🧪 연금술 연성: ✅ 완료 (수령 대기)");
-        } else {
-            statusList.push("🧪 연금술 연성: 💤 대기 중");
-        }
-
-        // 3. 부두 하역 알바
+        // 2. 부두 하역 알바
         var workConf = SYSTEM_CONFIG.ECO.WORK || { COOLDOWN_MIN: 5 };
         var workCdMs = workConf.COOLDOWN_MIN * 60 * 1000;
         if (user.lastWorkTime && (now - user.lastWorkTime < workCdMs)) {
@@ -12267,15 +12173,12 @@ function _gameTradeLogic(msg, user, data, replier, roomName, targetUid) {
         var jobLabel = (user.job === 'pirate') ? "🏴‍☠️ 나소 해적도시 (약탈)" : (user.job === 'navy' ? "👮 해군 본부 (토벌)" : "⚓ 조합 사무소 (전직)");
         menu += "\n" + (curIdx++) + ". " + jobLabel;
         
-        // 3. 던전 메뉴 (항상 존재)
-        menu += "\n" + (curIdx++) + ". 🌀 해상 탐험 (균열/기둥)";
-
-        // 4. 왕실 메뉴 (상인 전용)
+        // 3. 왕실 메뉴 (상인 전용)
         if (isMerchant) {
             menu += "\n" + (curIdx++) + ". 🏰 왕실 집무실 (작위 수여)";
         }
 
-        // 5. 해양 도감 메뉴
+        // 4. 해양 도감 메뉴
         menu += "\n" + (curIdx++) + ". 📘 해양 생물 도감 (수집)";
 
         // [v19.5] 직업에 따른 상단 타이틀 동적 변경 (해적: 나소 / 그 외: 무역 지부)
@@ -16314,868 +16217,10 @@ function util_checkNavyTitle(user, replier, roomName) {
     }
 }
 
-//==========섹터53 (해상던전 시스템)==========
+//==========섹터53==========
 
-/**
- * [v17.6] 해상 던전: 심해의 균열 (Instanced Dungeon) 시스템
- * 기능: 상인/직업군 밸런스형 턴제 전투 및 보상 정산
- */
 
-function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
-    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-    var roomData = data.rooms[logicRoom];
-    
-    // 1. 입장 가드 (무역 지부 및 활동 가능 상태 체크)
-    var stateRes = util_checkUserState(user, targetUid, roomName, true);
-    if (!stateRes.canAction) {
-        replier.reply(formatError(user, "입장 불가", stateRes.reason));
-        return true;
-    }
-    
-    var riftStatus = (user.voyage && user.voyage.active) ? " (🔒 정박 시 진입 가능)" : " (기존 탐험 및 연금술)";
-    var body = "미지의 해역으로 모험을 떠납니다.\n도전할 구역을 선택하세요.\n\n" +
-               "1. 🌀 심해의 균열" + riftStatus + "\n" +
-               "2. 🔱 심연의 기둥 (무한 돌파 및 축복 강화)\n\n" +
-               "↩️ 뒤로 / ❎취소";
 
-    replier.reply(formatCommand("🧭 해상 탐험 허브", user, body, "번호를 선택하세요."));
-    roomData.features.states.menuWait[targetUid] = { type: 'explore_hub', time: Date.now(), originRoom: roomName };
-    return true;
-}
-
-// [기존 균열 로비 출력부 분리]
-function _showRiftLobby(user, data, replier, roomName, targetUid) {
-    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-    var roomData = data.rooms[logicRoom];
-    var mapCost = DUNGEON_CONFIG.COST || 3;
-    var maps = Number(user.ancientMaps || 0);
-    
-    var body = "";
-    var menuType = 'dungeon_lobby';
-
-    if (user.dungeonExplore) {
-        var e = user.dungeonExplore;
-        body = "🌊 [중단된 탐험 발견]\n지난 탐험이 아직 심해에 남아있습니다.\n\n" +
-               "📏 수심: " + e.depth + "m\n" +
-               "🚢 함선 HP: " + Math.floor(e.myHP) + " / " + e.myMaxHP + "\n" +
-               "📦 누적 전리품: " + e.loot.cargo + "상자 외\n\n" +
-               "1. ⏩ 이어서 탐험 (지도 소모 없음)\n" +
-               "2. 🆕 새로 시작 (지도 " + mapCost + "장 소모)\n\n" +
-               "⚠️ 새로 시작 시 기존 전리품은 모두 유실됩니다.";
-        menuType = 'dungeon_resume';
-    } else {
-        body = "바다의 깊은 곳, 미지의 해저 차원문이 열렸습니다.\n" +
-               "수심을 뚫고 내려가며 숨겨진 전리품을 인양하십시오!\n\n" +
-               "📜 [보유 지도]: " + maps + "장\n\n" +
-               "1. 🤿 심해 다이빙 시작 (고대 지도 " + mapCost + "장 소모)\n" +
-               "2. 🧪 연금술 연성진 (물약 제작 및 수령)\n" +
-               "3. 🎒 내 물약 가방 확인\n\n" +
-               "⚠️ 침몰 시 누적된 전리품을 모두 잃을 수 있습니다.\n\n" +
-               "↩️ 뒤로 / ❎취소";
-        menuType = 'dungeon_lobby';
-    }
-
-    replier.reply(formatCommand("🌀 심해의 균열: " + (menuType === 'dungeon_resume' ? "이어하기" : "로비"), user, body, "번호를 선택하세요."));
-    roomData.features.states.menuWait[targetUid] = { type: menuType, time: Date.now(), originRoom: roomName };
-}
-
-// 메뉴 선택 핸들러
-function _handleDungeonSelection(choice, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
-    var waitInfo = roomData.features.states.menuWait[targetUid];
-
-    // [탐험 허브 분기]
-    if (waitInfo && waitInfo.type === 'explore_hub') {
-        if (choice === "1") {
-            if (user.voyage && user.voyage.active) {
-                return replier.reply(formatError(user, "진입 불가", "항해 중에는 [심해의 균열]에 진입할 수 없습니다.\n가까운 항구에 정박한 뒤 시도하세요."));
-            }
-            return _showRiftLobby(user, data, replier, roomName, targetUid);
-        } else if (choice === "2") {
-            return _showPillarLobby(user, data, replier, roomName, targetUid);
-        } else {
-            return replier.reply(formatError(user, "번호 오류", "1번(균열) 또는 2번(기둥)을 선택하세요."));
-        }
-    }
-
-    // [재진입 처리] 이어하기 상태일 경우의 핸들링
-    if (waitInfo && waitInfo.type === 'dungeon_resume') {
-        if (choice === "1") {
-            // [이어하기] 기존 데이터 유지, 핸들러 타입만 변경하여 즉시 복구
-            roomData.features.states.menuWait[targetUid] = { type: 'dungeon_combat', time: Date.now() };
-            replier.reply("⚓ 마지막 교전 지점 또는 탐사 지점으로 복귀합니다...");
-            _showDungeonTurn(user, replier, roomName);
-            return;
-        } else if (choice === "2") {
-            // [새로하기] 기존 데이터 삭제 후 하단 신규 시작 로직으로 진행 유도
-            user.dungeonExplore = null;
-        } else {
-            return replier.reply(formatError(user, "번호 오류", "1번(이어하기) 또는 2번(새로 시작)을 입력하세요."));
-        }
-    } 
-    else if (waitInfo && waitInfo.type === 'dungeon_lobby') {
-        if (choice === "2") {
-            return _showAlchemyMenu(user, data, replier, roomName, targetUid);
-        } else if (choice === "3") {
-            var p = user.potions || {heal:0, maxhp:0, atk:0};
-            var bag = "🎒 내 물약 보관함\n\n" +
-                      "💚 복구 키트: " + p.heal + "개\n" +
-                      "🛡️ 코팅제: " + p.maxhp + "개\n" +
-                      "⚔️ 압축액: " + p.atk + "개\n\n" +
-                      "💡 물약은 심해 다이빙 중 전투 화면에서 사용할 수 있습니다.";
-            return replier.reply(formatCommand("🧪 연금술 가방", user, bag, "뒤로 가려면 [뒤로] 입력"));
-        } else if (choice !== "1") {
-            return replier.reply(formatError(user, "번호 오류", "1번, 2번, 3번 중 하나를 선택하세요."));
-        }
-    }
-    else if (waitInfo && waitInfo.type === 'dungeon_alchemy') {
-        return _handleAlchemyAction(choice, user, data, replier, roomName, targetUid);
-    }
-
-    // 1번 선택(신규 시작) 시 공통 처리 로직
-    var mapCost = DUNGEON_CONFIG.COST || 3;
-    var maps = Number(user.ancientMaps || 0);
-    if (maps < mapCost) return replier.reply(formatError(user, "지도 부족", "입장에 필요한 고대 지도가 부족합니다. (" + mapCost + "장 필요)"));
-
-    var isJob = !!user.job;
-    var sLv = Number(user.shipLevel || 1);
-    
-    // 심연의 축복 보너스 적용 (1레벨당 체력/공격력 5% 상승)
-    var myHP = isJob ? (sLv * 100) : (sLv * 300);
-    myHP += (Number(user.enhLimit || 0) * 20);
-    
-    var myATK = isJob ? (sLv * 15) : (sLv * 45);
-    myATK += (Number(user.enhProfit || 0) * 2);
-
-    user.ancientMaps -= mapCost;
-    user.skipHealing = true;
-
-    user.dungeonExplore = {
-        depth: 100, 
-        bossCount: 0, 
-        myHP: myHP,
-        myMaxHP: myHP,
-        myATK: myATK,
-        loot: { points: 0, cargo: 0, medals: 0, maps: 0, artifacts: 0 },
-        phase: 'event',
-        lastLog: "탐조등을 켜고 어두운 심해로 하강을 시작합니다...",
-        hasRepaired: false,
-        healUsed: 0 // [Gemini 요청] 포션 사용 제한 카운트 추가
-    };
-
-    roomData.features.states.menuWait[targetUid] = { type: 'dungeon_combat', time: Date.now() };
-    
-    _generateDungeonEvent(user);
-    _showDungeonTurn(user, replier, roomName);
-    safeSaveData(data, true);
-}
-
-function _showAlchemyMenu(user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
-    if (!user.brewing) user.brewing = { active: false, type: "", endTime: 0 };
-    
-    var body = "";
-    if (user.brewing.active) {
-        var remain = user.brewing.endTime - Date.now();
-        if (remain <= 0) {
-            var rcp = ALCHEMY_CONFIG.RECIPES[user.brewing.type];
-            if (!user.potions) user.potions = {heal:0, maxhp:0, atk:0};
-            user.potions[user.brewing.type]++;
-            user.brewing.active = false;
-            user.skipHealing = true;
-            safeSaveData(data, true);
-            
-            body = "✨ 연성이 완료되었습니다!\n\n" +
-                   "[" + rcp.name + "] 1개를 수령했습니다.\n\n" +
-                   "다시 연성진을 보려면 [뒤로] 후 다시 진입하세요.";
-            replier.reply(formatCommand("🧪 연금술 완료", user, body));
-        } else {
-            var m = Math.floor(remain / 60000);
-            var s = Math.floor((remain % 60000) / 1000);
-            body = "🔥 가마솥이 끓고 있습니다...\n\n" +
-                   "연성 중인 물약: " + ALCHEMY_CONFIG.RECIPES[user.brewing.type].name + "\n" +
-                   "남은 시간: " + m + "분 " + s + "초\n\n" +
-                   "↩️ 뒤로 / ❎취소";
-            replier.reply(formatCommand("🧪 연금술 연성 중", user, body));
-        }
-    } else {
-        // 물약 리스트 출력 시 효과(desc) 안내 추가
-        body = "심해의 기운을 담아 강력한 비약을 만듭니다.\n" +
-               "소요 시간: 1분\n\n" +
-               "1. 💚 심해수 복구 키트 (즉시 체력 30% 회복)\n" +
-               "   └ 🍎식료품 50상자 + 🧩유물 1개 + 10만P\n" +
-               "2. 🛡️ 티타늄 장갑 코팅제 (탐험 중 Max HP 50% 증가)\n" +
-               "   └ ⚙️공업품 50상자 + 🪙귀금속 20상자 + 🧩유물 1개 + 10만P\n" +
-               "3. ⚔️ 흑색 화약 압축액 (탐험 중 공격력 50% 증가)\n" +
-               "   └ ⚙️공업품 50상자 + 💎보석 20상자 + 🧩유물 1개 + 10만P\n\n" +
-               "원하는 제작 번호를 입력하세요.\n" +
-               "↩️ 뒤로 / ❎취소";
-        replier.reply(formatCommand("🧪 연금술 공방", user, body));
-    }
-    roomData.features.states.menuWait[targetUid] = { type: 'dungeon_alchemy', time: Date.now(), originRoom: roomName };
-}
-
-function _handleAlchemyAction(choice, user, data, replier, roomName, targetUid) {
-    if (user.brewing && user.brewing.active) {
-        return _showAlchemyMenu(user, data, replier, roomName, targetUid);
-    }
-
-    var types = { "1": "heal", "2": "maxhp", "3": "atk" };
-    var type = types[choice];
-    if (!type) return replier.reply(formatError(user, "번호 오류", "1~3번을 선택하세요."));
-
-    var recipe = ALCHEMY_CONFIG.RECIPES[type];
-    
-    if (Number(user.point) < recipe.point) return replier.reply(formatError(user, "재료 부족", "포인트가 부족합니다. (" + fp(recipe.point) + "P 필요)"));
-    if (Number(user.artifactPieces || 0) < recipe.artifact) return replier.reply(formatError(user, "재료 부족", "유물 조각이 부족합니다. (" + recipe.artifact + "개 필요)"));
-
-    // 배 적재함(cargo)이 아닌 물류 창고(warehouse)에서 재료를 확인합니다.
-    if (!user.warehouse) user.warehouse = {};
-    for (var k in recipe.cargo) {
-        if (Number(user.warehouse[k] || 0) < recipe.cargo[k]) {
-            return replier.reply(formatError(user, "재료 부족", "창고에 [" + k + "]이(가) 부족합니다. (" + recipe.cargo[k] + "상자 필요)"));
-        }
-    }
-
-    util_updatePoint(user, data.rooms["내리다"], -recipe.point, "연금술 제작: " + recipe.name, roomName);
-    user.artifactPieces -= recipe.artifact;
-    for (var k in recipe.cargo) {
-        // 실제 차감도 물류 창고에서 진행합니다.
-        user.warehouse[k] -= recipe.cargo[k];
-        if (user.warehouse[k] <= 0) delete user.warehouse[k]; // 0 이하가 되면 깔끔하게 키 삭제
-    }
-
-    user.brewing = {
-        active: true,
-        type: type,
-        endTime: Date.now() + ALCHEMY_CONFIG.TIME_MS
-    };
-    user.skipHealing = true;
-    safeSaveData(data, true);
-
-    // 시작 메시지도 1분으로 텍스트 교정
-    replier.reply(formatCommand("🔥 연성 시작", user, "[" + recipe.name + "] 제작을 시작했습니다!\n약 1분 뒤에 공방을 다시 방문해주세요.", "뒤로 가려면 [뒤로] 입력"));
-}
-
-// 심해 층별 이벤트 생성기 (수심 스케일링 적용)
-function _generateDungeonEvent(user) {
-    var e = user.dungeonExplore;
-    var rand = Math.random();
-    
-    // 1. 1000m, 2000m, 3000m... 확정 층 (재앙급)
-    var isFinalBossFloor = (e.depth % 1000 === 0);
-    // 2. 500m, 1500m, 2500m... 확정 층 (1000의 배수가 아닌 500의 배수)
-    var isMidBossFloor = (e.depth % 500 === 0 && !isFinalBossFloor);
-    // 3. 일반 층 (35% 확률 등장)
-    var isNormalCombat = (!isFinalBossFloor && !isMidBossFloor && rand < 0.35);
-
-    if (isFinalBossFloor || isMidBossFloor || isNormalCombat) {
-        var pool = [];
-        
-        // 수심 구간별 다채로운 몬스터 생태계 풀(Pool) 구성
-        if (isFinalBossFloor) {
-            pool = [
-                { name: "레비아탄", hp: 2000, atk: 110, icon: "🐉", title: "[재앙 경보: 전설의 해신 강림]" },
-                { name: "요르문간드", hp: 2200, atk: 100, icon: "🐍", title: "[재앙 경보: 세계를 감싸는 독사]" },
-                { name: "크툴루의 환영", hp: 1800, atk: 130, icon: "🐙", title: "[재앙 경보: 고대의 우주적 존재]" },
-                { name: "심연의 모비딕", hp: 2500, atk: 90, icon: "🐋", title: "[재앙 경보: 파괴적인 백경 출몰]" }
-            ];
-        } else if (isMidBossFloor) {
-            pool = [
-                { name: "심해 크라켄", hp: 800, atk: 55, icon: "🦑", title: "[위기 발생: 심해 괴수 출몰]" },
-                { name: "메갈로돈", hp: 850, atk: 60, icon: "🦈", title: "[위기 발생: 고대 포식자의 습격]" },
-                { name: "거대 바다거북", hp: 1000, atk: 45, icon: "🐢", title: "[위기 발생: 심해의 철벽 조우]" },
-                { name: "고대 바다전갈", hp: 750, atk: 65, icon: "🦂", title: "[위기 발생: 맹독의 꼬리 출몰]" }
-            ];
-        } else {
-            pool = [
-                { name: "유령선", hp: 300, atk: 25, icon: "👻", title: "[전투 돌입: 망령 함선 조우]" },
-                { name: "세이렌 무리", hp: 280, atk: 35, icon: "🧜‍♀️", title: "[전투 돌입: 매혹적인 환청]" },
-                { name: "저주받은 해적선", hp: 350, atk: 30, icon: "🏴‍☠️", title: "[전투 돌입: 심해의 무법자 습격]" },
-                { name: "대왕 가오리", hp: 320, atk: 22, icon: "🦇", title: "[전투 돌입: 바다의 유령 조우]" },
-                { name: "심해 아귀", hp: 330, atk: 28, icon: "🐟", title: "[전투 돌입: 기괴한 포식자 조우]" },
-                { name: "환영의 함대", hp: 250, atk: 40, icon: "🌫️", title: "[전투 돌입: 짙은 안개 속의 적]" }
-            ];
-        }
-        
-        // 난수 추첨을 통해 등장 몬스터 확정
-        var enemy = pool[Math.floor(Math.random() * pool.length)];
-        
-        e.phase = 'combat';
-        e.enemyName = enemy.name;
-        e.enemyIcon = enemy.icon;
-        e.enemyTitle = enemy.title;
-        
-        // [난이도 조정] 괴수(일반/심해 무관) 조우 횟수 누적
-        e.bossCount = Number(e.bossCount || 0) + 1;
-        
-        // 몬스터 스케일링: 조우 횟수당 15%씩 능력치 상승 유지 (1회차는 0% 상승)
-        var scale = 1 + (e.bossCount - 1) * 0.15;
-        
-        e.enemyHP = Math.floor(enemy.hp * scale);
-        e.enemyMaxHP = e.enemyHP;
-        e.enemyATK = Math.floor(enemy.atk * scale);
-        e.hasRepaired = false;
-    } else {
-        e.phase = 'event';
-        if (rand < 0.6) {
-            e.currentEvent = { type: 'treasure', title: "✨ [해저 유적 발견]", desc: "어둠 속에서 기이한 황금빛이 새어 나오는 난파선을 발견했습니다." };
-        } else {
-            e.currentEvent = { type: 'trap', title: "🌪️ [거대 해류 조우]", desc: "강력한 해저 소용돌이가 함선의 진로를 위협합니다." };
-        }
-    }
-}
-
-// 탐험 UI 렌더러
-function _showDungeonTurn(user, replier, roomName) {
-    var e = user.dungeonExplore;
-    if (!e) return;
-    
-    var pBar = "🟦".repeat(Math.ceil(e.myHP/e.myMaxHP*5)) + "⬜".repeat(5-Math.ceil(e.myHP/e.myMaxHP*5));
-    var lootStr = "💰 포인트: " + fp(e.loot.points) + " | 📦 교역품: " + e.loot.cargo + "\n" +
-                  "🎖️ 훈장: " + e.loot.medals + " | 🗺️ 지도: " + e.loot.maps + " | 🧩 유물: " + e.loot.artifacts;
-
-    var body = "🚢 내 함선 HP [" + pBar + "] " + Math.floor(e.myHP) + "\n" +
-               "[누적 전리품]\n" + lootStr + "\n" +
-               "━━━━━━━━━━━━━━━\n" +
-               "🌊 [이전 상황]\n" + e.lastLog + "\n\n" +
-               "🌀 심해의 균열 [수심 " + e.depth + "m]\n" +
-               "━━━━━━━━━━━━━━━\n\n";
-
-    if (e.phase === 'event') {
-        body += e.currentEvent.title + "\n" + e.currentEvent.desc + "\n\n" +
-                "1. 🔍 탐색한다 (보물 획득 or 함정 피해)\n" +
-                "2. ⏩ 무시하고 하강한다 (+100m 잠수)\n" +
-                "3. 🏃 전리품을 싣고 귀항한다 (안전 정산)";
-
-    } else if (e.phase === 'victory') {
-        body += "✨ [전투 승리: 구역 평정]\n적을 물리치고 주변이 고요해졌습니다. 다음 행동을 결정하세요.\n\n" +
-                "1. 🌊 더 깊이 탐사 (수심 +100m 하강 시작)\n" +
-                "2. ⚓ 전리품 싣고 귀항 (현재까지 보상 확정)";
-
-    } else if (e.phase === 'combat') {
-        var eBar = "🟥".repeat(Math.ceil(e.enemyHP/e.enemyMaxHP*5)) + "⬜".repeat(5-Math.ceil(e.enemyHP/e.enemyMaxHP*5));
-        
-        // 몬스터 종류에 따라 출력 타이틀 및 아이콘 세분화
-        var combatTitle = "⚔️ [적 조우]";
-        if (e.enemyName === "유령선") {
-            combatTitle = "👻 [전투 돌입: 망령 함선 조우]";
-        } else if (e.enemyName === "심해 크라켄") {
-            combatTitle = "🦑 [위기 발생: 심해 괴수 출몰]";
-        } else if (e.enemyName === "레비아탄") {
-            combatTitle = "🐉 [재앙 경보: 전설의 해신 강림]";
-        }
-
-       var p = user.potions || {heal:0, maxhp:0, atk:0};
-
-        body += combatTitle + "\n" + e.enemyName + "이(가) 앞을 가로막습니다!\n" +
-                "   HP [" + eBar + "] " + Math.floor(e.enemyHP) + "\n\n" +
-                "1. 💣 전면 포격 (주사위 공격)\n" +
-                "2. 🎒 물약 가방 열기 (보유: 회복 " + p.heal + " / 장갑 " + p.maxhp + " / 화약 " + p.atk + ")\n" +
-                "3. 💨 긴급 탈출 (전리품 50% 상실 및 귀항)";
-    } else if (e.phase === 'potion_use') {
-        var p = user.potions || {heal:0, maxhp:0, atk:0};
-        var remainHeal = Math.max(0, 3 - (e.healUsed || 0));
-       body += "어떤 물약을 사용하시겠습니까? (사용 시 턴이 소모되지 않습니다!)\n\n" +
-                "1. 💚 심해수 복구 키트 (보유: " + p.heal + "개 / 잔여: " + remainHeal + "회)\n" +
-                "   └ 즉시 HP 30% 회복\n" +
-                "2. 🛡️ 티타늄 장갑 코팅제 (보유: " + p.maxhp + "개)\n" +
-                "   └ 이번 탐험 한정 Max HP 50% 증가\n" +
-                "3. ⚔️ 흑색 화약 압축액 (보유: " + p.atk + "개)\n" +
-                "   └ 이번 탐험 한정 ATK 50% 증가\n\n" +
-                "4. ↩️ 돌아가기 (전투 화면으로)";
-    }
-
-    replier.reply(formatCommand("🌊 해저 탐험 진행 중", user, body, "행동 번호를 입력하세요."));
-}
-
-// 탐험 & 전투 액션 핸들러
-function _handleDungeonCombat(msg, user, data, replier, roomName, targetUid) {
-    var e = user.dungeonExplore;
-    if (!e) return;
-    
-    var roomData = data.rooms[roomName]; // 타임아웃 갱신용
-
-    // 전리품 추가 헬퍼 함수
-    var addLoot = function(mult) {
-        var isJob = !!user.job;
-        var pts = 0, cargo = 0;
-        var log = "";
-        
-        var depthMult = 1 + (e.depth / 500);
-        var basePts = Math.floor((Math.random() * 10000 + 5000) * mult * depthMult);
-        var baseCargo = Math.floor((Math.random() * 2 + 1) * mult * depthMult);
-        
-        if (isJob) {
-            pts = basePts * 2;
-        } else {
-            if (Math.random() < 0.5) pts = basePts;
-            else cargo = baseCargo;
-        }
-        
-        e.loot.points += pts;
-        e.loot.cargo += cargo;
-        
-        if (pts > 0) log += "💰+" + fp(pts) + " ";
-        if (cargo > 0) log += "📦+" + cargo + " ";
-
-        // [1000m 이상 전용 보너스 배율] 1000m 진입 시 희귀 보상 확률 1.5배 증가 (밸런스 조정)
-        var abyssBonus = (e.depth >= 1000) ? 1.5 : 1.0;
-
-        if (Math.random() < 0.05 * mult * (1 + e.depth/2000) * abyssBonus) { e.loot.medals++; log += "🎖️+1 "; }
-        if (Math.random() < 0.05 * mult * (1 + e.depth/2000) * abyssBonus) { e.loot.maps++; log += "🗺️+1 "; }
-        if (Math.random() < 0.15 * mult * (1 + e.depth/2000) * abyssBonus) { e.loot.artifacts++; log += "🧩+1 "; }
-        
-        return log.trim();
-    };
-
-    // [난이도 UP] 하강 시 수압 데미지 처리 헬퍼 함수
-    var goDeeper = function() {
-        e.depth += 100;
-        // 최대 체력의 5% + 수심 비례 고정 피해
-        var pressureDmg = Math.floor(e.myMaxHP * 0.05) + Math.floor(e.depth / 10);
-        e.myHP -= pressureDmg;
-        e.lastLog += "\n🌊 [수압] 깊은 수심의 압력으로 선체가 손상됩니다. (-" + pressureDmg + ")";
-        
-        if (e.myHP <= 0) return false; // 사망
-        _generateDungeonEvent(user);
-        return true;
-    };
-
-    if (e.phase === 'event') {
-        if (msg === "1") { // 탐색
-            var rand = Math.random();
-            if (e.currentEvent.type === 'treasure') {
-                if (rand < 0.8) {
-                    var lLog = addLoot(1.0);
-                    e.lastLog = "✅ 유적 탐색 성공!\n획득: " + lLog;
-                } else {
-                    var dmgMult = 1 + (e.depth / 1000);
-                    var dmg = Math.floor(e.myMaxHP * 0.1 * dmgMult);
-                    e.myHP -= dmg;
-                    e.lastLog = "⚠️ 유적에 붕괴 함정이 발동했습니다!\n선체 피해: -" + dmg;
-                }
-            } else { // trap
-                if (rand < 0.7) {
-                    var dmgMult = 1 + (e.depth / 1000);
-                    var dmg = Math.floor(e.myMaxHP * 0.15 * dmgMult);
-                    e.myHP -= dmg;
-                    e.lastLog = "⚠️ 소용돌이에 휩쓸려 파편에 부딪혔습니다!\n선체 피해: -" + dmg;
-                } else {
-                    var lLog = addLoot(1.5);
-                    e.lastLog = "✅ 거센 해류 속에서 진귀한 물건을 건졌습니다!\n획득: " + lLog;
-                }
-            }
-            
-            if (e.myHP <= 0) return _finishDungeon(user, data, replier, roomName, targetUid, "DEATH");
-            
-            // 하강 및 수압 데미지
-            if (!goDeeper()) return _finishDungeon(user, data, replier, roomName, targetUid, "DEATH");
-            _showDungeonTurn(user, replier, roomName);
-            
-        } else if (msg === "2") { // 무시하고 하강
-            e.lastLog = "⏩ 위험을 피하고 조용히 수심을 내립니다.";
-            if (!goDeeper()) return _finishDungeon(user, data, replier, roomName, targetUid, "DEATH");
-            _showDungeonTurn(user, replier, roomName);
-            
-        } else if (msg === "3") { // 귀항 정산
-            return _finishDungeon(user, data, replier, roomName, targetUid, "SAFE");
-        }
-    } 
-
-    else if (e.phase === 'victory') {
-        // 승리 후 정비 단계에서의 선택 처리
-        if (msg === "1") { // 더 깊이 탐색
-            e.lastLog = "🌊 전리품을 정리하고 다시 하강을 시작합니다.";
-            if (!goDeeper()) return _finishDungeon(user, data, replier, roomName, targetUid, "DEATH");
-            _showDungeonTurn(user, replier, roomName);
-        } else if (msg === "2") { // 귀항
-            return _finishDungeon(user, data, replier, roomName, targetUid, "SAFE");
-        }
-        return true;
-    }
-
-    else if (e.phase === 'combat') {
-        if (msg === "1") { // 공격
-            var dice = Math.floor(Math.random() * 20) + 1;
-            var damage = Math.floor(e.myATK * (dice / 10));
-            if (dice === 20) damage *= 2; // 치명타
-            
-            e.enemyHP -= damage;
-            var log = "💥 포격 성공! " + damage + "의 피해를 입혔습니다." + (dice === 20 ? " (치명타!)" : "");
-
-            if (e.enemyHP <= 0) {
-                var lLog = addLoot(2.0); 
-                e.lastLog = "🏆 " + e.enemyName + " 격파!\n전리품 획득: " + lLog;
-                
-                e.phase = 'victory'; // 선택권을 주기 위해 페이즈 변경
-                _showDungeonTurn(user, replier, roomName);
-                return;
-            }
-
-            // [난이도 UP] 적 반격 데미지 상향 조정 (0.8~1.5배)
-            var eDamage = Math.floor(e.enemyATK * (Math.random() * 0.7 + 0.8));
-            e.myHP -= eDamage;
-            e.lastLog = log + "\n🏹 적의 반격! " + eDamage + "의 피해를 입었습니다.";
-
-            if (e.myHP <= 0) return _finishDungeon(user, data, replier, roomName, targetUid, "DEATH");
-
-            _showDungeonTurn(user, replier, roomName);
-
-        } else if (msg === "2") { // 물약 가방 열기
-            e.phase = 'potion_use';
-            _showDungeonTurn(user, replier, roomName);
-        } else if (msg === "3") { // 도주
-            return _finishDungeon(user, data, replier, roomName, targetUid, "FLEE");
-        }
-    } 
-    else if (e.phase === 'potion_use') {
-        if (msg === "4" || msg === "뒤로" || msg === "취소") {
-            e.phase = 'combat';
-            _showDungeonTurn(user, replier, roomName);
-            return;
-        }
-        
-       var p = user.potions || {heal:0, maxhp:0, atk:0};
-        var used = false;
-        
-        if (msg === "1") {
-            if ((e.healUsed || 0) >= 3) return replier.reply(formatError(user, "사용 제한", "복구 키트는 한 번의 탐험당 최대 3회까지만 사용할 수 있습니다."));
-            if (p.heal <= 0) return replier.reply(formatError(user, "물약 부족", "심해수 복구 키트가 없습니다."));
-            p.heal--;
-            e.healUsed = (e.healUsed || 0) + 1; // 사용 횟수 증가
-            var healAmt = Math.floor(e.myMaxHP * 0.3);
-            e.myHP = Math.min(e.myMaxHP, e.myHP + healAmt);
-            e.lastLog = "💚 [복구 키트 사용] 선체 내구도를 " + healAmt + "만큼 회복했습니다! (잔여: " + (3 - e.healUsed) + "회)";
-            used = true;
-        } else if (msg === "2") {
-            if (p.maxhp <= 0) return replier.reply(formatError(user, "물약 부족", "티타늄 장갑 코팅제가 없습니다."));
-            p.maxhp--;
-            var boost = Math.floor(e.myMaxHP * 0.5);
-            e.myMaxHP += boost;
-            e.myHP += boost;
-            e.lastLog = "🛡️ [장갑 코팅제 사용] 함선 최대 내구도가 " + boost + "만큼 영구 증가했습니다!";
-            used = true;
-        } else if (msg === "3") {
-            if (p.atk <= 0) return replier.reply(formatError(user, "물약 부족", "흑색 화약 압축액이 없습니다."));
-            p.atk--;
-            var boost = Math.floor(e.myATK * 0.5);
-            e.myATK += boost;
-            e.lastLog = "⚔️ [화약 압축액 사용] 함선 포격 데미지가 " + boost + "만큼 영구 증가했습니다!";
-            used = true;
-        } else {
-            return replier.reply(formatError(user, "번호 오류", "올바른 번호를 입력하세요."));
-        }
-        
-        if (used) {
-            user.potions = p;
-            e.phase = 'combat'; // 물약 사용 후 턴 소모 없이 즉시 전투 복귀
-            user.skipHealing = true;
-            _showDungeonTurn(user, replier, roomName);
-        }
-    }
-    
-    // 시간 연장
-    if (data.rooms[roomName].features.states.menuWait[targetUid]) {
-        data.rooms[roomName].features.states.menuWait[targetUid].time = Date.now();
-    }
-    safeSaveData(data, true);
-}
-
-// 최종 정산 (안전 귀항, 도망, 침몰)
-function _finishDungeon(user, data, replier, roomName, targetUid, resultType) {
-    var e = user.dungeonExplore;
-    var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
-    var roomData = data.rooms[logicRoom];
-    
-    var loot = e.loot;
-    user.dungeonExplore = null;
-    delete data.rooms[roomName].features.states.menuWait[targetUid];
-
-    if (resultType === "DEATH") {
-        user.durability = Math.max(0, (user.durability || 100) - 50);
-        replier.reply(formatCommand("💀 심해 침몰 (탐험 실패)", user, "치명적인 피해를 입고 선박이 파손되었습니다.\n모은 전리품을 모두 심해에 떨어뜨렸습니다.\n내구도가 50% 급감했습니다.", "수리 필요: 무역 지부"));
-        safeSaveData(data, true);
-        return;
-    }
-
-    if (resultType === "FLEE") {
-        loot.points = Math.floor(loot.points / 2);
-        loot.cargo = Math.floor(loot.cargo / 2);
-        loot.medals = Math.floor(loot.medals / 2);
-        loot.maps = Math.floor(loot.maps / 2);
-        loot.artifacts = Math.floor(loot.artifacts / 2);
-        user.durability = Math.max(0, (user.durability || 100) - 20);
-    }
-
-    // 전리품 실제 지급 로직
-    var rewardMsg = "";
-    
-    if (loot.points > 0) {
-        var res = processRepayment(user, loot.points, targetUid, logicRoom);
-        util_updatePoint(user, roomData, Number(res.actualGain), "해상 던전 탐험 정산", logicRoom);
-        rewardMsg += "💰 획득 포인트: +" + fp(loot.points) + "P" + (res.repayMsg || "") + "\n";
-    }
-    if (loot.cargo > 0) {
-        user.unknownCargo = (Number(user.unknownCargo) || 0) + loot.cargo;
-        rewardMsg += "📦 미확인 교역품: +" + loot.cargo + "상자 (출항 시 자동 변환)\n";
-    }
-    if (loot.medals > 0) {
-        user.royalMedals = (Number(user.royalMedals) || 0) + loot.medals;
-        rewardMsg += "🎖️ 왕실 훈장: +" + loot.medals + "개\n";
-    }
-    if (loot.maps > 0) {
-        user.ancientMaps = (Number(user.ancientMaps) || 0) + loot.maps;
-        rewardMsg += "🗺️ 고대 지도: +" + loot.maps + "장\n";
-    }
-    if (loot.artifacts > 0) {
-        user.artifactPieces = (Number(user.artifactPieces) || 0) + loot.artifacts;
-        rewardMsg += "🧩 유물 조각: +" + loot.artifacts + "개\n";
-    }
-
-    var titleStr = (resultType === "FLEE") ? "🏃 긴급 탈출 완료" : "🏆 탐험 귀항 완료!";
-    var descStr = (resultType === "FLEE") ? "전장 이탈로 전리품의 절반을 분실했습니다.\n(내구도 -20% 감소)\n\n" : "심해의 압력을 견디고 전리품을 무사히 인양했습니다!\n\n";
-
-    if (rewardMsg === "") rewardMsg = "획득한 전리품이 없습니다.";
-
-    replier.reply(formatCommand(titleStr, user, descStr + rewardMsg, "내 잔액: " + fp(user.point) + "P"));
-    safeSaveData(data, true);
-}
-
-/* === [심연의 기둥] 전용 로직 및 핸들러 === */
-function _showPillarLobby(user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
-    var floor = Number(user.pillarFloor || 1);
-    var best = Number(user.pillarBest || 0);
-    var emblems = Number(user.abyssEmblems || 0);
-    var bless = Number(user.abyssBlessing || 0);
-    
-    var cost = 50000;
-    if (floor > 100) cost = 500000;
-    else if (floor > 50) cost = 200000;
-
-    var mapReq = (floor > 100) ? " + 지도 1장" : "";
-    var startFloor = Math.floor((floor - 1) / 10) * 10 + 1; // 1, 11, 21...
-
-    var blessCost = bless * 5 + 10;
-    var isMax = (bless >= 30) ? " (MAX)" : (" (" + blessCost + "개 소모)");
-
-    var body = "끝을 알 수 없는 거대한 심연의 기둥이 솟아 있습니다.\n" +
-               "한계를 돌파하여 캐릭터의 영구적인 축복을 얻어내세요.\n\n" +
-               "📊 [내 기록]\n" +
-               "• 최고 도달: " + best + "층\n" +
-               "• 시작 구간: " + startFloor + "층부터 진행\n\n" +
-               "✨ [심연의 축복: Lv." + bless + "]\n" +
-               "• 기본 산소량: +" + (bless * 5) + "\n" +
-               "• 보유 인장: 💠 " + emblems + "개\n\n" +
-               "1. 🔱 하강 시작 (비용: " + fp(cost) + "P" + mapReq + ")\n" +
-               "2. 💠 축복 강화" + isMax + "\n\n" +
-               "↩️ 뒤로 / ❎취소";
-    
-    replier.reply(formatCommand("🔱 심연의 기둥", user, body, "번호를 선택하세요."));
-    roomData.features.states.menuWait[targetUid] = { type: 'pillar_lobby', time: Date.now(), originRoom: roomName };
-}
-
-function _handlePillarSelection(choice, user, data, replier, roomName, targetUid) {
-    var roomData = data.rooms[roomName];
-    var waitInfo = roomData.features.states.menuWait[targetUid];
-
-    if (waitInfo.type === 'pillar_lobby') {
-        if (choice === "1") {
-            var floor = Number(user.pillarFloor || 1);
-            var startFloor = Math.floor((floor - 1) / 10) * 10 + 1;
-            
-            var cost = 50000;
-            var needMap = false;
-            if (startFloor > 100) { cost = 500000; needMap = true; }
-            else if (startFloor > 50) cost = 200000;
-
-            if (Number(user.point) < cost) {
-                return replier.reply(formatError(user, "자금 부족", "입장료 " + fp(cost) + "P가 부족합니다."));
-            }
-            if (needMap && Number(user.ancientMaps || 0) < 1) {
-                return replier.reply(formatError(user, "지도 부족", "100층 이상 심연 진입 시 고대 지도가 1장 필요합니다."));
-            }
-
-            util_updatePoint(user, data.rooms["내리다"], -cost, "심연의 기둥 입장료", roomName);
-            if (needMap) user.ancientMaps -= 1;
-            user.skipHealing = true;
-
-            var bless = Number(user.abyssBlessing || 0);
-            var startOxygen = 100 + (bless * 5); // 축복 레벨당 5의 산소 보너스 부여
-
-            user.pillarLoot = { points: 0, floor: startFloor, oxygen: startOxygen };
-            roomData.features.states.menuWait[targetUid] = { type: 'pillar_combat', time: Date.now(), originRoom: roomName };
-            _showPillarTurn(user, replier, roomName, targetUid);
-            safeSaveData(data, true);
-
-        } else if (choice === "2") {
-            var bless = Number(user.abyssBlessing || 0);
-            if (bless >= 30) return replier.reply(formatError(user, "강화 불가", "심연의 축복이 이미 최고 레벨(Lv.30)입니다."));
-            var req = bless * 5 + 10;
-            if (Number(user.abyssEmblems || 0) < req) return replier.reply(formatError(user, "인장 부족", "심연의 인장이 " + req + "개 필요합니다.\n(현재 보유: " + (user.abyssEmblems || 0) + "개)"));
-            
-            user.abyssEmblems -= req;
-            user.abyssBlessing = bless + 1;
-            user.skipHealing = true;
-            safeSaveData(data, true);
-            replier.reply(formatCommand("✨ 축복 강화 완료", user, "심연의 축복이 Lv." + user.abyssBlessing + "(으)로 상승했습니다!\n기둥 진입 시 주어지는 기본 산소량이 증가합니다.", "다시 확인하려면 [뒤로] 입력"));
-            delete roomData.features.states.menuWait[targetUid];
-        } else {
-            replier.reply(formatError(user, "번호 오류", "1번 또는 2번을 선택하세요."));
-        }
-    } 
-    else if (waitInfo.type === 'pillar_combat') {
-        var pl = user.pillarLoot;
-        if (!pl) return;
-        
-        var curFloor = pl.floor;
-        
-        if (choice === "1" || choice === "2") {
-            var rand = Math.random() * 100;
-            var isRush = (choice === "1");
-            var successRate = (isRush ? 35 : 60); // 확률 조정 (55->35, 85->60)
-            
-            if (rand < successRate) {
-                var jump = isRush ? 3 : 1; // 돌파 시 등반 층수 조정 (+2 -> +3)
-                
-                pl.floor += jump;
-                
-                var ecoMult = util_getEcoMultiplier(roomName);
-                var earned = Math.floor((5000 + pl.floor * 500) * ecoMult);
-                pl.points += earned;
-                
-                var msgBody = (isRush ? "💨 과부하 엔진으로 빠르게 심연을 돌파했습니다!" : "🛡️ 신중하게 장애물을 피하며 하강했습니다.") +
-                              "\n\n🔻 도달: " + pl.floor + "층 (+" + jump + "층)\n" +
-                              "💰 전리품 누적: +" + fp(earned) + "P";
-                
-                var getEmb = 0;
-                var getArtifact = 0; // 유물 조각 획득 카운트
-                for (var i = 0; i < jump; i++) {
-                    var targetFloor = curFloor + i + 1;
-                    
-                    // 심연의 인장 드랍률 계산
-                    var dropRate = Math.min(30, 5 + Math.floor(targetFloor / 100));
-                    if (Math.random() * 100 < dropRate) getEmb++;
-                    
-                    // 유물 조각 드랍률 계산 (기본 5%, 100층당 +1%, 최대 25%)
-                    var artifactRate = Math.min(25, 5 + Math.floor(targetFloor / 100));
-                    if (Math.random() * 100 < artifactRate) getArtifact++;
-                }
-
-                if (getEmb > 0) {
-                    user.abyssEmblems = (Number(user.abyssEmblems) || 0) + getEmb;
-                    msgBody += "\n\n💠 [심연의 인장 발견!]: " + getEmb + "개 획득";
-                }
-                
-                if (getArtifact > 0) {
-                    user.artifactPieces = (Number(user.artifactPieces) || 0) + getArtifact;
-                    msgBody += (getEmb > 0 ? "\n" : "\n\n") + "🧩 [유물 조각 획득!]: " + getArtifact + "개 획득";
-                }
-                
-                var oldCheck = Math.floor((curFloor - 1) / 10);
-                var newCheck = Math.floor((pl.floor - 1) / 10);
-                if (newCheck > oldCheck) {
-                    user.pillarFloor = Math.max(Number(user.pillarFloor||1), pl.floor);
-                    msgBody += "\n📍 [체크포인트 갱신!]\n다음부터 " + (newCheck * 10 + 1) + "층에서 시작 가능합니다.";
-                }
-                
-                if (pl.floor > Number(user.pillarBest || 0)) {
-                    user.pillarBest = pl.floor;
-                }
-
-                user.skipHealing = true;
-                safeSaveData(data, true);
-                
-                replier.reply(formatCommand("✅ 하강 성공", user, msgBody));
-                roomData.features.states.menuWait[targetUid].time = Date.now();
-
-            } else {
-                // 돌파 실패 시 산소 차감 로직 적용
-                var oxyLoss = isRush ? 20 : 10;
-                pl.oxygen = Math.max(0, (Number(pl.oxygen)||100) - oxyLoss);
-                user.skipHealing = true;
-                
-                // 산소가 아직 남아있는 경우에만 실패 메시지 출력 (산소가 0이면 하단의 조난 가드로 넘어감)
-                if (pl.oxygen > 0) {
-                    if (isRush) {
-                        var failMsg = "💥 끔찍한 충돌!\n무리한 하강으로 암초에 크게 부딪혔습니다.\n\n" +
-                                      "🫧 산소량: -" + oxyLoss + "\n" +
-                                      "해당 층에서 다시 시도합니다.";
-                        safeSaveData(data, true);
-                        replier.reply(formatCommand("⚠️ 돌파 실패", user, failMsg));
-                        roomData.features.states.menuWait[targetUid].time = Date.now();
-                    } else {
-                        var failMsg = "⚠️ 하강 중 거센 해류에 밀려났습니다.\n\n" +
-                                      "🫧 산소량: -" + oxyLoss + "\n" +
-                                      "해당 층에서 다시 시도합니다.";
-                        safeSaveData(data, true);
-                        replier.reply(formatCommand("⚠️ 하강 지연", user, failMsg));
-                        roomData.features.states.menuWait[targetUid].time = Date.now();
-                    }
-                }
-            }
-            
-            // 산소 0 사망 처리 (최종 가드)
-            if (pl && pl.oxygen <= 0 && user.pillarLoot) {
-                var finalPts = Math.floor(user.pillarLoot.points / 2);
-                util_updatePoint(user, data.rooms["내리다"], finalPts, "심연의 기둥 산소 고갈", roomName);
-                user.pillarLoot = null;
-                
-                // [좀비 세션 완벽 삭제]
-                if (data.rooms["내리다"].features.states.menuWait) delete data.rooms["내리다"].features.states.menuWait[targetUid];
-                if (data.rooms[roomName] && data.rooms[roomName].features.states.menuWait) delete data.rooms[roomName].features.states.menuWait[targetUid];
-                
-                replier.reply(formatError(user, "산소 고갈", "산소가 0이 되어 긴급 구조됩니다.\n전리품의 절반을 바다에 떨어뜨렸습니다."));
-                safeSaveData(data, true);
-                return true;
-            }
-            
-            // [단일 호출 보장]: 성공이든 지연이든 함수 최하단에서 오직 딱 한 번만 UI를 렌더링
-            _showPillarTurn(user, replier, roomName, targetUid);
-            return true;
-
-        } else if (choice === "3") {
-            var finalPts = pl.points;
-            util_updatePoint(user, data.rooms["내리다"], finalPts, "심연의 기둥 안전귀항", roomName);
-            
-            user.pillarLoot = null;
-            
-            // [좀비 세션 완벽 삭제]
-            if (data.rooms["내리다"].features.states.menuWait) delete data.rooms["내리다"].features.states.menuWait[targetUid];
-            if (data.rooms[roomName] && data.rooms[roomName].features.states.menuWait) delete data.rooms[roomName].features.states.menuWait[targetUid];
-            
-            replier.reply(formatCommand("🏃 안전 귀항", user, "기둥을 무사히 빠져나와 보상을 챙겼습니다.\n\n💰 최종 획득: +" + fp(finalPts) + "P", "내 잔액: " + fp(user.point) + "P"));
-            safeSaveData(data, true);
-        } else {
-            replier.reply(formatError(user, "번호 오류", "1, 2, 3번 중 선택하세요."));
-        }
-    }
-}
-
-function _showPillarTurn(user, replier, roomName, targetUid) {
-    var pl = user.pillarLoot;
-    if (!pl) return;
-    var oxy = Number(pl.oxygen || 0);
-    var bless = Number(user.abyssBlessing || 0);
-    var maxOxy = 100 + (bless * 5);
-    
-    // 산소 비율에 따른 아이콘 (50%, 20% 기준)
-    var ratio = oxy / maxOxy;
-    var dIcon = ratio > 0.5 ? "🟢" : (ratio >= 0.2 ? "🟡" : "🔴");
-    
-    var body = "현재 심연 " + pl.floor + "층을 지나고 있습니다...\n\n" +
-               "🫧 산소 잔량: " + dIcon + " " + oxy + " / " + maxOxy + "\n" +
-               "💰 누적 전리품: " + fp(pl.points) + "P\n" +
-               "━━━━━━━━━━━━━━━\n\n" +
-               "1. 💥 과부하 돌파 (확률 35%, +3층)\n" +
-               "   └ 실패 시: 산소 -20 & 해당 층 재도전\n" +
-               "2. 🛡️ 신중한 하강 (확률 60%, +1층)\n" +
-               "   └ 실패 시: 산소 -10 & 해당 층 재도전\n" +
-               "3. 🏃 귀항 (현재 보상 100% 수령 및 탈출)";
-               
-    replier.reply(formatCommand("🔱 [심연의 기둥 - " + pl.floor + "층]", user, body, "번호를 선택하세요."));
-}
 //==========섹터54==========
 
 /**

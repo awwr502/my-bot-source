@@ -16745,6 +16745,18 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
         return _processDungeonWakeUp(user, data, replier, logicRoom, targetUid);
     }
 
+    // [좀비 세션 원천 차단 가드] 탐험 관련 상태인데 user.dgnState가 null이면 세션 강제 파기 후 명령어 패스
+    var exploreStates = ['dgn_turn', 'dgn_merchant', 'dgn_combat_main', 'dgn_combat_dir'];
+    if (exploreStates.indexOf(state.type) !== -1 && !user.dgnState) {
+        if (data.rooms[roomName] && data.rooms[roomName].features.states.menuWait) {
+            delete data.rooms[roomName].features.states.menuWait[targetUid];
+        }
+        if (data.rooms["내리다"] && data.rooms["내리다"].features.states.menuWait) {
+            delete data.rooms["내리다"].features.states.menuWait[targetUid];
+        }
+        return false; // false를 리턴하여 하단의 명령어(/던전 등)가 정상 작동하도록 흘려보냄
+    }
+
     if (state.type === 'dgn_lobby') {
         if (choice === "1") _showDungeonThemeSelect(user, data, replier, logicRoom, targetUid);
         else if (choice === "2") _showDgnGuildMain(user, replier, roomData, targetUid, logicRoom);
@@ -17101,7 +17113,15 @@ function _processDungeonTurn(choice, user, data, replier, roomName, targetUid) {
         user.dgnState = null;
         s.hp = s.maxHp; // 마을 귀환 시 풀피 (임시)
         s.hunger = s.maxHunger;
-        delete data.rooms[roomName].features.states.menuWait[targetUid];
+        
+        // 1:1방 연동 완벽 해제를 위한 양방향 세션 파기
+        if (data.rooms[roomName] && data.rooms[roomName].features.states.menuWait) {
+            delete data.rooms[roomName].features.states.menuWait[targetUid];
+        }
+        if (data.rooms["내리다"] && data.rooms["내리다"].features.states.menuWait) {
+            delete data.rooms["내리다"].features.states.menuWait[targetUid];
+        }
+
         safeSaveData(data, true);
         
         replier.reply(formatCommand("🏃 무사 귀환", user, "무사히 던전을 빠져나왔습니다.\n(체력과 허기가 회복되었습니다.)\n\n💰 탐험 획득 금화: +" + earnedGold + " G"));
@@ -17129,8 +17149,16 @@ function _handlePlayerDeath(user, data, replier, roomName, targetUid) {
     s.hunger = 30; // 빈사 상태의 허기
     
     user.dgnState = null;
-    delete data.rooms[roomName].features.states.menuWait[targetUid];
-    safeSaveData(data, true);
+    
+    // 사망 시에도 1:1방 양방향 세션 완벽 파기
+    if (data.rooms[roomName] && data.rooms[roomName].features.states.menuWait) {
+        delete data.rooms[roomName].features.states.menuWait[targetUid];
+    }
+    if (data.rooms["내리다"] && data.rooms["내리다"].features.states.menuWait) {
+        delete data.rooms["내리다"].features.states.menuWait[targetUid];
+    }
+    
+    safeSaveData(data, true);
 
     var deathMsg = "💀 [사망: 심연에 먹히다]\n━━━━━━━━━━━━━━━\n" +
                    "체력을 모두 소진하여 쓰러졌습니다...\n" +

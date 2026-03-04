@@ -169,8 +169,8 @@ var DGN_ITEM_DB = {
     "연막탄": { type: "consumable", rank: "일반", price: 5000, effect: "escape" },
 
     // 4. 채집 도구 및 채집물
-    "낡은 곡괭이": { type: "tool", rank: "일반", price: 5000, usage: 5 },
-    "채집용 낫": { type: "tool", rank: "일반", price: 5000, usage: 5 },
+    "낡은 곡괭이": { type: "tool", rank: "일반", price: 10000, usage: 5 },
+    "채집용 낫": { type: "tool", rank: "일반", price: 10000, usage: 5 },
     "철광석": { type: "mat", rank: "일반", price: 1500 },
     "마력 깃든 약초": { type: "mat", rank: "희귀", price: 2500 },
     "던전 입장권": { type: "consumable", rank: "희귀", price: 5000, effect: "ticket" },
@@ -11616,12 +11616,14 @@ function _finalizeItemGive(tUser, matchInfo, count, replier, tRoom) {
                     logMsg = "⚠️ 가방이 가득 차 지급되지 않았습니다.";
                 }
             } else {
-                // 스택 불가 아이템(장비 등): 남은 빈 공간만큼만 1개씩 쪼개서 지급
+                // 스택 불가 아이템(장비, 도구 등): 남은 빈 공간만큼만 1개씩 쪼개서 지급
                 var added = 0;
                 var overWarning = "";
                 for (var d = 0; d < count; d++) {
                     if (tUser.dgnBag.length < maxBag) {
-                        util_addDgnItem(tUser.dgnBag, { name: matchInfo.name, type: matchInfo.item.type, rank: matchInfo.item.rank }, 1);
+                        var newItem = { name: matchInfo.name, type: matchInfo.item.type, rank: matchInfo.item.rank };
+                        if (matchInfo.item.usage) newItem.usage = matchInfo.item.usage; // 도구 내구도 주입
+                        util_addDgnItem(tUser.dgnBag, newItem, 1);
                         added++;
                     } else {
                         overWarning = "\n⚠️ 가방이 가득 차 초과분은 지급되지 않았습니다.";
@@ -17807,11 +17809,17 @@ function _showDgnStorage(user, replier, roomData, targetUid, roomName) {
     
     var idx = 1;
     if (bag.length === 0) body += "- 비어있음 -\n";
-    bag.forEach(function(it) { body += (idx++) + ". " + it.name + " x" + (it.qty || 1) + "\n"; });
+    bag.forEach(function(it) { 
+        var qtyStr = (it.type === "tool") ? "(내구도:" + (it.usage || 5) + ")" : "x" + (it.qty || 1);
+        body += (idx++) + ". " + it.name + " " + qtyStr + "\n"; 
+    });
     
     body += "\n[창고 보관품]\n";
     if (strg.length === 0) body += "- 비어있음 -\n";
-    strg.forEach(function(it) { body += (idx++) + ". " + it.name + " x" + (it.qty || 1) + "\n"; });
+    strg.forEach(function(it) { 
+        var qtyStr = (it.type === "tool") ? "(내구도:" + (it.usage || 5) + ")" : "x" + (it.qty || 1);
+        body += (idx++) + ". " + it.name + " " + qtyStr + "\n"; 
+    });
 
     body += "\n💬 [이용 방법]\n" +
             "형식: [가방/창고 번호] [수량]\n" +
@@ -17876,6 +17884,7 @@ function _processDgnStorage(choice, user, data, replier, roomName, targetUid) {
 function _showDgnShopMain(user, replier, roomData, targetUid, roomName) {
         var shopItems = [
             "초보자의 검", "가죽 갑옷", "바람의 반지", "소형 체력 포션", "중형 체력 포션", "스태미나 포션", "휴식용 텐트", "A형 텐트", "횃불", "연막탄", "던전 입장권",
+            "낡은 곡괭이", "채집용 낫",
             "화염 스킬북(초급)", "맹독 스킬북(초급)", "전격 스킬북(초급)", "빙결 스킬북(초급)", "관통 스킬북(초급)", "마력 스킬북(초급)", "치유 스킬북(초급)", "주사위 스킬북(초급)"
         ];
         var body = "🏪 [마을 상점]\n💰 내 금화: " + fp(user.dgnGold || 0) + " G\n\n";
@@ -17885,8 +17894,11 @@ function _showDgnShopMain(user, replier, roomData, targetUid, roomName) {
             var icon = (info.type === "weapon") ? "🗡️" : (info.type === "armor" ? "🛡️" : (info.type === "acc" ? "💍" : "🧪"));
             if (info.type === "consumable") icon = "📦";
             if (info.type === "skill_book") icon = "📕";
+            if (info.type === "tool") icon = "⛏️";
             if (name === "던전 입장권") icon = "🎫";
-            body += (i+1) + ". " + icon + " " + name + " : " + fp(info.price) + " G\n";
+            
+            var toolDesc = (info.type === "tool") ? " (내구도:" + info.usage + ")" : "";
+            body += (i+1) + ". " + icon + " " + name + toolDesc + " : " + fp(info.price) + " G\n";
         });
 
     body += "\n↩️ 뒤로 / ❎취소";
@@ -17927,7 +17939,9 @@ function _processDgnShop(choice, user, data, replier, roomName, targetUid) {
                 if (!user.dgnActiveSkill) user.dgnActiveSkill = sKey;
             }
         } else {
-            util_addDgnItem(user.dgnBag, { name: iName, type: iInfo.type, rank: iInfo.rank }, 1);
+            var newItem = { name: iName, type: iInfo.type, rank: iInfo.rank };
+            if (iInfo.usage) newItem.usage = iInfo.usage; // 도구 구매 시 내구도 속성 부여
+            util_addDgnItem(user.dgnBag, newItem, 1);
         }
         
     user.skipHealing = true;
@@ -17958,7 +17972,11 @@ function _showDgnInfoMain(user, replier, roomData, targetUid, roomName) {
 
     var bagStrArr = [];
     user.dgnBag.forEach(function(it) {
-        bagStrArr.push(it.name + " x" + (it.qty || 1));
+        if (it.type === "tool") {
+            bagStrArr.push(it.name + "(내구도:" + (it.usage || 5) + ")");
+        } else {
+            bagStrArr.push(it.name + " x" + (it.qty || 1));
+        }
     });
     var bagDisplay = bagStrArr.length > 0 ? bagStrArr.join(", ") : "비어있음";
 

@@ -4310,15 +4310,24 @@ function _runSector16Logic(data, ctx) {
                         // 3. [경쟁형] 최고 투자자 색출
                         var topUid = "";
                         var maxBet = 0;
+                        var topName = "공석";
                         for (var uid in venture.bets) {
                             if (venture.bets[uid] > maxBet) {
                                 maxBet = venture.bets[uid];
                                 topUid = uid;
                             }
                         }
+                        if (topUid && mainRoomData.users[topUid]) topName = mainRoomData.users[topUid].name;
+
+                        // 최대 펀딩 한도 및 80% 기준점 계산 (물가 배율 연동)
+                        var ecoMult = util_getEcoMultiplier(ctx.targetRoom);
+                        var baseMax = vCfg.MAX_BET || 100000;
+                        var maxLimit = Math.floor((baseMax * ecoMult) / 10000) * 10000;
+                        var highBetThreshold = maxLimit * 0.8;
 
                         var resultMsg = "🚢 [제 " + venture.round + "회 왕립 상선단 귀항]\n━━━━━━━━━━━━━━━\n" +
-                                        "상선단: " + venture.fleetName + "\n\n" +
+                                        "상선단: " + venture.fleetName + "\n" +
+                                        "👑 [제독]: " + topName + "\n\n" +
                                         "🗺️ [항해 일지]\n" +
                                         "• " + evObj.name + ": " + evObj.msg + "\n" +
                                         "• 협동: 총 투자금 " + fp(venture.totalPool) + "P 달성!\n\n" +
@@ -4328,6 +4337,8 @@ function _runSector16Logic(data, ctx) {
                         
                         var totalPaid = 0;
                         var winLog = [];
+                        var medalLog = []; // 훈장 수여자 명단 보관함
+                        
                         for(var uid in venture.bets) {
                             var betAmt = venture.bets[uid];
                             var payout = Math.floor(betAmt * finalMult);
@@ -4338,26 +4349,35 @@ function _runSector16Logic(data, ctx) {
                                 totalPaid += payout;
                                 
                                 var line = "• " + u.name + " +" + fp(payout) + "P";
+                                if (uid === topUid) line = "👑 " + line; // 제독 강조 표시
+                                winLog.push(line);
                                 
-                                // 훈장 지급 판정 (제독 100%, 10만P 이상 20%)
+                                // 훈장 지급 판정 (독립적 확률 계산)
                                 var earnedMedal = false;
                                 if (uid === topUid) {
-                                    earnedMedal = true;
-                                    line = "👑 " + line + " [제독]";
-                                } else if (betAmt >= 100000 && Math.random() < 0.20) {
-                                    earnedMedal = true;
+                                    // 제독: 40% 확률
+                                    if (Math.random() < 0.40) earnedMedal = true; 
+                                } else if (betAmt >= highBetThreshold) {
+                                    // 그 외 한도의 80% 이상 투자자: 20% 확률
+                                    if (Math.random() < 0.20) earnedMedal = true; 
                                 }
                                 
                                 if (earnedMedal) {
                                     u.royalMedals = (Number(u.royalMedals) || 0) + 1;
-                                    line += " 🎖️";
+                                    medalLog.push("🎖️ " + u.name);
                                 }
-                                
-                                winLog.push(line);
                             }
                         }
-                        resultMsg += "💰 총 지급액: " + fp(totalPaid) + "P\n" + winLog.join("\n") + 
-                                     "\n\n💡 👑제독(최고투자자) 및 10만P 이상 투자자(20%)에게 🎖️왕실 훈장이 수여되었습니다.";
+                        
+                        resultMsg += "💰 총 지급액: " + fp(totalPaid) + "P\n" + winLog.join("\n");
+                        
+                        // 훈장 수여자가 있을 경우에만 구분선 상단에 별도 표기
+                        if (medalLog.length > 0) {
+                            resultMsg += "\n\n[✨ 왕실 훈장 수여 명단]\n" + medalLog.join("\n");
+                        }
+                        
+                        resultMsg += "\n━━━━━━━━━━━━━━━\n💡 고액을 펀딩하거나 제독이 되면 왕실 훈장 수여 확률이 발생합니다.";
+                        
                         Api.replyRoom(ctx.targetRoom, resultMsg);
                     }
 

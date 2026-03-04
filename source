@@ -5992,18 +5992,10 @@ function _handleSelectionLogic(msg, user, data, replier, roomName, targetUid) {
            }
 
         else if (type === "admin_point_give") {
-            // [v17.6.4] 중복 유저 선택 후 포인트 지급 연동
-            util_updatePoint(targetUser, targetRoomData, extra.amount, "관리자 지급", targetRoom);
-            
-            replier.reply(formatAdmin("포인트 지급 완료", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님: +" + fp(extra.amount) + "P\n(현재: " + fp(targetUser.point) + "P)"));
-            
-            try { 
-                Api.replyRoom("베릭방", "⚙️ [Admin Action: Selected]\n• 실행자: " + user.name + "\n• 대상: [" + targetRoom + "] " + targetUser.name + "\n• 내용: " + fp(extra.amount) + "P 지급 완료"); 
-            } catch(e) {}
-            
-            safeSaveData(data, true);
-            return true; // 세션 종료
-        }
+            // [v17.7] 중복 유저 선택 후 바로 지급하지 않고 재화 선택 메뉴로 이동
+            _showCurrencySelectMenu(user, targetUser, extra.amount, replier, roomName, targetUid, targetRoom);
+            return true;
+
         else if (type === "admin_point_take") {
             util_updatePoint(targetUser, targetRoomData, -extra.amount, "관리자 차감", targetRoom);
             replier.reply(formatAdmin("포인트 차감 완료", "[" + targetRoom + "] " + getDisplayName(targetUser) + "님 차감 처리됨"));
@@ -7576,7 +7568,8 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         'trade_raid_list', 'trade_battle_list', 'trade_escort_confirm',
         'trade_pedia_main', 'trade_pedia_detail_view',
         'trade_warehouse', 'trade_warehouse_action',
-        'dgn_lobby', 'dgn_turn', 'dgn_combat', 'dgn_theme_select'
+        'dgn_lobby', 'dgn_turn', 'dgn_combat', 'dgn_theme_select',
+        'admin_point_currency'
     ];
 
     var logicRoom = (roomName === "베릭방" || (typeof ALLOWED_ROOMS !== 'undefined' && ALLOWED_ROOMS.indexOf(roomName) === -1)) ? "내리다" : roomName;
@@ -8508,6 +8501,52 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         
         state.time = Date.now(); // 연속 조회를 위해 세션 시간 연장
         replier.reply(formatCommand("📘 해양 생물 상세 정보", user, detailBody));
+        return true;
+    }
+
+        // [관리자] 다중 재화 지급 선택 핸들러
+    if (state.type === 'admin_point_currency') {
+        var choiceNum = parseInt(choice);
+        if (isNaN(choiceNum) || choiceNum < 1 || choiceNum > 7) {
+            return replier.reply(formatError(user, "번호 오류", "1~7번 사이의 재화 번호를 선택하세요."));
+        }
+        
+        var ext = state.extra;
+        var tRoomData = data.rooms[ext.targetRoom];
+        if (!tRoomData || !tRoomData.users[ext.targetUid]) {
+            delete menuWaitState[targetUid];
+            return replier.reply(formatError(user, "대상 오류", "유저 데이터를 찾을 수 없습니다."));
+        }
+        
+        var tUser = tRoomData.users[ext.targetUid];
+        var amt = ext.amount;
+        var currencyName = "";
+        
+        if (choiceNum === 1) {
+            util_updatePoint(tUser, tRoomData, amt, "관리자 전역 지급", ext.targetRoom);
+            currencyName = "기본 포인트 (P)";
+        } else if (choiceNum === 2) {
+            tUser.dgnGold = (Number(tUser.dgnGold) || 0) + amt;
+            currencyName = "던전 금화 (G)";
+        } else if (choiceNum === 3) {
+            if (!tUser.bm) tUser.bm = { isRegistered: false, krw: 0, weapons: {"소총":0, "전술장비":0, "폭발물":0, "중화기":0}, vaults: {"USD":0, "EUR":0, "RUB":0, "AED":0} };
+            tUser.bm.krw = (Number(tUser.bm.krw) || 0) + amt;
+            currencyName = "블랙마켓 원화 (KRW)";
+        } else {
+            var vKey = ["USD", "EUR", "RUB", "AED"][choiceNum - 4];
+            if (!tUser.bm) tUser.bm = { isRegistered: false, krw: 0, weapons: {"소총":0, "전술장비":0, "폭발물":0, "중화기":0}, vaults: {"USD":0, "EUR":0, "RUB":0, "AED":0} };
+            if (!tUser.bm.vaults) tUser.bm.vaults = {"USD":0, "EUR":0, "RUB":0, "AED":0};
+            tUser.bm.vaults[vKey] = (Number(tUser.bm.vaults[vKey]) || 0) + amt;
+            currencyName = "블랙마켓 " + vKey;
+        }
+        
+        tUser.skipHealing = true;
+        safeSaveData(data, true);
+        delete menuWaitState[targetUid];
+        
+        try { Api.replyRoom("베릭방", "⚙️ [Admin Action: Point Give]\n• 실행자: " + user.name + "\n• 대상: [" + ext.targetRoom + "] " + tUser.name + "\n• 지급: " + fp(amt) + " " + currencyName); } catch(e) {}
+        
+        replier.reply(formatAdmin("재화 지급 완료", "[" + ext.targetRoom + "] " + tUser.name + "님에게\n" + fp(amt) + " " + currencyName + " 지급을 완료했습니다."));
         return true;
     }
 
@@ -10766,18 +10805,24 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
     if (msg.indexOf("/포인트지급 ") === 0) {
         var parts = msg.trim().split(/\s+/);
         if (parts.length < 3) return replier.reply(formatError(user, "형식 오류", "/포인트지급 [닉네임] [금액]"));
-        var am = parseInt(parts.pop());
+        
+        // 쉼표가 포함된 숫자도 처리 가능하게 정제
+        var am = parseInt(parts.pop().replace(/,/g, ""));
         var tn = parts.slice(1).join(" ").trim();
         
+        if (isNaN(am) || am <= 0) return replier.reply(formatError(user, "금액 오류", "지급할 금액을 숫자로 입력하세요."));
+
         var found = findUserGlobal(tn, roomName);
         if (!found.length) { replier.reply(formatError(user, "대상 없음", "유저를 찾을 수 없습니다.")); return true; }
-        if (found.length > 1) { handleUserSelection(replier, targetUid, found, "admin_point_give", { amount: am }, user, roomName); return true; }
+        if (found.length > 1) { 
+            // 중복 유저가 있을 경우 유저 선택창으로 이동
+            handleUserSelection(replier, targetUid, found, "admin_point_give", { amount: am }, user, roomName); 
+            return true; 
+        }
         
         var f = found[0];
-        util_updatePoint(f.data, data.rooms[f.roomName], am, "관리자 전역 지급", f.roomName);
-        replier.reply(formatAdmin("지급 완료", "[" + f.roomName + "] " + f.data.name + "님: +" + fp(am) + "P"));
-        try { Api.replyRoom("베릭방", "⚙️ [Admin Action]\n• 실행자: " + sender + "\n• 내용: " + msg); } catch(e) {}
-        safeSaveData(data);
+        // 단일 유저가 식별된 경우 다중 재화 선택 메뉴 호출
+        _showCurrencySelectMenu(user, f.data, am, replier, roomName, targetUid, f.roomName);
         return true;
     }
 
@@ -10875,6 +10920,39 @@ function _adminEconomyLogic(msg, user, data, replier, roomName, targetUid, sende
             "✨ 이제 [/무역재고] 확인 시 정상 펌핑된 수치가 출력됩니다."));
         return true;
     }
+
+/**
+ * [관리자 헬퍼] 다중 포인트/재화 지급을 위한 메뉴 출력 함수
+ */
+function _showCurrencySelectMenu(adminUser, targetUser, amount, replier, currentRoomName, adminUid, targetUserRoom) {
+    var menu = "지급 대상: [" + targetUserRoom + "] " + targetUser.name + "\n" +
+               "지급 수량: " + fp(amount) + "\n\n" +
+               "[지급할 재화 종류 선택]\n" +
+               "1. 💰 기본 포인트 (P)\n" +
+               "2. 🟡 던전 금화 (G)\n" +
+               "3. 💵 블랙마켓 원화 (KRW)\n" +
+               "4. 🇺🇸 블랙마켓 USD\n" +
+               "5. 🇪🇺 블랙마켓 EUR\n" +
+               "6. 🇷🇺 블랙마켓 RUB\n" +
+               "7. 🇦🇪 블랙마켓 AED\n\n" +
+               "숫자를 입력하세요. (취소: [취소])";
+               
+    var db = getDatabase();
+    var cRoomData = db.rooms[currentRoomName] || db.rooms["내리다"];
+    if (!cRoomData.features.states.menuWait) cRoomData.features.states.menuWait = {};
+    
+    cRoomData.features.states.menuWait[adminUid] = {
+        type: 'admin_point_currency',
+        time: Date.now(),
+        originRoom: currentRoomName,
+        extra: {
+            targetUid: targetUser.uid,
+            targetRoom: targetUserRoom,
+            amount: amount
+        }
+    };
+    replier.reply(formatAdmin("포인트/재화 종류 선택", menu));
+}
 
 //==========섹터36==========
 
@@ -11327,7 +11405,7 @@ function _executeItemGive(tUser, iName, count, replier, tRoom, adminUser, adminU
         }
     }
 
-    // 5. 상점 아이템 (무역 상점)
+    // 4. 상점 아이템 (무역 상점 및 모든 카테고리 자동 스캔)
     for (var i = 0; i < SHOP_ITEMS.length; i++) {
         var shName = SHOP_ITEMS[i].name;
         if (shName.replace(/\s/g,"").indexOf(cleanI) !== -1 || cleanI.indexOf(shName.replace(/\s/g,"")) !== -1) {
@@ -11336,6 +11414,29 @@ function _executeItemGive(tUser, iName, count, replier, tRoom, adminUser, adminU
                 if(matches[j].name.replace(/\s/g,"") === shName.replace(/\s/g,"")) dup=true; 
             }
             if(!dup) matches.push({ type: "shop", name: shName, item: SHOP_ITEMS[i] });
+        }
+    }
+
+    // 5. 던전 아이템 (DGN_ITEM_DB 자동 스캔 지원)
+    if (typeof DGN_ITEM_DB !== 'undefined') {
+        for (var dName in DGN_ITEM_DB) {
+            if (dName.replace(/\s/g,"").indexOf(cleanI) !== -1 || cleanI.indexOf(dName.replace(/\s/g,"")) !== -1) {
+                var dup = false;
+                for(var j=0; j<matches.length; j++) { if(matches[j].name.replace(/\s/g,"") === dName.replace(/\s/g,"")) dup=true; }
+                if(!dup) matches.push({ type: "dgn_item", name: dName, item: DGN_ITEM_DB[dName] });
+            }
+        }
+    }
+
+    // 6. 블랙마켓 무기 (BM_CONFIG.WEAPONS 자동 스캔 지원 - 이모지 예외처리 포함)
+    if (typeof BM_CONFIG !== 'undefined' && BM_CONFIG.WEAPONS) {
+        for (var wName in BM_CONFIG.WEAPONS) {
+            var wActualName = BM_CONFIG.WEAPONS[wName].name.replace(/[^가-힣a-zA-Z0-9]/g, ""); 
+            if (wName.replace(/\s/g,"").indexOf(cleanI) !== -1 || cleanI.indexOf(wName.replace(/\s/g,"")) !== -1 || wActualName.indexOf(cleanI) !== -1 || cleanI.indexOf(wActualName) !== -1) {
+                var dup = false;
+                for(var j=0; j<matches.length; j++) { if(matches[j].name.indexOf(wName) !== -1) dup=true; }
+                if(!dup) matches.push({ type: "bm_weapon", name: wName, item: BM_CONFIG.WEAPONS[wName] });
+            }
         }
     }
 
@@ -11433,6 +11534,44 @@ function _finalizeItemGive(tUser, matchInfo, count, replier, tRoom) {
         }
         logMsg = "[" + item.name + "] " + count + "개 지급 완료";
     }
+
+    else if (matchInfo.type === "dgn_item") {
+        if (!tUser.dgnBag) tUser.dgnBag = [];
+        var maxBag = (SYSTEM_CONFIG && SYSTEM_CONFIG.DUNGEON && SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) ? SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS : 20;
+        var added = 0;
+        
+        // 던전 장비 및 포션 지급 (가방 용량 한도까지만 지급)
+        for(var d=0; d<count; d++) {
+            if (tUser.dgnBag.length < maxBag) {
+                tUser.dgnBag.push({ name: matchInfo.name, type: matchInfo.item.type, rank: matchInfo.item.rank });
+                added++;
+            } else {
+                logMsg += "\n⚠️ 가방이 가득 차 초과분은 지급되지 않았습니다.";
+                break;
+            }
+        }
+        logMsg = "[던전 아이템: " + matchInfo.name + "] " + added + "개 지급 (탐험용 가방)";
+    }
+    else if (matchInfo.type === "bm_weapon") {
+        if (!tUser.bm) tUser.bm = { isRegistered: true, krw: 0, weapons: {"소총":0, "전술장비":0, "폭발물":0, "중화기":0}, vaults: {"USD":0, "EUR":0, "RUB":0, "AED":0} };
+        if (!tUser.bm.weapons) tUser.bm.weapons = {"소총":0, "전술장비":0, "폭발물":0, "중화기":0};
+        
+        var wKey = matchInfo.name; // 무기 키값 (소총, 폭발물 등)
+        var currentWeapons = 0;
+        for (var k in tUser.bm.weapons) currentWeapons += Number(tUser.bm.weapons[k] || 0);
+        
+        var wMax = (typeof BM_CONFIG !== 'undefined' && BM_CONFIG.MAX_CAPACITY) ? BM_CONFIG.MAX_CAPACITY : 100;
+        var addable = Math.min(count, Math.max(0, wMax - currentWeapons));
+        
+        if (addable > 0) {
+            tUser.bm.weapons[wKey] = (Number(tUser.bm.weapons[wKey]) || 0) + addable;
+            tUser.bm.isRegistered = true; // 무기 지급 시 자동 블랙마켓 등록 활성화
+        }
+        
+        if (addable < count) logMsg += "\n⚠️ 무기고 용량을 초과하여 일부만 지급되었습니다.";
+        logMsg = "[블랙마켓 무기: " + (matchInfo.item.name || wKey) + "] " + addable + "개 지급 (개인 무기고)";
+    }
+
     else if (matchInfo.type === "manual") {
         // 예외 수동 처리 (강제 창고행)
         if (!tUser.warehouse) tUser.warehouse = {};

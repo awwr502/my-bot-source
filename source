@@ -184,7 +184,8 @@ if (typeof globalData.bmWorld === 'undefined') {
         rates: { "USD": 1300, "EUR": 1450, "RUB": 600, "AED": 350 },
         tensions: { "USD": "➖ 안정", "EUR": "➖ 안정", "RUB": "➖ 안정", "AED": "➖ 안정" },
         contracts: [],
-        lastUpdateMin: -1
+        lastUpdateMin: -1,
+        pools: { "USD": 10000, "EUR": 10000, "RUB": 10000, "AED": 10000 }
     };
 }
 
@@ -17708,57 +17709,81 @@ function _runBlackMarketScheduler(data, ctx) {
         var currencies = ["USD", "EUR", "RUB", "AED"];
         var weaponKeys = ["소총", "전술장비", "폭발물", "중화기"];
 
-        currencies.forEach(function(cur) {
-            var base = BM_CONFIG.REGIONS[cur].baseRate;
-            var currentRate = bm.rates[cur] || base; // 현재 환율을 가져옴 (없으면 원가)
-
-            // 1. 상태(정세) AI 결정 (내전 10%, 폭락 20%, 호조 20%, 안정 50%)
-            var randEvent = Math.random();
-            var status = "";
-            var fluctuation = 0;
-
-            if (randEvent < 0.10) {
-                status = "🔥 내전 발발 (무기수요 급증)";
-                fluctuation = (Math.random() * 0.3) + 0.2; // +20% ~ +50% 폭등
-            } else if (randEvent < 0.30) {
-                status = "📉 가치 폭락";
-                fluctuation = -(Math.random() * 0.15) - 0.1; // -10% ~ -25% 폭락
-            } else if (randEvent < 0.50) {
-                status = "🔺 반등 호조";
-                fluctuation = (Math.random() * 0.15) + 0.05; // +5% ~ +20% 상승
-            } else {
-                status = "➖ 안정";
-                fluctuation = (Math.random() * 0.1) - 0.05; // -5% ~ +5% 보합세 (미세 변동)
+        // [지능형 동적 스케일링] 블랙마켓 활성 유저 수 집계
+        var activeBmUsers = 0;
+        var nowTs = Date.now();
+        var mainUsers = (data.rooms["내리다"] && data.rooms["내리다"].users) ? data.rooms["내리다"].users : {};
+        
+        for (var uid in mainUsers) {
+            var tu = mainUsers[uid];
+            // 최근 3일 이내 접속한 블랙마켓 가입자만 활성 유저로 카운트
+            if (tu.bm && tu.bm.isRegistered && (nowTs - (new Date(tu.lastDate || 0).getTime() || 0) < 3 * 86400000)) {
+                activeBmUsers++;
             }
+        }
 
-            // 2. 누적 환율 계산 (현재가 기준) 및 복원력(Gravity) 적용
-            var rawNewRate = currentRate * (1 + fluctuation);
-            
-            // 너무 기준가에서 멀어지면 15%의 힘으로 원래 가치로 돌아가려는 탄성 작용
-            var newRate = rawNewRate + (base - rawNewRate) * 0.15; 
+        // 활성 유저가 적어도(예: 4명) 최소 5명 규모의 가상 시장(AI 큰손 개입)을 보장하여 다이내믹한 시세 펌핑 유지
+        var virtualUsers = Math.max(5, activeBmUsers);
+        var dynBaseline = virtualUsers * 2000; // 1인당 외환 보유고 2000 기준 (5명이면 10,000)
 
-            // 3. 상하한선 강력 방어 (원가의 30% ~ 400% 사이로 제한하여 붕괴 방지)
-            newRate = Math.max(base * 0.3, Math.min(base * 4.0, newRate));
+        if (!bm.pools) bm.pools = { "USD": dynBaseline, "EUR": dynBaseline, "RUB": dynBaseline, "AED": dynBaseline };
+
+        currencies.forEach(function(cur) {
+            var baseRate = BM_CONFIG.REGIONS[cur].baseRate;
+            var currentPool = Number(bm.pools[cur] || dynBaseline);
+
+            // 1. 가상 AI 브로커들의 공격적인 환치기 (시장 규모의 -25% ~ +25% 물량 변동)
+            // 유저가 가만히 있어도 10분마다 시장이 크게 출렁거리게 만드는 핵심 로직
+            var aiActivity = Math.floor((Math.random() * (dynBaseline * 0.50)) - (dynBaseline * 0.25));
+            currentPool += aiActivity;
+
+            // 2. 시장 회복력 (Elasticity): 무역과 동일하게 기준점(dynBaseline)으로 서서히 회귀 (10%)
+            currentPool = currentPool + (dynBaseline - currentPool) * 0.10;
+
+            // 3. 상하한선 강제 방어 (동적 기준점의 10% ~ 400% 이내로 고립 방지)
+            var minPool = Math.floor(dynBaseline * 0.1);
+            var maxPool = Math.floor(dynBaseline * 4.0);
+            currentPool = Math.max(minPool, Math.min(maxPool, currentPool));
+            bm.pools[cur] = currentPool;
+
+            // 4. 기본 노이즈 (85% ~ 115%)
+            var noise = 0.85 + (Math.random() * 0.30);
+
+            // 5. 수요-공급 기반 동적 희소성 계수 (가중치 1.5배로 변동폭 극대화)
+            var scarcityMult = 1 + ((dynBaseline - currentPool) / dynBaseline) * 1.5;
+            scarcityMult = Math.max(0.4, Math.min(3.0, scarcityMult)); // 최소 40% ~ 최대 300% 변동 허용
+
+            // 6. 최종 환율 산출
+            var finalRate = Math.floor(baseRate * noise * scarcityMult);
+            var oldRate = bm.rates[cur] || baseRate;
+            bm.rates[cur] = Math.max(10, finalRate); // 10원 밑으로 떨어지지 않게 방어
+
+            // 7. 시세 변화율에 따른 정세(Tension) 텍스트 결정
+            var rateDiff = finalRate / oldRate;
+            var status = "➖ 안정";
+            if (rateDiff >= 1.20) status = "🔥 매물 품귀 (폭등)";
+            else if (rateDiff >= 1.05) status = "🔺 수요 증가 (상승)";
+            else if (rateDiff <= 0.80) status = "📉 외환 과잉 (폭락)";
+            else if (rateDiff <= 0.95) status = "🔹 매도 우위 (하락)";
             
-            bm.rates[cur] = Math.floor(newRate);
             bm.tensions[cur] = status;
 
-            // 4. 브로커 의뢰 생성 (각 국가별 1~2개)
+            // 8. 브로커 의뢰 생성 (각 국가별 1~2개)
             var contractCount = Math.floor(Math.random() * 2) + 1;
             for (var i = 0; i < contractCount; i++) {
                 var wKey = weaponKeys[Math.floor(Math.random() * weaponKeys.length)];
-                var reqQty = Math.floor(Math.random() * 20) + 10; // 10~30개 요구
-                var isWar = (status.indexOf("내전") !== -1);
+                var reqQty = Math.floor(Math.random() * 20) + 10; 
                 
                 var wPrice = BM_CONFIG.WEAPONS[wKey].price;
-                // 내전 중이면 마진율(수익률) 폭등 (기본 1.2~1.7배 -> 내전 2.0~3.0배)
-                var margin = isWar ? (Math.random() * 1.0 + 2.0) : (Math.random() * 0.5 + 1.2); 
+                // 매물 품귀(폭등) 상태일수록 의뢰의 마진율(수익)이 극대화됨 (1.5배 ~ 2.5배)
+                var margin = (status.indexOf("품귀") !== -1) ? (Math.random() * 1.0 + 1.5) : (Math.random() * 0.5 + 1.2); 
                 var krwValue = wPrice * reqQty * margin;
+                
                 // 보상(현지 화폐) = (원화가치) / 현재환율
                 var rewardLocal = Math.floor(krwValue / bm.rates[cur]);
                 
-                // 내전 중이면 적발 위험(risk)도 같이 높아짐
-                var risk = isWar ? Math.floor(Math.random() * 20 + 20) : Math.floor(Math.random() * 15 + 5); // 5~35%
+                // 보상이 좋은 만큼 적발 위험도 상승
+                var risk = (status.indexOf("품귀") !== -1) ? Math.floor(Math.random() * 20 + 15) : Math.floor(Math.random() * 15 + 5); 
 
                 bm.contracts.push({
                     id: generateUUID().substring(0, 8),
@@ -18051,15 +18076,19 @@ function _handleBMStep(msg, user, data, replier, roomName, targetUid) {
 
         user.bm.vaults[cur] -= qty;
         user.bm.krw += convertedKrw;
+        
+        // [실물 경제 연동] 유저가 외환을 팔면(환전) 시장에 매물이 풀려 보유고가 증가함 (시세 하락 유도)
+        if (!data.bmWorld.pools) data.bmWorld.pools = { "USD": 10000, "EUR": 10000, "RUB": 10000, "AED": 10000 };
+        data.bmWorld.pools[cur] = (Number(data.bmWorld.pools[cur]) || 10000) + qty;
+        
         user.skipHealing = true;
-        safeSaveData(data, true);
-
         safeSaveData(data, true);
 
         var exMsg = "현지 화폐를 원화(KRW)로 안전하게 세탁하여 본국으로 송금했습니다.\n\n" +
                     "📉 사용 외환: -" + fp(qty) + " " + cur + "\n" +
                     "📈 적용 환율: " + fp(rate) + "\n" +
-                    "💰 송금 완료: +" + fp(convertedKrw) + " 원";
+                    "💰 송금 완료: +" + fp(convertedKrw) + " 원\n\n" +
+                    "💡 (시장에 " + cur + " 매물이 풀렸습니다)";
         replier.reply(formatCommand("💼 자금 세탁 및 송금 완료", user, exMsg, "뒤로가기: [뒤로]"));
         state.time = Date.now();
         return true;
@@ -18095,10 +18124,16 @@ function _processBMArrival(user, data, replier, roomName) {
             replier.reply(formatError(user, "납품 실패 보고", resMsg));
         } else {
             user.bm.vaults[c.region] = (Number(user.bm.vaults[c.region]) || 0) + c.reward;
+            
+            // [실물 경제 연동] 의뢰 성공으로 브로커가 대금을 지불하면 시장의 외환 보유고가 감소함 (시세 상승 유도)
+            if (!data.bmWorld.pools) data.bmWorld.pools = { "USD": 10000, "EUR": 10000, "RUB": 10000, "AED": 10000 };
+            data.bmWorld.pools[c.region] = Math.max(1000, (Number(data.bmWorld.pools[c.region]) || 10000) - c.reward);
+
             resMsg += "✅ [작전 성공]\n" +
                       "포위망을 뚫고 무사히 물건을 전달했습니다.\n" +
                       "대금은 현지 비밀 금고에 안전하게 보관되었습니다.\n\n" +
-                      "💰 획득: +" + fp(c.reward) + " " + c.region;
+                      "💰 획득: +" + fp(c.reward) + " " + c.region + "\n\n" +
+                      "💡 (시장에서 " + c.region + " 매물이 감소했습니다)";
             replier.reply(formatCommand("🚚 무기 납품 완료", user, resMsg));
         }
 

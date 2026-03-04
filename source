@@ -160,7 +160,8 @@ var DGN_ITEM_DB = {
     "낡은 곡괭이": { type: "tool", rank: "일반", price: 5000, usage: 5 },
     "채집용 낫": { type: "tool", rank: "일반", price: 5000, usage: 5 },
     "철광석": { type: "mat", rank: "일반", price: 1500 },
-    "마력 깃든 약초": { type: "mat", rank: "희귀", price: 2500 }
+    "마력 깃든 약초": { type: "mat", rank: "희귀", price: 2500 },
+    "던전 입장권": { type: "consumable", rank: "희귀", price: 5000, effect: "ticket" }
 };
 
 if (typeof globalData === 'undefined' || globalData === null) {
@@ -405,6 +406,7 @@ var USER_SCHEMA = [
     { key: 'dgnState', default: null, type: 'object' }, // 현재 진행중인 던전 상태
     { key: 'dgnGuild', default: { rank: 'F', exp: 0, clearCount: 0 }, type: 'object' },
     { key: 'dgnGold', default: 0, type: 'number' }, // 던전 전용 재화 금화
+    { key: 'dgnTickets', default: 2, type: 'number' }, // 매일 지급되는 던전 입장권
     { key: 'bm', default: { isRegistered: false, krw: 0, weapons: {"소총":0, "전술장비":0, "폭발물":0, "중화기":0}, vaults: {"USD":0, "EUR":0, "RUB":0, "AED":0} }, type: 'object' }
 ];
 
@@ -4960,7 +4962,11 @@ function _runSector17Logic(data, ctx) {
             
             // [보안강화] 시간 비례 적립 이자 정산 (0시 정각)
             var now = Date.now();
-            if (u.lastBankUpdateTime > 0 && Number(u.bank) > 0) {
+            
+            // 던전 입장권 매일 무료 충전 (최소 2장 보장)
+            u.dgnTickets = Math.max(2, Number(u.dgnTickets || 0));
+
+            if (u.lastBankUpdateTime > 0 && Number(u.bank) > 0) {
                 var timePassed = now - u.lastBankUpdateTime;
                 var dayMs = 24 * 60 * 60 * 1000;
                 var lastMinuteEarned = Number(u.bank) * SYSTEM_CONFIG.ECO.BANK.INTEREST_RATE * (timePassed / dayMs);
@@ -16443,16 +16449,44 @@ function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
     return true;
 }
 
+function _advanceDungeonDepth(user) {
+    var d = user.dgnState;
+    var s = user.dgnStat;
+    d.depth++;
+    
+    // 맵 루프는 테마 선택형으로 변경되었으므로 삭제. 선택된 d.zone이 계속 유지됨.
+    if (d.zone === "DESERT" && Math.random() < 0.15) {
+        var stormDmg = Math.floor(s.maxHp * 0.1);
+        s.hp -= stormDmg;
+        d.log += "\n🌪️ [모래폭풍] 거친 모래바람에 휩싸여 체력을 잃었습니다! (-" + stormDmg + " HP)";
+    }
+    if (d.zone === "CANYON") {
+        var fillRatio = user.dgnBag.length / SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS;
+        if (fillRatio >= 0.7) {
+            var fallProb = 0.20 + (fillRatio - 0.70); 
+            fallProb = Math.min(0.50, fallProb);
+            if (Math.random() < fallProb) {
+                var fallDmg = Math.floor(s.maxHp * 0.15);
+                s.hp -= fallDmg;
+                var loseCount = Math.floor(user.dgnBag.length * 0.25);
+                for (var i = 0; i < loseCount; i++) user.dgnBag.pop(); 
+                d.log += "\n💥 [추락] 무게를 이기지 못하고 협곡 다리에서 굴러 떨어졌습니다!\n(-" + fallDmg + " HP, 가방 물품 " + loseCount + "개 유실)";
+            }
+        }
+    }
+}
+
 function _showDungeonLobby(user, replier, roomData, targetUid, roomName) {
     var s = user.dgnStat;
+    var tCount = Number(user.dgnTickets || 0);
     var body = "어둡고 습한 해저 동굴의 입구, [탐험가 마을]에 도착했습니다.\n\n" +
                "📊 [내 상태]\n" +
-               "💰 금화: " + fp(user.dgnGold || 0) + " G\n" +
+               "🎫 입장권: " + tCount + " 장 | 💰 금화: " + fp(user.dgnGold || 0) + " G\n" +
                "❤️ HP: " + s.hp + " / " + s.maxHp + "\n" +
                "⚡ ST: " + s.stam + " / " + s.maxStam + " | 🍖 허기: " + s.hunger + " / " + s.maxHunger + "\n" +
                "🎒 가방: " + user.dgnBag.length + " / " + SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS + " 칸\n" +
                "━━━━━━━━━━━━━━━\n" +
-               "1. ⚔️ 던전 진입 (입장료 10,000P 소모)\n" +
+               "1. ⚔️ 던전 진입 (입장권 1장 소모)\n" +
                "2. 🛡️ 길드 지부 (의뢰/창고 관리)\n" +
                "3. 🏪 상점 구역 (장비/물약 구매)\n" +
                "4. 🎒 내 정보 및 장비 세팅\n\n" +
@@ -16473,7 +16507,7 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
     }
 
     if (state.type === 'dgn_lobby') {
-        if (choice === "1") _startDungeon(user, data, replier, logicRoom, targetUid);
+        if (choice === "1") _showDungeonThemeSelect(user, data, replier, logicRoom, targetUid);
         else if (choice === "2") _showDgnGuildMain(user, replier, roomData, targetUid, logicRoom);
         else if (choice === "3") _showDgnShopMain(user, replier, roomData, targetUid, logicRoom);
         else if (choice === "4") _showDgnInfoMain(user, replier, roomData, targetUid, logicRoom);
@@ -16508,20 +16542,26 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
     else if (state.type === 'dgn_turn') {
         _processDungeonTurn(choice, user, data, replier, logicRoom, targetUid);
     }
+    else if (state.type === 'dgn_theme_select') {
+        _processDungeonThemeSelect(choice, user, data, replier, logicRoom, targetUid);
+    }
     else if (state.type === 'dgn_merchant') {
         if (choice === "1") {
             if ((user.dgnGold || 0) < 50000) return replier.reply(formatError(user, "금화 부족", "던전 금화가 부족합니다."));
             user.dgnGold -= 50000;
             user.ancientMaps = (user.ancientMaps || 0) + 1;
-            user.skipHealing = true;
-            replier.reply(formatCommand("💰 거래 완료", user, "떠돌이 상인에게서 '고대 지도' 1장을 구매했습니다!\n(50,000 G 차감)\n상인은 안개 속으로 사라집니다."));
-            delete roomData.features.states.menuWait[targetUid];
-            safeSaveData(data, true);
+            user.dgnState.log = "상인에게서 고대 지도를 구매한 뒤 다음 층으로 내려갔습니다.";
         } else {
-            replier.reply(formatCommand("🚶 거래 거절", user, "상인을 무시하고 갈 길을 갑니다."));
-            roomData.features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: logicRoom };
-            _showDungeonTurn(user, replier);
+            user.dgnState.log = "상인을 무시하고 갈 길을 갔습니다.";
         }
+        
+        _advanceDungeonDepth(user);
+        if (user.dgnStat.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
+        
+        user.skipHealing = true;
+        safeSaveData(data, true);
+        roomData.features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: logicRoom };
+        _showDungeonTurn(user, replier);
     }
     else if (state.type === 'dgn_combat_main') {
         _processDgnCombatMain(choice, user, data, replier, logicRoom, targetUid);
@@ -16531,33 +16571,54 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
     }
 }
 
-function _startDungeon(user, data, replier, roomName, targetUid) {
-    // 1. 입장권 검사 (현재는 임시로 10000P 차감으로 대체, 추후 인벤토리 입장권 아이템으로 변경 가능)
-    var cost = SYSTEM_CONFIG.DUNGEON.TICKET_PRICE;
-    if (user.point < cost) {
-        return replier.reply(formatError(user, "입장 불가", "던전 탐험 허가증을 구매할 " + fp(cost) + "P가 부족합니다."));
-    }
+function _showDungeonThemeSelect(user, data, replier, roomName, targetUid) {
+    if (user.dgnTickets === undefined) user.dgnTickets = 2; // 기존 유저 마이그레이션
 
-    // 2. 가방 공간 검사
+    var tCount = Number(user.dgnTickets || 0);
+    if (tCount < 1) {
+        return replier.reply(formatError(user, "입장 불가", "던전 입장권이 부족합니다. 상점에서 구매하거나 내일 무료 지급을 기다리세요."));
+    }
+    
     if (user.dgnBag.length >= SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) {
         return replier.reply(formatError(user, "가방 포화", "가방이 꽉 찼습니다! 길드 창고에 물건을 맡기거나 버린 후 진입하세요."));
     }
 
-    // 결제 진행 (입장권은 외부 포인트 소모)
-    util_updatePoint(user, data.rooms["내리다"], -cost, "던전 입장료 지불", roomName);
+    var body = "원하시는 던전 테마(구역)를 선택하세요.\n선택한 구역의 고유한 몬스터와 특성이 층수와 무관하게 계속 유지됩니다.\n\n";
+    var zones = SYSTEM_CONFIG.DUNGEON.ZONE_ORDER;
+    zones.forEach(function(zKey, i) {
+        var z = SYSTEM_CONFIG.DUNGEON.ZONES[zKey];
+        body += (i + 1) + ". " + z.name + "\n   └ 특성: " + z.trait + " (" + z.desc + ")\n";
+    });
+    body += "\n↩️ 뒤로 / ❎취소";
 
-    // 3. 던전 환경(State) 생성
+    data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_theme_select', time: Date.now(), originRoom: roomName };
+    replier.reply(formatCommand("🗺️ 던전 테마 선택", user, body, "입장할 구역의 번호를 입력하세요."));
+}
+
+function _processDungeonThemeSelect(choice, user, data, replier, roomName, targetUid) {
+    var idx = parseInt(choice) - 1;
+    var zones = SYSTEM_CONFIG.DUNGEON.ZONE_ORDER;
+    if (isNaN(idx) || idx < 0 || idx >= zones.length) {
+        return replier.reply(formatError(user, "번호 오류", "올바른 테마 번호를 선택하세요."));
+    }
+
+    var selectedZone = zones[idx];
+    var zInfo = SYSTEM_CONFIG.DUNGEON.ZONES[selectedZone];
+
+    // 입장권 차감
+    user.dgnTickets = Math.max(0, (Number(user.dgnTickets) || 0) - 1);
+
+    // 던전 환경(State) 생성
     user.dgnState = {
         inProgress: true,
-        zone: "SWAMP", // 첫 구역인 늪지대부터 시작
-        depth: 1,  // 층수
-        log: "축축한 냄새가 코를 찌릅니다. 동굴 내부로 발을 들였습니다.",
-        loots: { points: 0, items: [] } // 이번 탐험에서 얻은 금화/전리품
+        zone: selectedZone, // 선택한 구역 고정
+        depth: 1,  
+        log: "[" + zInfo.name + "] 구역의 깊은 곳으로 발을 들였습니다.",
+        loots: { points: 0, items: [] } 
     };
     user.skipHealing = true;
     safeSaveData(data, true);
 
-    // 탐험 턴 세션으로 전환
     data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
     _showDungeonTurn(user, replier);
 }
@@ -16709,18 +16770,19 @@ function _processDungeonTurn(choice, user, data, replier, roomName, targetUid) {
                     if (user.dgnBag[toolIdx].usage <= 0) user.dgnBag.splice(toolIdx, 1); 
                     
                     if (user.dgnBag.length < SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) {
-                        user.dgnBag.push({ name: rewardItem, type: "mat", rank: (isOre ? "일반" : "희귀") });
-                        d.log += "⛏️ [" + reqTool + "]를 사용하여 [" + rewardItem + "]을(를) 채집했습니다!";
-                    } else {
-                        d.log += "⛏️ 채집에 성공했으나 가방이 꽉 차서 챙기지 못했습니다.";
-                    }
+                    user.dgnBag.push({ name: rewardItem, type: "mat", rank: (isOre ? "일반" : "희귀") });
+                    d.log += "⛏️ [" + reqTool + "]를 사용하여 [" + rewardItem + "]을(를) 채집했습니다!";
                 } else {
-                    d.log += "🌿 신비한 자원을 발견했으나 [" + reqTool + "] 도구가 없어 채집하지 못했습니다.";
+                    d.log += "⛏️ 채집에 성공했으나 가방이 꽉 차서 챙기지 못했습니다.";
                 }
-                movedDown = true;
-            } 
+            } else {
+                d.log += "🌿 신비한 자원을 발견했으나 [" + reqTool + "] 도구가 없어 채집하지 못했습니다.";
+            }
+            
+            _advanceDungeonDepth(user);
+        } 
 
-            // [15% 확률: 랜덤 이벤트 (제단/미믹 등)]
+        // [15% 확률: 랜덤 이벤트 (제단/미믹 등)]
             else {
                 var evtRand = Math.random();
                 if (evtRand < 0.2) {
@@ -16735,61 +16797,28 @@ function _processDungeonTurn(choice, user, data, replier, roomName, targetUid) {
                     d.loots.points += dropGold;
                     d.log += "🏺 [오래된 상자] 먼지 쌓인 상자에서 " + dropGold + " G를 발견했습니다!";
                 } else {
-                    var trapDmg = Math.floor(s.maxHp * 0.2);
-                    s.hp -= trapDmg;
-                    d.log += "💥 [미믹의 함정] 보물상자인 줄 알았으나 함정이었습니다! (-" + trapDmg + " HP)";
-                }
-                if (s.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
-                movedDown = true;
+                var trapDmg = Math.floor(s.maxHp * 0.2);
+                s.hp -= trapDmg;
+                d.log += "💥 [미믹의 함정] 보물상자인 줄 알았으나 함정이었습니다! (-" + trapDmg + " HP)";
             }
+            if (s.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
+            
+            _advanceDungeonDepth(user);
+        }
+    } else {
+        // 조우하지 않았을 경우
+        if (!isExplore) {
+            d.log += "⏩ 몬스터를 피해 빠르게 다음 층 계단을 찾아 내려갔습니다!";
         } else {
-            // 조우하지 않았을 경우
-            if (!isExplore) {
-                d.log += "⏩ 몬스터를 피해 빠르게 다음 층 계단을 찾아 내려갔습니다!";
-            } else {
-                d.log += "🔍 바닥을 샅샅이 뒤졌으나 별다른 소득이 없었습니다. 더 깊이 전진합니다.";
-            }
-            movedDown = true;
+            d.log += "🔍 바닥을 샅샅이 뒤졌으나 별다른 소득이 없었습니다. 더 깊이 전진합니다.";
         }
+        
+        _advanceDungeonDepth(user);
+    }
 
-        // 층수 이동 시 구역 루프 및 특성 발동
-        if (movedDown) {
-            d.depth++;
-            
-            // [무한의 탑 맵 루프] 10층마다 다음 구역으로 배경 순환 변경
-            var zones = SYSTEM_CONFIG.DUNGEON.ZONE_ORDER;
-            var zoneIdx = Math.floor((d.depth - 1) / 10) % zones.length;
-            var prevZone = d.zone;
-            d.zone = zones[zoneIdx];
-            
-            if (prevZone !== d.zone) {
-                d.log += "\n\n✨ 주변 환경이 [" + SYSTEM_CONFIG.DUNGEON.ZONES[d.zone].name + "](으)로 변했습니다!";
-            }
+    if (user.dgnStat.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
 
-            if (d.zone === "DESERT" && Math.random() < 0.15) {
-                var stormDmg = Math.floor(s.maxHp * 0.1);
-                s.hp -= stormDmg;
-                d.log += "\n🌪️ [모래폭풍] 거친 모래바람에 휩싸여 체력을 잃었습니다! (-" + stormDmg + " HP)";
-            }
-            if (d.zone === "CANYON") {
-                var fillRatio = user.dgnBag.length / SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS;
-                if (fillRatio >= 0.7) {
-                    var fallProb = 0.20 + (fillRatio - 0.70); 
-                    fallProb = Math.min(0.50, fallProb);
-                    if (Math.random() < fallProb) {
-                        var fallDmg = Math.floor(s.maxHp * 0.15);
-                        s.hp -= fallDmg;
-                        var loseCount = Math.floor(user.dgnBag.length * 0.25);
-                        for (var i = 0; i < loseCount; i++) user.dgnBag.pop(); 
-                        d.log += "\n💥 [추락] 무게를 이기지 못하고 협곡 다리에서 굴러 떨어졌습니다!\n(-" + fallDmg + " HP, 가방 물품 " + loseCount + "개 유실)";
-                    }
-                }
-            }
-        }
-
-        if (s.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
-
-        user.skipHealing = true;
+    user.skipHealing = true;
         safeSaveData(data, false);
         data.rooms[roomName].features.states.menuWait[targetUid].time = Date.now();
         _showDungeonTurn(user, replier);
@@ -16924,14 +16953,17 @@ function _processDgnCombatMain(choice, user, data, replier, roomName, targetUid)
         }
     }
     else if (choice === "5") {
-        var runProb = (c.mob.type === "boss") ? (s.agi) : (s.agi * 2);
-        if (Math.random() * 100 < runProb) { 
-            user.dgnState.combat = null;
-            user.dgnState.log = "🏃 구사일생으로 몬스터에게서 도망쳤습니다.";
-            data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
-            safeSaveData(data, false);
-            return _showDungeonTurn(user, replier);
-        } else {
+            var runProb = (c.mob.type === "boss") ? (s.agi) : (s.agi * 2);
+            if (Math.random() * 100 < runProb) { 
+                user.dgnState.combat = null;
+                user.dgnState.log = "🏃 구사일생으로 몬스터에게서 도망쳤습니다.";
+                _advanceDungeonDepth(user);
+                if (user.dgnStat.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
+                
+                data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
+                safeSaveData(data, false);
+                return _showDungeonTurn(user, replier);
+            } else {
             _resolveCombatTurn(user, data, replier, roomName, targetUid, "🏃 도망에 실패했습니다!\n", false, 0);
         }
     } else {
@@ -17060,40 +17092,44 @@ function _getDirStr(num) {
 
 /* 전투 승리 통합 처리 */
 function _winDgnCombat(user, data, replier, roomName, targetUid, combatLog) {
-    var c = user.dgnState.combat;
-    var d = user.dgnState;
-    
-    var gold = Math.floor(Math.random() * (c.mob.gold[1] - c.mob.gold[0])) + c.mob.gold[0];
-    d.loots.points += gold;
+        var c = user.dgnState.combat;
+        var d = user.dgnState;
+        var s = user.dgnStat;
+        
+        var gold = Math.floor(Math.random() * (c.mob.gold[1] - c.mob.gold[0])) + c.mob.gold[0];
+        d.loots.points += gold;
 
-    var logMsg = combatLog + "\n🎉 [" + c.mob.name + "] 토벌 성공!\n💰 획득 금화: +" + gold + " G\n";
-    
-    // [무한의 탑 드랍 스케일링] 20층을 돌파할 때마다 드랍 기회(주사위)가 1번씩 늘어남
-    var dropChances = 1 + Math.floor((d.depth - 1) / 20);
-    
-    for (var i = 0; i < dropChances; i++) {
-        if (c.mob.drop && Math.random() < 0.6) { 
-            var dropInfo = DGN_ITEM_DB[c.mob.drop];
-            var itemColor = (dropInfo && dropInfo.rank === "희귀") ? "🔵" : "⚪";
-            d.loots.items.push(c.mob.drop);
-            
-            if (user.dgnBag.length < SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) {
-                user.dgnBag.push({ name: c.mob.drop, type: dropInfo.type, rank: dropInfo.rank });
-                logMsg += "🎁 전리품 획득: " + itemColor + "[" + c.mob.drop + "]\n";
-            } else {
-                logMsg += "⚠️ 전리품(" + c.mob.drop + ")을 발견했으나 가방이 가득 차 버렸습니다.\n";
+        var logMsg = combatLog + "\n🎉 [" + c.mob.name + "] 토벌 성공!\n💰 획득 금화: +" + gold + " G\n";
+        
+        // [무한의 탑 드랍 스케일링] 20층을 돌파할 때마다 드랍 기회(주사위)가 1번씩 늘어남
+        var dropChances = 1 + Math.floor((d.depth - 1) / 20);
+        
+        for (var i = 0; i < dropChances; i++) {
+            if (c.mob.drop && Math.random() < 0.6) { 
+                var dropInfo = DGN_ITEM_DB[c.mob.drop];
+                var itemColor = (dropInfo && dropInfo.rank === "희귀") ? "🔵" : "⚪";
+                d.loots.items.push(c.mob.drop);
+                
+                if (user.dgnBag.length < SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) {
+                    user.dgnBag.push({ name: c.mob.drop, type: dropInfo.type, rank: dropInfo.rank });
+                    logMsg += "🎁 전리품 획득: " + itemColor + "[" + c.mob.drop + "]\n";
+                } else {
+                    logMsg += "⚠️ 전리품(" + c.mob.drop + ")을 발견했으나 가방이 가득 차 버렸습니다.\n";
+                }
             }
         }
-    }
 
-    d.combat = null;
-    d.log = logMsg;
-    
-    user.skipHealing = true;
-    data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
-    safeSaveData(data, false);
-    _showDungeonTurn(user, replier);
-}
+        d.combat = null;
+        d.log = logMsg;
+        
+        _advanceDungeonDepth(user);
+        if (s.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
+        
+        user.skipHealing = true;
+        data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
+        safeSaveData(data, false);
+        _showDungeonTurn(user, replier);
+    }
 
 /* -----------------------------------------
    [던전] 길드 지부 (창고 시스템)
@@ -17167,15 +17203,17 @@ function _processDgnStorage(choice, user, data, replier, roomName, targetUid) {
    [던전] 상점 구역
 ----------------------------------------- */
 function _showDgnShopMain(user, replier, roomData, targetUid, roomName) {
-    var shopItems = ["초보자의 검", "가죽 갑옷", "바람의 반지", "소형 체력 포션", "중형 체력 포션", "스태미나 포션", "휴식용 텐트", "횃불", "귀환 주문서"];
-    var body = "🏪 [마을 상점]\n💰 내 금화: " + fp(user.dgnGold || 0) + " G\n\n";
-    
-    shopItems.forEach(function(name, i) {
-        var info = DGN_ITEM_DB[name];
-        var icon = (info.type === "weapon") ? "🗡️" : (info.type === "armor" ? "🛡️" : (info.type === "acc" ? "💍" : "🧪"));
-        if (info.type === "consumable") icon = "📦";
-        body += (i+1) + ". " + icon + " " + name + " : " + fp(info.price) + " G\n";
-    });
+        var shopItems = ["초보자의 검", "가죽 갑옷", "바람의 반지", "소형 체력 포션", "중형 체력 포션", "스태미나 포션", "휴식용 텐트", "횃불", "귀환 주문서", "던전 입장권"];
+        var body = "🏪 [마을 상점]\n💰 내 금화: " + fp(user.dgnGold || 0) + " G\n\n";
+        
+        shopItems.forEach(function(name, i) {
+            var info = DGN_ITEM_DB[name];
+            var icon = (info.type === "weapon") ? "🗡️" : (info.type === "armor" ? "🛡️" : (info.type === "acc" ? "💍" : "🧪"));
+            if (info.type === "consumable") icon = "📦";
+            if (name === "던전 입장권") icon = "🎫";
+            body += (i+1) + ". " + icon + " " + name + " : " + fp(info.price) + " G\n";
+        });
+
     body += "\n↩️ 뒤로 / ❎취소";
     replier.reply(formatCommand("🏪 상점", user, body, "구매할 아이템 번호를 입력하세요."));
     roomData.features.states.menuWait[targetUid] = { type: 'dgn_shop_main', time: Date.now(), extra: { items: shopItems }, originRoom: roomName };
@@ -17195,8 +17233,13 @@ function _processDgnShop(choice, user, data, replier, roomName, targetUid) {
     if (user.dgnBag.length >= SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) return replier.reply(formatError(user, "가방 포화", "가방에 빈 공간이 없습니다."));
 
     user.dgnGold -= iInfo.price;
-    user.dgnBag.push({ name: iName, type: iInfo.type, rank: iInfo.rank });
-    
+        
+        if (iName === "던전 입장권") {
+            user.dgnTickets = (Number(user.dgnTickets) || 0) + 1;
+        } else {
+            user.dgnBag.push({ name: iName, type: iInfo.type, rank: iInfo.rank });
+        }
+        
     user.skipHealing = true;
     safeSaveData(data, false);
     replier.reply(formatCommand("구매 완료", user, "[" + iName + "]을(를) 구매하여 가방에 넣었습니다.\n💰 남은 금화: " + fp(user.dgnGold) + " G"));

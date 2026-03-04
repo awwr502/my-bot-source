@@ -5668,18 +5668,19 @@ if (user) {
         var errorDetail = e.name + ": " + e.message + " (Line: " + e.lineNumber + ")";
         Log.error("🚨 [런타임 에러] " + errorDetail);
 
-        // 관리자(95 남 광어)에게 에러의 원인과 줄번호를 즉시 보고
-        try {
-            if (isAdmin(sender, data, targetUid)) {
-                replier.reply("🚫 [로직 충돌 보고]\n━━━━━━━━━━━━━━━\n• 유형: " + e.name + "\n• 내용: " + e.message + "\n• 위치: Line " + e.lineNumber + "\n━━━━━━━━━━━━━━━\n⚠️ 이 메시지를 알려주세요.");
-            } else {
-                // 일반 유저에게는 기존 보안 메시지 출력
-                var safeUser = { name: cleanSender, point: 0, bank: 0 }; 
-                if (typeof formatError === 'function') {
-                    replier.reply(formatError(safeUser, "시스템 보호 작동", "일시적인 오류가 감지되어 복구되었습니다.\n다시 시도해주세요."));
-                }
-            }
-        } catch(inner) {}
+        // [전역 에러 방송 엔진 연동] 
+       // 관리자 여부, 방 이름에 관계없이 로직 내부에서 에러가 터지면 즉시 관제방으로 쏘아줍니다.
+       if (typeof util_broadcastError === 'function') {
+           util_broadcastError(e, "메인 채팅 로직 (" + cleanSender + " / " + (msg ? msg.split(" ")[0] : "알수없음") + ")");
+       }
+
+       // 에러를 발생시킨 유저 본인에게는 내부 사정이 보이지 않게 안내 메시지만 전송
+       try {
+           var safeUser = { name: cleanSender, point: 0, bank: 0 }; 
+           if (typeof formatError === 'function') {
+               replier.reply(formatError(safeUser, "시스템 보호 작동", "일시적인 오류가 감지되어 복구되었습니다.\n다시 시도해주세요."));
+           }
+       } catch(inner) {}
 
         // [Rollback] 에러 발생 시 데이터 복구
         if (typeof util_stagingRollback === 'function' && user && user.uid) {
@@ -14781,11 +14782,10 @@ function _processTradeArrival(user, data, replier, roomName, targetUid) {
         
         Log.error(errFullMsg); 
         
-        // 전역 에러 보고 함수가 있으면 사용
-        if (typeof sendError === 'function') {
-            sendError(e, errHeader);
+        // 전역 에러 방송 엔진 연동
+        if (typeof util_broadcastError === 'function') {
+            util_broadcastError(e, "무역 정산 엔진 (" + (user.name || "알수없음") + ")");
         } else {
-            // 없으면 직접 베릭방에 전송 (이제 깔끔하게 나갑니다)
             try { Api.replyRoom("베릭방", errFullMsg); } catch(re) {}
         }
 

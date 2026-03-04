@@ -165,7 +165,8 @@ var DGN_ITEM_DB = {
     "휴대용 식량": { type: "potion", rank: "일반", price: 3000, stat: { hunger: 30 } },
     "휴식용 텐트": { type: "consumable", rank: "일반", price: 10000, effect: "safe_rest" },
     "횃불": { type: "consumable", rank: "일반", price: 3000, effect: "light" },
-    "귀환 주문서": { type: "consumable", rank: "희귀", price: 20000, effect: "escape" },
+    "A형 텐트": { type: "consumable", rank: "희귀", price: 25000, effect: "fast_rest" },
+    "연막탄": { type: "consumable", rank: "일반", price: 5000, effect: "escape" },
 
     // 4. 채집 도구 및 채집물
     "낡은 곡괭이": { type: "tool", rank: "일반", price: 5000, usage: 5 },
@@ -16713,20 +16714,29 @@ function _processDungeonWakeUp(user, data, replier, roomName, targetUid) {
     if (!d || !d.isResting) return;
 
     var passedMin = Math.floor((Date.now() - (d.restStartTime || Date.now())) / 60000);
-    passedMin = Math.min(30, Math.max(0, passedMin)); // 최대 30분 제한
+    var recHp = 0;
+    var recStam = 0;
 
-    var mult = d.hasTent ? 2 : 1; // 텐트가 있으면 회복량 2배
-    var recHp = passedMin * 5 * mult;
-    var recStam = passedMin * 2 * mult;
+    if (d.hasATent) {
+        passedMin = Math.min(15, Math.max(0, passedMin)); // A형 텐트는 15분 제한
+        recHp = passedMin * 20;  // 분당 20 회복 (일반 텐트의 2배 효율)
+        recStam = passedMin * 8; // 분당 8 회복
+        d.log = "⛺ A형 텐트에서 " + passedMin + "분 동안 편안하게 휴식하여 체력(+" + recHp + ")과 스태미나(+" + recStam + ")를 매우 빠르게 회복했습니다. (일회용 텐트 소모됨)";
+    } else {
+        passedMin = Math.min(30, Math.max(0, passedMin)); // 일반은 30분 제한
+        var mult = d.hasTent ? 2 : 1; 
+        recHp = passedMin * 5 * mult;
+        recStam = passedMin * 2 * mult;
+        d.log = "⛺ " + passedMin + "분 동안 휴식하여 체력(+" + recHp + ")과 스태미나(+" + recStam + ")를 회복했습니다.";
+    }
 
     s.hp = Math.min(s.maxHp, s.hp + recHp);
     s.stam = Math.min(s.maxStam, s.stam + recStam);
 
     d.isResting = false;
-    d.log = "⛺ " + passedMin + "분 동안 휴식하여 체력(+" + recHp + ")과 스태미나(+" + recStam + ")를 회복했습니다.";
 
     // 텐트 없이 휴식 시 20% 확률로 야생 몬스터 기습(체력 패널티)
-    if (!d.hasTent && Math.random() < 0.20 && passedMin > 0) {
+    if (!d.hasTent && !d.hasATent && Math.random() < 0.20 && passedMin > 0) {
         var dmg = Math.floor(s.maxHp * 0.15);
         s.hp -= dmg;
         d.log += "\n⚠️ 맨바닥에서 자다가 습격을 받아 체력을 잃었습니다! (-" + dmg + " HP)";
@@ -16985,7 +16995,7 @@ function _showDungeonTurn(user, replier) {
 
     body += "3. ⛺ 텐트를 치고 휴식한다.\n" +
             "4. 🎒 물약/가방 열기\n" +
-            "5. 🏃 귀환 주문서 사용 (마을로 도망)";
+            "5. 🏃 마을로 귀환 (탐험 중단 및 획득 금화 정산)";
 
     replier.reply(formatCommand("🗺️ 미궁 탐험 중", user, body, "행동 번호를 입력하세요."));
 }
@@ -17141,17 +17151,29 @@ function _processDungeonTurn(choice, user, data, replier, roomName, targetUid) {
     } 
     else if (choice === "3") {
         // [실시간 캠핑 시스템 도입]
+        var aTentIdx = -1;
+        for(var i=0; i<user.dgnBag.length; i++) {
+            if (user.dgnBag[i].name === "A형 텐트") { aTentIdx = i; break; }
+        }
+        var hasATent = (aTentIdx !== -1);
         var hasTent = user.dgnBag.some(function(it) { return it.name === "휴식용 텐트"; });
         
         d.isResting = true;
         d.restStartTime = Date.now();
         d.hasTent = hasTent;
+        d.hasATent = hasATent;
+        
+        var msgExt = "(최대 30분간 분당 HP/ST/허기가 지속 회복됩니다.)";
+        if (hasATent) {
+            user.dgnBag.splice(aTentIdx, 1); // 일회용 텐트 소모
+            msgExt = "(A형 텐트 사용됨: 최대 15분, 회복 속도 2배!)";
+        }
         
         user.skipHealing = true;
         data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_rest', time: Date.now(), originRoom: roomName };
         safeSaveData(data, false);
         
-        return replier.reply(formatCommand("⛺ 캠프 구축", user, "동굴 한켠에 자리를 잡고 휴식에 들어갑니다.\n(최대 30분간 분당 HP/ST/허기가 지속 회복됩니다.)\n\n탐험을 재개하려면 준비가 끝난 후 아무 채팅이나 입력하세요."));
+        return replier.reply(formatCommand("⛺ 캠프 구축", user, "동굴 한켠에 자리를 잡고 휴식에 들어갑니다.\n" + msgExt + "\n\n탐험을 재개하려면 준비가 끝난 후 아무 채팅이나 입력하세요."));
     }
     else if (choice === "4") {
         // 가방 열기 (턴 소모 안함, 메뉴만 이동)
@@ -17229,8 +17251,8 @@ function _showDgnCombatMain(user, replier, extraMsg) {
     var c = user.dgnState.combat;
     var s = user.dgnStat;
     
-    // 몬스터 아이콘 판별 (보스/엘리트면 왕관, 일반이면 칼)
-    var mIcon = (c.mob.type === "boss" || c.mob.type === "elite") ? "👑" : "🗡️";
+    // 몬스터 아이콘 판별 (보스면 왕관, 엘리트면 도깨비, 일반이면 칼)
+    var mIcon = (c.mob.type === "boss") ? "👑" : ((c.mob.type === "elite") ? "👹" : "🗡️");
 
     var body = (extraMsg ? extraMsg + "\n\n" : "") +
                mIcon + " [" + c.mob.name + "] (HP: " + c.mob.hp + ")\n" +
@@ -17241,7 +17263,7 @@ function _showDgnCombatMain(user, replier, extraMsg) {
                "2. 🛡️ 방어 (방향 선택)\n" +
                "3. ✨ 스킬 (ST 소모, 방향 선택)\n" +
                "4. 🧪 포션 (가방 사용)\n" +
-               "5. 🏃 도망가기 (확률 낮음)\n\n" +
+               "5. 🏃 도망가기 ('연막탄' 보유 시 확정 도망)\n\n" +
                "입력: [번호]";
 
     replier.reply(formatCommand("⚔️ 전투 진행 중 (턴 " + c.turn + ")", user, body));
@@ -17300,6 +17322,24 @@ function _processDgnCombatMain(choice, user, data, replier, roomName, targetUid)
         }
     }
     else if (choice === "5") {
+        var smokeIdx = -1;
+        for (var i = 0; i < user.dgnBag.length; i++) {
+            if (user.dgnBag[i].name === "연막탄") { smokeIdx = i; break; }
+        }
+
+        if (smokeIdx !== -1) {
+            // 연막탄 사용 시 100% 확정 도망 성공
+            user.dgnBag.splice(smokeIdx, 1);
+            user.dgnState.combat = null;
+            user.dgnState.log = "💨 [연막탄]을 터뜨려 몬스터의 시야를 가리고 완벽하게 도망쳤습니다! (-연막탄 1개 소모)";
+            _advanceDungeonDepth(user);
+            if (user.dgnStat.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
+            
+            data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
+            safeSaveData(data, false);
+            return _showDungeonTurn(user, replier);
+        } else {
+            // 기본 도망 로직 (기존 유지)
             var runProb = (c.mob.type === "boss") ? (s.agi) : (s.agi * 2);
             if (Math.random() * 100 < runProb) { 
                 user.dgnState.combat = null;
@@ -17311,7 +17351,8 @@ function _processDgnCombatMain(choice, user, data, replier, roomName, targetUid)
                 safeSaveData(data, false);
                 return _showDungeonTurn(user, replier);
             } else {
-            _resolveCombatTurn(user, data, replier, roomName, targetUid, "🏃 도망에 실패했습니다!\n", false, 0);
+                _resolveCombatTurn(user, data, replier, roomName, targetUid, "🏃 도망에 실패했습니다!\n", false, 0, "run");
+            }
         }
     } else {
         replier.reply(formatError(user, "명령 거부", "1~5 사이의 번호를 입력해주세요."));
@@ -17681,7 +17722,7 @@ function _processDgnStorage(choice, user, data, replier, roomName, targetUid) {
 ----------------------------------------- */
 function _showDgnShopMain(user, replier, roomData, targetUid, roomName) {
         var shopItems = [
-            "초보자의 검", "가죽 갑옷", "바람의 반지", "소형 체력 포션", "중형 체력 포션", "스태미나 포션", "휴식용 텐트", "횃불", "귀환 주문서", "던전 입장권",
+            "초보자의 검", "가죽 갑옷", "바람의 반지", "소형 체력 포션", "중형 체력 포션", "스태미나 포션", "휴식용 텐트", "A형 텐트", "횃불", "연막탄", "던전 입장권",
             "화염 스킬북(초급)", "맹독 스킬북(초급)", "전격 스킬북(초급)", "빙결 스킬북(초급)", "관통 스킬북(초급)", "마력 스킬북(초급)", "치유 스킬북(초급)", "주사위 스킬북(초급)"
         ];
         var body = "🏪 [마을 상점]\n💰 내 금화: " + fp(user.dgnGold || 0) + " G\n\n";

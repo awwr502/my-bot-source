@@ -17709,20 +17709,41 @@ function _runBlackMarketScheduler(data, ctx) {
         var weaponKeys = ["소총", "전술장비", "폭발물", "중화기"];
 
         currencies.forEach(function(cur) {
-            // 1. 환율 변동 (기준가 대비 ±30% 변동)
             var base = BM_CONFIG.REGIONS[cur].baseRate;
-            var fluctuation = (Math.random() * 0.6) - 0.3; // -30% ~ +30%
-            var newRate = Math.floor(base * (1 + fluctuation));
-            bm.rates[cur] = Math.max(10, newRate); // 최소 방어선 10원
+            var currentRate = bm.rates[cur] || base; // 현재 환율을 가져옴 (없으면 원가)
+
+            // 1. 상태(정세) AI 결정 (내전 10%, 폭락 20%, 호조 20%, 안정 50%)
+            var randEvent = Math.random();
+            var status = "";
+            var fluctuation = 0;
+
+            if (randEvent < 0.10) {
+                status = "🔥 내전 발발 (무기수요 급증)";
+                fluctuation = (Math.random() * 0.3) + 0.2; // +20% ~ +50% 폭등
+            } else if (randEvent < 0.30) {
+                status = "📉 가치 폭락";
+                fluctuation = -(Math.random() * 0.15) - 0.1; // -10% ~ -25% 폭락
+            } else if (randEvent < 0.50) {
+                status = "🔺 반등 호조";
+                fluctuation = (Math.random() * 0.15) + 0.05; // +5% ~ +20% 상승
+            } else {
+                status = "➖ 안정";
+                fluctuation = (Math.random() * 0.1) - 0.05; // -5% ~ +5% 보합세 (미세 변동)
+            }
+
+            // 2. 누적 환율 계산 (현재가 기준) 및 복원력(Gravity) 적용
+            var rawNewRate = currentRate * (1 + fluctuation);
             
-            // 2. 텐션(정세) 텍스트 결정
-            var status = "➖ 안정";
-            if (fluctuation > 0.15) status = "🔺 반등 호조";
-            else if (fluctuation < -0.15) status = "📉 가치 폭락";
-            else if (Math.random() < 0.1) status = "🔥 내전 발발 (무기수요 급증)";
+            // 너무 기준가에서 멀어지면 15%의 힘으로 원래 가치로 돌아가려는 탄성 작용
+            var newRate = rawNewRate + (base - rawNewRate) * 0.15; 
+
+            // 3. 상하한선 강력 방어 (원가의 30% ~ 400% 사이로 제한하여 붕괴 방지)
+            newRate = Math.max(base * 0.3, Math.min(base * 4.0, newRate));
+            
+            bm.rates[cur] = Math.floor(newRate);
             bm.tensions[cur] = status;
 
-            // 3. 브로커 의뢰 생성 (각 국가별 1~2개)
+            // 4. 브로커 의뢰 생성 (각 국가별 1~2개)
             var contractCount = Math.floor(Math.random() * 2) + 1;
             for (var i = 0; i < contractCount; i++) {
                 var wKey = weaponKeys[Math.floor(Math.random() * weaponKeys.length)];
@@ -17730,13 +17751,13 @@ function _runBlackMarketScheduler(data, ctx) {
                 var isWar = (status.indexOf("내전") !== -1);
                 
                 var wPrice = BM_CONFIG.WEAPONS[wKey].price;
-                // 내전 중이면 마진율 폭등 (기본 1.5배 ~ 내전 3배)
+                // 내전 중이면 마진율(수익률) 폭등 (기본 1.2~1.7배 -> 내전 2.0~3.0배)
                 var margin = isWar ? (Math.random() * 1.0 + 2.0) : (Math.random() * 0.5 + 1.2); 
                 var krwValue = wPrice * reqQty * margin;
                 // 보상(현지 화폐) = (원화가치) / 현재환율
                 var rewardLocal = Math.floor(krwValue / bm.rates[cur]);
                 
-                // 내전 중이면 적발 위험(risk)도 높아짐
+                // 내전 중이면 적발 위험(risk)도 같이 높아짐
                 var risk = isWar ? Math.floor(Math.random() * 20 + 20) : Math.floor(Math.random() * 15 + 5); // 5~35%
 
                 bm.contracts.push({

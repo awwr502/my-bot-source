@@ -1239,7 +1239,7 @@ function safeSaveData(data, isForceBackup) {
             if (rFile.exists()) {
                 try { 
                     var rContent = FileStream.read(rFile.getAbsolutePath());
-                    if (rContent) safeRoomRef = JSON.parse(rContent); 
+                    if (rContent && rContent.trim().length > 0) safeRoomRef = JSON.parse(rContent); 
                 } catch(e) { Log.error(rName + " 검역 참조 실패: " + e); }
             }
 
@@ -16133,7 +16133,10 @@ function _processPillageSuccess(victimUid, pData, data, roomName) {
     var pirate = null;
     var isAI = (victimUid.indexOf("AI_BOT_") === 0);
 
-    // 1. 유저 식별 및 위치 탐색
+    var economyRoomName = "내리다";
+    var economyRoomData = data.rooms[economyRoomName];
+
+    // 1. 유저 식별 및 위치 탐색
     for (var r in data.rooms) {
         if (!isAI && data.rooms[r].users[victimUid]) victim = data.rooms[r].users[victimUid];
     }
@@ -16457,6 +16460,41 @@ function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
     return true;
 }
 
+function _processDungeonWakeUp(user, data, replier, roomName, targetUid) {
+    var d = user.dgnState;
+    var s = user.dgnStat;
+    if (!d || !d.isResting) return;
+
+    var passedMin = Math.floor((Date.now() - (d.restStartTime || Date.now())) / 60000);
+    passedMin = Math.min(30, Math.max(0, passedMin)); // 최대 30분 제한
+
+    var mult = d.hasTent ? 2 : 1; // 텐트가 있으면 회복량 2배
+    var recHp = passedMin * 5 * mult;
+    var recStam = passedMin * 2 * mult;
+
+    s.hp = Math.min(s.maxHp, s.hp + recHp);
+    s.stam = Math.min(s.maxStam, s.stam + recStam);
+
+    d.isResting = false;
+    d.log = "⛺ " + passedMin + "분 동안 휴식하여 체력(+" + recHp + ")과 스태미나(+" + recStam + ")를 회복했습니다.";
+
+    // 텐트 없이 휴식 시 20% 확률로 야생 몬스터 기습(체력 패널티)
+    if (!d.hasTent && Math.random() < 0.20 && passedMin > 0) {
+        var dmg = Math.floor(s.maxHp * 0.15);
+        s.hp -= dmg;
+        d.log += "\n⚠️ 맨바닥에서 자다가 습격을 받아 체력을 잃었습니다! (-" + dmg + " HP)";
+    }
+
+    if (s.hp <= 0) return _handlePlayerDeath(user, data, replier, roomName, targetUid);
+
+    user.skipHealing = true;
+    safeSaveData(data, false);
+    
+    if (!data.rooms[roomName].features.states.menuWait) data.rooms[roomName].features.states.menuWait = {};
+    data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
+    _showDungeonTurn(user, replier);
+}
+
 function _advanceDungeonDepth(user) {
     var d = user.dgnState;
     var s = user.dgnStat;
@@ -16524,7 +16562,7 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
     // [길드 라우터]
     else if (state.type === 'dgn_guild_main') {
         if (choice === "1") _showDgnStorage(user, replier, roomData, targetUid, logicRoom);
-        else if (choice === "2") _showDgnGuildQuest(user, replier, roomData, targetUid, logicRoom);
+        else if (choice === "2") _showDgnGuildQuest(user, data, replier, roomData, targetUid, logicRoom);
         else replier.reply(formatError(user, "입력 오류", "정확한 번호를 입력하세요."));
     }
     else if (state.type === 'dgn_guild_storage') {
@@ -17403,7 +17441,7 @@ function _processDgnUnequip(user, data, replier, roomName, targetUid) {
 /* -----------------------------------------
    [던전] 길드 의뢰 게시판 (AI 퀘스트)
 ----------------------------------------- */
-function _showDgnGuildQuest(user, replier, roomData, targetUid, roomName) {
+function _showDgnGuildQuest(user, data, replier, roomData, targetUid, roomName) {
     var g = user.dgnGuild;
     
     // 1. 현재 진행 중인 의뢰가 있는 경우 (달성 여부 판정)

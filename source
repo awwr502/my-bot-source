@@ -2173,7 +2173,7 @@ function util_calculateGini(roomName) {
  * 반영: 랜드마크, 경마 배팅액, 로또 잭팟, 은행 재원 등을 모두 합산하여 물가 왜곡 방지
  */
 function calculateEconomy(data, roomName) {
-    var totalAssets = 0;      // [물가용] 시스템 전체 통화량
+    var totalAssets = 0;      // [물가용] 유저 실자산 기반 통화량
     var totalUserWealth = 0;  // [평균용] 유저들의 실질 순자산 합계
     var userCount = 0;
     var economyBase = 0;      // [조회용] 현재 방의 물가 기준점
@@ -2189,8 +2189,8 @@ function calculateEconomy(data, roomName) {
         // 물가 기준점 확보
         economyBase = Number(roomData.economyBase || 0);
 
-        // A. 시스템 금고 (중앙은행 재원) 통화량 편입
-        totalAssets += Number(roomData.bankReserve || 0);
+        // [수정] AI 상단으로 인해 폭증하는 국고(bankReserve)를 물가 계산에서 완전히 제외합니다.
+        // 기존: totalAssets += Number(roomData.bankReserve || 0);
 
         // B. 유저 데이터 합산 루프
         for (var uid in roomData.users) {
@@ -2200,12 +2200,14 @@ function calculateEconomy(data, roomName) {
             var u = roomData.users[uid];
             if (!u) continue;
 
-            // 1. [평균자산용]: 무역 실물 화물 + 채권/채무가 포함된 유저의 실질 순자산 합산
-            totalUserWealth += util_calculateNetWorth(u, roomData);
+            // 1. 유저의 실질 순자산 (현금 + 예금 + 보유 무역품 - 채무) 산출
+            var netWorth = util_calculateNetWorth(u, roomData);
 
-            // 2. [물가용]: 인플레이션 기준이 되는 순수 '유동성(현금+예금)'만 합산
-            var cash = Number(u.point || 0) + Number(u.bank || 0);
-            totalAssets += cash;
+            // [평균자산용]: 실질 순자산 합산
+            totalUserWealth += netWorth;
+
+            // [물가용]: 국고가 아닌 오직 '유저들의 실자산'만으로 시장 통화량을 결정합니다.
+            totalAssets += netWorth; 
             
             userCount++;
         } // 유저 루프 종료
@@ -2215,7 +2217,7 @@ function calculateEconomy(data, roomName) {
         total: Math.max(0, totalAssets), 
         count: userCount,
         average: userCount > 0 ? Math.floor(totalUserWealth / userCount) : 0,
-        base: economyBase // 요청하신 물가기준 필드 추가
+        base: economyBase
     };
 }
 

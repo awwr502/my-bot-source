@@ -210,6 +210,11 @@ if (typeof globalData.bmWorld === 'undefined') {
     };
 }
 
+// 글로벌 던전 퀘스트 보드 데이터 구조 안전 초기화
+if (typeof globalData.dgnQuestBoard === 'undefined') {
+    globalData.dgnQuestBoard = { lastUpdateMin: -1, quests: [] };
+}
+
 /**
  * [v16.1] 하이브리드 지능형 소각 엔진 (Memory-Safe Deep Scrub)
  * 업그레이드: 재귀 탐색을 유지하여 자동 경로 탐지 기능을 보존하되, 
@@ -3535,6 +3540,17 @@ function runScheduler() {
             // 🌐 블랙마켓 환율 및 글로벌 의뢰 스케줄러 가동 (10분 주기)
             if (typeof _runBlackMarketScheduler === 'function') {
                 _runBlackMarketScheduler(data, ctx);
+            }
+
+            // ⚔️ [던전] 글로벌 길드 의뢰 게시판 갱신 스케줄러 (10분 주기)
+            if (currentMin % 10 === 0 && (!data.dgnQuestBoard || data.dgnQuestBoard.lastUpdateMin !== currentMin)) {
+                if (!data.dgnQuestBoard) data.dgnQuestBoard = { lastUpdateMin: -1, quests: [] };
+                data.dgnQuestBoard.lastUpdateMin = currentMin;
+                if (typeof _generateDgnQuests === 'function') {
+                    data.dgnQuestBoard.quests = _generateDgnQuests();
+                }
+                ctx.isUpdated = true;
+                Log.info("📜 [Dungeon] 탐험가 길드 글로벌 의뢰 게시판 갱신 완료.");
             }
 
             // [v18.7] 지연 시간(18.3s) 해결을 위한 부하 분산 패치
@@ -11565,10 +11581,12 @@ function _finalizeItemGive(tUser, matchInfo, count, replier, tRoom) {
     }
 
     else if (matchInfo.type === "dgn_item") {
+        // 1. 던전 입장권 직행 처리
         if (matchInfo.name === "던전 입장권") {
             tUser.dgnTickets = (Number(tUser.dgnTickets) || 0) + count;
             logMsg = "[던전 입장권] " + count + "장 지급 완료";
         } 
+        // 2. 스킬북 직행 처리
         else if (matchInfo.item.type === "skill_book") {
             if (!tUser.dgnSkills) tUser.dgnSkills = {};
             var sKey = matchInfo.item.skill;
@@ -11577,27 +11595,48 @@ function _finalizeItemGive(tUser, matchInfo, count, replier, tRoom) {
             if (upAmount > 0) {
                 tUser.dgnSkills[sKey] = curLv + upAmount;
                 if (!tUser.dgnActiveSkill) tUser.dgnActiveSkill = sKey;
+                logMsg = "[" + matchInfo.name + "] " + count + "개 지급 (스킬 레벨업 적용)";
+            } else {
+                logMsg = "⚠️ 이미 해당 스킬이 최고 레벨(10)입니다.";
             }
-            logMsg = "[" + matchInfo.name + "] " + count + "개 지급 (스킬 레벨업 적용)";
         } 
+        // 3. 일반 던전 아이템 가방 지급 (스택 및 용량 계산)
         else {
             if (!tUser.dgnBag) tUser.dgnBag = [];
             var maxBag = (SYSTEM_CONFIG && SYSTEM_CONFIG.DUNGEON && SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) ? SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS : 20;
-            var added = 0;
-            
-            // 던전 장비 및 포션 지급 (가방 용량 한도까지만 지급)
-            for(var d=0; d<count; d++) {
-                if (tUser.dgnBag.length < maxBag) {
-                    tUser.dgnBag.push({ name: matchInfo.name, type: matchInfo.item.type, rank: matchInfo.item.rank });
-                    added++;
+            var isStackable = ["mat", "potion", "consumable"].indexOf(matchInfo.item.type) !== -1;
+            var hasSame = tUser.dgnBag.some(function(i) { return i.name === matchInfo.name; });
+
+            if (isStackable) {
+                // 스택 가능 아이템: 같은 템이 있거나, 가방에 빈자리가 1칸이라도 있으면 전량 지급
+                if (hasSame || tUser.dgnBag.length < maxBag) {
+                    util_addDgnItem(tUser.dgnBag, { name: matchInfo.name, type: matchInfo.item.type, rank: matchInfo.item.rank }, count);
+                    logMsg = "[던전 아이템: " + matchInfo.name + "] " + count + "개 지급 (탐험용 가방)";
                 } else {
-                    logMsg += "\n⚠️ 가방이 가득 차 초과분은 지급되지 않았습니다.";
-                    break;
+                    logMsg = "⚠️ 가방이 가득 차 지급되지 않았습니다.";
+                }
+            } else {
+                // 스택 불가 아이템(장비 등): 남은 빈 공간만큼만 1개씩 쪼개서 지급
+                var added = 0;
+                var overWarning = "";
+                for (var d = 0; d < count; d++) {
+                    if (tUser.dgnBag.length < maxBag) {
+                        util_addDgnItem(tUser.dgnBag, { name: matchInfo.name, type: matchInfo.item.type, rank: matchInfo.item.rank }, 1);
+                        added++;
+                    } else {
+                        overWarning = "\n⚠️ 가방이 가득 차 초과분은 지급되지 않았습니다.";
+                        break;
+                    }
+                }
+                if (added > 0) {
+                    logMsg = "[던전 아이템: " + matchInfo.name + "] " + added + "개 지급 (탐험용 가방)" + overWarning;
+                } else {
+                    logMsg = "⚠️ 가방이 가득 차 지급되지 않았습니다.";
                 }
             }
-            logMsg = "[던전 아이템: " + matchInfo.name + "] " + added + "개 지급 (탐험용 가방)";
         }
     }
+
     else if (matchInfo.type === "bm_weapon") {
         if (!tUser.bm) tUser.bm = { isRegistered: true, krw: 0, weapons: {"소총":0, "전술장비":0, "폭발물":0, "중화기":0}, vaults: {"USD":0, "EUR":0, "RUB":0, "AED":0} };
         if (!tUser.bm.weapons) tUser.bm.weapons = {"소총":0, "전술장비":0, "폭발물":0, "중화기":0};
@@ -16637,11 +16676,104 @@ function util_checkNavyTitle(user, replier, roomName) {
  * 기능: 로비, 길드/상점 뼈대, 스탯 관리, 허기/스태미나 기반의 탐사 분기 시스템
  */
 
+// [스택 유틸리티 1] 가방에 아이템 추가 (소비재만 중첩)
+function util_addDgnItem(bagArr, itemObj, qtyToAdd) {
+    if (!qtyToAdd) qtyToAdd = 1;
+    var stackableTypes = ["mat", "potion", "consumable"]; // 중첩 가능 타입
+    
+    if (stackableTypes.indexOf(itemObj.type) !== -1) {
+        var found = false;
+        for (var i = 0; i < bagArr.length; i++) {
+            if (bagArr[i].name === itemObj.name) {
+                bagArr[i].qty = (bagArr[i].qty || 1) + qtyToAdd;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            var newObj = JSON.parse(JSON.stringify(itemObj));
+            newObj.qty = qtyToAdd;
+            bagArr.push(newObj);
+        }
+    } else {
+        // 장비류(weapon, armor, acc, tool)는 개별 슬롯 차지
+        for (var i = 0; i < qtyToAdd; i++) {
+            var newObj = JSON.parse(JSON.stringify(itemObj));
+            newObj.qty = 1;
+            bagArr.push(newObj);
+        }
+    }
+}
+
+// [스택 유틸리티 2] 가방에서 아이템 제거
+function util_removeDgnItem(bagArr, index, qtyToRemove) {
+    if (index < 0 || index >= bagArr.length) return null;
+    var item = bagArr[index];
+    var currentQty = item.qty || 1;
+    var removedQty = Math.min(currentQty, qtyToRemove);
+    
+    var removedItem = JSON.parse(JSON.stringify(item));
+    removedItem.qty = removedQty;
+
+    if (currentQty <= qtyToRemove) {
+        bagArr.splice(index, 1);
+    } else {
+        item.qty -= removedQty;
+    }
+    return removedItem;
+}
+
+// [글로벌 퀘스트 생성기]
+function _generateDgnQuests() {
+    var quests = [];
+    var qId = 1;
+    var zones = Object.keys(DGN_MONSTER_DB);
+
+    // 총 15개의 글로벌 퀘스트 생성
+    for (var i = 0; i < 15; i++) {
+        var isHunt = Math.random() < 0.6; // 사냥 60%, 수집 40%
+        var zone = zones[Math.floor(Math.random() * zones.length)];
+        var mobList = DGN_MONSTER_DB[zone];
+
+        if (isHunt) {
+            var mob = mobList[Math.floor(Math.random() * mobList.length)];
+            var isBoss = mob.type === "boss";
+            var isElite = mob.type === "elite";
+            
+            var targetCnt = isBoss ? 1 : (isElite ? Math.floor(Math.random() * 2) + 1 : Math.floor(Math.random() * 5) + 3);
+            var baseRwd = isBoss ? 50000 : (isElite ? 15000 : 3000);
+            var reward = targetCnt * baseRwd;
+
+            quests.push({
+                id: qId++, type: "hunt", target: targetCnt, targetMob: mob.name,
+                desc: "[" + SYSTEM_CONFIG.DUNGEON.ZONES[zone].name + "] " + mob.name + " " + targetCnt + "마리 토벌",
+                reward: reward
+            });
+        } else {
+            var mob = mobList[Math.floor(Math.random() * mobList.length)];
+            var dropItem = mob.drop || "슬라임의 점액";
+            
+            var itemInfo = DGN_ITEM_DB[dropItem];
+            var targetCnt = (itemInfo && itemInfo.rank === "희귀") ? Math.floor(Math.random() * 3) + 1 : Math.floor(Math.random() * 8) + 3;
+            var baseRwd = (itemInfo && itemInfo.rank === "희귀") ? 8000 : 2000;
+            var reward = targetCnt * baseRwd;
+
+            quests.push({
+                id: qId++, type: "collect", target: targetCnt, targetItem: dropItem,
+                desc: "[" + SYSTEM_CONFIG.DUNGEON.ZONES[zone].name + "] " + dropItem + " " + targetCnt + "개 수집",
+                reward: reward
+            });
+        }
+    }
+    quests.sort(function() { return Math.random() - 0.5; });
+    return quests;
+}
+
 function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
     var logicRoom = (ALLOWED_ROOMS.indexOf(roomName) === -1) ? "내리다" : roomName;
     var roomData = data.rooms[logicRoom];
 
-    // 던전 스키마 무결성 검사 (업데이트 전 생성된 유저 대비)
+    // 던전 스키마 무결성 검사
     if (!user.dgnStat) {
         user.dgnStat = { hp: 100, maxHp: 100, stam: 50, maxStam: 50, hunger: 100, maxHunger: 100, str: 10, agi: 10, int: 10 };
         user.dgnEquip = { weapon: null, armor: null, acc: null };
@@ -16650,41 +16782,37 @@ function _gameDungeonLogic(msg, user, data, replier, roomName, targetUid) {
         user.dgnGold = 0;
     }
 
-    // 관리자 지급 오류 등으로 가방(dgnBag)에 잘못 들어간 '던전 입장권'과 '스킬북'을 원래 위치로 복원하고 가방을 비워줍니다.
-    if (user.dgnBag && user.dgnBag.length > 0) {
-        var extractedTickets = 0;
-        var extractedSkills = 0;
-        
-        for (var i = user.dgnBag.length - 1; i >= 0; i--) {
-            var it = user.dgnBag[i];
-            if (it.name === "던전 입장권") {
-                extractedTickets++;
-                user.dgnBag.splice(i, 1);
-            } 
-            else if (it.type === "skill_book") {
-                var sInfo = DGN_ITEM_DB[it.name];
-                if (sInfo && sInfo.skill) {
-                    if (!user.dgnSkills) user.dgnSkills = {};
-                    var sKey = sInfo.skill;
-                    var curLv = user.dgnSkills[sKey] || 0;
-                    if (curLv < 10) {
-                        user.dgnSkills[sKey] = curLv + 1;
-                        if (!user.dgnActiveSkill) user.dgnActiveSkill = sKey;
-                        extractedSkills++;
+    // [기존 가방 중첩 마이그레이션 및 오염 정화 엔진]
+    if (!user.dgnBagMigrated) {
+        var consolidate = function(arr) {
+            var newArr = [];
+            for (var i=0; i<arr.length; i++) {
+                var it = arr[i];
+                if (it.name === "던전 입장권") {
+                    user.dgnTickets = (Number(user.dgnTickets) || 0) + (it.qty || 1);
+                } else if (it.type === "skill_book") {
+                    var sInfo = DGN_ITEM_DB[it.name];
+                    if (sInfo && sInfo.skill) {
+                        if (!user.dgnSkills) user.dgnSkills = {};
+                        var sKey = sInfo.skill;
+                        var curLv = user.dgnSkills[sKey] || 0;
+                        if (curLv < 10) {
+                            user.dgnSkills[sKey] = curLv + 1;
+                            if (!user.dgnActiveSkill) user.dgnActiveSkill = sKey;
+                        }
                     }
+                } else {
+                    util_addDgnItem(newArr, it, it.qty || 1);
                 }
-                user.dgnBag.splice(i, 1); // 최고 레벨이든 아니든 사용할 수 없는 템이므로 가방에서 즉시 제거
             }
-        }
+            return newArr;
+        };
         
-        if (extractedTickets > 0) {
-            user.dgnTickets = (Number(user.dgnTickets) || 0) + extractedTickets;
-        }
-        if (extractedTickets > 0 || extractedSkills > 0) {
-            user.skipHealing = true;
-            safeSaveData(data, false);
-            Log.info("🧹 [Dungeon CleanUp] " + user.name + " 가방 내 오류 아이템 자동 복구 완료 (입장권 " + extractedTickets + "장 / 스킬 " + extractedSkills + "업)");
-        }
+        user.dgnBag = consolidate(user.dgnBag || []);
+        if (user.dgnStorage) user.dgnStorage = consolidate(user.dgnStorage);
+        user.dgnBagMigrated = true;
+        user.skipHealing = true;
+        safeSaveData(data, false);
     }
 
     // [세이브포인트 연동] 탐험 중이거나 휴식 중이었을 경우 자동 복구
@@ -17603,8 +17731,11 @@ function _winDgnCombat(user, data, replier, roomName, targetUid, combatLog) {
                 var itemColor = (dropInfo && dropInfo.rank === "희귀") ? "🔵" : "⚪";
                 d.loots.items.push(c.mob.drop);
                 
-                if (user.dgnBag.length < SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) {
-                    user.dgnBag.push({ name: c.mob.drop, type: dropInfo.type, rank: dropInfo.rank });
+                var isStackable = ["mat", "potion", "consumable"].indexOf(dropInfo.type) !== -1;
+                var hasSame = user.dgnBag.some(function(it){return it.name === c.mob.drop;});
+                
+                if (user.dgnBag.length < SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS || (isStackable && hasSame)) {
+                    util_addDgnItem(user.dgnBag, { name: c.mob.drop, type: dropInfo.type, rank: dropInfo.rank }, 1);
                     logMsg += "🎁 전리품 획득: " + itemColor + "[" + c.mob.drop + "]\n";
                 } else {
                     logMsg += "⚠️ 전리품(" + c.mob.drop + ")을 발견했으나 가방이 가득 차 버렸습니다.\n";
@@ -17667,51 +17798,73 @@ function _showDgnStorage(user, replier, roomData, targetUid, roomName) {
     var bag = user.dgnBag || [];
     var strg = user.dgnStorage || [];
     var maxBag = SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS;
-    var maxStrg = 50; // 기본 창고 50칸
+    var maxStrg = 50;
 
     var body = "📦 [길드 창고 현황]\n" +
                "🎒 내 가방: " + bag.length + "/" + maxBag + "칸\n" +
-               "🗃️ 창고: " + strg.length + "/" + maxStrg + "칸\n\n" +
-               "[가방 아이템]\n";
+               "🗃️ 길드 창고: " + strg.length + "/" + maxStrg + "칸\n\n" +
+               "[가방 보관품]\n";
     
     var idx = 1;
-    if (bag.length === 0) body += "- 없음 -\n";
-    bag.forEach(function(it) { body += (idx++) + ". " + it.name + "\n"; });
+    if (bag.length === 0) body += "- 비어있음 -\n";
+    bag.forEach(function(it) { body += (idx++) + ". " + it.name + " x" + (it.qty || 1) + "\n"; });
     
-    body += "\n[창고 아이템]\n";
-    if (strg.length === 0) body += "- 없음 -\n";
-    strg.forEach(function(it) { body += (idx++) + ". " + it.name + "\n"; });
+    body += "\n[창고 보관품]\n";
+    if (strg.length === 0) body += "- 비어있음 -\n";
+    strg.forEach(function(it) { body += (idx++) + ". " + it.name + " x" + (it.qty || 1) + "\n"; });
 
-    body += "\n💬 보관하려면 가방 번호를, 찾으려면 창고 번호를 입력하세요.\n↩️ 뒤로 / ❎취소";
-    replier.reply(formatCommand("📦 길드 창고", user, body, "아이템 번호를 입력하세요."));
+    body += "\n💬 [이용 방법]\n" +
+            "형식: [가방/창고 번호] [수량]\n" +
+            "(예: 1 5 ➔ 1번 아이템 5개 이동)\n\n" +
+            "↩️ 뒤로 / ❎취소";
+            
+    replier.reply(formatCommand("📦 길드 창고 입출고", user, body, "이동할 아이템 번호와 수량을 띄어쓰기로 입력하세요."));
     roomData.features.states.menuWait[targetUid] = { type: 'dgn_guild_storage', time: Date.now(), originRoom: roomName };
 }
 
 function _processDgnStorage(choice, user, data, replier, roomName, targetUid) {
-    var idx = parseInt(choice) - 1;
+    var parts = choice.split(/\s+/);
+    var idx = parseInt(parts[0]) - 1;
+    var moveQty = parts.length > 1 ? parseInt(parts[1]) : 1;
+    
     var bag = user.dgnBag;
     var strg = user.dgnStorage;
     var maxBag = SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS;
     var maxStrg = 50;
 
-    if (isNaN(idx) || idx < 0 || idx >= (bag.length + strg.length)) {
-        return replier.reply(formatError(user, "번호 오류", "정확한 아이템 번호를 입력하세요."));
+    if (isNaN(idx) || idx < 0 || idx >= (bag.length + strg.length) || isNaN(moveQty) || moveQty <= 0) {
+        return replier.reply(formatError(user, "입력 오류", "정확한 번호와 수량을 입력하세요. (예: 1 5)"));
     }
 
     if (idx < bag.length) {
         // 보관 (가방 -> 창고)
-        if (strg.length >= maxStrg) return replier.reply(formatError(user, "공간 부족", "창고가 가득 찼습니다."));
-        var it = bag.splice(idx, 1)[0];
-        strg.push(it);
-        replier.reply(formatCommand("보관 완료", user, "[" + it.name + "]을(를) 창고에 보관했습니다."));
+        var sourceItem = bag[idx];
+        var isStackable = ["mat", "potion", "consumable"].indexOf(sourceItem.type) !== -1;
+        var hasSame = strg.some(function(i){return i.name === sourceItem.name;});
+
+        if (strg.length >= maxStrg && !(isStackable && hasSame)) return replier.reply(formatError(user, "공간 부족", "창고가 가득 찼습니다."));
+        
+        moveQty = Math.min(moveQty, sourceItem.qty || 1);
+        var movedItem = util_removeDgnItem(bag, idx, moveQty);
+        util_addDgnItem(strg, movedItem, moveQty);
+        
+        replier.reply(formatCommand("보관 완료", user, "[" + movedItem.name + "] " + moveQty + "개를 창고에 보관했습니다."));
     } else {
         // 찾기 (창고 -> 가방)
-        if (bag.length >= maxBag) return replier.reply(formatError(user, "공간 부족", "가방이 가득 찼습니다."));
         var sIdx = idx - bag.length;
-        var it = strg.splice(sIdx, 1)[0];
-        bag.push(it);
-        replier.reply(formatCommand("인출 완료", user, "[" + it.name + "]을(를) 가방으로 꺼냈습니다."));
+        var sourceItem = strg[sIdx];
+        var isStackable = ["mat", "potion", "consumable"].indexOf(sourceItem.type) !== -1;
+        var hasSame = bag.some(function(i){return i.name === sourceItem.name;});
+
+        if (bag.length >= maxBag && !(isStackable && hasSame)) return replier.reply(formatError(user, "공간 부족", "가방이 가득 찼습니다."));
+        
+        moveQty = Math.min(moveQty, sourceItem.qty || 1);
+        var movedItem = util_removeDgnItem(strg, sIdx, moveQty);
+        util_addDgnItem(bag, movedItem, moveQty);
+        
+        replier.reply(formatCommand("인출 완료", user, "[" + movedItem.name + "] " + moveQty + "개를 가방으로 꺼냈습니다."));
     }
+    
     user.skipHealing = true;
     safeSaveData(data, false);
     _showDgnStorage(user, replier, data.rooms[roomName], targetUid, roomName);
@@ -17752,7 +17905,12 @@ function _processDgnShop(choice, user, data, replier, roomName, targetUid) {
     var iInfo = DGN_ITEM_DB[iName];
 
     if ((user.dgnGold || 0) < iInfo.price) return replier.reply(formatError(user, "금화 부족", "금화가 부족합니다."));
-    if (iInfo.type !== "skill_book" && user.dgnBag.length >= SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) return replier.reply(formatError(user, "가방 포화", "가방에 빈 공간이 없습니다."));
+    var isStackable = ["mat", "potion", "consumable"].indexOf(iInfo.type) !== -1;
+    var hasSame = user.dgnBag.some(function(i){return i.name === iName;});
+    
+    if (iInfo.type !== "skill_book" && user.dgnBag.length >= SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS && !(isStackable && hasSame)) {
+        return replier.reply(formatError(user, "가방 포화", "가방에 빈 공간이 없습니다."));
+    }
 
     user.dgnGold -= iInfo.price;
         
@@ -17762,15 +17920,14 @@ function _processDgnShop(choice, user, data, replier, roomName, targetUid) {
             if (!user.dgnSkills) user.dgnSkills = {};
             var sKey = iInfo.skill;
             if (user.dgnSkills[sKey]) {
-                user.dgnGold += iInfo.price; // 중복 방지 환불
+                user.dgnGold += iInfo.price; 
                 return replier.reply(formatError(user, "구매 불가", "이미 해당 계열의 스킬을 보유 중입니다.\n이후 스킬 업그레이드는 던전 드랍을 통해서만 가능합니다."));
             } else {
                 user.dgnSkills[sKey] = 1;
-                // 첫 스킬 구매 시 자동 장착
                 if (!user.dgnActiveSkill) user.dgnActiveSkill = sKey;
             }
         } else {
-            user.dgnBag.push({ name: iName, type: iInfo.type, rank: iInfo.rank });
+            util_addDgnItem(user.dgnBag, { name: iName, type: iInfo.type, rank: iInfo.rank }, 1);
         }
         
     user.skipHealing = true;
@@ -17799,10 +17956,10 @@ function _showDgnInfoMain(user, replier, roomData, targetUid, roomName) {
         sStr = sInfo.icon + " " + sInfo.nameIdx[sLv - 1] + " (Lv." + sLv + ")";
     }
 
-    var bagList = {};
-    user.dgnBag.forEach(function(it) { bagList[it.name] = (bagList[it.name] || 0) + 1; });
     var bagStrArr = [];
-    for (var k in bagList) bagStrArr.push(k + "x" + bagList[k]);
+    user.dgnBag.forEach(function(it) {
+        bagStrArr.push(it.name + " x" + (it.qty || 1));
+    });
     var bagDisplay = bagStrArr.length > 0 ? bagStrArr.join(", ") : "비어있음";
 
     var body = "📊 [내 전투 스탯]\n" +
@@ -17836,7 +17993,7 @@ function _showDgnEquipMenu(user, replier, roomData, targetUid, roomName) {
 
     bag.forEach(function(it, i) {
         if (["weapon", "armor", "acc", "potion"].indexOf(it.type) !== -1) {
-            body += idx + ". " + it.name + "\n";
+            body += idx + ". " + it.name + " x" + (it.qty || 1) + "\n";
             equipable.push({ bagIdx: i, item: it });
             idx++;
         }
@@ -17874,7 +18031,7 @@ function _processDgnEquip(choice, user, data, replier, roomName, targetUid) {
             }
         }
         
-        user.dgnBag.splice(target.bagIdx, 1);
+        util_removeDgnItem(user.dgnBag, target.bagIdx, 1);
         replier.reply(formatCommand("🧪 아이템 사용", user, "[" + target.item.name + "]을(를) 사용했습니다!" + cureMsg));
     }
 
@@ -17889,12 +18046,15 @@ function _processDgnEquip(choice, user, data, replier, roomName, targetUid) {
             if (oldInfo && oldInfo.stat) {
                 for (var key in oldInfo.stat) user.dgnStat[key] -= oldInfo.stat[key];
             }
-            user.dgnBag.push(oldEquip); // 기존 템 가방으로
+            util_addDgnItem(user.dgnBag, oldEquip, 1); // 기존 템 가방으로 (스택 함수 사용)
         }
 
         // 2. 새 장비 착용 및 스탯 적용
-        user.dgnBag.splice(target.bagIdx, 1); // 가방에서 제거
-        user.dgnEquip[slot] = target.item;
+        util_removeDgnItem(user.dgnBag, target.bagIdx, 1); // 가방에서 1개 제거
+        var equipItem = JSON.parse(JSON.stringify(target.item));
+        delete equipItem.qty; // 장비 슬롯에는 수량 정보 불필요
+        
+        user.dgnEquip[slot] = equipItem;
         if (iInfo && iInfo.stat) {
             for (var key in iInfo.stat) user.dgnStat[key] += iInfo.stat[key];
         }
@@ -17913,13 +18073,13 @@ function _processDgnUnequip(user, data, replier, roomName, targetUid) {
 
     slots.forEach(function(slot) {
         if (eq[slot]) {
-            if (user.dgnBag.length >= SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) return; // 가방 꽉차면 중단
+            if (user.dgnBag.length >= SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) return;
             
             var oldInfo = DGN_ITEM_DB[eq[slot].name];
             if (oldInfo && oldInfo.stat) {
                 for (var key in oldInfo.stat) user.dgnStat[key] -= oldInfo.stat[key];
             }
-            user.dgnBag.push(eq[slot]);
+            util_addDgnItem(user.dgnBag, eq[slot], 1);
             eq[slot] = null;
             unequipped = true;
         }
@@ -17982,15 +18142,16 @@ function _processDgnSkillEquip(choice, user, data, replier, roomName, targetUid)
 ----------------------------------------- */
 function _showDgnGuildQuest(user, data, replier, roomData, targetUid, roomName) {
     var g = user.dgnGuild;
+    var body = "";
     
-    // 1. 현재 진행 중인 의뢰가 있는 경우 (달성 여부 판정)
+    // 1. 수락한 의뢰 진행 및 완료 판정
     if (g.quest) {
         var isClear = false;
         
         if (g.quest.type === "hunt" && g.quest.current >= g.quest.target) isClear = true;
         if (g.quest.type === "collect") {
             var count = 0;
-            user.dgnBag.forEach(function(it) { if (it.name === g.quest.targetItem) count++; });
+            user.dgnBag.forEach(function(it) { if (it.name === g.quest.targetItem) count += (it.qty || 1); });
             if (count >= g.quest.target) isClear = true;
         }
 
@@ -18000,57 +18161,72 @@ function _showDgnGuildQuest(user, data, replier, roomData, targetUid, roomName) 
             g.exp += 10;
             g.clearCount++;
             
-            // 수집 퀘스트일 경우 가방에서 아이템 삭제
             if (g.quest.type === "collect") {
-                var removed = 0;
+                var required = g.quest.target;
                 for (var i = user.dgnBag.length - 1; i >= 0; i--) {
-                    if (user.dgnBag[i].name === g.quest.targetItem && removed < g.quest.target) {
-                        user.dgnBag.splice(i, 1);
-                        removed++;
+                    if (user.dgnBag[i].name === g.quest.targetItem) {
+                        var removedItem = util_removeDgnItem(user.dgnBag, i, required);
+                        required -= removedItem.qty;
+                        if (required <= 0) break;
                     }
                 }
             }
             g.quest = null;
             user.skipHealing = true;
             safeSaveData(data, true);
-            replier.reply(formatCommand("✨ 의뢰 달성", user, "길드의 의뢰를 성공적으로 완수했습니다!\n\n💰 보상: +" + fp(rwd) + " G\n📈 길드 경험치: +10"));
+            return replier.reply(formatCommand("✨ 의뢰 달성", user, "길드의 의뢰를 성공적으로 완수했습니다!\n\n💰 보상: +" + fp(rwd) + " G\n📈 길드 경험치: +10"));
         } else {
             var curStat = (g.quest.type === "hunt") ? g.quest.current : "가방 소지품 확인";
-            replier.reply(formatCommand("🏃 진행 중인 의뢰", user, "목표: " + g.quest.desc + "\n현황: " + curStat + " / " + g.quest.target + "\n\n(조건을 달성한 후 다시 길드를 방문하세요.)", "길드 지부 메인: [뒤로]"));
+            body += "🏃 [수락한 의뢰]\n목표: " + g.quest.desc + "\n현황: " + curStat + " / " + g.quest.target + "\n\n━━━━━━━━━━━━━━━\n";
         }
-        return;
     }
 
-    // 2. 의뢰가 없을 경우 AI 무작위 퀘스트 생성 (F랭크 기준)
-    var qList = [
-        { id: 1, type: "hunt", target: 3, targetMob: "맹독 슬라임", desc: "늪지대 맹독 슬라임 3마리 토벌", reward: 15000 },
-        { id: 2, type: "collect", target: 2, targetItem: "고블린의 뼈", desc: "고블린의 뼈 2개 수집", reward: 10000 },
-        { id: 3, type: "hunt", target: 1, targetMob: "거대 고블린 족장", desc: "[보스 토벌] 거대 고블린 족장 처치", reward: 50000 }
-    ];
+    // 2. 글로벌 의뢰 게시판 (10분 갱신 공유 보드)
+    if (!data.dgnQuestBoard || !data.dgnQuestBoard.quests) {
+        data.dgnQuestBoard = { lastUpdateMin: -1, quests: _generateDgnQuests() };
+    }
+    
+    var qList = data.dgnQuestBoard.quests;
+    
+    body += "📢 [글로벌 신규 의뢰 게시판]\n(모든 탐험가가 공유하며, 선착순으로 수주됩니다.)\n\n";
+    
+    if (qList.length === 0) {
+        body += "- 현재 등록된 신규 의뢰가 없습니다.\n(다음 갱신을 기다려주세요)\n";
+    } else {
+        qList.forEach(function(q, i) { 
+            body += (i+1) + ". " + q.desc + " (보상: " + fp(q.reward) + " G)\n"; 
+        });
+        body += "\n💬 수주할 의뢰 번호를 입력하세요.";
+    }
+    body += "\n↩️ 뒤로 / ❎취소";
 
-    var body = "게시판에 새로운 의뢰가 3건 등록되어 있습니다.\n\n";
-    qList.forEach(function(q, i) { body += (i+1) + ". " + q.desc + " (보상: " + fp(q.reward) + "P)\n"; });
-    body += "\n수주할 의뢰 번호를 입력하세요.\n↩️ 뒤로 / ❎취소";
-
-    roomData.features.states.menuWait[targetUid] = { type: 'dgn_guild_quest', time: Date.now(), extra: { quests: qList }, originRoom: roomName };
-    replier.reply(formatCommand("📜 AI 의뢰 게시판", user, body));
+    roomData.features.states.menuWait[targetUid] = { type: 'dgn_guild_quest', time: Date.now(), originRoom: roomName };
+    replier.reply(formatCommand("📜 탐험가 길드 의뢰소", user, body));
 }
 
 function _processDgnGuildQuest(choice, user, data, replier, roomName, targetUid) {
-    var state = data.rooms[roomName].features.states.menuWait[targetUid];
     var idx = parseInt(choice) - 1;
-    var list = state.extra.quests;
+    var board = data.dgnQuestBoard.quests || [];
 
-    if (isNaN(idx) || idx < 0 || idx >= list.length) return replier.reply(formatError(user, "번호 오류", "1~3번 의뢰 중 하나를 선택하세요."));
+    if (isNaN(idx) || idx < 0 || idx >= board.length) {
+        return replier.reply(formatError(user, "번호 오류", "목록에 있는 신규 의뢰 번호를 선택하세요."));
+    }
 
-    var selQ = list[idx];
-    selQ.current = 0; // 진행도 초기화
-    user.dgnGuild.quest = selQ;
+    if (user.dgnGuild.quest) {
+        return replier.reply(formatError(user, "수주 불가", "이미 진행 중인 의뢰가 있습니다.\n기존 의뢰를 먼저 완료하거나 포기하세요."));
+    }
+
+    // 글로벌 보드에서 선착순으로 퀘스트를 빼옴 (배열 자체를 조작하여 다른 유저도 동시 체감)
+    var pulledQuest = board.splice(idx, 1)[0];
+    pulledQuest.current = 0; 
+    
+    user.dgnGuild.quest = pulledQuest;
     user.skipHealing = true;
-    safeSaveData(data, false);
+    
+    safeSaveData(data, true);
 
     delete data.rooms[roomName].features.states.menuWait[targetUid];
-    replier.reply(formatCommand("✅ 의뢰 수주 완료", user, "다음 의뢰를 수주했습니다.\n[" + selQ.desc + "]\n\n던전을 탐험하여 조건을 달성하세요."));
+    replier.reply(formatCommand("✅ 의뢰 수주 완료", user, "길드로부터 선착순 의뢰를 성공적으로 배정받았습니다!\n\n[" + pulledQuest.desc + "]\n\n던전을 탐험하여 조건을 달성하세요."));
 }
 
 /* -----------------------------------------

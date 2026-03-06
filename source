@@ -18211,10 +18211,11 @@ function _showDgnGuildQuest(user, data, replier, roomData, targetUid, roomName) 
     if (qList.length === 0) {
         body += "- 현재 등록된 신규 의뢰가 없습니다.\n(다음 갱신을 기다려주세요)\n";
     } else {
-        qList.forEach(function(q, i) { 
-            body += (i+1) + ". " + q.desc + " (보상: " + fp(q.reward) + " G)\n"; 
-        });
-        body += "\n💬 수주할 의뢰 번호를 입력하세요.";
+        for (var i = 0; i < Math.min(5, qList.length); i++) {
+            var q = qList[i];
+            body += (i + 1) + ". " + q.desc + " (보상: " + fp(q.reward) + " G)\n";
+        }
+        body += "\n6. 🗑️ 진행 중인 의뢰 포기\n\n💬 수주할 번호 또는 포기(6)를 입력하세요.";
     }
     body += "\n↩️ 뒤로 / ❎취소";
 
@@ -18226,17 +18227,36 @@ function _processDgnGuildQuest(choice, user, data, replier, roomName, targetUid)
     var idx = parseInt(choice) - 1;
     var board = data.dgnQuestBoard.quests || [];
 
-    if (isNaN(idx) || idx < 0 || idx >= board.length) {
-        return replier.reply(formatError(user, "번호 오류", "목록에 있는 신규 의뢰 번호를 선택하세요."));
+    if (choice === "6") {
+        if (!user.dgnGuild.quest) {
+            return replier.reply(formatError(user, "포기 불가", "현재 진행 중인 의뢰가 없습니다."));
+        }
+        user.dgnGuild.quest = null;
+        user.skipHealing = true;
+        safeSaveData(data, true);
+        delete data.rooms[roomName].features.states.menuWait[targetUid];
+        return replier.reply(formatCommand("🗑️ 의뢰 포기 완료", user, "진행 중이던 의뢰를 포기했습니다.\n새로운 의뢰를 수주할 수 있습니다."));
+    }
+
+    var displayCount = Math.min(5, board.length);
+
+    if (isNaN(idx) || idx < 0 || idx >= displayCount) {
+        return replier.reply(formatError(user, "번호 오류", "목록에 있는 신규 의뢰 번호(1~" + displayCount + ") 또는 6번(포기)을 선택하세요."));
     }
 
     if (user.dgnGuild.quest) {
-        return replier.reply(formatError(user, "수주 불가", "이미 진행 중인 의뢰가 있습니다.\n기존 의뢰를 먼저 완료하거나 포기하세요."));
+        return replier.reply(formatError(user, "수주 불가", "이미 진행 중인 의뢰가 있습니다.\n기존 의뢰를 먼저 완료하거나 6번을 눌러 포기하세요."));
     }
 
     // 글로벌 보드에서 선착순으로 퀘스트를 빼옴 (배열 자체를 조작하여 다른 유저도 동시 체감)
     var pulledQuest = board.splice(idx, 1)[0];
     pulledQuest.current = 0; 
+    
+    // 풀이 5개 미만이 되면 즉시 생성하여 보충 (끊임없는 의뢰 제공)
+    if (board.length < 5) {
+        var newQuests = _generateDgnQuests();
+        data.dgnQuestBoard.quests = board.concat(newQuests);
+    } 
     
     user.dgnGuild.quest = pulledQuest;
     user.skipHealing = true;

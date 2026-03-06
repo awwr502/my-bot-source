@@ -1655,6 +1655,7 @@ var CMD_LIST = {
         { cmd: "/데이터전수조사", desc: "[닉네임] 명부 무시 DB 전체 스캔", func: "_adminUserManageLogic" },
         { cmd: "/명부강제등록", desc: "[닉네임] [UID] 수동 바인딩", func: "_adminUserManageLogic" },
         { cmd: "/전체직업초기화", desc: "모든 유저의 직업 및 악명/명성 데이터 초기화", func: "_adminUserManageLogic" },
+        { cmd: "/레벨조정", desc: "[닉네임] [레벨] 던전 레벨 및 스탯 강제 적용", func: "_adminUserManageLogic" },
         { cmd: "/화물복구", desc: "[닉네임] [품목] [수량] 화물 수동 복구", func: "_adminUserManageLogic" },
         { cmd: "/무역즉시완료", desc: "[닉네임] 항해 시간 즉시 종료 및 도착 처리", func: "_adminUserManageLogic" },
         { cmd: "/무역재고초기화", desc: "모든 항구의 실물 재고를 2000개로 강제 리셋", func: "_adminEconomyLogic" },
@@ -10417,6 +10418,54 @@ if (msg.startsWith("/화물복구")) {
         return true;
     }
 
+    // [관리자] 던전 레벨 강제 조정 시스템
+    if (msg.indexOf("/레벨조정 ") === 0) {
+        var ps = msg.split(/\s+/);
+        if (ps.length < 3) return replier.reply(formatAdmin("오류", "형식: /레벨조정 [닉네임] [목표레벨]"));
+
+        var targetLv = parseInt(ps.pop());
+        var tn = ps.slice(1).join(" ").trim();
+
+        if (isNaN(targetLv) || targetLv < 1) return replier.reply(formatAdmin("오류", "레벨은 1 이상의 숫자로 입력하세요."));
+
+        var found = findUserGlobal(tn, roomName);
+        if (found.length === 0) return replier.reply(formatAdmin("오류", "유저를 찾을 수 없습니다."));
+        if (found.length > 1) {
+            return replier.reply(formatAdmin("오류", "중복된 닉네임이 있습니다. 띄어쓰기를 포함한 정확한 풀네임을 입력하세요."));
+        }
+
+        var tUser = found[0].data;
+        var oldLv = tUser.dgnLevel || 1;
+        
+        if (targetLv <= oldLv) return replier.reply(formatAdmin("오류", "현재 레벨(" + oldLv + ")보다 높은 레벨만 설정할 수 있습니다."));
+
+        var lvDiff = targetLv - oldLv;
+        
+        tUser.dgnLevel = targetLv;
+        tUser.dgnExp = 0; // 다음 레벨을 위해 경험치 초기화
+        tUser.dgnStatPoints = (Number(tUser.dgnStatPoints) || 0) + (lvDiff * 2);
+        
+        if (!tUser.dgnStat) tUser.dgnStat = { hp: 100, maxHp: 100, stam: 50, maxStam: 50, hunger: 100, maxHunger: 100, str: 10, agi: 10, int: 10 };
+        
+        // 정규 레벨업과 완벽하게 동일한 체급 상승
+        tUser.dgnStat.maxHp += (lvDiff * 15);
+        tUser.dgnStat.maxStam += (lvDiff * 2);
+        
+        // 회복 처리
+        tUser.dgnStat.hp = tUser.dgnStat.maxHp;
+        tUser.dgnStat.stam = tUser.dgnStat.maxStam;
+
+        tUser.skipHealing = true;
+        safeSaveData(data, true);
+
+        replier.reply(formatAdmin("🆙 던전 레벨 강제 조정 완료", 
+            "대상: " + tUser.name + "\n" +
+            "레벨: Lv." + oldLv + " ➔ Lv." + targetLv + "\n" +
+            "지급: 스탯 포인트 +" + (lvDiff * 2) + "\n" +
+            "상승: 최대체력 +" + (lvDiff * 15) + " / 최대ST +" + (lvDiff * 2)));
+        return true;
+    }
+
     // 기존 버그로 인해 이름이 바뀌지 않은 정령들의 이름을 일괄 교정
     if (msg === "/정령이름복구") {
         var fixCount = 0;
@@ -17370,6 +17419,8 @@ function _processDungeonTurn(choice, user, data, replier, roomName, targetUid) {
         user.dgnGold = (user.dgnGold || 0) + earnedGold;
         
         user.dgnState = null;
+        user.dgnBuff = null; // 버프 요리 초기화
+        if (typeof _applySetEffects === 'function') _applySetEffects(user);
         s.hp = s.maxHp; // 마을 귀환 시 풀피 (임시)
         s.hunger = s.maxHunger;
         
@@ -17404,10 +17455,12 @@ function _handlePlayerDeath(user, data, replier, roomName, targetUid) {
     }
 
     // 부활 처리 (마을 귀환)
-    s.hp = Math.floor(s.maxHp * 0.1); // 체력 10%로 부활
-    s.hunger = 30; // 빈사 상태의 허기
-    
-    user.dgnState = null;
+    s.hp = Math.floor(s.maxHp * 0.1); // 체력 10%로 부활
+    s.hunger = 30; // 빈사 상태의 허기
+    
+    user.dgnState = null;
+    user.dgnBuff = null; // 버프 요리 초기화
+    if (typeof _applySetEffects === 'function') _applySetEffects(user);
     
     // 사망 시에도 1:1방 양방향 세션 완벽 파기
     if (data.rooms[roomName] && data.rooms[roomName].features.states.menuWait) {
@@ -17675,6 +17728,9 @@ function _resolveCombatTurn(user, data, replier, roomName, targetUid, prevLog, i
             skName = sInfo.icon + " [" + sInfo.nameIdx[sLv - 1] + "] ";
         }
 
+        // 🛡️ 주점 요리 버프(atkBonus) 합산 (일반/스킬 무관하게 고정뎀 가산)
+        pBaseAtk += (s.atkBonus || 0);
+
         var pAtkRes = calcDmg(pBaseAtk);
         var pAtk = pAtkRes.dmg;
         var cStr = pAtkRes.crit ? " ⚡[기본치명타!]" : "";
@@ -17868,9 +17924,10 @@ function _winDgnCombat(user, data, replier, roomName, targetUid, combatLog) {
         }
         
         var dropChances = 1 + Math.floor((d.depth - 1) / 20);
+        var buffDropRate = user.dgnBuff ? (user.dgnBuff.dropRate || 0) : 0;
         
         for (var i = 0; i < dropChances; i++) {
-            if (c.mob.drop && Math.random() < 0.6) { 
+            if (c.mob.drop && Math.random() < (0.6 + buffDropRate)) { 
                 var dropInfo = DGN_ITEM_DB[c.mob.drop];
                 var itemColor = (dropInfo && dropInfo.rank === "희귀") ? "🔵" : "⚪";
                 d.loots.items.push(c.mob.drop);
@@ -17883,6 +17940,24 @@ function _winDgnCombat(user, data, replier, roomName, targetUid, combatLog) {
                     logMsg += "🎁 전리품 획득: " + itemColor + "[" + c.mob.drop + "]\n";
                 } else {
                     logMsg += "⚠️ 전리품(" + c.mob.drop + ")을 발견했으나 가방이 가득 차 버렸습니다.\n";
+                }
+            }
+        }
+
+        // [Phase 3] 세트 장비 전용 드랍 판정 (엘리트/보스 몬스터 고유 드랍)
+        if (c.mob.setDrop && c.mob.setDrop.length > 0) {
+            // 기본 5% + 요리 버프 상승률
+            if (Math.random() < (0.05 + buffDropRate)) {
+                var setItemName = c.mob.setDrop[Math.floor(Math.random() * c.mob.setDrop.length)];
+                var setInfo = DGN_ITEM_DB[setItemName];
+                if (setInfo) {
+                    d.loots.items.push(setItemName);
+                    if (user.dgnBag.length < SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS) {
+                        util_addDgnItem(user.dgnBag, { name: setItemName, type: setInfo.type, rank: setInfo.rank }, 1);
+                        logMsg += "🔥 [세트 장비 발견!]: 🟣 [" + setItemName + "] 획득!\n";
+                    } else {
+                        logMsg += "⚠️ 🟣세트 장비(" + setItemName + ")를 발견했으나 가방이 가득 차 버렸습니다.\n";
+                    }
                 }
             }
         }
@@ -18151,6 +18226,7 @@ function _processDgnTavern(choice, user, data, replier, roomName, targetUid) {
         logMsg = "🍽️ [" + iName + "]을(를) 맛있게 먹었습니다!\n체력 +" + iInfo.stat.hp + ", 허기 +" + iInfo.stat.hunger + " 회복되었습니다.";
     } else if (iInfo.type === "tavern_buff") {
         user.dgnBuff = JSON.parse(JSON.stringify(iInfo.buff));
+        if (typeof _applySetEffects === 'function') _applySetEffects(user);
         logMsg = "🍲 [특제 해신탕]을 바닥까지 긁어 먹었습니다!\n온몸에 뜨거운 기운이 솟구칩니다!\n\n✨ [버프 활성화]\n공격력 +50, 최대 체력 +300, 허기/ST 최대치 +50\n엘리트 이상 드롭률 +10% (이번 탐험 내내 유지)";
     }
 
@@ -18288,6 +18364,7 @@ function _processDgnEquip(choice, user, data, replier, roomName, targetUid) {
         if (iInfo && iInfo.stat) {
             for (var key in iInfo.stat) user.dgnStat[key] += iInfo.stat[key];
         }
+        if (typeof _applySetEffects === 'function') _applySetEffects(user);
         replier.reply(formatCommand("✨ 장비 장착", user, "[" + target.item.name + "]을(를) 장착했습니다."));
     }
 
@@ -18316,6 +18393,7 @@ function _processDgnUnequip(user, data, replier, roomName, targetUid) {
     });
 
     if (unequipped) {
+        if (typeof _applySetEffects === 'function') _applySetEffects(user);
         replier.reply(formatCommand("⏬ 장비 해제", user, "모든 장비를 해제하여 가방에 넣었습니다."));
     } else {
         replier.reply(formatError(user, "해제 실패", "장착 중인 장비가 없거나 가방이 꽉 찼습니다."));
@@ -18485,22 +18563,70 @@ function _processDgnGuildQuest(choice, user, data, replier, roomName, targetUid)
    (장비 장착/해제 시마다 자동으로 호출됨)
 ----------------------------------------- */
 function _applySetEffects(user) {
-    var eq = user.dgnEquip;
     var s = user.dgnStat;
     
-    // 기본 장비 스탯은 장착 시마다 누적되므로, 여기서는 '세트 조건'이 맞을 때만 특수 패시브(스탯 추가)를 부여합니다.
-    // 기존 세트 효과 중첩 방지를 위해 임시 보너스 필드를 0으로 초기화
-    s.setBonusAgi = 0;
-    
-    var wName = eq.weapon ? eq.weapon.name : "";
-    var aName = eq.armor ? eq.armor.name : "";
-
-    // [세트효과: 고블린 족장의 위엄] 투구 + 무기(족장의 몽둥이-예시) 등 조건 충족 시 AGI 15 증가
-    // 현재 DB엔 '족장의 투구'만 있으므로, 무기가 '초보자의 검'일 때 발동하는 초보자 세트로 임시 구현
-    if (wName === "초보자의 검" && aName === "가죽 갑옷") {
-        s.setBonusAgi += 5; 
-        // 실시간 민첩성 상승으로 회피/도망 확률이 높아집니다.
+    // 1. 기존에 적용된 세트/버프 보너스가 있다면 먼저 원상 복구 (영구 스탯 뻥튀기 방지)
+    if (s.appliedBonuses) {
+        for (var key in s.appliedBonuses) {
+            if (s[key] !== undefined) s[key] -= s.appliedBonuses[key];
+        }
     }
+    
+    // 새로운 보너스 누적 컨테이너
+    s.appliedBonuses = { maxHp: 0, str: 0, agi: 0, int: 0, def: 0, maxStam: 0, maxHunger: 0, atk: 0 };
+    
+    // 2. 세트 아이템 개수 집계
+    var setCounts = {};
+    ["weapon", "armor", "acc"].forEach(function(slot) {
+        var eq = user.dgnEquip[slot];
+        if (eq && DGN_ITEM_DB[eq.name] && DGN_ITEM_DB[eq.name].setInfo) {
+            var sName = DGN_ITEM_DB[eq.name].setInfo;
+            setCounts[sName] = (setCounts[sName] || 0) + 1;
+        }
+    });
+
+    // 3. 세트 효과 공식 적용 (1개: HP 5% / 2개: HP 8%, 주스탯+5 / 3개: HP 15%, 올스탯+5, 방어+10)
+    var pureMaxHp = s.maxHp; // 원본 MaxHP 기준
+    for (var sName in setCounts) {
+        var cnt = setCounts[sName];
+        
+        if (cnt >= 1) s.appliedBonuses.maxHp += Math.floor(pureMaxHp * 0.05);
+        if (cnt >= 2) {
+            s.appliedBonuses.maxHp += Math.floor(pureMaxHp * 0.03); // 누적 8%
+            if (sName.indexOf("마력") !== -1 || sName.indexOf("스핑크스") !== -1) s.appliedBonuses.int += 5;
+            else if (sName.indexOf("가고일") !== -1 || sName.indexOf("쌍두사") !== -1) s.appliedBonuses.agi += 5;
+            else s.appliedBonuses.str += 5; // 기본은 힘 증가
+        }
+        if (cnt >= 3) {
+            s.appliedBonuses.maxHp += Math.floor(pureMaxHp * 0.07); // 누적 15%
+            s.appliedBonuses.def += 10;
+            s.appliedBonuses.str += 5;
+            s.appliedBonuses.agi += 5;
+            s.appliedBonuses.int += 5;
+        }
+    }
+
+    // 4. 주점 요리 1회용 버프 적용 (특제 해신탕 등)
+    if (user.dgnBuff) {
+        if (user.dgnBuff.maxHp) s.appliedBonuses.maxHp += user.dgnBuff.maxHp;
+        if (user.dgnBuff.maxStam) s.appliedBonuses.maxStam += user.dgnBuff.maxStam;
+        if (user.dgnBuff.maxHunger) s.appliedBonuses.maxHunger += user.dgnBuff.maxHunger;
+        if (user.dgnBuff.atk) s.appliedBonuses.atk += user.dgnBuff.atk; // 전투 데미지 가산용
+    }
+
+    // 5. 계산된 보너스를 실제 스탯에 더하기
+    for (var key in s.appliedBonuses) {
+        if (s[key] !== undefined) {
+            s[key] += s.appliedBonuses[key];
+        } else if (key === 'atk') {
+            s.atkBonus = s.appliedBonuses.atk;
+        }
+    }
+    
+    // 6. 최대치가 변동되었으므로 현재 수치 클램핑 (초과 방지)
+    s.hp = Math.min(s.maxHp, s.hp);
+    s.stam = Math.min(s.maxStam, s.stam);
+    s.hunger = Math.min(s.maxHunger, s.hunger);
 }
 
 //==========섹터54==========

@@ -187,6 +187,8 @@ var DGN_ITEM_DB = {
     "스태미나 포션": { type: "potion", rank: "일반", price: 3000, stat: { stam: 30 } },
     "해독제": { type: "potion", rank: "일반", price: 2000, stat: { cure: "poison" } },
     "휴대용 식량": { type: "potion", rank: "일반", price: 3000, stat: { hunger: 30 } },
+    "육포": { type: "potion", rank: "일반", price: 4000, stat: { hp: 50, hunger: 20 } },
+    "구운 버섯": { type: "potion", rank: "일반", price: 6000, stat: { hp: 100, hunger: 30 } },
     "휴식용 텐트": { type: "consumable", rank: "일반", price: 10000, effect: "safe_rest" },
     "횃불": { type: "consumable", rank: "일반", price: 3000, effect: "light" },
     "A형 텐트": { type: "consumable", rank: "희귀", price: 25000, effect: "fast_rest" },
@@ -7721,26 +7723,46 @@ function _handleMenuStep4(msg, user, data, replier, roomName, targetUid) {
         }
 
         // 던전 시스템 계층 이동
-        if (prevState === 'dgn_turn' || prevState === 'dgn_combat_normal' || prevState === 'dgn_boss_atk' || prevState === 'dgn_boss_def') {
-            replier.reply(formatError(user, "명령 거부", "탐험 중에는 뒤로가기를 사용할 수 없습니다.\n전투 중 [도망]을 시도하거나 [귀환 주문서]를 사용하세요."));
-            return true;
-        }
-        if (prevState === 'dgn_guild_main' || prevState === 'dgn_shop_main' || prevState === 'dgn_info_main' || prevState === 'dgn_theme_select') {
+        if (prevState === 'dgn_turn' || prevState === 'dgn_combat_main' || prevState === 'dgn_combat_dir') {
+            replier.reply(formatError(user, "명령 거부", "탐험 및 전투 중에는 뒤로가기를 사용할 수 없습니다.\n[도망가기]를 시도하세요."));
+            return true;
+        }
+        
+        // [중요] 내 정보/가방에서 뒤로 갈 때, 탐험 중이면 전투(턴) 화면으로 복귀, 아니면 마을로 복귀
+        if (prevState === 'dgn_info_main') {
+            if (user.dgnState && user.dgnState.inProgress) {
+                roomData.features.states.menuWait[targetUid] = { type: 'dgn_turn', time: Date.now(), originRoom: roomName };
+                _showDungeonTurn(user, replier);
+            } else {
+                _showDungeonLobby(user, replier, roomData, targetUid, roomName);
+            }
+            return true;
+        }
+        
+        if (prevState === 'dgn_info_equip' || prevState === 'dgn_info_skill' || prevState === 'dgn_stat_distribute') {
+            _showDgnInfoMain(user, replier, roomData, targetUid, roomName);
+            return true;
+        }
+        
+        if (prevState === 'dgn_guild_main' || prevState === 'dgn_shop_main' || prevState === 'dgn_theme_select' || prevState === 'dgn_tavern_main') {
             _showDungeonLobby(user, replier, roomData, targetUid, roomName);
             return true;
         }
-        if (prevState === 'dgn_guild_storage' || prevState === 'dgn_guild_quest') {
-            _showDgnGuildMain(user, replier, roomData, targetUid, roomName);
-            return true;
-        }
-        if (prevState === 'dgn_info_equip') {
-            _showDgnInfoMain(user, replier, roomData, targetUid, roomName);
-            return true;
-        }
-        if (prevState === 'dgn_lobby') {
-            replier.reply(formatCommand("🚪 마을 복귀", user, "던전 입구를 떠나 일상으로 돌아갑니다."));
-            return true;
-        }
+        
+        if (prevState === 'dgn_guild_storage' || prevState === 'dgn_guild_quest') {
+            _showDgnGuildMain(user, replier, roomData, targetUid, roomName);
+            return true;
+        }
+        
+        if (prevState === 'dgn_shop_list') {
+            _showDgnShopMain(user, replier, roomData, targetUid, roomName);
+            return true;
+        }
+
+        if (prevState === 'dgn_lobby') {
+            replier.reply(formatCommand("🚪 마을 복귀", user, "던전 입구를 떠나 일상으로 돌아갑니다."));
+            return true;
+        }
 
         // --- [B] 2단계 메뉴에서 1단계(최상단 메인)로 복귀 ---
         // 무역 메인으로 돌아가는 리스트
@@ -17064,6 +17086,9 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
     }
     // [상점 라우터]
     else if (state.type === 'dgn_shop_main') {
+        _processDgnShopCat(choice, user, data, replier, logicRoom, targetUid);
+    }
+    else if (state.type === 'dgn_shop_list') {
         _processDgnShop(choice, user, data, replier, logicRoom, targetUid);
     }
     // [주점 라우터]
@@ -17075,7 +17100,8 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
         if (choice === "1") _showDgnEquipMenu(user, replier, roomData, targetUid, logicRoom);
         else if (choice === "2") _processDgnUnequip(user, data, replier, logicRoom, targetUid);
         else if (choice === "3") _showDgnSkillMenu(user, replier, roomData, targetUid, logicRoom);
-        else replier.reply(formatError(user, "입력 오류", "1번(장착), 2번(해제), 3번(스킬)을 선택하세요."));
+        else if (choice === "4") _showDgnStatDistributeMenu(user, replier, roomData, targetUid, logicRoom);
+        else replier.reply(formatError(user, "입력 오류", "1~4번 중 하나를 선택하세요."));
     }
     else if (state.type === 'dgn_info_equip') {
         _processDgnEquip(choice, user, data, replier, logicRoom, targetUid);
@@ -18099,28 +18125,55 @@ function _processDgnStorage(choice, user, data, replier, roomName, targetUid) {
    [던전] 상점 구역
 ----------------------------------------- */
 function _showDgnShopMain(user, replier, roomData, targetUid, roomName) {
-        var shopItems = [
-            "초보자의 검", "가죽 갑옷", "바람의 반지", "소형 체력 포션", "중형 체력 포션", "스태미나 포션", "휴식용 텐트", "A형 텐트", "횃불", "연막탄", "던전 입장권",
-            "낡은 곡괭이", "채집용 낫",
-            "화염 스킬북(초급)", "맹독 스킬북(초급)", "전격 스킬북(초급)", "빙결 스킬북(초급)", "관통 스킬북(초급)", "마력 스킬북(초급)", "치유 스킬북(초급)", "주사위 스킬북(초급)"
-        ];
-        var body = "🏪 [마을 상점]\n💰 내 금화: " + fp(user.dgnGold || 0) + " G\n\n";
-        
-        shopItems.forEach(function(name, i) {
-            var info = DGN_ITEM_DB[name];
-            var icon = (info.type === "weapon") ? "🗡️" : (info.type === "armor" ? "🛡️" : (info.type === "acc" ? "💍" : "🧪"));
-            if (info.type === "consumable") icon = "📦";
-            if (info.type === "skill_book") icon = "📕";
-            if (info.type === "tool") icon = "⛏️";
-            if (name === "던전 입장권") icon = "🎫";
-            
-            var toolDesc = (info.type === "tool") ? " (내구도:" + info.usage + ")" : "";
-            body += (i+1) + ". " + icon + " " + name + toolDesc + " : " + fp(info.price) + " G\n";
-        });
+    var body = "🏪 [마을 상점]\n💰 내 금화: " + fp(user.dgnGold || 0) + " G\n\n" +
+               "어떤 물건을 찾으시나요?\n\n" +
+               "1. 🗡️ 무기 및 장신구\n" +
+               "2. 📦 소모품 (물약/식량/도구)\n" +
+               "3. 📕 비전 스킬북\n\n" +
+               "↩️ 뒤로 / ❎취소";
+    replier.reply(formatCommand("🏪 마을 상점", user, body, "원하시는 카테고리 번호를 입력하세요."));
+    roomData.features.states.menuWait[targetUid] = { type: 'dgn_shop_main', time: Date.now(), originRoom: roomName };
+}
 
+function _processDgnShopCat(choice, user, data, replier, roomName, targetUid) {
+    var c = parseInt(choice);
+    var items = [];
+    
+    if (c === 1) {
+        items = ["초보자의 검", "가죽 갑옷", "바람의 반지"];
+    } else if (c === 2) {
+        items = ["소형 체력 포션", "중형 체력 포션", "스태미나 포션", "해독제", "휴대용 식량", "육포", "구운 버섯", "휴식용 텐트", "A형 텐트", "횃불", "연막탄", "던전 입장권", "낡은 곡괭이", "채집용 낫"];
+    } else if (c === 3) {
+        items = ["화염 스킬북(초급)", "맹독 스킬북(초급)", "전격 스킬북(초급)", "빙결 스킬북(초급)", "관통 스킬북(초급)", "마력 스킬북(초급)", "치유 스킬북(초급)", "주사위 스킬북(초급)"];
+    } else {
+        return replier.reply(formatError(user, "번호 오류", "1~3번 중 하나를 선택하세요."));
+    }
+
+    var body = "🏪 [마을 상점 - 상품 목록]\n💰 내 금화: " + fp(user.dgnGold || 0) + " G\n\n";
+    items.forEach(function(name, i) {
+        var info = DGN_ITEM_DB[name];
+        var icon = (info.type === "weapon") ? "🗡️" : (info.type === "armor" ? "🛡️" : (info.type === "acc" ? "💍" : "🧪"));
+        if (info.type === "consumable") icon = "📦";
+        if (info.type === "skill_book") icon = "📕";
+        if (info.type === "tool") icon = "⛏️";
+        if (name === "던전 입장권") icon = "🎫";
+        
+        var toolDesc = (info.type === "tool") ? " (내구도:" + info.usage + ")" : "";
+        var healDesc = "";
+        if (info.stat) {
+            var hps = [], hgs = [];
+            if (info.stat.hp) hps.push("HP+" + info.stat.hp);
+            if (info.stat.stam) hps.push("ST+" + info.stat.stam);
+            if (info.stat.hunger) hps.push("허기+" + info.stat.hunger);
+            if (hps.length > 0) healDesc = " (" + hps.join(", ") + ")";
+        }
+        
+        body += (i+1) + ". " + icon + " " + name + toolDesc + healDesc + " : " + fp(info.price) + " G\n";
+    });
+    
     body += "\n↩️ 뒤로 / ❎취소";
-    replier.reply(formatCommand("🏪 상점", user, body, "구매할 아이템 번호를 입력하세요."));
-    roomData.features.states.menuWait[targetUid] = { type: 'dgn_shop_main', time: Date.now(), extra: { items: shopItems }, originRoom: roomName };
+    replier.reply(formatCommand("🏪 상점 물품 선택", user, body, "구매할 아이템 번호를 입력하세요."));
+    data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_shop_list', time: Date.now(), extra: { items: items, cat: c }, originRoom: roomName };
 }
 
 function _processDgnShop(choice, user, data, replier, roomName, targetUid) {
@@ -18143,29 +18196,81 @@ function _processDgnShop(choice, user, data, replier, roomName, targetUid) {
 
     user.dgnGold -= iInfo.price;
         
-        if (iName === "던전 입장권") {
-            user.dgnTickets = (Number(user.dgnTickets) || 0) + 1;
-        } else if (iInfo.type === "skill_book") {
-            if (!user.dgnSkills) user.dgnSkills = {};
-            var sKey = iInfo.skill;
-            if (user.dgnSkills[sKey]) {
-                user.dgnGold += iInfo.price; 
-                return replier.reply(formatError(user, "구매 불가", "이미 해당 계열의 스킬을 보유 중입니다.\n이후 스킬 업그레이드는 던전 드랍을 통해서만 가능합니다."));
-            } else {
-                user.dgnSkills[sKey] = 1;
-                if (!user.dgnActiveSkill) user.dgnActiveSkill = sKey;
-            }
+    if (iName === "던전 입장권") {
+        user.dgnTickets = (Number(user.dgnTickets) || 0) + 1;
+    } else if (iInfo.type === "skill_book") {
+        if (!user.dgnSkills) user.dgnSkills = {};
+        var sKey = iInfo.skill;
+        if (user.dgnSkills[sKey]) {
+            user.dgnGold += iInfo.price; 
+            return replier.reply(formatError(user, "구매 불가", "이미 해당 계열의 스킬을 보유 중입니다.\n이후 스킬 업그레이드는 던전 드랍을 통해서만 가능합니다."));
         } else {
-            var newItem = { name: iName, type: iInfo.type, rank: iInfo.rank };
-            if (iInfo.usage) newItem.usage = iInfo.usage; // 도구 구매 시 내구도 속성 부여
-            util_addDgnItem(user.dgnBag, newItem, 1);
+            user.dgnSkills[sKey] = 1;
+            if (!user.dgnActiveSkill) user.dgnActiveSkill = sKey;
         }
+    } else {
+        var newItem = { name: iName, type: iInfo.type, rank: iInfo.rank };
+        if (iInfo.usage) newItem.usage = iInfo.usage;
+        util_addDgnItem(user.dgnBag, newItem, 1);
+    }
         
     user.skipHealing = true;
     safeSaveData(data, false);
-    replier.reply(formatCommand("구매 완료", user, "[" + iName + "]을(를) 구매하여 가방에 넣었습니다.\n💰 남은 금화: " + fp(user.dgnGold) + " G"));
-    data.rooms[roomName].features.states.menuWait[targetUid].time = Date.now();
-    _showDgnShopMain(user, replier, data.rooms[roomName], targetUid, roomName);
+    replier.reply(formatCommand("✅ 구매 완료", user, "[" + iName + "]을(를) 구매했습니다.\n💰 남은 금화: " + fp(user.dgnGold) + " G"));
+    
+    // 구매 후 해당 카테고리 목록으로 다시 렌더링 유지
+    state.time = Date.now();
+    _processDgnShopCat(state.extra.cat, user, data, replier, roomName, targetUid);
+}
+
+// [스탯 분배 전용 메뉴 로직 추가]
+function _showDgnStatDistributeMenu(user, replier, roomData, targetUid, roomName) {
+    var pts = Number(user.dgnStatPoints || 0);
+    if (pts <= 0) return replier.reply(formatError(user, "스탯 포인트 부족", "분배할 스탯 포인트가 없습니다. 레벨업을 하세요."));
+    
+    var body = "🆙 [스탯 포인트 분배]\n" +
+               "잔여 포인트: " + pts + " Pts\n\n" +
+               "어떤 능력을 상승시키겠습니까?\n" +
+               "1. 💪 STR (힘) +1\n" +
+               "2. 🏃 AGI (민첩) +1\n" +
+               "3. 🧠 INT (지능) +1\n" +
+               "4. ❤️ MaxHP (최대 체력) +10\n" +
+               "5. ⚡ MaxST (최대 스태미나) +5\n" +
+               "6. 🍖 MaxHunger (최대 허기) +5\n\n" +
+               "↩️ 뒤로 / ❎취소";
+               
+    replier.reply(formatCommand("✨ 스탯 투자", user, body, "올릴 능력치의 번호를 입력하세요."));
+    roomData.features.states.menuWait[targetUid] = { type: 'dgn_stat_distribute', time: Date.now(), originRoom: roomName };
+}
+
+function _processDgnStatDistribute(choice, user, data, replier, roomName, targetUid) {
+    var pts = Number(user.dgnStatPoints || 0);
+    if (pts <= 0) return replier.reply(formatError(user, "스탯 포인트 부족", "분배할 스탯 포인트가 없습니다."));
+    
+    var c = parseInt(choice);
+    if (isNaN(c) || c < 1 || c > 6) return replier.reply(formatError(user, "입력 오류", "1~6번 중 하나를 선택하세요."));
+    
+    if (c === 1) user.dgnStat.str++;
+    else if (c === 2) user.dgnStat.agi++;
+    else if (c === 3) user.dgnStat.int++;
+    else if (c === 4) { user.dgnStat.maxHp += 10; user.dgnStat.hp += 10; }
+    else if (c === 5) { user.dgnStat.maxStam += 5; user.dgnStat.stam += 5; }
+    else if (c === 6) { user.dgnStat.maxHunger += 5; user.dgnStat.hunger += 5; }
+    
+    user.dgnStatPoints--;
+    user.skipHealing = true;
+    
+    if (typeof _applySetEffects === 'function') _applySetEffects(user);
+    safeSaveData(data, false);
+    
+    replier.reply(formatCommand("✨ 스탯 상승", user, "능력치가 영구적으로 상승했습니다!\n(남은 포인트: " + user.dgnStatPoints + ")"));
+    
+    // 계속 분배할 포인트가 남았으면 분배창, 아니면 내 정보창 띄우기
+    if (user.dgnStatPoints > 0) {
+        _showDgnStatDistributeMenu(user, replier, data.rooms[roomName], targetUid, roomName);
+    } else {
+        _showDgnInfoMain(user, replier, data.rooms[roomName], targetUid, roomName);
+    }
 }
 
 /* -----------------------------------------

@@ -8917,22 +8917,43 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
     if (msg === "/가방") {
         var inv = user.inventory || [];
         
+        // [인벤토리 자동 중첩 엔진] 동일 아이템은 하나로 합치고 수량(qty)을 증가시킴
+        var map = {};
+        var newInv = [];
+        for (var i = 0; i < inv.length; i++) {
+            var it = inv[i];
+            var key = it.id + "_" + it.effect + "_" + (it.title || it.name);
+            if (!map[key]) {
+                var newItem = JSON.parse(JSON.stringify(it));
+                if (newItem.qty === undefined) newItem.qty = 1;
+                map[key] = newItem;
+                newInv.push(newItem);
+            } else {
+                map[key].qty = (map[key].qty || 1) + (it.qty || 1);
+            }
+        }
+        
         // ID 기준 오름차순 정렬 (자산가 칭호 700~703번이 칭호 상단에 오도록 정렬)
-        inv.sort(function(a, b) {
+        newInv.sort(function(a, b) {
             var idA = Number(a.id) || 9999;
             var idB = Number(b.id) || 9999;
             if (idA !== idB) return idA - idB;
             return (a.name || "").localeCompare(b.name || "");
         });
+        
+        // 정화된 배열로 덮어쓰기 (인덱스가 갱신되어 /장착 시 오류 방지)
+        user.inventory = newInv;
+        user.skipHealing = true;
+        safeSaveData(data, false);
 
         var iconEntries = [];
         var titleEntries = [];
         
-        if (inv.length === 0) {
+        if (newInv.length === 0) {
             iconEntries.push("(보유 중인 아이템이 없습니다)");
         } else {
-            for (var i = 0; i < inv.length; i++) {
-                var it = inv[i];
+            for (var i = 0; i < newInv.length; i++) {
+                var it = newInv[i];
                 var activeMark = "";
                 
                 // 현재 장착 상태 확인 (✅ 표시)
@@ -8940,17 +8961,21 @@ function _handleInventoryLogic(msg, user, data, replier, roomName, targetUid) {
                 else if (it.effect === "title" && user.title === it.title) activeMark = " (✅ 장착 중)";
                 
                 var displayIcon = it.icon || "";
+                var qtyStr = (it.qty && it.qty > 1) ? " x" + it.qty : "";
                 var entry = "";
 
                 if (it.effect === "icon") {
-                    // 아이콘 카테고리: [아이콘] 이름 포맷
-                    entry = (i + 1) + ". " + (displayIcon || "📦") + " " + it.name + activeMark;
+                    // 아이콘 카테고리: [아이콘] 이름 x수량 포맷
+                    entry = (i + 1) + ". " + (displayIcon || "📦") + " " + it.name + qtyStr + activeMark;
                     iconEntries.push(entry);
                 } else if (it.effect === "title") {
-
-                    // 칭호: [이름] 포맷 (특수 아이콘 표시 로직 제거)
-                    entry = (i + 1) + ". [" + it.title + "] 칭호" + activeMark;
+                    // 칭호: [이름] 칭호 x수량 포맷
+                    entry = (i + 1) + ". [" + it.title + "] 칭호" + qtyStr + activeMark;
                     titleEntries.push(entry);
+                } else {
+                    // 기타 확장 아이템 대비
+                    entry = (i + 1) + ". " + (displayIcon || "📦") + " " + it.name + qtyStr + activeMark;
+                    iconEntries.push(entry);
                 }
             }
         }

@@ -17065,6 +17065,12 @@ function _handleDungeonState(msg, user, data, replier, roomName, targetUid, stat
     else if (state.type === 'dgn_combat_dir') {
         _processDgnCombatDir(choice, user, data, replier, logicRoom, targetUid);
     }
+    else if (state.type === 'dgn_combat_skill_select') {
+        _processDgnCombatSkillSelect(choice, user, data, replier, logicRoom, targetUid);
+    }
+    else if (state.type === 'dgn_stat_distribute') {
+        _processDgnStatDistribute(choice, user, data, replier, logicRoom, targetUid);
+    }
 }
 
 function _showDungeonThemeSelect(user, data, replier, roomName, targetUid) {
@@ -17432,19 +17438,19 @@ function _showDgnCombatMain(user, replier, extraMsg) {
     var mIcon = (c.mob.type === "boss") ? "👑" : ((c.mob.type === "elite") ? "👹" : "🗡️");
 
     var body = (extraMsg ? extraMsg + "\n\n" : "") +
-               mIcon + " [" + c.mob.name + "] (HP: " + c.mob.hp + ")\n" +
-               "👤 내 체력: " + s.hp + " / " + s.maxHp + " | ST: " + s.stam + "\n" +
-               "━━━━━━━━━━━━━━━\n" +
-               "어떻게 대처하시겠습니까?\n" +
-               "1. ⚔️ 공격 (방향 선택)\n" +
-               "2. 🛡️ 방어 (방향 선택)\n" +
-               "3. ✨ 스킬 (ST 소모, 방향 선택)\n" +
-               "4. 🧪 포션 (가방 사용)\n" +
-               "5. 🏃 도망가기 ('연막탄' 보유 시 확정 도망)\n\n" +
-               "입력: [번호]";
+                   mIcon + " [" + c.mob.name + "] (Lv." + (c.mob.lv || 1) + " / HP: " + c.mob.hp + ")\n" +
+                   "👤 내 체력: " + s.hp + " / " + s.maxHp + " | ST: " + s.stam + "\n" +
+                   "━━━━━━━━━━━━━━━\n" +
+                   "어떻게 대처하시겠습니까?\n" +
+                   "1. ⚔️ 일반 공격 (방향 선택)\n" +
+                   "2. 🛡️ 방어 (방향 선택)\n" +
+                   "3. ✨ 스킬 (보유 스킬 즉시 사용)\n" +
+                   "4. 🧪 포션 (가방 사용)\n" +
+                   "5. 🏃 도망가기 ('연막탄' 보유 시 확정 도망)\n\n" +
+                   "입력: [번호]";
 
-    replier.reply(formatCommand("⚔️ 전투 진행 중 (턴 " + c.turn + ")", user, body));
-}
+        replier.reply(formatCommand("⚔️ 전투 진행 중 (턴 " + c.turn + ")", user, body));
+    }
 
 function _processDgnCombatMain(choice, user, data, replier, roomName, targetUid) {
     var c = user.dgnState.combat;
@@ -17462,22 +17468,29 @@ function _processDgnCombatMain(choice, user, data, replier, roomName, targetUid)
         replier.reply("☠️ 슬라임의 점액에 닿아 [맹독] 상태에 빠졌습니다! (매턴 체력 감소)");
     }
 
-    if (choice === "1" || choice === "3") {
-        if (choice === "3") {
-            if (!user.dgnActiveSkill) return replier.reply(formatError(user, "스킬 없음", "장착 중인 스킬이 없습니다. 가방 메뉴에서 장착하세요."));
-            var sKey = user.dgnActiveSkill;
-            var sInfo = DGN_SKILL_DB[sKey];
-            if (s.stam < sInfo.st) return replier.reply(formatError(user, "스태미나 부족", "스킬을 사용할 스태미나가 부족합니다. (필요: " + sInfo.st + ")"));
-            
-            // 힐(Heal) 스킬은 방향 선택 없이 즉시 발동
-            if (sKey === "heal") {
-                return _resolveCombatTurn(user, data, replier, roomName, targetUid, "", false, 0, "skill");
-            }
-        }
-        c.nextAction = choice === "1" ? "atk" : "skill";
+    if (choice === "1") {
+        c.nextAction = "atk";
         data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_combat_dir', time: Date.now(), originRoom: roomName };
         return replier.reply(formatCommand("⚔️ 전투 - 타격 부위 선택", user, "어느 방향을 노리시겠습니까?\n\n1. 상단\n2. 하단\n3. 좌측\n4. 우측\n\n입력: [번호]"));
     } 
+    else if (choice === "3") {
+        if (!user.dgnSkills || Object.keys(user.dgnSkills).length === 0) {
+            return replier.reply(formatError(user, "스킬 없음", "보유 중인 스킬이 없습니다. 상점에서 스킬북을 구매하세요."));
+        }
+        var skillBody = "✨ [스킬 사용]\nST를 소모하여 방향 선택 없이 적에게 즉시 강력한 마법/물리 스킬을 시전합니다.\n\n";
+        var idx = 1;
+        var sList = [];
+        for (var sKey in user.dgnSkills) {
+            var sLv = user.dgnSkills[sKey];
+            var sInfo = DGN_SKILL_DB[sKey];
+            skillBody += idx + ". " + sInfo.icon + " " + sInfo.nameIdx[sLv - 1] + " (Lv." + sLv + " / ST: " + sInfo.st + ")\n";
+            sList.push(sKey);
+            idx++;
+        }
+        skillBody += "\n↩️ 뒤로 / ❎취소";
+        data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_combat_skill_select', time: Date.now(), extra: { list: sList }, originRoom: roomName };
+        return replier.reply(formatCommand("✨ 전투 스킬 선택", user, skillBody, "사용할 스킬 번호를 입력하세요."));
+    }
     else if (choice === "2") {
         c.nextAction = "def";
         data.rooms[roomName].features.states.menuWait[targetUid] = { type: 'dgn_combat_dir', time: Date.now(), originRoom: roomName };
@@ -17546,6 +17559,46 @@ function _processDgnCombatDir(choice, user, data, replier, roomName, targetUid) 
     _resolveCombatTurn(user, data, replier, roomName, targetUid, "", isDefending, pDir, c.nextAction);
 }
 
+function _processDgnCombatSkillSelect(choice, user, data, replier, roomName, targetUid) {
+    var state = data.rooms[roomName].features.states.menuWait[targetUid];
+    var idx = parseInt(choice) - 1;
+    
+    if (isNaN(idx) || idx < 0 || idx >= state.extra.list.length) {
+        return replier.reply(formatError(user, "번호 오류", "올바른 스킬 번호를 선택하세요."));
+    }
+    
+    var sKey = state.extra.list[idx];
+    var sInfo = DGN_SKILL_DB[sKey];
+    var s = user.dgnStat;
+    
+    if (s.stam < sInfo.st) {
+        return replier.reply(formatError(user, "스태미나 부족", "스킬을 사용할 스태미나가 부족합니다. (필요: " + sInfo.st + ")"));
+    }
+    
+    // 전투 시에만 일회성으로 장착 스킬을 변경하고 즉시 발동
+    user.dgnActiveSkill = sKey;
+    _resolveCombatTurn(user, data, replier, roomName, targetUid, "", false, 0, "skill");
+}
+
+function _processDgnStatDistribute(choice, user, data, replier, roomName, targetUid) {
+    var pts = Number(user.dgnStatPoints || 0);
+    if (pts <= 0) return replier.reply(formatError(user, "스탯 포인트 부족", "분배할 스탯 포인트가 없습니다. 레벨업을 하세요."));
+    
+    var c = parseInt(choice);
+    if (isNaN(c) || c < 1 || c > 3) return replier.reply(formatError(user, "입력 오류", "1. STR / 2. AGI / 3. INT 중 하나를 선택하세요."));
+    
+    if (c === 1) user.dgnStat.str++;
+    else if (c === 2) user.dgnStat.agi++;
+    else if (c === 3) user.dgnStat.int++;
+    
+    user.dgnStatPoints--;
+    user.skipHealing = true;
+    safeSaveData(data, false);
+    
+    replier.reply(formatCommand("✨ 스탯 상승", user, "능력치가 영구적으로 상승했습니다!\n(남은 포인트: " + user.dgnStatPoints + ")"));
+    _showDgnInfoMain(user, replier, data.rooms[roomName], targetUid, roomName);
+}
+
 function _resolveCombatTurn(user, data, replier, roomName, targetUid, prevLog, isDefending, pDir, actionType) {
     var c = user.dgnState.combat;
     var s = user.dgnStat;
@@ -17591,7 +17644,7 @@ function _resolveCombatTurn(user, data, replier, roomName, targetUid, prevLog, i
         
         logMsg += sInfo.icon + " [" + sInfo.nameIdx[sLv - 1] + "] 발동! 체력을 " + healAmt + " 회복했습니다.\n";
     }
-    else if (pDir > 0 && !isDefending) {
+    else if ((pDir > 0 && !isDefending) || actionType === "skill") {
         var pBaseAtk = s.str * 10; 
         var pAtkType = "physical";
         var skName = "";
@@ -17603,7 +17656,9 @@ function _resolveCombatTurn(user, data, replier, roomName, targetUid, prevLog, i
             s.stam -= sInfo.st;
             
             pAtkType = sInfo.type; // magic or physical
-            var effMult = sInfo.baseDmgMult + (sLv - 1) * 0.1; // 렙당 0.1 계수 상승
+            
+            // [스킬 데미지 공식 개편] 기본공격 150% + 렙당 5% 증가
+            var effMult = 1.5 + (sLv - 1) * 0.05; 
             
             if (pAtkType === "magic") {
                 pBaseAtk = s.int * 10 * effMult;
@@ -17624,7 +17679,11 @@ function _resolveCombatTurn(user, data, replier, roomName, targetUid, prevLog, i
         var pAtk = pAtkRes.dmg;
         var cStr = pAtkRes.crit ? " ⚡[기본치명타!]" : "";
 
-        logMsg += "당신은 " + _getDirStr(pDir) + "을(를) 향해 " + (actionType === "skill" ? skName + "스킬을 내질렀습니다!\n" : "공격했습니다!\n");
+        if (actionType === "skill") {
+            logMsg += "당신은 " + skName + "스킬을 시전했습니다!\n";
+        } else {
+            logMsg += "당신은 " + _getDirStr(pDir) + "을(를) 향해 공격했습니다!\n";
+        }
 
         var mobDef = c.mob.def || 0;
         var mobMRes = c.mob.mRes || 0;
@@ -17635,12 +17694,13 @@ function _resolveCombatTurn(user, data, replier, roomName, targetUid, prevLog, i
 
         if (curMobAct === "def") {
             logMsg += "적은 " + _getDirStr(mDir) + "을(를) 방어했습니다.\n";
-            if (pDir === mDir) {
+            // 스킬은 방향 무시 확정 타격 (방향 방어판정 무효화)
+            if (pDir > 0 && pDir === mDir) {
                 pAtk = Math.floor(pAtk * 0.1);
                 var resistDmg = Math.max(1, pAtk - (pAtkType === "magic" ? mobMRes : mobDef));
                 logMsg += "🛡️ 적이 공격을 막아냈습니다! (" + resistDmg + " 데미지)\n";
                 c.mob.hp -= resistDmg;
-            } else if (pDir === opposites[mDir]) {
+            } else if (pDir > 0 && pDir === opposites[mDir]) {
                 pAtk = Math.floor(pAtk * 1.5);
                 var resistDmg = Math.max(1, pAtk - (pAtkType === "magic" ? Math.floor(mobMRes/2) : Math.floor(mobDef/2)));
                 logMsg += "💥 방어의 허점을 완벽히 찔렀습니다! (" + resistDmg + " 데미지)" + cStr + " 🎯[약점공격!]\n";
@@ -17770,7 +17830,42 @@ function _winDgnCombat(user, data, replier, roomName, targetUid, combatLog) {
         var gold = Math.floor(Math.random() * (c.mob.gold[1] - c.mob.gold[0])) + c.mob.gold[0];
         d.loots.points += gold;
 
-        var logMsg = combatLog + "\n🎉 [" + c.mob.name + "] 토벌 성공!\n💰 획득 금화: +" + gold + " G\n";
+        // [경험치 산출 엔진]
+        var mobLv = c.mob.lv || 1;
+        var myLv = user.dgnLevel || 1;
+        var baseExp = 10.0 + (Math.random() * 5.0); // 10.0 ~ 15.0
+        var lvDiff = mobLv - myLv;
+        var expMult = 1.0;
+        
+        if (lvDiff > 0) {
+            expMult += (lvDiff * 0.1); // 몹 레벨이 높을수록 보너스 증가
+        } else if (lvDiff < 0) {
+            expMult = Math.max(0.1, 1.0 + (lvDiff * 0.1)); // 몹 레벨이 낮을수록 페널티 (최소 10% 보장)
+        }
+        
+        var finalExp = Number((baseExp * expMult).toFixed(1));
+        user.dgnExp = (Number(user.dgnExp) || 0) + finalExp;
+
+        var logMsg = combatLog + "\n🎉 [" + c.mob.name + "] 토벌 성공!\n💰 획득 금화: +" + gold + " G\n✨ 획득 경험치: +" + finalExp + " EXP\n";
+
+        // [레벨업 판정 엔진]
+        var reqExp = myLv * 100 + 200;
+        var lvUpCount = 0;
+        while (user.dgnExp >= reqExp) {
+            user.dgnExp -= reqExp;
+            user.dgnLevel++;
+            user.dgnStat.maxHp += 15;
+            user.dgnStat.maxStam += 2;
+            user.dgnStatPoints = (Number(user.dgnStatPoints) || 0) + 2;
+            user.dgnStat.hp = user.dgnStat.maxHp;
+            user.dgnStat.stam = user.dgnStat.maxStam;
+            lvUpCount++;
+            myLv = user.dgnLevel;
+            reqExp = myLv * 100 + 200;
+        }
+        if (lvUpCount > 0) {
+            logMsg += "\n🆙 레벨 업! (Lv." + user.dgnLevel + ")\n(최대 HP +15, 최대 ST +2, 스탯포인트 +2 획득 및 전면 회복)\n";
+        }
         
         var dropChances = 1 + Math.floor((d.depth - 1) / 20);
         
@@ -18096,28 +18191,29 @@ function _showDgnInfoMain(user, replier, roomData, targetUid, roomName) {
     });
     var bagDisplay = bagStrArr.length > 0 ? bagStrArr.join(", ") : "비어있음";
 
-    var body = "📊 [내 전투 스탯]\n" +
-               "❤️ HP: " + s.hp + " / " + s.maxHp + "\n" +
-               "⚡ ST: " + s.stam + " / " + s.maxStam + "\n" +
-               "🍖 허기: " + s.hunger + " / " + s.maxHunger + "\n" +
-               "💪 STR: " + s.str + " | 🏃 AGI: " + s.agi + " | 🧠 INT: " + s.int + "\n" +
-               "━━━━━━━━━━━━━━━\n" +
-               "[착용 중인 장비]\n" +
-               "🗡️ 무기: " + wStr + "\n" +
-               "🛡️ 방어구: " + aStr + "\n" +
-               "💍 장신구: " + cStr + "\n" +
-               "📕 장착 스킬: " + sStr + "\n" +
-               "━━━━━━━━━━━━━━━\n" +
-               "🎒 [가방] (" + user.dgnBag.length + "/" + SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS + ")\n" +
-               bagDisplay + "\n\n" +
-               "1. 🎒 가방에서 장비 장착 / 포션 사용\n" +
-               "2. ⏬ 장착 해제\n\n" +
-               "3. 📕 보유 스킬 장착 변경\n\n" +
-               "↩️ 뒤로 / ❎취소";
+        var body = "📊 [내 전투 스탯]\n" +
+                   "❤️ HP: " + s.hp + " / " + s.maxHp + "\n" +
+                   "⚡ ST: " + s.stam + " / " + s.maxStam + "\n" +
+                   "🍖 허기: " + s.hunger + " / " + s.maxHunger + "\n" +
+                   "💪 STR: " + s.str + " | 🏃 AGI: " + s.agi + " | 🧠 INT: " + s.int + "\n" +
+                   "━━━━━━━━━━━━━━━\n" +
+                   "[착용 중인 장비]\n" +
+                   "🗡️ 무기: " + wStr + "\n" +
+                   "🛡️ 방어구: " + aStr + "\n" +
+                   "💍 장신구: " + cStr + "\n" +
+                   "📕 장착 스킬: " + sStr + "\n" +
+                   "━━━━━━━━━━━━━━━\n" +
+                   "🎒 [가방] (" + user.dgnBag.length + "/" + SYSTEM_CONFIG.DUNGEON.MAX_BAG_SLOTS + ")\n" +
+                   bagDisplay + "\n\n" +
+                   "1. 🎒 가방에서 장비 장착 / 포션 사용\n" +
+                   "2. ⏬ 장착 해제\n\n" +
+                   "3. 📕 보유 스킬 장착 변경\n" +
+                   "4. 🆙 스탯 포인트 분배 (" + (user.dgnStatPoints || 0) + " Pts)\n\n" +
+                   "↩️ 뒤로 / ❎취소";
 
-    replier.reply(formatCommand("👤 내 정보 세팅", user, body, "메뉴 번호를 선택하세요."));
-    roomData.features.states.menuWait[targetUid] = { type: 'dgn_info_main', time: Date.now(), originRoom: roomName };
-}
+        replier.reply(formatCommand("👤 내 정보 세팅", user, body, "메뉴 번호를 선택하세요."));
+        roomData.features.states.menuWait[targetUid] = { type: 'dgn_info_main', time: Date.now(), originRoom: roomName };
+    }
 
 function _showDgnEquipMenu(user, replier, roomData, targetUid, roomName) {
     var bag = user.dgnBag;

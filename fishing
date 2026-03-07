@@ -390,14 +390,12 @@ def safe_find_image(img_path, conf=0.6, region=None):
         search_region = None
         using_smart_roi = False
 
-        # 1. 스마트 ROI (학습된 좌표 꺼내기)
         if region is None and img_path in SMART_ROI_CACHE:
             search_region = SMART_ROI_CACHE[img_path]
             using_smart_roi = True
         elif region is not None:
             search_region = region
 
-        # 2. mss 기반 초고속 화면 캡처
         if search_region:
             monitor = {"left": int(search_region[0]), "top": int(search_region[1]), "width": int(search_region[2]), "height": int(search_region[3])}
             sct_img = sct.grab(monitor)
@@ -409,35 +407,34 @@ def safe_find_image(img_path, conf=0.6, region=None):
         screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
         
         # ==============================================================
-        # [스마트 하이브리드 엔진] 파일명 기반 실시간 알고리즘 스위칭 (연산 지연 0초)
+        # [스마트 하이브리드 엔진] 파일명 기반 실시간 알고리즘 스위칭
         # ==============================================================
-        # 그룹 A: 윤곽선이 뚜렷한 UI 및 텍스트 (캐니 엣지 정밀 탐색 적용)
+        # 그룹 A: 윤곽선이 뚜렷한 텍스트/불투명 UI (캐니 엣지 정밀 탐색)
+        # [버그 픽스] 반투명해서 뒤에 비치는 물결의 방해를 받는 낚시 UI들은 그룹 B로 강등시켰습니다.
         edge_targets = [
-            'catch_F.png', 'eel.png', 'exit_notice.png', 'fishing.png', 
-            'fishing_mode.png', 'jellyfish.png', 'press_A.png', 'press_D.png', 
-            'none1.png', 'none2.png', 'none3.png', 'specific_A.png', 
-            'specific_B.png', 'specific_C.png', 'auto_release.png'
+            'catch_F.png', 'eel.png', 'exit_notice.png', 'jellyfish.png', 
+            'press_A.png', 'press_D.png', 'none1.png', 'none2.png', 'none3.png', 
+            'specific_A.png', 'specific_B.png', 'specific_C.png'
         ]
         
         if img_path in edge_targets:
-            # 화면과 템플릿 모두 뼈대(Edge)만 남겨서 배경(물결, 안개 등)을 무시하고 형태만 비교
             template_edge = cv2.Canny(template, 50, 150)
             screen_edge = cv2.Canny(screen_gray, 50, 150)
             res = cv2.matchTemplate(screen_edge, template_edge, cv2.TM_CCOEFF_NORMED)
+            # Canny 필터 오탐 방지를 위해 기준치를 0.7 이상으로 엄격하게 보정
+            conf = max(conf, 0.7)
         else:
-            # 그룹 B: 빛, 이펙트, 미끼 등 윤곽선이 모호한 이미지 (기존 부드러운 매칭 유지)
+            # 그룹 B: 반투명 낚시 UI, 빛, 미끼 등 (기존 부드러운 매칭)
             res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
         # ==============================================================
         
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-        # 3. 발견 성공 시
         if max_val >= conf:
             h, w = template.shape
             real_x = max_loc[0] + (search_region[0] if search_region else 0)
             real_y = max_loc[1] + (search_region[1] if search_region else 0)
 
-            # 처음 찾은 이미지라면 주변에 30픽셀 여유 공간을 두고 좌표를 기억(학습)함
             if region is None and not using_smart_roi:
                 pad = 30
                 SMART_ROI_CACHE[img_path] = (
@@ -446,7 +443,6 @@ def safe_find_image(img_path, conf=0.6, region=None):
                 )
             return Box(real_x, real_y, w, h)
             
-        # 4. 발견 실패 시
         else:
             if using_smart_roi:
                 del SMART_ROI_CACHE[img_path]

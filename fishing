@@ -352,76 +352,111 @@ def send_cmd(cmd):
 IMAGE_CACHE = {} 
 
 def preload_all_images():
-    """현재 폴더의 모든 PNG 이미지를 봇 구동 시점에 램(RAM)으로 사전 적재(Eager Loading)합니다."""
-    global IMAGE_CACHE
-    # 봇이 스스로 외워둔 UI 좌표를 저장하는 뇌(메모리)
+class Box:
+    """pyautogui의 리턴값과 100% 동일하게 동작하도록 만든 가짜 Box 객체 (하위 호환성 유지)"""
+    def __init__(self, left, top, width, height):
+        self.left = left; self.top = top; self.width = width; self.height = height
+
+# 봇이 스스로 외워둔 UI 좌표를 저장하는 뇌(메모리)
 SMART_ROI_CACHE = {}
 
 def preload_all_images():
-    """현재 폴더의 모든 PNG 이미지를 봇 구동 시점에 램(RAM)으로 사전 적재(Eager Loading)합니다."""
+    """현재 폴더의 모든 PNG 이미지를 봇 구동 시점에 '흑백(Grayscale) cv2 포맷'으로 사전 적재합니다."""
     global IMAGE_CACHE
     bprint("\n>>> [시스템] 구동 전 필요 이미지(PNG) 사전 적재 시작...")
     count = 0
     
-    # [수정] 실행 위치와 상관없이 스크립트가 있는 폴더를 강제로 '절대 경로'로 고정
     base_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # 고정된 절대 경로 안의 모든 파일을 검사
     for filename in os.listdir(base_dir):
         if filename.lower().endswith('.png'):
             try:
                 full_path = os.path.join(base_dir, filename)
-                IMAGE_CACHE[filename] = Image.open(full_path)
-                count += 1
+                # PIL 대신 cv2 흑백으로 즉시 캐싱 (연산 속도 극대화 및 호환성 해결)
+                img = cv2.imread(full_path, cv2.IMREAD_GRAYSCALE)
+                if img is not None:
+                    IMAGE_CACHE[filename] = img
+                    count += 1
             except Exception as e:
                 print(f"  > [경고] {filename} 메모리 적재 실패: {e}")
     bprint(f">>> [시스템] 총 {count}개의 이미지 캐싱 완료! (탐색 준비 끝) <<<\n")
 
 def safe_find_image(img_path, conf=0.6, region=None):
-    """pyautogui 엔진을 유지하면서, 자가 학습 탐색(Smart ROI)을 적용한 함수"""
+    """하이브리드 비전(Canny Edge + Normal) 및 Smart ROI가 통합된 초고속 탐색 함수"""
     global IMAGE_CACHE, SMART_ROI_CACHE
+    
+    template = IMAGE_CACHE.get(img_path)
+    if template is None: return None 
+
     try:
-        # [안전장치] 사전 적재를 했지만, 런타임에 새로 생긴 사진을 위한 Lazy Load
-        if img_path not in IMAGE_CACHE:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            full_path = os.path.join(base_dir, img_path)
-            IMAGE_CACHE[img_path] = Image.open(full_path)
-            
-        search_region = region
+        search_region = None
         using_smart_roi = False
 
-        # 1. 수동 지정된 좌표가 없고, AI 뇌에 저장된 '학습된 좌표'가 있다면 꺼내 씁니다.
+        # 1. 스마트 ROI (학습된 좌표 꺼내기)
         if region is None and img_path in SMART_ROI_CACHE:
             search_region = SMART_ROI_CACHE[img_path]
             using_smart_roi = True
+        elif region is not None:
+            search_region = region
 
-        # 2. 이미지 탐색 (기존 pyautogui 유지)
-        pos = pyautogui.locateOnScreen(IMAGE_CACHE[img_path], confidence=conf, region=search_region, grayscale=True)
+        # 2. mss 기반 초고속 화면 캡처
+        if search_region:
+            monitor = {"left": int(search_region[0]), "top": int(search_region[1]), "width": int(search_region[2]), "height": int(search_region[3])}
+            sct_img = sct.grab(monitor)
+            screen_np = np.array(sct_img)
+        else:
+            sct_img = sct.grab(sct.monitors[1])
+            screen_np = np.array(sct_img)
+            
+        screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
         
+        # ==============================================================
+        # [스마트 하이브리드 엔진] 파일명 기반 실시간 알고리즘 스위칭 (연산 지연 0초)
+        # ==============================================================
+        # 그룹 A: 윤곽선이 뚜렷한 UI 및 텍스트 (캐니 엣지 정밀 탐색 적용)
+        edge_targets = [
+            'catch_F.png', 'eel.png', 'exit_notice.png', 'fishing.png', 
+            'fishing_mode.png', 'jellyfish.png', 'press_A.png', 'press_D.png', 
+            'none1.png', 'none2.png', 'none3.png', 'specific_A.png', 
+            'specific_B.png', 'specific_C.png', 'auto_release.png'
+        ]
+        
+        if img_path in edge_targets:
+            # 화면과 템플릿 모두 뼈대(Edge)만 남겨서 배경(물결, 안개 등)을 무시하고 형태만 비교
+            template_edge = cv2.Canny(template, 50, 150)
+            screen_edge = cv2.Canny(screen_gray, 50, 150)
+            res = cv2.matchTemplate(screen_edge, template_edge, cv2.TM_CCOEFF_NORMED)
+        else:
+            # 그룹 B: 빛, 이펙트, 미끼 등 윤곽선이 모호한 이미지 (기존 부드러운 매칭 유지)
+            # 'start_condition.png', 'anchor.png', 'green_range.png', 'green_float.png' 등이 자동 해당됨
+            res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+        # ==============================================================
+        
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+
         # 3. 발견 성공 시
-        if pos is not None:
-            # [핵심] 처음 전체화면에서 발견한 경우, 다음을 위해 상하좌우 30픽셀 여유를 두고 위치를 외웁니다.
+        if max_val >= conf:
+            h, w = template.shape
+            real_x = max_loc[0] + (search_region[0] if search_region else 0)
+            real_y = max_loc[1] + (search_region[1] if search_region else 0)
+
+            # 처음 찾은 이미지라면 주변에 30픽셀 여유 공간을 두고 좌표를 기억(학습)함
             if region is None and not using_smart_roi:
                 pad = 30
-                # pos는 (left, top, width, height) 형태의 Box 객체입니다.
                 SMART_ROI_CACHE[img_path] = (
-                    max(0, int(pos.left) - pad),
-                    max(0, int(pos.top) - pad),
-                    int(pos.width) + (pad * 2),
-                    int(pos.height) + (pad * 2)
+                    max(0, real_x - pad), max(0, real_y - pad),
+                    w + (pad * 2), h + (pad * 2)
                 )
-            return pos
+            return Box(real_x, real_y, w, h)
             
-        # 4. 발견 실패 시 대응 (지우개 로직)
+        # 4. 발견 실패 시
         else:
-            # 학습된 구역에서 찾아봤는데 실패했다면? -> 창이 움직였거나 아직 UI가 안 뜬 것!
-            # 다음 번 0.1초 뒤의 캡처 때는 '전체 화면'을 다시 뒤지도록 기억을 지워버립니다.
+            # 학습된 구역에서 못 찾았다면 UI가 이동했거나 안 뜬 것이므로 기억을 지움 (Fallback 방어)
             if using_smart_roi:
                 del SMART_ROI_CACHE[img_path]
             return None
 
     except Exception as e:
-        # 에러 발생 시 캐시 오염을 막기 위해 기억을 지웁니다.
         if region is None and img_path in SMART_ROI_CACHE:
             del SMART_ROI_CACHE[img_path]
         return None

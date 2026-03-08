@@ -376,6 +376,10 @@ def send_cmd(cmd):
 # [스마트 비전 엔진] 이미지 램(RAM) 캐싱 저장소
 IMAGE_CACHE = {} 
 
+# [데이터 샘플링 엔진] 이미지별 좌표 수집 및 통합 바운딩 박스 저장소
+ROI_SAMPLER = {}
+SAMPLE_LIMIT = 10 # 10회 수집 후 영역 통합
+
 class Box:
     """pyautogui의 리턴값과 100% 동일하게 동작하도록 만든 가짜 Box 객체 (하위 호환성 유지)"""
     def __init__(self, left, top, width, height):
@@ -409,10 +413,10 @@ def preload_all_images():
 def safe_find_image(img_path, conf=0.6, region=None):
     """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진"""
     global IMAGE_CACHE
+    global ROI_SAMPLER
     template = IMAGE_CACHE.get(img_path)
     
     try:
-        # [안전장치] 런타임에 늦게 추가된 사진을 위한 Lazy Load (한글 경로 대응)
         if template is None:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             full_path = os.path.join(base_dir, img_path)
@@ -423,28 +427,72 @@ def safe_find_image(img_path, conf=0.6, region=None):
             else:
                 return None
 
-        # 1. mss 초고속 캡처 (region이 있으면 그 부분만, 없으면 1번 모니터 전체)
-        if region:
-            monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
-            sct_img = sct.grab(monitor)
-            screen_np = np.array(sct_img)
-        else:
-            sct_img = sct.grab(sct.monitors[1])
-            screen_np = np.array(sct_img)
+        # 딕셔너리 초기화 (최초 1회)
+        if img_path not in ROI_SAMPLER:
+            ROI_SAMPLER[img_path] = {'samples': [], 'master_box': None}
             
-        # 2. 흑백 변환 후 매칭 연산 (PyAutoGUI와 100% 동일한 비교 공식)
+        cache_data = ROI_SAMPLER[img_path]
+        target_monitor = None
+        is_using_master = False
+
+        # [핵심] 탐색 구역(Monitor) 결정 로직
+        if region:
+            # 1. 하드코딩된 지역이 있으면 무조건 우선
+            target_monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
+        elif cache_data['master_box']:
+            # 2. 10번 수집이 끝나서 '통합 영역'이 만들어졌다면 그곳만 탐색
+            target_monitor = cache_data['master_box']
+            is_using_master = True
+        else:
+            # 3. 아직 10번이 안 찼거나, 찾지 못했다면 전체 모니터 탐색
+            target_monitor = sct.monitors[1]
+
+        # 캡처 및 매칭 연산
+        sct_img = sct.grab(target_monitor)
+        screen_np = np.array(sct_img)
         screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
         res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
         
-        # 3. 신뢰도를 넘으면 위치 반환
+        # 신뢰도를 넘었을 경우
         if max_val >= conf:
             h, w = template.shape
-            # region을 썼을 경우 바탕화면 기준의 절대 좌표로 복원
-            real_x = max_loc[0] + (region[0] if region else 0)
-            real_y = max_loc[1] + (region[1] if region else 0)
+            real_x = max_loc[0] + target_monitor["left"]
+            real_y = max_loc[1] + target_monitor["top"]
+
+            # [데이터 샘플링 로직] 하드코딩된 region이 없고, 아직 10번 수집이 덜 끝났을 때
+            if not region and not cache_data['master_box']:
+                cache_data['samples'].append((real_x, real_y, w, h))
+                
+                # 딱 10번 채우는 순간, 바운딩 박스 생성!
+                if len(cache_data['samples']) >= SAMPLE_LIMIT:
+                    # 모든 샘플 중 가장 좌상단, 우하단 좌표를 찾아서 하나의 큰 박스로 묶음 (+30픽셀 여유 공간)
+                    pad = 30
+                    min_x = min(s[0] for s in cache_data['samples']) - pad
+                    min_y = min(s[1] for s in cache_data['samples']) - pad
+                    max_x = max(s[0] + s[2] for s in cache_data['samples']) + pad
+                    max_y = max(s[1] + s[3] for s in cache_data['samples']) + pad
+                    
+                    cache_data['master_box'] = {
+                        "left": int(max(0, min_x)),
+                        "top": int(max(0, min_y)),
+                        "width": int(max_x - min_x),
+                        "height": int(max_y - min_y)
+                    }
+                    bprint(f">>> [시스템] '{img_path}' 10회 학습 완료! 통합 탐색 영역이 지정되었습니다.")
+
             return Box(real_x, real_y, w, h)
             
+        else:
+            # [스마트 폴백 안전망] 통합 영역(마스터 박스)에서 찾았는데 실패했다면? 
+            # -> 창이 이동했거나 UI가 예상 범위를 벗어난 것이므로, 배운 걸 다 잊고 초기화!
+            if is_using_master:
+                cache_data['samples'] = []
+                cache_data['master_box'] = None
+                bprint(f"  > [안내] '{img_path}' 지정 구역 이탈 감지. 전체 화면 재학습을 시작합니다.")
+                # region=None으로 강제 설정하여 전체화면으로 다시 한 번 찾아봄 (재귀 호출)
+                return safe_find_image(img_path, conf, region=None)
+
         return None
     except Exception as e:
         return None

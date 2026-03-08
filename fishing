@@ -389,9 +389,42 @@ class Box:
         self.width = width
         self.height = height
 
+def load_roi_cache():
+    """저장된 ROI 기억(json)을 불러옵니다."""
+    global ROI_SAMPLER
+    try:
+        if os.path.exists(ROI_CACHE_FILE):
+            with open(ROI_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for k, v in data.items():
+                    # json에 저장된 리스트를 다시 양방향 큐(deque)로 변환하여 두뇌에 적재
+                    ROI_SAMPLER[k] = {
+                        'samples': deque(v.get('samples', []), maxlen=10),
+                        'master_box': v.get('master_box')
+                    }
+            print(f">>> [시스템] 이전 ROI 학습 데이터 복구 완료 (세이브 파일 로드 성공)")
+    except Exception as e:
+        print(f"  > [경고] ROI 캐시 불러오기 실패: {e}")
+
+def save_roi_cache():
+    """현재까지 학습된 ROI 기억을 json 파일로 영구 저장합니다."""
+    global ROI_SAMPLER
+    try:
+        save_data = {}
+        for k, v in ROI_SAMPLER.items():
+            save_data[k] = {
+                'samples': list(v['samples']), # deque는 json 저장이 안 되므로 순수 리스트로 변환
+                'master_box': v['master_box']
+            }
+        with open(ROI_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(save_data, f, indent=4, ensure_ascii=False)
+    except:
+        pass
+
 def preload_all_images():
     """현재 폴더의 모든 PNG 이미지를 봇 구동 시점에 '흑백(Grayscale) cv2 포맷'으로 사전 적재합니다."""
     global IMAGE_CACHE
+    load_roi_cache() # 사진을 메모리에 올리기 전에 과거 학습 데이터부터 복구
     bprint("\n>>> [시스템] 구동 전 필요 이미지(PNG) 사전 적재 시작...")
     count = 0
     
@@ -478,6 +511,9 @@ def safe_find_image(img_path, conf=0.6, region=None):
                     "width": int(max_x - min_x),
                     "height": int(max_y - min_y)
                 }
+
+                # 상자 크기가 늘어나거나 줄어들며 갱신될 때마다 즉시 세이브 파일 덮어쓰기
+                save_roi_cache()
 
             return Box(real_x, real_y, w, h)
             

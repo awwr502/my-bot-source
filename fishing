@@ -437,10 +437,13 @@ def safe_find_image(img_path, conf=0.6, region=None):
         is_using_master = False
 
         # [핵심] 탐색 구역(Monitor) 결정 로직
-        if region:
+        if region == "FULL_SCREEN":
+            # 폴백에서 강제로 전체화면 스캔을 명령한 경우 기억상자를 1회 무시함
+            target_monitor = sct.monitors[1]
+            region = None # 찾은 뒤 정상적으로 샘플 큐에 좌표를 넣고 상자를 넓히기 위해 None으로 원복
+        elif region:
             target_monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
         elif cache_data['master_box']:
-            # 베릭님 아이디어: 1번만 찾아도 바로 master_box가 생기므로 즉시 적용됨
             target_monitor = cache_data['master_box']
             is_using_master = True
         else:
@@ -485,15 +488,19 @@ def safe_find_image(img_path, conf=0.6, region=None):
                 # [파이팅 게이지 렉 해결] 전체화면 스캔 도배 방지 (1초 쿨다운)
                 last_fallback = FALLBACK_COOLDOWN.get(img_path, 0)
                 if time.time() - last_fallback > 1.0: # 1초에 단 1번만 전체화면 스캔 허용
-                    # 조용히 재귀 호출만 수행
-                    res_fallback = safe_find_image(img_path, conf, region=None)
-                    if res_fallback is None:
-                        # 전체 화면에서도 못 찾음 = 화면에 진짜 없는 상태 -> 1초 쿨다운 부여
-                        FALLBACK_COOLDOWN[img_path] = time.time()
-                    return res_fallback
-                else:
-                    # 쿨다운 중이므로 무거운 전체화면 스캔을 생략하고 즉시 포기 (렉 방지)
-                    return None
+                        # [치명적 버그 수정] 재귀 호출 시 강제로 전체 화면을 보게끔 플래그("FULL_SCREEN") 전달!
+                        res_fallback = safe_find_image(img_path, conf, region="FULL_SCREEN")
+                        if res_fallback is None:
+                            # 전체 화면에서도 못 찾음 = 화면에 진짜 없는 상태 -> 1초 쿨다운 부여
+                            FALLBACK_COOLDOWN[img_path] = time.time()
+                        return res_fallback
+                    else:
+                        # 쿨다운 중이므로 무거운 전체화면 스캔을 생략하고 즉시 포기 (렉 방지)
+                        return None
+
+        return None
+    except Exception as e:
+        return None
 
         return None
     except Exception as e:

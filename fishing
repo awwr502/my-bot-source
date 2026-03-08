@@ -352,74 +352,77 @@ def send_cmd(cmd):
 IMAGE_CACHE = {} 
 
 class Box:
-    """pyautogui의 리턴값과 100% 동일하게 동작하도록 만든 가짜 Box 객체 (하위 호환성 유지)"""
-    def __init__(self, left, top, width, height):
-        self.left = left; self.top = top; self.width = width; self.height = height
+    """pyautogui의 리턴값과 100% 동일하게 동작하도록 만든 가짜 Box 객체 (하위 호환성 유지)"""
+    def __init__(self, left, top, width, height):
+        self.left = left
+        self.top = top
+        self.width = width
+        self.height = height
 
 def preload_all_images():
-    """현재 폴더의 모든 PNG 이미지를 봇 구동 시점에 '흑백(Grayscale) cv2 포맷'으로 사전 적재합니다."""
-    global IMAGE_CACHE
-    bprint("\n>>> [시스템] 구동 전 필요 이미지(PNG) 사전 적재 시작...")
-    count = 0
-    
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    for filename in os.listdir(base_dir):
-        if filename.lower().endswith('.png'):
-            try:
-                full_path = os.path.join(base_dir, filename)
-                # [안전 업그레이드] PIL 대신 cv2 흑백으로 즉시 캐싱 + 한글 경로 에러 방지
-                img_array = np.fromfile(full_path, np.uint8)
-                img = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
-                if img is not None:
-                    IMAGE_CACHE[filename] = img
-                    count += 1
-            except Exception as e:
-                print(f"  > [경고] {filename} 메모리 적재 실패: {e}")
-    bprint(f">>> [시스템] 총 {count}개의 이미지 캐싱 완료! (탐색 준비 끝) <<<\n")
+    """현재 폴더의 모든 PNG 이미지를 봇 구동 시점에 '흑백(Grayscale) cv2 포맷'으로 사전 적재합니다."""
+    global IMAGE_CACHE
+    bprint("\n>>> [시스템] 구동 전 필요 이미지(PNG) 사전 적재 시작...")
+    count = 0
+    
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    for filename in os.listdir(base_dir):
+        if filename.lower().endswith('.png'):
+            try:
+                full_path = os.path.join(base_dir, filename)
+                # [안전 업그레이드] PIL 대신 cv2 흑백으로 즉시 캐싱 + 한글 경로 에러 방지
+                img_array = np.fromfile(full_path, np.uint8)
+                img = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+                if img is not None:
+                    IMAGE_CACHE[filename] = img
+                    count += 1
+            except Exception as e:
+                print(f"  > [경고] {filename} 메모리 적재 실패: {e}")
+    bprint(f">>> [시스템] 총 {count}개의 이미지 캐싱 완료! (탐색 준비 끝) <<<\n")
 
 def safe_find_image(img_path, conf=0.6, region=None):
-    """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진"""
-    global IMAGE_CACHE
-    template = IMAGE_CACHE.get(img_path)
-    
-    try:
-        # [안전장치] 런타임에 늦게 추가된 사진을 위한 Lazy Load (한글 경로 대응)
-        if template is None:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            full_path = os.path.join(base_dir, img_path)
-            img_array = np.fromfile(full_path, np.uint8)
-            template = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
-            if template is not None:
-                IMAGE_CACHE[img_path] = template
-            else:
-                return None
+    """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진"""
+    global IMAGE_CACHE
+    template = IMAGE_CACHE.get(img_path)
+    
+    try:
+        # [안전장치] 런타임에 늦게 추가된 사진을 위한 Lazy Load (한글 경로 대응)
+        if template is None:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            full_path = os.path.join(base_dir, img_path)
+            img_array = np.fromfile(full_path, np.uint8)
+            template = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+            if template is not None:
+                IMAGE_CACHE[img_path] = template
+            else:
+                return None
 
-        # 1. mss 초고속 캡처 (region이 있으면 그 부분만, 없으면 1번 모니터 전체)
-        if region:
-            monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
-            sct_img = sct.grab(monitor)
-            screen_np = np.array(sct_img)
-        else:
-            sct_img = sct.grab(sct.monitors[1])
-            screen_np = np.array(sct_img)
-            
-        # 2. 흑백 변환 후 매칭 연산 (PyAutoGUI와 100% 동일한 비교 공식)
-        screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
-        res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        
-        # 3. 신뢰도를 넘으면 위치 반환
-        if max_val >= conf:
-            h, w = template.shape
-            # region을 썼을 경우 바탕화면 기준의 절대 좌표로 복원
-            real_x = max_loc[0] + (region[0] if region else 0)
-            real_y = max_loc[1] + (region[1] if region else 0)
-            return Box(real_x, real_y, w, h)
-            
-        return None
-    except Exception as e:
-        return None
+        # 1. mss 초고속 캡처 (region이 있으면 그 부분만, 없으면 1번 모니터 전체)
+        if region:
+            monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
+            sct_img = sct.grab(monitor)
+            screen_np = np.array(sct_img)
+        else:
+            sct_img = sct.grab(sct.monitors[1])
+            screen_np = np.array(sct_img)
+            
+        # 2. 흑백 변환 후 매칭 연산 (PyAutoGUI와 100% 동일한 비교 공식)
+        screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
+        res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        
+        # 3. 신뢰도를 넘으면 위치 반환
+        if max_val >= conf:
+            h, w = template.shape
+            # region을 썼을 경우 바탕화면 기준의 절대 좌표로 복원
+            real_x = max_loc[0] + (region[0] if region else 0)
+            real_y = max_loc[1] + (region[1] if region else 0)
+            return Box(real_x, real_y, w, h)
+            
+        return None
+    except Exception as e:
+        return None
 
 # [v6 통합본] 이 블록 하나로 기존 엔진과 정렬 함수를 교체하세요.
 last_success_scale = 1.0

@@ -729,11 +729,12 @@ def fishing_bot():
 
             # --- [State 1] 캐스팅 (좌클릭 홀딩 보강) ---
             if state == 1:
-                if not bot_active: continue
+                if not bot_active: raise BotStopException() # [문제 2 해결] 즉각 폭파
                 bprint(f"\n[State 1] 캐스팅 시퀀스 시작")
 
                 # 캐스팅 전 시점 복구 (시각적 닻 정렬)
                 align_view_by_anchor('anchor.png')
+                if not bot_active: raise BotStopException() # 즉각 폭파
                 
                 # 1. 초기화 후 좌클릭 '꾹' 누르기 (Mouse.press 상태 진입)
                 send_cmd('R'); time.sleep(0.1) # 충분한 초기화 대기
@@ -762,7 +763,7 @@ def fishing_bot():
                     send_cmd('U')
                     bprint("  > [타임아웃] 게이지 미포착 -> 강제 해제")
                 
-                if not bot_active: continue
+                if not bot_active: raise BotStopException() # 즉각 폭파
 
                 # 3. fishing.png 확인 시 즉시 2단계로 (동적 대기)
                 bprint("  > 찌 낙하 확인 대기...")
@@ -777,6 +778,8 @@ def fishing_bot():
                         break
                     time.sleep(0.1)
 
+                if not bot_active: raise BotStopException() # [문제 1 해결] 전이 대기 중 [ 눌렀을 때 즉시 폭파
+
                 # 알림 감지로 리셋된 경우 루프 재시작
                 if state == 1 and not found_ui:
                     if bot_active: # 실패해서 리셋된 경우만
@@ -787,9 +790,8 @@ def fishing_bot():
                              
                              # 연속 5회 실패 시 미끼 부족/위치 꼬임으로 판단하고 스마트 복구 강제 실행
                              if cast_fail_count >= 5:
-                                 bprint("\n!!! [긴급] 캐스팅 연속 5회 실패! 스마트 복구 시도 !!!")
-                                 send_blynk_notification("⚠️ 정체 감지. 스마트 복구 작동")
-                                 dump_blackbox_log("연속_캐스팅_5회_실패") # [블랙박스 트리거 추가]
+                                 bprint("\n!!! [긴급] 캐스팅 연속 5회 실패! 스마트 복구 대기 !!!")
+                                 # [문제 3 해결] 텔레그램 중복 발송을 막기 위해 알림 발송 코드는 제거하고 워치독 타이머만 조작
                                  state_start_time = time.time() - 200.0 # 스마트 복구 조건(180초 정체) 강제 달성
                                  cast_fail_count = 0
                                  continue
@@ -803,14 +805,14 @@ def fishing_bot():
 
             # --- [State 2] 입질 대기 ---
             elif state == 2:
-                if not bot_active: continue
+                if not bot_active: raise BotStopException()
                 if safe_find_image('green_float.png', 0.65):
                     bprint("  > [!] 입질 확인! 챔질(C)!"); send_cmd('C'); time.sleep(0.1); send_cmd('R')
                     time.sleep(0.2); state = 3
 
             # --- [State 3] 어종 판별 및 줄 끊기 (정밀 검증 강화) ---
             elif state == 3:
-                if not bot_active: continue
+                if not bot_active: raise BotStopException()
                 stats['daily_hook_count'] += 1
                 bprint(f"[State 3] 어종 고속 분석 중... (현재 누적 입질: {stats['daily_hook_count']}회)")
                 found_target = False
@@ -913,6 +915,8 @@ def fishing_bot():
                 while time.time() - wait_ui_start < 2.0 and bot_active:
                     if safe_find_image('fishing_mode.png', 0.6): break
                     time.sleep(0.1)
+
+                if not bot_active: raise BotStopException()
 
                 time.sleep(0.2)
                 missing_ui_count = 0 
@@ -1191,9 +1195,9 @@ def fishing_bot():
                     bprint("  > [정상] 특이사항 없음. 다음 낚시를 시작합니다.")
                     state = 1
 
-            # 루프를 정상적으로 빠져나왔을 때의 안전장치
-            if not bot_active:
-                bprint("=== 시스템이 대기 모드로 전환되었습니다. (시작: ] 키) ===")
+            # 무조건 예외 처리기(BotStopException)로 넘김
+            if not bot_active: 
+                raise BotStopException()
                 
         except BotStopException:
             # 예외가 발생하면 진행 중이던 모든 껍데기를 즉시 내던지고 여기로 빠져나옵니다.

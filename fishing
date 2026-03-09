@@ -556,35 +556,49 @@ def safe_find_image(img_path, conf=0.6, region=None):
 # [v6 통합본] 이 블록 하나로 기존 엔진과 정렬 함수를 교체하세요.
 last_success_scale = 1.0
 
+# [이미지 피라미드 캐싱 저장소]
+PYRAMID_CACHE = {}
+
 def find_anchor_final(target_img_path):
-    global last_success_scale
-    try:
-        screen_gray = fast_cv_screenshot(gray=True)
-        img_array = np.fromfile(target_img_path, np.uint8)
-        template = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
-        if template is None: return None
+    global last_success_scale, PYRAMID_CACHE
+    try:
+        screen_gray = fast_cv_screenshot(gray=True)
+        
+        # 1. 캐시에 해당 타겟의 피라미드가 없다면 최초 1회만 구워냅니다.
+        if target_img_path not in PYRAMID_CACHE:
+            img_array = np.fromfile(target_img_path, np.uint8)
+            template = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+            if template is None: return None
+            
+            PYRAMID_CACHE[target_img_path] = {}
+            # 사용되는 모든 스케일을 미리 계산하여 딕셔너리에 영구 저장
+            for s in [0.4, 0.6, 0.8, 1.0, 1.2]:
+                w, h = int(template.shape[1] * s), int(template.shape[0] * s)
+                if w >= 10 and h >= 10:
+                    PYRAMID_CACHE[target_img_path][s] = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
 
-        ADJUST_Y = 0.35 # 하단 쏠림 방지 고정값
-        scales = [last_success_scale, 0.4, 0.6, 0.8, 1.0, 1.2]
-        unique_scales = []
-        [unique_scales.append(x) for x in scales if x not in unique_scales]
+        ADJUST_Y = 0.35 # 하단 쏠림 방지 고정값
+        scales = [last_success_scale, 0.4, 0.6, 0.8, 1.0, 1.2]
+        unique_scales = []
+        [unique_scales.append(x) for x in scales if x not in unique_scales]
 
-        best_score = -1
-        best_pos = None
+        best_score = -1
+        best_pos = None
 
-        for scale in unique_scales:
-            w, h = int(template.shape[1] * scale), int(template.shape[0] * scale)
-            if w < 10 or h < 10: continue
-            resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
-            res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        for scale in unique_scales:
+            # 2. 매번 리사이즈 하지 않고, 메모리에 구워둔 피라미드에서 즉시 꺼내옵니다. (연산량 0)
+            resized = PYRAMID_CACHE[target_img_path].get(scale)
+            if resized is None: continue
+            
+            res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-            if max_val > 0.65 and max_val > best_score:
-                best_score = max_val
-                last_success_scale = scale
-                
-                # [v6 핵심] 화면 중앙(1920/2) 기준 좌우 보정치 결정
-                current_tx = max_loc[0] + (w / 2)
+            if max_val > 0.65 and max_val > best_score:
+                best_score = max_val
+                last_success_scale = scale
+                
+                # [v6 핵심] 화면 중앙(1920/2) 기준 좌우 보정치 결정
+                current_tx = max_loc[0] + (resized.shape[1] / 2)
                 if current_tx < 960: # 화면 왼쪽 영역
                     ADJUST_X = 0.35 # 왼쪽일 때 우측 쏠림을 방지하기 위해 타겟을 왼쪽으로 당김
                 else: # 화면 오른쪽 영역

@@ -141,13 +141,17 @@ keyboard.is_pressed = _custom_is_pressed
 
 # 통계 결산용 전역 변수 모음
 stats = {
-    'daily_hook_count': 0,        # 순수 입질 성공(State 3) 횟수
-    'total_catch_count': 0,       # 최종 낚시 성공(State 5) 횟수
-    'skip_count': 0,              # 잡어 판독 후 줄 끊기(스킵) 횟수
-    'watchdog_recovery_count': 0, # 워치독 발동 횟수
-    'inventory_clear_count': 0,   # 인벤토리 비움 발동 횟수
-    'afk_bypass_count': 0,        # 잠수방지 해제 횟수
-    'pure_run_time': 0.0          # 순수 가동 시간 누적기 (초)
+    'daily_hook_count': 0,        # 순수 입질 성공(State 3) 횟수
+    'total_catch_count': 0,       # 최종 낚시 성공(State 5) 횟수
+    'skip_count': 0,              # 잡어 판독 후 줄 끊기(스킵) 횟수
+    'watchdog_recovery_count': 0, # 워치독 발동 횟수
+    'inventory_clear_count': 0,   # 인벤토리 비움 발동 횟수
+    'afk_bypass_count': 0,        # 잠수방지 해제 횟수
+    'pure_run_time': 0.0,         # 순수 가동 시간 누적기 (초)
+    'hourly_records': [],         # 1시간 단위 완료 기록 저장 리스트
+    'last_snapshot_time': 0.0,    # 마지막 스냅샷 시점의 누적 가동 시간
+    'last_snapshot_hook': 0,      # 마지막 스냅샷 시점의 누적 입질
+    'last_snapshot_catch': 0      # 마지막 스냅샷 시점의 누적 포획
 }
 
 run_start_time = None 
@@ -165,15 +169,27 @@ def send_telegram_report():
     if bot_active and run_start_time is not None:
         current_run_time += (time.time() - run_start_time)
 
-    hours_run = current_run_time / 3600.0 if current_run_time > 0 else 0
-
     # 포획 성공률 및 절약한 시간 계산
     success_rate = round((stats['total_catch_count'] / stats['daily_hook_count']) * 100, 1) if stats['daily_hook_count'] > 0 else 0
     saved_minutes = round((stats['skip_count'] * 15) / 60, 1) # 잡어 1마리당 파이팅 시간 약 15초로 상정
 
-    # 1시간 단위 누적 평균 지표 계산
-    avg_hook = round(stats['daily_hook_count'] / hours_run, 1) if hours_run > 0 else 0
-    avg_catch = round(stats['total_catch_count'] / hours_run, 1) if hours_run > 0 else 0
+    # [핵심] 1시간 단위 누적 평균 지표 계산 (실제 1시간 경과 데이터만 취합)
+    records = stats['hourly_records']
+    completed_hours = len(records)
+    
+    if completed_hours > 0:
+        avg_hook = round(sum(r['hook'] for r in records) / completed_hours, 1)
+        avg_catch = round(sum(r['catch'] for r in records) / completed_hours, 1)
+        hourly_status_text = (
+            f"⏳ <b>[실제 1시간 평균 지표]</b> (현재 {completed_hours}시간 누적)\n"
+            f"🎣 평균 입질: {avg_hook}회/h\n"
+            f"🐟 평균 포획: {avg_catch}마리/h\n"
+        )
+    else:
+        hourly_status_text = (
+            f"⏳ <b>[실제 1시간 평균 지표]</b>\n"
+            f"⚠️ 가동 1시간 미만 (데이터 수집 중...)\n"
+        )
 
     report_text = (
         f"📊 <b>[{BOT_NAME} 낚시봇 일일 결산 보고서]</b>\n"
@@ -185,9 +201,7 @@ def send_telegram_report():
         f"🐟 총 포획: {stats['total_catch_count']}마리\n"
         f"🎯 성공률: {success_rate}%\n"
         f"\n"
-        f"⏳ <b>[1시간 평균 지표]</b>\n"
-        f"🎣 시간당 입질: {avg_hook}회/h\n"
-        f"🐟 시간당 포획: {avg_catch}마리/h\n"
+        f"{hourly_status_text}"
         f"━━━━━━━━━━━━━━\n"
         f"🗑️ <b>잡어 스킵:</b> {stats['skip_count']}회 (약 {saved_minutes}분 절약)\n"
         f"⚠️ <b>워치독 복구:</b> {stats['watchdog_recovery_count']}회\n"
@@ -206,8 +220,17 @@ def send_telegram_report():
 def reset_stats():
     """통계를 초기화하고 가동 스톱워치를 재정렬합니다."""
     global stats, run_start_time
-    stats = {k: 0 for k in stats}
-    stats['pure_run_time'] = 0.0
+    stats['daily_hook_count'] = 0
+    stats['total_catch_count'] = 0
+    stats['skip_count'] = 0
+    stats['watchdog_recovery_count'] = 0
+    stats['inventory_clear_count'] = 0
+    stats['afk_bypass_count'] = 0
+    stats['pure_run_time'] = 0.0
+    stats['hourly_records'] = []
+    stats['last_snapshot_time'] = 0.0
+    stats['last_snapshot_hook'] = 0
+    stats['last_snapshot_catch'] = 0
     if bot_active:
         run_start_time = time.time()
     else:
@@ -761,8 +784,22 @@ def fishing_bot():
 
     while True:
         try:
-            # 1. 상태가 넘어가면(정상 진행) 타이머를 0초로 리셋
-            if state != last_state:
+            # --- [1시간 단위 실제 통계 스냅샷 저장] ---
+            if bot_active and run_start_time is not None:
+                current_total_time = stats['pure_run_time'] + (time.time() - run_start_time)
+                if current_total_time - stats['last_snapshot_time'] >= 3600.0:
+                    hook_delta = stats['daily_hook_count'] - stats['last_snapshot_hook']
+                    catch_delta = stats['total_catch_count'] - stats['last_snapshot_catch']
+                    
+                    stats['hourly_records'].append({'hook': hook_delta, 'catch': catch_delta})
+                    stats['last_snapshot_time'] += 3600.0
+                    stats['last_snapshot_hook'] = stats['daily_hook_count']
+                    stats['last_snapshot_catch'] = stats['total_catch_count']
+                    bprint(f"  > [통계 시스템] 정확히 1시간 가동 달성! (이번 1시간: 입질 {hook_delta}회 / 포획 {catch_delta}마리 기록됨)")
+            # ----------------------------------------
+            
+            # 1. 상태가 넘어가면(정상 진행) 타이머를 0초로 리셋
+            if state != last_state:
                 state_start_time = time.time()
                 last_state = state
                 

@@ -864,21 +864,35 @@ def fishing_bot():
         try:
 
             # === [원격 터미널 메인 스레드 대리 실행기] ===
-            # 텔레그램이 남겨둔 메모가 있는지 매 순간 감시하고, 있으면 메인 봇이 직접 누릅니다!
+            # 텔레그램이 남겨둔 메모가 있는지 감시하고, 메인 봇이 평소 낚시할 때와 10,000% 동일한 방식으로 직접 누릅니다.
             global remote_task
             if remote_task is not None:
                 cmd, duration, d_name = remote_task
-                bprint(f"\n>>> [원격 터미널] 메인 봇이 직접 {d_name}({cmd}) 키를 {duration}초간 누릅니다. <<<")
+                bprint(f"\n>>> [원격 터미널] 메인 봇이 게임을 깨우고 {d_name}({cmd}) 키를 {duration}초간 누릅니다. <<<")
+                
+                # 기존 봇의 작동 상태(정지/가동)를 잠시 기억해두고, 락(Lock)을 강제로 풉니다.
+                global bot_active
+                was_active = bot_active
+                bot_active = True 
+                
                 try:
-                    arduino.write('R'.encode()); arduino.flush()
-                    time.sleep(0.05)
-                    arduino.write(cmd.encode()); arduino.flush()
+                    # 1. 아두이노 USB 통신 찌꺼기 완벽 청소
+                    arduino.reset_input_buffer()
+                    arduino.reset_output_buffer()
+                    send_cmd('R'); time.sleep(0.1)
+                    
+                    # 2. 본 명령 전송 (평소 낚시할 때 쓰는 send_cmd 완벽 적용)
+                    send_cmd(cmd)
                     time.sleep(duration)
-                    arduino.write('R'.encode()); arduino.flush()
+                    send_cmd('R') # 손 떼기
+                    
+                    bprint("  > [성공] 게임 내 물리 입력 100% 전송 완료.")
                 except Exception as e:
                     bprint(f"  > [터미널] 실행 오류: {e}")
                 finally:
-                    remote_task = None # 임무 완수 후 메모장 파기
+                    # 명령이 끝나면 봇을 원래 상태(정지해 있었으면 다시 정지 상태)로 돌려놓고 메모를 파기합니다.
+                    bot_active = was_active 
+                    remote_task = None 
             # ========================================
 
             # --- [1시간 단위 실제 통계 스냅샷 저장] ---

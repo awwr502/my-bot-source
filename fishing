@@ -141,53 +141,18 @@ keyboard.is_pressed = _custom_is_pressed
 
 # 통계 결산용 전역 변수 모음
 stats = {
-    'daily_hook_count': 0,        # 순수 입질 성공(State 3) 횟수
-    'total_catch_count': 0,       # 최종 낚시 성공(State 5) 횟수
-    'skip_count': 0,              # 잡어 판독 후 줄 끊기(스킵) 횟수
-    'watchdog_recovery_count': 0, # 워치독 발동 횟수
-    'inventory_clear_count': 0,   # 인벤토리 비움 발동 횟수
-    'afk_bypass_count': 0,        # 잠수방지 해제 횟수
-    'pure_run_time': 0.0,         # 순수 가동 시간 누적기 (초)
-    'hourly_records': [],         # 1시간 단위 완료 기록 저장 리스트
-    'last_snapshot_time': 0.0,    # 마지막 스냅샷 시점의 누적 가동 시간
-    'last_snapshot_hook': 0,      # 마지막 스냅샷 시점의 누적 입질
-    'last_snapshot_catch': 0      # 마지막 스냅샷 시점의 누적 포획
+    'daily_hook_count': 0,        # 순수 입질 성공(State 3) 횟수
+    'total_catch_count': 0,       # 최종 낚시 성공(State 5) 횟수
+    'skip_count': 0,              # 잡어 판독 후 줄 끊기(스킵) 횟수
+    'watchdog_recovery_count': 0, # 워치독 발동 횟수
+    'inventory_clear_count': 0,   # 인벤토리 비움 발동 횟수
+    'afk_bypass_count': 0,        # 잠수방지 해제 횟수
+    'pure_run_time': 0.0          # 순수 가동 시간 누적기 (초)
 }
 
 run_start_time = None 
 last_update_id = 0
 last_report_date = date.today() # 부팅 날짜 기록
-
-STATS_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stats_cache.json")
-
-def load_stats_cache():
-    """부팅 시 하드디스크에 저장된 이전 통계 기록을 불러옵니다."""
-    global stats, last_report_date
-    try:
-        if os.path.exists(STATS_CACHE_FILE):
-            with open(STATS_CACHE_FILE, "r", encoding="utf-8") as f:
-                saved_data = json.load(f)
-                for k in stats.keys():
-                    if k in saved_data:
-                        stats[k] = saved_data[k]
-                if "last_report_date" in saved_data:
-                    last_report_date = datetime.strptime(saved_data["last_report_date"], "%Y-%m-%d").date()
-            print(f">>> [시스템] 이전 낚시 통계 및 1시간 스냅샷 기록 복구 완료")
-    except Exception as e:
-        print(f"  > [경고] 통계 캐시 불러오기 실패: {e}")
-
-def save_stats_cache():
-    """현재 메모리의 통계를 하드디스크에 영구 저장합니다."""
-    try:
-        save_data = stats.copy()
-        save_data["last_report_date"] = last_report_date.strftime("%Y-%m-%d")
-        with open(STATS_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(save_data, f, indent=4, ensure_ascii=False)
-    except:
-        pass
-
-# 파이썬 실행 시 즉시 통계 복구
-load_stats_cache()
 
 def get_formatted_time(seconds):
     hours = int(seconds // 3600)
@@ -200,45 +165,28 @@ def send_telegram_report():
     if bot_active and run_start_time is not None:
         current_run_time += (time.time() - run_start_time)
 
+    hours_run = current_run_time / 3600.0 if current_run_time > 0 else 0
+    avg_catch = round(stats['total_catch_count'] / hours_run, 1) if hours_run > 0 else 0
+
     # 포획 성공률 및 절약한 시간 계산
-    success_rate = round((stats['total_catch_count'] / stats['daily_hook_count']) * 100, 1) if stats['daily_hook_count'] > 0 else 0
-    saved_minutes = round((stats['skip_count'] * 15) / 60, 1) # 잡어 1마리당 파이팅 시간 약 15초로 상정
+    success_rate = round((stats['total_catch_count'] / stats['daily_hook_count']) * 100, 1) if stats['daily_hook_count'] > 0 else 0
+    saved_minutes = round((stats['skip_count'] * 15) / 60, 1) # 잡어 1마리당 파이팅 시간 약 15초로 상정
 
-    # [핵심] 1시간 단위 누적 평균 지표 계산 (실제 1시간 경과 데이터만 취합)
-    records = stats['hourly_records']
-    completed_hours = len(records)
-    
-    if completed_hours > 0:
-        avg_hook = round(sum(r['hook'] for r in records) / completed_hours, 1)
-        avg_catch = round(sum(r['catch'] for r in records) / completed_hours, 1)
-        hourly_status_text = (
-            f"⏳ <b>[실제 1시간 평균 지표]</b> (현재 {completed_hours}시간 누적)\n"
-            f"🎣 평균 입질: {avg_hook}회/h\n"
-            f"🐟 평균 포획: {avg_catch}마리/h\n"
-        )
-    else:
-        hourly_status_text = (
-            f"⏳ <b>[실제 1시간 평균 지표]</b>\n"
-            f"⚠️ 가동 1시간 미만 (데이터 수집 중...)\n"
-        )
-
-    report_text = (
-        f"📊 <b>[{BOT_NAME} 낚시봇 일일 결산 보고서]</b>\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"⏱️ <b>가동 시간:</b> {get_formatted_time(current_run_time)}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"📌 <b>[전체 누적 통계]</b>\n"
-        f"🎣 총 입질: {stats['daily_hook_count']}회\n"
-        f"🐟 총 포획: {stats['total_catch_count']}마리\n"
-        f"🎯 성공률: {success_rate}%\n"
-        f"\n"
-        f"{hourly_status_text}"
-        f"━━━━━━━━━━━━━━\n"
-        f"🗑️ <b>잡어 스킵:</b> {stats['skip_count']}회 (약 {saved_minutes}분 절약)\n"
-        f"⚠️ <b>워치독 복구:</b> {stats['watchdog_recovery_count']}회\n"
-        f"🎒 <b>인벤 비움:</b> {stats['inventory_clear_count']}회\n"
-        f"🛡️ <b>잠수 해제:</b> {stats['afk_bypass_count']}회"
-    )
+    report_text = (
+        f"📊 <b>[{BOT_NAME} 낚시봇 일일 결산 보고서]</b>\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"⏱️ <b>순수 가동 시간:</b> {get_formatted_time(current_run_time)}\n"
+        f"🎣 <b>총 입질 횟수:</b> {stats['daily_hook_count']}회\n"
+        f"🐟 <b>총 포획량:</b> {stats['total_catch_count']}마리\n"
+        f"🎯 <b>포획 성공률:</b> {success_rate}%\n"
+        f"📈 <b>시간당 평균 포획:</b> {avg_catch}마리/h\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🗑️ <b>잡어 스킵(줄끊기):</b> {stats['skip_count']}회\n"
+        f"💡 <b>절약한 잉여 시간:</b> 약 {saved_minutes}분\n"
+        f"⚠️ <b>워치독 복구:</b> {stats['watchdog_recovery_count']}회\n"
+        f"🎒 <b>인벤 비움:</b> {stats['inventory_clear_count']}회\n"
+        f"🛡️ <b>잠수방지 해제:</b> {stats['afk_bypass_count']}회"
+    )
     
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "parse_mode": "HTML", "text": report_text}
@@ -251,18 +199,8 @@ def send_telegram_report():
 def reset_stats():
     """통계를 초기화하고 가동 스톱워치를 재정렬합니다."""
     global stats, run_start_time
-    stats['daily_hook_count'] = 0
-    stats['total_catch_count'] = 0
-    stats['skip_count'] = 0
-    stats['watchdog_recovery_count'] = 0
-    stats['inventory_clear_count'] = 0
-    stats['afk_bypass_count'] = 0
-    stats['pure_run_time'] = 0.0
-    stats['hourly_records'] = []
-    stats['last_snapshot_time'] = 0.0
-    stats['last_snapshot_hook'] = 0
-    stats['last_snapshot_catch'] = 0
-    save_stats_cache() # 06시 정기 초기화 후 깨끗해진 상태를 세이브 파일에 덮어쓰기
+    stats = {k: 0 for k in stats}
+    stats['pure_run_time'] = 0.0
     if bot_active:
         run_start_time = time.time()
     else:
@@ -309,46 +247,6 @@ def _telegram_listener():
                         elif msg_text == f"{CMD_PREFIX}종료":
                             bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} 긴급 종료 <<<")
                             force_exit()
-
-                        elif msg_text.startswith(f"{CMD_PREFIX}입력"):
-                            try:
-                                parts = msg_text.split()
-                                if len(parts) >= 2:
-                                    input_str = parts[1].upper() # 무조건 대문자 변환
-                                    
-                                    key_map = {
-                                        'E': ('E', 'ESC'),
-                                        'ESC': ('E', 'ESC'),
-                                        'L': ('L', '좌클릭'),
-                                        'CLICK': ('L', '좌클릭'),
-                                        'C': ('C', '챔질(C)'),
-                                        'H': ('H', '보관(H)'),
-                                        'F': ('F', '수거(F)')
-                                    }
-                                    
-                                    arduino_cmd, display_name = key_map.get(input_str, (input_str, input_str))
-                                    
-                                    duration = 0.5
-                                    if len(parts) >= 3:
-                                        duration = float(parts[2])
-                                    
-                                    # 명령을 즉각 수행하지 못하는 병목을 유발하므로, 리스너 스레드에서 아두이노로 즉시 직결합니다.
-                                    bprint(f"\n>>> [원격 터미널] 어떠한 간섭도 없이 순수하게 {display_name}({arduino_cmd}) 키를 {duration}초간 발사합니다. <<<")
-                                    try:
-                                        arduino.write(arduino_cmd.encode())
-                                        arduino.flush()
-                                        original_sleep(duration) # 메인 스레드의 time.sleep(jitter) 대신 순수 sleep 사용
-                                        arduino.write('R'.encode())
-                                        arduino.flush()
-                                        
-                                        url_msg = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-                                        requests.post(url_msg, json={"chat_id": CHAT_ID, "text": f"⌨️ [터미널] {display_name}키 전송 완료"})
-                                    except Exception as e:
-                                        bprint(f"  > [터미널 전송 오류] {e}")
-                                else:
-                                    bprint("  > [원격 터미널] 키 인자가 누락되었습니다. (예: /2입력 w 3)")
-                            except Exception as e:
-                                bprint(f"  > [원격 터미널] 파싱 오류: {e}")
                             
                         elif msg_text == f"{CMD_PREFIX}보고서":
                             bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} 보고서 요청 수신 <<<")
@@ -419,7 +317,6 @@ pyautogui.raisePyAutoGUIImageNotFoundException = False
 
 is_manual_stop = True
 bot_active = False
-remote_task = None # [핵심] 텔레그램 스레드와 메인 봇을 연결하는 지시용 우체통 변수
 
 def toggle_stop():
     global bot_active, run_start_time
@@ -439,7 +336,6 @@ def toggle_stop():
         run_start_time = None
         
     bot_active = False
-    save_stats_cache() # 봇이 대기 모드로 들어갈 때까지의 통계와 가동 시간을 안전하게 세이브
     try:
         # 강제 정지 시 마우스 좌클릭(당기기) 상태를 무조건 해제(U)
         arduino.write('U'.encode()); arduino.flush()
@@ -761,14 +657,8 @@ def get_tension_status(exact_roi):
         return 0
 
 def force_exit():
-    global run_start_time
-    bprint("\n\n!!! 긴급 종료 요청 감지 !!!")
-    dump_blackbox_log("사용자_강제종료_요청") # [블랙박스 트리거 추가]
-    
-    # 봇이 종료되기 직전에 마지막 가동 시간을 쥐어짜서 기록하고 영구 세이브
-    if bot_active and run_start_time is not None:
-        stats['pure_run_time'] += (time.time() - run_start_time)
-    save_stats_cache()
+    bprint("\n\n!!! 긴급 종료 요청 감지 !!!")
+    dump_blackbox_log("사용자_강제종료_요청") # [블랙박스 트리거 추가]
     try:
         send_cmd('U'); send_cmd('R')
     except: pass
@@ -864,24 +754,8 @@ def fishing_bot():
 
     while True:
         try:
-
-            # --- [1시간 단위 실제 통계 스냅샷 저장] ---
-            if bot_active and run_start_time is not None:
-                current_total_time = stats['pure_run_time'] + (time.time() - run_start_time)
-                if current_total_time - stats['last_snapshot_time'] >= 3600.0:
-                    hook_delta = stats['daily_hook_count'] - stats['last_snapshot_hook']
-                    catch_delta = stats['total_catch_count'] - stats['last_snapshot_catch']
-                    
-                    stats['hourly_records'].append({'hook': hook_delta, 'catch': catch_delta})
-                    stats['last_snapshot_time'] += 3600.0
-                    stats['last_snapshot_hook'] = stats['daily_hook_count']
-                    stats['last_snapshot_catch'] = stats['total_catch_count']
-                    bprint(f"  > [통계 시스템] 정확히 1시간 가동 달성! (이번 1시간: 입질 {hook_delta}회 / 포획 {catch_delta}마리 기록됨)")
-                    save_stats_cache() # 1시간 스냅샷 달성 시 CMD가 꺼져도 안 날아가게 영구 세이브
-            # ----------------------------------------
-            
-            # 1. 상태가 넘어가면(정상 진행) 타이머를 0초로 리셋
-            if state != last_state:
+            # 1. 상태가 넘어가면(정상 진행) 타이머를 0초로 리셋
+            if state != last_state:
                 state_start_time = time.time()
                 last_state = state
                 
@@ -923,7 +797,6 @@ def fishing_bot():
                 # (4) 기타 원인불명 (시점 꼬임 등) -> 블라인드 위치 보정
                 else:
                     bprint("  > [분석] 원인불명(시점 꼬임 등). 위치 보정(S->W) 수행")
-                    send_cmd('F'); time.sleep(0.2); send_cmd('R'); time.sleep(0.5)
                     send_cmd('S'); time.sleep(1.0); send_cmd('R'); time.sleep(0.2)
                     send_cmd('W'); time.sleep(1.0); send_cmd('R'); time.sleep(0.5)
                     recovered = True # 블라인드 처리 후 일단 재시도해봄

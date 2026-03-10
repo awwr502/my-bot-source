@@ -331,19 +331,36 @@ def _telegram_listener():
                                     # 사전에 등록된 키면 번역해서 쓰고, 없으면 입력한 문자(W, A, S, D 등) 그대로 사용
                                     arduino_cmd, display_name = key_map.get(input_str, (input_str, input_str))
                                     
-                                    # 3번째 인자(시간)가 있으면 쓰고, 없으면 0.2초(단순 클릭)로 설정
-                                    duration = 0.2
+                                    # 3번째 인자(시간)가 없으면 인식이 가장 확실한 0.5초로 넉넉하게 설정
+                                    duration = 0.5
                                     if len(parts) >= 3:
                                         duration = float(parts[2])
                                     
-                                    bprint(f">>> [텔레그램 원격 터미널] {display_name} 키 {duration}초 제어 실행 <<<")
+                                    bprint(f">>> [텔레그램 원격 터미널] {display_name}({arduino_cmd}) 키 {duration}초 제어 실행 <<<")
                                     
-                                    # 봇이 정지(대기) 상태일 때 `send_cmd`가 차단되는 것을 우회하여 아두이노에 직통으로 쏩니다.
-                                    arduino.write(arduino_cmd.encode())
-                                    arduino.flush()
-                                    original_sleep(duration)
-                                    arduino.write('R'.encode()) # 손 떼기 (Reset)
-                                    arduino.flush()
+                                    # [100% 동기화 및 엔진 깨우기 패치]
+                                    # 봇이 정지 상태일 때도 명령이 들어가도록 전역 락을 잠시 풉니다.
+                                    global bot_active
+                                    was_active = bot_active
+                                    bot_active = True 
+                                    
+                                    try:
+                                        send_cmd('R') # 아두이노 내부에 꼬여있을 수 있는 신호 완벽 초기화
+                                        original_sleep(0.05)
+                                        
+                                        # [핵심] 게임 엔진 깨우기: 마우스를 아주 미세하게 1픽셀만 움직여 입력 수신기를 활성화
+                                        send_cmd('M1,1') 
+                                        original_sleep(0.05)
+                                        
+                                        # 본 명령어 전송 (평소 봇이 쓰는 함수와 100% 동일하게 전송됨)
+                                        send_cmd(arduino_cmd)
+                                        original_sleep(duration)
+                                        send_cmd('R') # 손 떼기
+                                        
+                                    except Exception as e:
+                                        bprint(f"  > [원격 터미널] 실행 내부 오류: {e}")
+                                    finally:
+                                        bot_active = was_active # 명령이 끝나면 안전하게 원래 정지/작동 상태로 원복
                                     
                                     # 텔레그램으로 직관적인 성공 메시지 회신
                                     url_msg = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"

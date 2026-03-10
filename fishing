@@ -311,42 +311,37 @@ def _telegram_listener():
                             force_exit()
 
                         elif msg_text.startswith(f"{CMD_PREFIX}입력"):
-                            try:
-                                # 명령어 분리 (예: "/2입력 w 3")
-                                parts = msg_text.split()
-                                if len(parts) >= 2:
-                                    input_str = parts[1].upper() # 무조건 대문자로 변환 (e -> E, esc -> ESC)
-                                    
-                                    # [스마트 키보드 번역기] 사용자 입력 -> (아두이노 전송용 문자, 텔레그램 출력용 이름)
-                                    key_map = {
-                                        'E': ('E', 'ESC'),
-                                        'ESC': ('E', 'ESC'),
-                                        'L': ('L', '좌클릭'),
-                                        'CLICK': ('L', '좌클릭'),
-                                        'C': ('C', '챔질(C)'),
-                                        'H': ('H', '보관(H)'),
-                                        'F': ('F', '수거(F)')
-                                    }
-                                    
-                                    # 사전에 등록된 키면 번역해서 쓰고, 없으면 입력한 문자 그대로 사용
-                                    arduino_cmd, display_name = key_map.get(input_str, (input_str, input_str))
-                                    
-                                    # 3번째 인자(시간)가 없으면 0.5초로 설정
-                                    duration = 0.5
-                                    if len(parts) >= 3:
-                                        duration = float(parts[2])
-                                    
-                                    # [스레드 충돌 완벽 해결] 서브 스레드가 직접 아두이노를 만지지 않고, 메인 봇의 우체통에 지시만 남깁니다.
+                            try:
+                                parts = msg_text.split()
+                                if len(parts) >= 2:
+                                    input_str = parts[1].upper() # 무조건 대문자 변환
+                                    
+                                    key_map = {
+                                        'E': ('E', 'ESC'),
+                                        'ESC': ('E', 'ESC'),
+                                        'L': ('L', '좌클릭'),
+                                        'CLICK': ('L', '좌클릭'),
+                                        'C': ('C', '챔질(C)'),
+                                        'H': ('H', '보관(H)'),
+                                        'F': ('F', '수거(F)')
+                                    }
+                                    
+                                    arduino_cmd, display_name = key_map.get(input_str, (input_str, input_str))
+                                    
+                                    duration = 0.5
+                                    if len(parts) >= 3:
+                                        duration = float(parts[2])
+                                    
+                                    # 메인 봇의 우체통에 명령만 살포시 넣어둠 (스레드 충돌 0%)
                                     global remote_task
                                     remote_task = (arduino_cmd, duration, display_name)
                                     
-                                    # 텔레그램으로 직관적인 성공 메시지 회신
                                     url_msg = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-                                    requests.post(url_msg, json={"chat_id": CHAT_ID, "text": f"⌨️ [터미널] {display_name}키 {duration}초 입력 지시 완료 (메인 봇이 즉시 수행합니다)."})
-                                else:
-                                    bprint("  > [원격 터미널] 키 인자가 누락되었습니다. (예: /2입력 F)")
-                            except Exception as e:
-                                bprint(f"  > [원격 터미널] 실행 내부 오류: {e}")
+                                    requests.post(url_msg, json={"chat_id": CHAT_ID, "text": f"⌨️ [터미널] {display_name}키 {duration}초 발사 준비 완료."})
+                                else:
+                                    bprint("  > [원격 터미널] 키 인자가 누락되었습니다. (예: /2입력 w 3)")
+                            except Exception as e:
+                                bprint(f"  > [원격 터미널] 파싱 오류: {e}")
                             
                         elif msg_text == f"{CMD_PREFIX}보고서":
                             bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} 보고서 요청 수신 <<<")
@@ -863,34 +858,33 @@ def fishing_bot():
     while True:
         try:
 
-            # === [원격 터미널 메인 스레드 대리 실행기] ===
+            # === [원격 터미널 최상위 우선 실행기] ===
             global remote_task
             if remote_task is not None:
                 cmd, duration, d_name = remote_task
-                bprint(f"\n>>> [원격 터미널] {d_name}({cmd}) 키 {duration}초 실행 (USB 절전 방어 적용) <<<")
+                bprint(f"\n>>> [원격 터미널] 모든 락을 무시하고 {d_name}({cmd}) 키를 {duration}초간 발사합니다. <<<")
                 
-                # 봇이 정지 상태여도 평소 낚시할 때 쓰는 send_cmd가 정상 작동하도록 잠시 락을 풉니다.
-                global bot_active
-                was_active = bot_active
-                bot_active = True 
-                
+                # 기존 send_cmd의 차단 로직(bot_active)을 거치지 않고, 무조건 아두이노에 직통으로 꽂아버리는 내부 함수
+                def force_arduino(c):
+                    arduino.write(c.encode())
+                    arduino.flush()
+
                 try:
-                    # 1. [가장 핵심] USB 콜드 스타트(절전) 방어 로직
-                    # 자고 있는 아두이노 USB 포트를 깨우기 위해 의미 없는 'R(손떼기)' 데이터를 먼저 던집니다.
-                    send_cmd('R') 
-                    time.sleep(0.5) # 포트가 완전히 깨어나서 다음 데이터를 씹지 않고 받을 준비가 될 때까지 대기
+                    # 1. 아두이노 초기화
+                    force_arduino('R')
+                    time.sleep(0.1)
                     
-                    # 2. 포트가 깨어난 상태에서 진짜 명령을 전송합니다. (매크로 낚시 로직과 100% 동일)
-                    send_cmd(cmd)
+                    # 2. 진짜 명령 수행
+                    force_arduino(cmd)
                     time.sleep(duration)
-                    send_cmd('R') # 손 떼기
                     
-                    bprint("  > [성공] 게임 내 물리 입력 완료.")
+                    # 3. 키보드 손 떼기
+                    force_arduino('R')
+                    bprint("  > [성공] 아두이노 물리 신호 100% 전송 완료.")
                 except Exception as e:
-                    bprint(f"  > [터미널] 실행 오류: {e}")
+                    bprint(f"  > [터미널 전송 오류] {e}")
                 finally:
-                    bot_active = was_active # 실행 후 봇 상태를 원래대로 원복
-                    remote_task = None 
+                    remote_task = None
             # ========================================
 
             # --- [1시간 단위 실제 통계 스냅샷 저장] ---

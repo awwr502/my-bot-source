@@ -315,25 +315,39 @@ def _telegram_listener():
                                 # 명령어 분리 (예: "/2입력 w 3")
                                 parts = msg_text.split()
                                 if len(parts) >= 2:
-                                    target_key = parts[1].upper() # 무조건 대문자로 변환 (w -> W)
-                                    
-                                    # 3번째 인자(시간)가 있으면 쓰고, 없으면 0.1초(단순 클릭)로 설정
-                                    duration = 0.1
-                                    if len(parts) >= 3:
-                                        duration = float(parts[2])
-                                    
-                                    bprint(f">>> [텔레그램 원격 터미널] {target_key} 키 {duration}초 제어 실행 <<<")
-                                    
-                                    # 봇이 정지(대기) 상태일 때 `send_cmd`가 차단되는 것을 우회하여 아두이노에 직통으로 쏩니다.
-                                    arduino.write(target_key.encode())
-                                    arduino.flush()
-                                    original_sleep(duration)
-                                    arduino.write('R'.encode()) # 손 떼기 (Reset)
-                                    arduino.flush()
-                                    
-                                    # 텔레그램으로 성공 메시지 조용히 회신
-                                    url_msg = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-                                    requests.post(url_msg, json={"chat_id": CHAT_ID, "text": f"⌨️ [터미널] {target_key}키 {duration}초 입력 완료."})
+                                    input_str = parts[1].upper() # 무조건 대문자로 변환 (e -> E, esc -> ESC)
+                                    
+                                    # [스마트 키보드 번역기] 사용자 입력 -> (아두이노 전송용 문자, 텔레그램 출력용 이름)
+                                    key_map = {
+                                        'E': ('E', 'ESC'),
+                                        'ESC': ('E', 'ESC'),
+                                        'L': ('L', '좌클릭'),
+                                        'CLICK': ('L', '좌클릭'),
+                                        'C': ('C', '챔질(C)'),
+                                        'H': ('H', '보관(H)'),
+                                        'F': ('F', '수거(F)')
+                                    }
+                                    
+                                    # 사전에 등록된 키면 번역해서 쓰고, 없으면 입력한 문자(W, A, S, D 등) 그대로 사용
+                                    arduino_cmd, display_name = key_map.get(input_str, (input_str, input_str))
+                                    
+                                    # 3번째 인자(시간)가 있으면 쓰고, 없으면 0.1초(단순 클릭)로 설정
+                                    duration = 0.1
+                                    if len(parts) >= 3:
+                                        duration = float(parts[2])
+                                    
+                                    bprint(f">>> [텔레그램 원격 터미널] {display_name} 키 {duration}초 제어 실행 <<<")
+                                    
+                                    # 봇이 정지(대기) 상태일 때 `send_cmd`가 차단되는 것을 우회하여 아두이노에 직통으로 쏩니다.
+                                    arduino.write(arduino_cmd.encode())
+                                    arduino.flush()
+                                    original_sleep(duration)
+                                    arduino.write('R'.encode()) # 손 떼기 (Reset)
+                                    arduino.flush()
+                                    
+                                    # 텔레그램으로 직관적인 성공 메시지 회신
+                                    url_msg = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                                    requests.post(url_msg, json={"chat_id": CHAT_ID, "text": f"⌨️ [터미널] {display_name}키 {duration}초 입력 완료."})
                                 else:
                                     bprint("  > [원격 터미널] 키 인자가 누락되었습니다. (예: /2입력 F)")
                             except Exception as e:

@@ -332,12 +332,19 @@ def _telegram_listener():
                                     if len(parts) >= 3:
                                         duration = float(parts[2])
                                     
-                                    # 메인 봇의 우체통에 명령만 살포시 넣어둠 (스레드 충돌 0%)
-                                    global remote_task
-                                    remote_task = (arduino_cmd, duration, display_name)
-                                    
-                                    url_msg = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-                                    requests.post(url_msg, json={"chat_id": CHAT_ID, "text": f"⌨️ [터미널] {display_name}키 입력 완료"})
+                                    # 명령을 즉각 수행하지 못하는 병목을 유발하므로, 리스너 스레드에서 아두이노로 즉시 직결합니다.
+                                    bprint(f"\n>>> [원격 터미널] 어떠한 간섭도 없이 순수하게 {display_name}({arduino_cmd}) 키를 {duration}초간 발사합니다. <<<")
+                                    try:
+                                        arduino.write(arduino_cmd.encode())
+                                        arduino.flush()
+                                        original_sleep(duration) # 메인 스레드의 time.sleep(jitter) 대신 순수 sleep 사용
+                                        arduino.write('R'.encode())
+                                        arduino.flush()
+                                        
+                                        url_msg = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                                        requests.post(url_msg, json={"chat_id": CHAT_ID, "text": f"⌨️ [터미널] {display_name}키 전송 완료"})
+                                    except Exception as e:
+                                        bprint(f"  > [터미널 전송 오류] {e}")
                                 else:
                                     bprint("  > [원격 터미널] 키 인자가 누락되었습니다. (예: /2입력 w 3)")
                             except Exception as e:
@@ -857,29 +864,6 @@ def fishing_bot():
 
     while True:
         try:
-
-            # === [원격 터미널 메인 스레드 대리 실행기] ===
-            global remote_task
-            if remote_task is not None:
-                cmd, duration, d_name = remote_task
-                bprint(f"\n>>> [원격 터미널] 어떠한 간섭도 없이 순수하게 {d_name}({cmd}) 키를 {duration}초간 발사합니다. <<<")
-                try:
-                    # 마우스 클릭 등 불필요한 잡동사니 완전 제거
-                    # 봇 정지 시 발생하는 자체 차단(BotStopException)을 무시하고 아두이노에 직통으로 꽂습니다.
-                    arduino.write(cmd.encode())
-                    arduino.flush()
-                    
-                    time.sleep(duration)
-                    
-                    arduino.write('R'.encode()) # 손 떼기
-                    arduino.flush()
-                    
-                    bprint("  > [성공] 물리 입력 전송 완료.")
-                except Exception as e:
-                    bprint(f"  > [터미널 전송 오류] {e}")
-                finally:
-                    remote_task = None
-            # ========================================
 
             # --- [1시간 단위 실제 통계 스냅샷 저장] ---
             if bot_active and run_start_time is not None:

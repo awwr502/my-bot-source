@@ -853,6 +853,26 @@ def force_exit():
     except: pass
     os._exit(1)
 
+# ==========================================
+# [보안 로직] 런처 우회 실행 방지 및 시간 파라미터 수신
+# ==========================================
+if __name__ == "__main__":
+    # 사용자가 fishing.py를 클릭해서 편법으로 켜는 것을 원천 차단합니다.
+    if len(sys.argv) < 2:
+        print("❌ 비정상적인 접근입니다. 보안 로더(loader.exe)를 통해 실행해주세요.")
+        time.sleep(3)
+        sys.exit()
+        
+    try:
+        # loader.exe가 던져준 시간(Hours)을 초(Seconds) 단위로 변환합니다.
+        allocated_hours = float(sys.argv[1])
+        max_seconds = allocated_hours * 3600
+    except Exception:
+        print("❌ 라이선스 데이터 수신 오류.")
+        sys.exit()
+        
+    fishing_bot(max_seconds)
+
 # --- [공통 로직] 잠수 방지 알림 제거 함수 ---
 def check_exit_notification(skip_esc=False):
     """잠수 방지 알림이 뜨면 F를 눌러 즉시 제거합니다."""
@@ -915,7 +935,7 @@ def check_exit_notification(skip_esc=False):
         return True
     return False
 
-def fishing_bot():
+def fishing_bot(max_allowed_seconds):
     # 함수 내부에서도 전역 변수를 쓰겠다고 선언해야 오류가 나지 않습니다.
     global bot_active, run_start_time
     
@@ -960,6 +980,17 @@ def fishing_bot():
             # 클러치에 의해 run_start_time이 None이 되므로 대기 중에는 스냅샷 연산도 자동으로 멈춥니다.
             if bot_active and run_start_time is not None:
                 current_total_time = stats['pure_run_time'] + (time.time() - run_start_time)
+                
+                # [라이선스 실시간 락] 누적 가동 시간이 할당된 시간을 초과하면 봇 강제 폭파
+                if max_allowed_seconds > 0 and current_total_time >= max_allowed_seconds:
+                    bprint(f"\n==================================================")
+                    bprint(f"⏳ [이용 시간 만료] 할당된 이용 시간({max_allowed_seconds/3600}시간)을 모두 소진했습니다.")
+                    bprint(f"관리자에게 문의하여 시간을 충전해주세요.")
+                    bprint(f"==================================================")
+                    send_blynk_notification("⏳ 이용 시간 만료 (봇 가동 중지)")
+                    dump_blackbox_log("라이선스_누적시간_만료")
+                    force_exit()
+
                 if current_total_time - stats['last_snapshot_time'] >= 3600.0:
                     # 델타 연산은 영구히 깎이지 않는 빅데이터(total_*)를 기준으로 삼아야 정확합니다.
                     hook_delta = stats['total_hook'] - stats['last_snapshot_hook']

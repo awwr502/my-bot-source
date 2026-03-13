@@ -577,13 +577,6 @@ def send_cmd(cmd):
 # [스마트 비전 엔진] 이미지 램(RAM) 캐싱 저장소
 IMAGE_CACHE = {} 
 
-# 이미지별로 성공한 화면 비율(Scale)을 기억하여 렉을 방지하는 메모리
-IMAGE_SCALE_CACHE = {}
-
-class Box:
-# [스마트 비전 엔진] 이미지 램(RAM) 캐싱 저장소
-IMAGE_CACHE = {} 
-
 # [데이터 샘플링 엔진] 점진적 확장(Incremental Expansion) ROI 저장소
 from collections import deque
 ROI_SAMPLER = {}

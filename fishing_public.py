@@ -498,6 +498,10 @@ is_manual_stop = True
 bot_active = False
 remote_task = None # [핵심] 텔레그램 스레드와 메인 봇을 연결하는 지시용 우체통 변수
 
+# [라이선스 모듈 플래그]
+ENABLE_FISHING = True
+ENABLE_IDLE_AFK = False # '단독' 잠수방지 감시 모드(State 0) 허용 여부
+
 def toggle_stop():
     global bot_active, run_start_time
     
@@ -1015,12 +1019,21 @@ def fishing_bot(max_allowed_seconds):
                 bprint("  > [시작 처리 완료] 시스템을 초기화하고 '작동 모드'로 전환합니다.")
                 send_cmd('R'); time.sleep(1.0)
                 
-                # 봇 시작 시 특정 사진(예: start_condition.png) 확인
-                if safe_find_image('start_condition.png', 0.75):
-                    bprint("  > [확인] 정상 낚시 모드 진입 (State 1)")
-                    state = 1
-                else:
-                    bprint("  > [대기] 대기 모드 작동 (State 0)")
+                if ENABLE_FISHING:
+                    # 봇 시작 시 특정 사진(예: start_condition.png) 확인
+                    if safe_find_image('start_condition.png', 0.75):
+                        bprint("  > [확인] 정상 낚시 모드 진입")
+                        state = 1
+                    else:
+                        if ENABLE_IDLE_AFK:
+                            bprint("  > [대기] 단독 잠수방지 모드 작동")
+                            state = 0
+                        else:
+                            bprint("  > [경고] 봇을 대기 모드([)로 강제 전환합니다.")
+                            toggle_stop() 
+                            continue
+                elif ENABLE_IDLE_AFK:
+                    bprint("  > [안내] 단독 잠수방지 전용 모드로 감시를 시작합니다.")
                     state = 0
 
             # === [중요] 모든 State 시작 전 공통 체크 ===
@@ -1534,8 +1547,23 @@ if __name__ == "__main__":
         sys.exit()
         
     try:
-        allocated_hours = float(sys.argv[1])
+        raw_val = float(sys.argv[1])
+        allocated_hours = int(raw_val) # 정수 부분
+        feature_code = round((raw_val - allocated_hours) * 10) # 소수점 첫째 자리
+        
         max_seconds = allocated_hours * 3600
+        
+        # [라이선스 모듈 세팅]
+        if feature_code == 1:
+            ENABLE_FISHING, ENABLE_IDLE_AFK = True, True
+            print("💎 [라이선스] 통합 패키지 (낚시 + 단독 잠수방지) 활성화")
+        elif feature_code == 2:
+            ENABLE_FISHING, ENABLE_IDLE_AFK = False, True
+            print("🛡️ [라이선스] 단독 잠수방지 전용 모드 활성화")
+        else: # 0 또는 그 외
+            ENABLE_FISHING, ENABLE_IDLE_AFK = True, False
+            print("🎣 [라이선스] 기본 낚시 모드 활성화 (단독 잠수방지 미포함)")
+            
     except Exception:
         print("❌ 라이선스 데이터 수신 오류.")
         sys.exit()

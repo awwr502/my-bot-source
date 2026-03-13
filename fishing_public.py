@@ -1275,17 +1275,18 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.2)
                 missing_ui_count = 0 
                 
-                # [오리지널 핵심 1] 렌즈 고정: 파이팅 시작 시 게이지의 정확한 중심점을 단 한 번만 찾아 좌표를 고정합니다.
+                # [원형 게이지 맞춤 패치] 사진 확인 결과 110x110은 원 안쪽 빈 공간만 봅니다!
+                # 커다란 원형 테두리 전체가 한눈에 들어오도록 렌즈를 400x400으로 큼직하게 덮어씌웁니다.
                 gauge_roi = None
                 ui_pos = safe_find_image('fishing_mode.png', 0.6)
                 if ui_pos:
                     cx = ui_pos.left + ui_pos.width // 2
                     cy = ui_pos.top + ui_pos.height // 2
-                    x1 = max(0, cx - 55)
-                    y1 = max(0, cy - 55)
-                    gauge_roi = (int(x1), int(y1), 110, 110)
+                    x1 = max(0, cx - 200)
+                    y1 = max(0, cy - 200)
+                    gauge_roi = (int(x1), int(y1), 400, 400)
                 else:
-                    gauge_roi = (CENTER_X - 55, CENTER_Y - 55, 110, 110) # 실패 시 화면 정중앙
+                    gauge_roi = (CENTER_X - 200, CENTER_Y - 200, 400, 400)
                 
                 def check_status():
                     nonlocal missing_ui_count

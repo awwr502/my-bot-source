@@ -786,37 +786,29 @@ def get_dynamic_sector8_roi():
 
 def get_tension_status(exact_roi):
     """
-    [렌즈 확장형 인식] 릴 아이콘(exact_roi)을 중심으로 탐색 범위를 넓혀서 
-    바깥쪽 원형 게이지의 핫핑크 색상을 포착합니다.
+    [배율 대응형 정밀 인식] 릴 아이콘의 크기에 비례해서 렌즈 크기를 결정합니다.
+    창 배율이 바뀌어도 게이지 테두리를 항상 정확한 비율로 포착합니다.
     """
     if not exact_roi: return 0.0
     try:
-        # 1. 릴 아이콘의 중심점 계산
+        # 1. 아이콘의 중심점 및 배율에 따른 렌즈 크기 계산
+        # 아이콘 가로 길이의 약 2.5배를 렌즈 크기로 잡아 배율 변화에 대응합니다.
         cx = exact_roi.left + (exact_roi.width // 2)
         cy = exact_roi.top + (exact_roi.height // 2)
+        lens_size = int(exact_roi.width * 2.5) 
         
-        # 2. 탐색 범위를 아이콘 크기보다 훨씬 넓게 확장 (250x250)
-        # 아이콘 바깥의 원형 게이지까지 모두 포함시키기 위함입니다.
-        lens_size = 250 
         region = (int(cx - lens_size//2), int(cy - lens_size//2), lens_size, lens_size)
 
         target_img = fast_cv_screenshot(region=region, gray=False)
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
         
-        # 3. [정밀 핫핑크 필터] 사진 속 게이지의 강렬한 색상 범위를 넓게 잡습니다.
-        # 핫핑크/마젠타 영역 (H: 140~180) + 순수 레드 영역 (H: 0~10) 통합
-        lower_pink = np.array([140, 80, 80])
+        # 2. [정밀 필터] 사진의 핫핑크/마젠타 색상 범위 (H: 140~180)
+        lower_pink = np.array([140, 90, 90])
         upper_pink = np.array([180, 255, 255])
-        lower_red = np.array([0, 80, 80])
-        upper_red = np.array([10, 255, 255])
+        mask = cv2.inRange(img_hsv, lower_pink, upper_pink)
         
-        mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
-        mask_red = cv2.inRange(img_hsv, lower_red, upper_red)
-        mask = cv2.bitwise_or(mask_pink, mask_red)
-        
-        # 4. 전체 렌즈 영역 대비 핫핑크 비율 계산
-        ratio = cv2.countNonZero(mask) / (target_img.shape[0] * target_img.shape[1])
-        return ratio
+        # 3. 전체 영역 중 핑크색 점유 비율 반환
+        return cv2.countNonZero(mask) / (target_img.shape[0] * target_img.shape[1])
     except:
         return 0.0
 
@@ -1372,21 +1364,24 @@ def fishing_bot(max_allowed_seconds):
                     sys.stdout.write(f"\r🔍 [감지 중] 임계점 비율: {pink_ratio*100:.1f}%   ")
                     sys.stdout.flush()
 
-                    # 2. 텐션 조절 로직 (사용자님 1초 당기기 유지)
+                    # 2. 텐션 조절 로직 (상하한선 시스템 적용)
+                    # 1.5%와 3% 사이에서 갈팡질팡하지 않도록 '이중 문턱'을 세웁니다.
+                    danger_limit = 0.10  # 10% 이상 차오르면 "손 떼!(U)"
+                    safe_limit = 0.03    # 3% 이하로 떨어지면 "다시 당겨!(L)"
+
                     if time.time() - fight_start_time < 1.0:
                         if not is_pulling:
                             send_cmd('L'); is_pulling = True
-                        time.sleep(0.01)
                     else:
-                        # 핑크색 비율이 3%만 넘어도 '위험'으로 간주하고 즉시 뗌 (U)
-                        if pink_ratio >= 0.03: 
+                        if pink_ratio >= danger_limit:
                             if is_pulling:
                                 send_cmd('U'); is_pulling = False
-                            time.sleep(0.01) # 식힐 때 대기
-                        else:
+                        elif pink_ratio <= safe_limit:
                             if not is_pulling:
                                 send_cmd('L'); is_pulling = True
-                            time.sleep(0.01)
+                    
+                    # 루프 속도를 살짝 늦춰 아두이노가 신호를 씹지 않게 보호
+                    original_sleep(0.005)
                     
                     # 무거운 전체화면 UI 체크는 0.1초에 1번만
                     if time.time() - last_ui_check > 0.1:

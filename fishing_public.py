@@ -876,13 +876,17 @@ def get_dynamic_sector8_roi():
 
 def get_tension_status(exact_roi):
     """
-    [v8 하이퍼 옵티마이즈] 무거운 이미지 검색 로직을 전부 폐기하고, 
-    State 4 진입 시 딱 1번 찾아둔 110x110 좌표(exact_roi)만 빛의 속도로 캡처합니다.
+    [v8 하이퍼 옵티마이즈 + 디버그 렌즈 장착] 
     """
     if not exact_roi: return 0
     try:
-        # exact_roi는 이제 무조건 (x, y, 110, 110) 튜플 형태로 들어옵니다.
+        # exact_roi 튜플 형태로 들어온 구역 캡처
         target_img = fast_cv_screenshot(region=exact_roi, gray=False)
+        
+        # [디버거 장착] 봇이 현재 바라보고 있는 시야를 사진으로 저장합니다.
+        # 폴더에 생성된 'DEBUG_BOT_EYE.png'를 열어보시면 원인이 1초 만에 파악됩니다!
+        cv2.imwrite("DEBUG_BOT_EYE.png", target_img)
+
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
         
         # 앞서 찾은 최적의 핑크-레드 필터 적용
@@ -890,7 +894,7 @@ def get_tension_status(exact_roi):
         upper_pink_red = np.array([175, 255, 255])
         mask = cv2.inRange(img_hsv, lower_pink_red, upper_pink_red)
         
-        # [핵심] 퍼센트(비율)가 아닌 '순수 붉은색 픽셀 개수(정수)'를 반환합니다.
+        # 순수 붉은색 픽셀 개수 반환
         return cv2.countNonZero(mask)
     except:
         return 0
@@ -1388,16 +1392,31 @@ def fishing_bot(max_allowed_seconds):
                 if not bot_active: raise BotStopException()
 
                 time.sleep(0.2)
-                missing_ui_count = 0 
+                missing_ui_count = 0
                 
-                # [수정] AI 이미지 인식(fishing_mode.png)이 엉뚱한 곳을 잡는 현상 원천 차단.
-                # 낚시 게이지는 항상 캐릭터 주변(화면 정중앙)에 뜨므로, 무조건 화면 정중앙 400x400 영역만 보도록 렌즈를 박아버립니다.
-                gauge_roi = (CENTER_X - 200, CENTER_Y - 200, 400, 400)
+                # [해결 핵심] 배율(Scale) 호환성 확보!
+                # 구매자의 창 배율이 커지면 게이지도 커지므로, 110x110 고정 상자도 비율에 맞춰 키워줘야 게이지 밖으로 안 벗어납니다.
+                current_scale = IMAGE_SCALE_CACHE.get('fishing_mode.png', 1.0)
+                box_size = int(110 * current_scale)
+                half_box = box_size // 2
 
-                # [위치/배율 최종 해결] 사용자의 요청에 따라 낚시 게이지가 화면 중앙 하단(약 85% 지점)에 위치하므로,
-                # 창 배율/해상도에 자동 대응하는 get_dynamic_sector8_roi()를 1순위 타겟으로 설정합니다.
-                dynamic_roi = get_dynamic_sector8_roi()
-                gauge_roi = dynamic_roi if dynamic_roi else (CENTER_X - 200, CENTER_Y + 200, 400, 400)
+                if ui_pos:
+                    # 1순위: fishing_mode.png 글씨를 찾았을 때의 중앙값
+                    cx = ui_pos.left + ui_pos.width // 2
+                    cy = ui_pos.top + ui_pos.height // 2
+                else:
+                    # 2순위: 못 찾았을 경우 동적 창 배율(Sector 8) 엔진으로 하단 중앙 백업 계산
+                    dyn_roi = get_dynamic_sector8_roi()
+                    if dyn_roi:
+                        cx = dyn_roi[0] + dyn_roi[2] // 2
+                        cy = dyn_roi[1] + dyn_roi[3] // 2
+                    else:
+                        cx, cy = CENTER_X, CENTER_Y
+                
+                # 계산된 중심점 기준, 배율이 적용된 유동적 렌즈 장착
+                x1 = max(0, cx - half_box)
+                y1 = max(0, cy - half_box)
+                gauge_roi = (int(x1), int(y1), box_size, box_size)
                 
                 def check_status():
                     nonlocal missing_ui_count

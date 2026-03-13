@@ -1340,31 +1340,30 @@ def fishing_bot(max_allowed_seconds):
                 while True: # bot_active로 스르륵 탈출 방지
                     if not bot_active: raise BotStopException() # 즉시 폭파
 
-                    # 1. 실시간 창 위치 추적 및 8번 섹터 ROI 계산
-                    active_roi = get_active_window_roi()
-                    tension_ratio = get_tension_status(active_roi)
+                    # 1. 8번 섹터 실시간 추적 및 텐션 비율(Ratio) 계산
+                    current_roi = get_dynamic_sector8_roi()
+                    pink_ratio = get_tension_status(current_roi)
                     
-                    # [디버그 출력] 현재 봇이 인식하는 붉은색 수치를 실시간으로 보여줍니다.
-                    # 만약 붉은색인데도 수치가 0.01 이하라면 위치나 색상 범위가 여전히 틀린 것입니다.
-                    sys.stdout.write(f"\r🔍 텐션 감시중... [위험도: {tension_ratio*100:.1f}%]  ")
+                    # [디버그] 콘솔에서 실시간 위험도를 확인할 수 있게 출력합니다.
+                    sys.stdout.write(f"\r🔍 [섹터8 감시] 위험도: {pink_ratio*100:.1f}%   ")
                     sys.stdout.flush()
 
-                    # 로직 실행
+                    # 2. 텐션 조절 로직
                     if time.time() - fight_start_time < 1.0:
-                        # 진입 초기 1초는 안정적인 장력을 위해 당김 유지
+                        # 초반 1초는 안정적인 입질을 위해 풀링 유지
                         if not is_pulling:
                             send_cmd('L'); is_pulling = True
                     else:
-                        # 붉은색 점유율이 2%만 넘어도 '위험'으로 간주하고 즉시 뗌 (임계값 하향조정)
-                        if tension_ratio >= 0.02: 
+                        # 핫핑크 게이지가 3% 이상 차오르면 즉시 휴식 (0.03)
+                        if pink_ratio >= 0.03: 
                             if is_pulling:
                                 send_cmd('U'); is_pulling = False
                         else:
-                            # 화면에 붉은색이 거의 없을 때만 다시 당김
+                            # 위험 구역에서 벗어나면 다시 당기기
                             if not is_pulling:
                                 send_cmd('L'); is_pulling = True
                     
-                    original_sleep(0.02) # 아두이노 응답 안정성 확보
+                    original_sleep(0.01) # 아두이노 응답 안정성 확보
                     
                     # 무거운 전체화면 UI 체크는 0.1초에 1번만
                     if time.time() - last_ui_check > 0.1:

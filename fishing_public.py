@@ -188,15 +188,16 @@ def save_stats_cache():
         save_data = stats.copy()
         save_data["last_report_date"] = last_report_date.strftime("%Y-%m-%d")
         
-        # 저장 전 숨김 속성 해제 (덮어쓰기 권한 확보)
+        # [번쩍임 제거 패치] subprocess 실행 시 윈도우 콘솔창이 절대 뜨지 않도록 CREATE_NO_WINDOW 플래그 부여
+        CREATE_NO_WINDOW = 0x08000000 
+        
         if os.path.exists(STATS_CACHE_FILE):
-            subprocess.run(["attrib", "-h", "-s", STATS_CACHE_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["attrib", "-h", "-s", STATS_CACHE_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
             
         with open(STATS_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(save_data, f, indent=4, ensure_ascii=False)
             
-        # 저장 후 다시 숨김 + 시스템 파일 속성 부여 (사용자 눈에 안 보임)
-        subprocess.run(["attrib", "+h", "+s", STATS_CACHE_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["attrib", "+h", "+s", STATS_CACHE_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
     except:
         pass
 

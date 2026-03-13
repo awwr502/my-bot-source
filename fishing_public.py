@@ -67,7 +67,7 @@ config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.j
 # [유니버설 하이브리드 패치] 기본값 세팅
 TELEGRAM_TOKEN = ""
 CHAT_ID = ""
-BOT_NAME = "베릭"
+BOT_NAME = "One 자동낚시 봇"
 CMD_PREFIX = "/2"
 USE_TELEGRAM = False # 텔레그램 스위치
 
@@ -76,8 +76,8 @@ try:
         config_data = json.load(f)
         TELEGRAM_TOKEN = config_data.get("TELEGRAM_TOKEN", "")
         CHAT_ID = config_data.get("CHAT_ID", "")
-        BOT_NAME = config_data.get("BOT_NAME", "베릭") 
-        CMD_PREFIX = config_data.get("CMD_PREFIX", "/2") 
+        BOT_NAME = config_data.get("BOT_NAME", "One 자동낚시 봇") 
+        CMD_PREFIX = config_data.get("CMD_PREFIX", "")
         
         # 토큰과 아이디가 모두 들어있을 때만 스위치 ON
         if TELEGRAM_TOKEN.strip() and CHAT_ID.strip():

@@ -753,26 +753,25 @@ def align_view_by_anchor(anchor_img):
             continue
     return False
 
-def get_active_window_roi():
+def get_dynamic_sector8_roi():
     """
-    [배율/위치 무력화] 현재 활성화된 창의 실제 위치를 추적하여 8번 섹터(하단 중앙)를 반환합니다.
+    [섹터 8 추적 엔진] 게임 창의 실제 위치를 추적하여 하단 중앙(8번 구역) ROI를 반환합니다.
+    이름을 본문의 호출부와 일치시켜 NameError를 완전히 해결했습니다.
     """
     import win32gui
     try:
-        # 현재 마우스가 올라와 있거나 활성화된 창 핸들을 가져옵니다.
+        # 현재 활성화된 창의 실제 좌표를 가져옴 (배율/위치 무관)
         hwnd = win32gui.GetForegroundWindow()
-        # 창의 실제 좌표 (left, top, right, bottom)
         rect = win32gui.GetWindowRect(hwnd)
         w = rect[2] - rect[0]
         h = rect[3] - rect[1]
         
-        # 8번 섹터 (가로 50%, 세로 85% 지점 타겟팅)
-        # 배율이 적용되어도 창 크기(w, h) 대비 비율로 계산하므로 정확합니다.
+        # 8번 섹터 중심점 계산 (가로 50%, 세로 85% 지점)
         center_x = rect[0] + (w // 2)
         target_y = rect[1] + int(h * 0.85)
         
-        # 렌즈 크기를 창 크기에 맞춰 유동적으로 조절 (창 높이의 25%)
-        lens_size = int(h * 0.25)
+        # 렌즈 크기를 창 크기에 맞춰 유동적으로 설정 (창 높이의 20%)
+        lens_size = int(h * 0.2)
         
         return (int(center_x - lens_size//2), int(target_y - lens_size//2), lens_size, lens_size)
     except:
@@ -780,25 +779,24 @@ def get_active_window_roi():
 
 def get_tension_status(roi):
     """
-    [마젠타/적색 통합 필터] 8번 섹터 내에서 핫핑크(위험) 픽셀 비율을 계산합니다.
+    [마젠타/적색 점유율 계산] 8번 섹터 내 핫핑크(위험) 색상의 비율을 계산합니다.
+    픽셀 개수가 아닌 '비율'을 보므로 배율이 바뀌어도 임계값이 유지됩니다.
     """
     if not roi: return 0.0
     try:
-        # 실제 계산된 ROI 영역만 초고속 캡처
         img = fast_cv_screenshot(region=roi, gray=False)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         
-        # [정밀 색상 범위] 사진 속 핫핑크와 일반 레드를 모두 포함하는 넓은 범위
+        # 사용자님 사진 기반 핫핑크(Magenta) + 레드 통합 필터
         lower_red1 = np.array([0, 130, 130])
-        upper_red1 = np.array([15, 255, 255])
-        lower_red2 = np.array([145, 130, 130]) # 핫핑크/마젠타 시작점
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([150, 130, 130]) 
         upper_red2 = np.array([180, 255, 255])
         
         mask = cv2.bitwise_or(cv2.inRange(hsv, lower_red1, upper_red1), 
                               cv2.inRange(hsv, lower_red2, upper_red2))
         
-        count = cv2.countNonZero(mask)
-        ratio = count / (img.shape[0] * img.shape[1])
+        ratio = cv2.countNonZero(mask) / (img.shape[0] * img.shape[1])
         return ratio
     except:
         return 0.0

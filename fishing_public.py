@@ -1017,10 +1017,10 @@ def fishing_bot(max_allowed_seconds):
                 
                 # 봇 시작 시 특정 사진(예: start_condition.png) 확인
                 if safe_find_image('start_condition.png', 0.75):
-                    bprint("  > [확인] 조건 사진 발견! 정상 낚시 모드 진입 (State 1)")
+                    bprint("  > [확인] 정상 낚시 모드 진입 (State 1)")
                     state = 1
                 else:
-                    bprint("  > [대기] 조건 사진 미발견! 잠수 방지 전용 모드 작동 (State 0)")
+                    bprint("  > [대기] 대기 모드 작동 (State 0)")
                     state = 0
 
             # === [중요] 모든 State 시작 전 공통 체크 ===

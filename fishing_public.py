@@ -1326,7 +1326,7 @@ def fishing_bot(max_allowed_seconds):
                     if not bot_active: raise BotStopException() # 즉시 폭파
 
                     # 1. [연산 최적화] 매번 찾지 않고, 110x110 초소형 영역만 0.001초 만에 스캔
-                    red_count = get_tension_status(gauge_roi)
+                    red_count = get_tension_status()
                     
                     # 파이팅 진입 직후 1초 동안은 애니메이션 붉은 잔상을 무시하고 무조건 당김!
                     if time.time() - fight_start_time < 1:

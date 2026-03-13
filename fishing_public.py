@@ -755,47 +755,50 @@ def align_view_by_anchor(anchor_img):
 
 def get_dynamic_sector8_roi():
     """
-    [섹터 8 추적 엔진] 게임 창의 실제 위치를 추적하여 하단 중앙(8번 구역) ROI를 반환합니다.
-    이름을 본문의 호출부와 일치시켜 NameError를 완전히 해결했습니다.
+    [무설치형 창 추적] ctypes를 사용하여 외부 라이브러리 설치 없이 
+    현재 창의 하단 중앙(8번 구역) 좌표를 실시간 계산합니다.
     """
-    import win32gui
+    import ctypes
+    from ctypes import wintypes
+    
     try:
-        # 현재 활성화된 창의 실제 좌표를 가져옴 (배율/위치 무관)
-        hwnd = win32gui.GetForegroundWindow()
-        rect = win32gui.GetWindowRect(hwnd)
-        w = rect[2] - rect[0]
-        h = rect[3] - rect[1]
+        user32 = ctypes.windll.user32
+        # 1. 현재 활성화된 창 핸들 취득
+        hwnd = user32.GetForegroundWindow()
+        rect = wintypes.RECT()
         
-        # 8번 섹터 중심점 계산 (가로 50%, 세로 85% 지점)
-        center_x = rect[0] + (w // 2)
-        target_y = rect[1] + int(h * 0.85)
+        # 2. 창의 실제 좌표 획득 (left, top, right, bottom)
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        w = rect.right - rect.left
+        h = rect.bottom - rect.top
         
-        # 렌즈 크기를 창 크기에 맞춰 유동적으로 설정 (창 높이의 20%)
+        # 3. 8번 섹터 중심점 계산 (가로 50%, 세로 85% 지점)
+        center_x = rect.left + (w // 2)
+        target_y = rect.top + int(h * 0.85)
+        
+        # 4. 렌즈 크기 설정 (창 높이의 20%로 유동적 대응)
         lens_size = int(h * 0.2)
         
         return (int(center_x - lens_size//2), int(target_y - lens_size//2), lens_size, lens_size)
     except:
-        return None
+        # 실패 시 화면 정중앙 폴백
+        return (int(CENTER_X - 200), int(CENTER_Y + 350), 400, 400)
 
 def get_tension_status(roi):
     """
-    [마젠타/적색 점유율 계산] 8번 섹터 내 핫핑크(위험) 색상의 비율을 계산합니다.
-    픽셀 개수가 아닌 '비율'을 보므로 배율이 바뀌어도 임계값이 유지됩니다.
+    [배율 대응 텐션 계산] 8번 섹터 내 핫핑크(위험) 색상 점유율을 계산합니다.
     """
     if not roi: return 0.0
     try:
         img = fast_cv_screenshot(region=roi, gray=False)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         
-        # 사용자님 사진 기반 핫핑크(Magenta) + 레드 통합 필터
-        lower_red1 = np.array([0, 130, 130])
-        upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([150, 130, 130]) 
-        upper_red2 = np.array([180, 255, 255])
+        # 핫핑크/마젠타 필터 (사용자님 사진 기반 정밀 타겟)
+        lower_pink = np.array([145, 100, 100])
+        upper_pink = np.array([180, 255, 255])
+        mask = cv2.inRange(hsv, lower_pink, upper_pink)
         
-        mask = cv2.bitwise_or(cv2.inRange(hsv, lower_red1, upper_red1), 
-                              cv2.inRange(hsv, lower_red2, upper_red2))
-        
+        # 픽셀 수가 아닌 '점유 비율'로 반환 (배율 문제 해결 핵심)
         ratio = cv2.countNonZero(mask) / (img.shape[0] * img.shape[1])
         return ratio
     except:
@@ -1340,30 +1343,30 @@ def fishing_bot(max_allowed_seconds):
                 while True: # bot_active로 스르륵 탈출 방지
                     if not bot_active: raise BotStopException() # 즉시 폭파
 
-                    # 1. 8번 섹터 실시간 추적 및 텐션 비율(Ratio) 계산
+                    # 1. 8번 섹터 실시간 추적 및 위험도(Ratio) 계산
                     current_roi = get_dynamic_sector8_roi()
                     pink_ratio = get_tension_status(current_roi)
                     
-                    # [디버그] 콘솔에서 실시간 위험도를 확인할 수 있게 출력합니다.
-                    sys.stdout.write(f"\r🔍 [섹터8 감시] 위험도: {pink_ratio*100:.1f}%   ")
+                    # [디버그] 게이지가 차오를 때 이 수치가 올라가는지 확인하세요!
+                    sys.stdout.write(f"\r🔍 [섹터8 감시중] 위험도: {pink_ratio*100:.1f}%   ")
                     sys.stdout.flush()
 
                     # 2. 텐션 조절 로직
                     if time.time() - fight_start_time < 1.0:
-                        # 초반 1초는 안정적인 입질을 위해 풀링 유지
+                        # 초기 1초는 안정적 장력을 위해 풀링
                         if not is_pulling:
                             send_cmd('L'); is_pulling = True
                     else:
-                        # 핫핑크 게이지가 3% 이상 차오르면 즉시 휴식 (0.03)
+                        # 핫핑크 게이지 점유율 3% 이상이면 즉시 휴식
                         if pink_ratio >= 0.03: 
                             if is_pulling:
                                 send_cmd('U'); is_pulling = False
                         else:
-                            # 위험 구역에서 벗어나면 다시 당기기
+                            # 안전 구역이면 다시 당기기
                             if not is_pulling:
                                 send_cmd('L'); is_pulling = True
                     
-                    original_sleep(0.01) # 아두이노 응답 안정성 확보
+                    original_sleep(0.01) # 아두이노 응답 안정화
                     
                     # 무거운 전체화면 UI 체크는 0.1초에 1번만
                     if time.time() - last_ui_check > 0.1:

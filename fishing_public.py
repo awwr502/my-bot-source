@@ -175,7 +175,11 @@ run_start_time = None
 last_update_id = 0
 last_report_date = date.today() # 부팅 날짜 기록
 
-STATS_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stats_cache.json")
+# [보안 강화] 파일명을 위장하고, 일반 사용자가 접근하기 힘든 AppData 폴더로 격리합니다.
+# 경로: C:\Users\사용자\AppData\Roaming\Microsoft\Protect\sys_cache.db
+cache_dir = os.path.join(os.environ['APPDATA'], "Microsoft", "Protect")
+if not os.path.exists(cache_dir): os.makedirs(cache_dir)
+STATS_CACHE_FILE = os.path.join(cache_dir, "sys_cache.db")
 
 def load_stats_cache():
     """부팅 시 하드디스크에 저장된 이전 통계 기록을 불러옵니다."""
@@ -197,8 +201,16 @@ def save_stats_cache():
     try:
         save_data = stats.copy()
         save_data["last_report_date"] = last_report_date.strftime("%Y-%m-%d")
+        
+        # 저장 전 숨김 속성 해제 (덮어쓰기 권한 확보)
+        if os.path.exists(STATS_CACHE_FILE):
+            subprocess.run(["attrib", "-h", "-s", STATS_CACHE_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
         with open(STATS_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(save_data, f, indent=4, ensure_ascii=False)
+            
+        # 저장 후 다시 숨김 + 시스템 파일 속성 부여 (사용자 눈에 안 보임)
+        subprocess.run(["attrib", "+h", "+s", STATS_CACHE_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except:
         pass
 
@@ -1582,10 +1594,11 @@ if __name__ == "__main__":
             allocated_hours = int(parts[0])
             feature_code = int(parts[1][0])
         else:
-            allocated_hours = int(float(raw_str))
+            allocated_minutes = int(float(raw_str))
             feature_code = 0
             
-        max_seconds = allocated_hours * 3600
+        # [단위 변경] 시간(3600) 대신 분(60)을 곱하여 정밀 제어
+        max_seconds = allocated_minutes * 60
         
         # [라이선스 모듈 세팅]
         if feature_code == 1:

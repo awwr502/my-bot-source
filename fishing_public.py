@@ -1280,11 +1280,12 @@ def fishing_bot(max_allowed_seconds):
                 if ui_pos:
                     cx = ui_pos.left + ui_pos.width // 2
                     cy = ui_pos.top + ui_pos.height // 2
-                    x1 = max(0, cx - 200)
-                    y1 = max(0, cy - 200)
+                    # [수정] 400x400은 노이즈가 너무 심함. 안정적인 160x160으로 타협
+                    x1 = max(0, cx - 80)
+                    y1 = max(0, cy - 80)
                     gauge_roi = (int(x1), int(y1), 160, 160)
                 else:
-                    gauge_roi = (CENTER_X - 200, CENTER_Y - 200, 400, 400)
+                    gauge_roi = (CENTER_X - 80, CENTER_Y - 80, 160, 160) # 실패 시 화면 정중앙
                 
                 def check_status():
                     nonlocal missing_ui_count
@@ -1334,7 +1335,7 @@ def fishing_bot(max_allowed_seconds):
                         time.sleep(0.01)
                     else:
                         # [오리지널 반응 임계값] 15픽셀
-                        if red_count >= 15:
+                        if red_count >= 40:
                             if is_pulling:
                                 send_cmd('U') 
                                 is_pulling = False

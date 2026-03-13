@@ -1621,13 +1621,14 @@ if __name__ == "__main__":
             print("🎣 [라이선스] 기본 낚시 모드 활성화 (단독 잠수방지 미포함)")
 
         # [권한 제어 2] 원격제어 보안 차단
-        # 라이선스상 원격 권한이 없으면(0), config.json에 토큰을 넣었더라도 강제로 기능을 끕니다.
         if remote_code == 1:
             print("📱 [라이선스] 텔레그램 원격제어 권한 확인 완료")
+            HAS_REMOTE_LICENSE = True # 봇에게 권한이 있음을 알려줌
         else:
             if USE_TELEGRAM:
                 print("🚫 [권한부족] 원격제어 라이선스가 없습니다. 기능을 강제 차단합니다.")
             USE_TELEGRAM = False
+            HAS_REMOTE_LICENSE = False
             
         # 모든 권한 세팅 완료 후 봇 가동
         fishing_bot(max_seconds)

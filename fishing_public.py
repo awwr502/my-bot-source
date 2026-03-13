@@ -880,13 +880,15 @@ def fishing_bot(max_allowed_seconds):
     else:
         # [CASE 3] 권한 자체가 없는 경우 (홍보 문구 출력)
         print("\n🚫 텔레그램 원격 봇 이용 권한이 없는 오프라인 모드입니다. 🚫")
-        print("⬇️⬇️⬇️ 봇 이용 문의는 판매자에게 연락 부탁드립니다. ⬇️⬇️⬇️")
-        print("📢 카카오톡 오픈채팅: https://open.kakao.com/o/sB6Ca9ki\n")
     
     state = -1
-    # 위에서 이미 \n으로 예쁘게 띄워두었으므로, 여기서는 \n을 제거해 줍니다.
+    
+    # [판매자 안내 문구 추가] 가동 시작 직전에 홍보 문구를 출력합니다.
+    print("⬇️⬇️⬇️ 봇 이용 문의는 판매자에게 연락 부탁드립니다. ⬇️⬇️⬇️")
+    print("📢 카카오톡 오픈채팅: https://open.kakao.com/o/sB6Ca9ki\n")
+    
     bprint("🚀낚시 매크로 V2.4 가동 시작🚀")
-    bprint("(작동: ] , 정지: [ )\n") # 요청하신 대로 타이머와 한 칸 띄우기 위해 \n 추가
+    bprint("(작동: ] , 정지: [ )\n") 
 
     # [하단 고정형 실시간 타이머 엔진]
     def timer_overlay():

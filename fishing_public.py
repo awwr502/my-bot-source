@@ -886,7 +886,8 @@ def fishing_bot(max_allowed_seconds):
     # [하단 고정형 실시간 타이머 엔진]
     def timer_overlay():
         while True:
-            if max_allowed_seconds >= 9000 * 3600:
+            # [단위 동기화] 이제 시간 기준이 '분'이므로, 9000분(약 150시간) 이상이면 영구제로 표시합니다.
+            if max_allowed_seconds >= 9000 * 60:
                 # 영구제 사용자용 텍스트
                 sys.stdout.write(f"\r⏳ 남은 시간: [영구제] 무제한 작동 중...{' '*20}")
             else:

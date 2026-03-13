@@ -1424,55 +1424,55 @@ def fishing_bot(max_allowed_seconds):
                     
                     return "KEEP"
 
-                bprint("  > [파이팅] 110x110 고정 렌즈 추적 시작")
-                is_pulling = False 
-                last_ui_check = time.time()
-                
-                fight_start_time = time.time() # 파이팅 진입 시간 기록
-                
-                while True: # bot_active로 스르륵 탈출 방지
-                    if not bot_active: raise BotStopException() # 즉시 폭파
+                bprint("  > [파이팅] 110x110 고정 렌즈 추적 시작")
+                is_pulling = False 
+                last_ui_check = time.time()
+                
+                fight_start_time = time.time() # 파이팅 진입 시간 기록
+                
+                while True: # bot_active로 스르륵 탈출 방지
+                    if not bot_active: raise BotStopException() # 즉시 폭파
 
-                    # 1. [연산 최적화] 매번 찾지 않고, 110x110 초소형 영역만 0.001초 만에 스캔
-                    red_count = get_tension_status(gauge_roi)
-                    
-                    # [디버그] 콘솔에서 수치가 15 이상 올라가는지 직관적으로 확인
-                    sys.stdout.write(f"\r🔍 [감지 중] 임계점 : {red_count} (임계점: 15)   ")
-                    sys.stdout.flush()
-                    
-                    # 파이팅 진입 직후 1초 동안은 무조건 당김 (잔상 무시)
-                    if time.time() - fight_start_time < 1.0:
-                        if not is_pulling:
-                            send_cmd('L')
-                            is_pulling = True
-                        time.sleep(0.01)
-                    else:
-                        # 2. 반응 임계값 15픽셀 (절대값 기반 초고속 반응)
-                        if red_count >= 15:
-                            if is_pulling:
-                                send_cmd('U') 
-                                is_pulling = False
-                            time.sleep(0.01) # 식힐 때 확실히 대기
-                        else:
-                            if not is_pulling:
-                                send_cmd('L') 
-                                is_pulling = True
-                            time.sleep(0.01)
-                    
-                    # [핵심 2] 랜덤 렉 방지. 전체 화면 스캔은 0.1초에 1번만
-                    if time.time() - last_ui_check > 0.1:
-                        res = check_status()
-                        last_ui_check = time.time()
-                        
-                        if res == "FINISH": 
-                            send_cmd('U'); state = 5; break
-                        if res == "RESET": 
-                            send_cmd('U'); state = 1; break
-                        if res == "QTE": 
-                            bprint("\n  > [QTE] 대응 완료. 0.01초 대기 후 텐션 조절 재개")
-                            is_pulling = False
-                            time.sleep(0.01)
-                            continue
+                    # 1. [연산 최적화] 매번 찾지 않고, 110x110 초소형 영역만 0.001초 만에 스캔
+                    red_count = get_tension_status(gauge_roi)
+                    
+                    # [디버그] 콘솔에서 수치가 15 이상 올라가는지 직관적으로 확인
+                    sys.stdout.write(f"\r🔍 [감지 중] 임계점 : {red_count} (임계점: 15)   ")
+                    sys.stdout.flush()
+                    
+                    # 파이팅 진입 직후 1초 동안은 무조건 당김 (잔상 무시)
+                    if time.time() - fight_start_time < 1.0:
+                        if not is_pulling:
+                            send_cmd('L')
+                            is_pulling = True
+                        time.sleep(0.01)
+                    else:
+                        # 2. 반응 임계값 15픽셀 (절대값 기반 초고속 반응)
+                        if red_count >= 15:
+                            if is_pulling:
+                                send_cmd('U') 
+                                is_pulling = False
+                            time.sleep(0.01) # 식힐 때 확실히 대기
+                        else:
+                            if not is_pulling:
+                                send_cmd('L') 
+                                is_pulling = True
+                            time.sleep(0.01)
+                    
+                    # [핵심 2] 랜덤 렉 방지. 전체 화면 스캔은 0.1초에 1번만
+                    if time.time() - last_ui_check > 0.1:
+                        res = check_status()
+                        last_ui_check = time.time()
+                        
+                        if res == "FINISH": 
+                            send_cmd('U'); state = 5; break
+                        if res == "RESET": 
+                            send_cmd('U'); state = 1; break
+                        if res == "QTE": 
+                            bprint("\n  > [QTE] 대응 완료. 0.01초 대기 후 텐션 조절 재개")
+                            is_pulling = False
+                            time.sleep(0.01)
+                            continue
 
             # --- [State 5] 수거 (완결성 검증 로직) ---
             elif state == 5:

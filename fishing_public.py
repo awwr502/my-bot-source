@@ -1450,7 +1450,7 @@ def fishing_bot(max_allowed_seconds):
                         time.sleep(0.01)
                     else:
                         # 2. 반응 임계값 15픽셀 (절대값 기반 초고속 반응)
-                        if red_count >= 50:
+                        if red_count >= 15:
                             if is_pulling:
                                 send_cmd('U') 
                                 is_pulling = False

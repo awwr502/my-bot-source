@@ -753,43 +753,53 @@ def align_view_by_anchor(anchor_img):
             continue
     return False
 
-def get_dynamic_sector8_roi():
+def get_active_window_roi():
     """
-    [섹터 8 추적] 게임 화면의 하단 중앙(8번 구역) 좌표를 실시간 계산합니다.
-    창 위치나 배율이 바뀌어도 해당 비율 지점을 캡처 영역으로 반환합니다.
+    [배율/위치 무력화] 현재 활성화된 창의 실제 위치를 추적하여 8번 섹터(하단 중앙)를 반환합니다.
     """
-    # 1920x1080 전체 화면 기준 비율 계산
-    target_x = CENTER_X 
-    target_y = int(SCREEN_H * 0.83) # 하단 83% 지점 (사용자님의 섹터 8)
-    
-    # 캡처 렌즈 크기 (400x400)
-    roi_w, roi_h = 400, 400
-    left = target_x - (roi_w // 2)
-    top = target_y - (roi_h // 2)
-    
-    return (int(left), int(top), roi_w, roi_h)
-
-def get_tension_status(exact_roi):
-    """
-    [배율 독립형 인식] 사진 속 '핫핑크'가 전체 영역 중 몇 %를 차지하는지 계산합니다.
-    픽셀 개수가 아닌 '비율'을 보므로 창 크기가 작아져도 임계값이 무너지지 않습니다.
-    """
-    if not exact_roi: return 0.0
+    import win32gui
     try:
-        # mss 기반 초고속 캡처
-        target_img = fast_cv_screenshot(region=exact_roi, gray=False)
-        img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
+        # 현재 마우스가 올라와 있거나 활성화된 창 핸들을 가져옵니다.
+        hwnd = win32gui.GetForegroundWindow()
+        # 창의 실제 좌표 (left, top, right, bottom)
+        rect = win32gui.GetWindowRect(hwnd)
+        w = rect[2] - rect[0]
+        h = rect[3] - rect[1]
         
-        # [정밀 필터] 사진에서 확인된 핫핑크/마젠타 색상 영역 (H: 150~180)
-        lower_pink = np.array([150, 100, 100])
-        upper_pink = np.array([180, 255, 255])
-        mask = cv2.inRange(img_hsv, lower_pink, upper_pink)
+        # 8번 섹터 (가로 50%, 세로 85% 지점 타겟팅)
+        # 배율이 적용되어도 창 크기(w, h) 대비 비율로 계산하므로 정확합니다.
+        center_x = rect[0] + (w // 2)
+        target_y = rect[1] + int(h * 0.85)
         
-        pink_pixels = cv2.countNonZero(mask)
-        total_pixels = target_img.shape[0] * target_img.shape[1]
+        # 렌즈 크기를 창 크기에 맞춰 유동적으로 조절 (창 높이의 25%)
+        lens_size = int(h * 0.25)
         
-        # 0.0 ~ 1.0 사이의 비율 반환
-        return pink_pixels / total_pixels
+        return (int(center_x - lens_size//2), int(target_y - lens_size//2), lens_size, lens_size)
+    except:
+        return None
+
+def get_tension_status(roi):
+    """
+    [마젠타/적색 통합 필터] 8번 섹터 내에서 핫핑크(위험) 픽셀 비율을 계산합니다.
+    """
+    if not roi: return 0.0
+    try:
+        # 실제 계산된 ROI 영역만 초고속 캡처
+        img = fast_cv_screenshot(region=roi, gray=False)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        
+        # [정밀 색상 범위] 사진 속 핫핑크와 일반 레드를 모두 포함하는 넓은 범위
+        lower_red1 = np.array([0, 130, 130])
+        upper_red1 = np.array([15, 255, 255])
+        lower_red2 = np.array([145, 130, 130]) # 핫핑크/마젠타 시작점
+        upper_red2 = np.array([180, 255, 255])
+        
+        mask = cv2.bitwise_or(cv2.inRange(hsv, lower_red1, upper_red1), 
+                              cv2.inRange(hsv, lower_red2, upper_red2))
+        
+        count = cv2.countNonZero(mask)
+        ratio = count / (img.shape[0] * img.shape[1])
+        return ratio
     except:
         return 0.0
 
@@ -1332,32 +1342,31 @@ def fishing_bot(max_allowed_seconds):
                 while True: # bot_active로 스르륵 탈출 방지
                     if not bot_active: raise BotStopException() # 즉시 폭파
 
-                    # 1. 중앙 400x400 영역에서 핫핑크 픽셀 추출
-                    red_count = get_tension_status(gauge_roi)
-
-                    # [실시간 추적] 루프마다 8번 섹터 위치를 재계산하여 창 이동에 대응합니다.
-                    current_roi = get_dynamic_sector8_roi()
-                    red_count = get_tension_status(current_roi)
+                    # 1. 실시간 창 위치 추적 및 8번 섹터 ROI 계산
+                    active_roi = get_active_window_roi()
+                    tension_ratio = get_tension_status(active_roi)
                     
-                    # 1초 무조건 당기기 로직 (원상 복구)
+                    # [디버그 출력] 현재 봇이 인식하는 붉은색 수치를 실시간으로 보여줍니다.
+                    # 만약 붉은색인데도 수치가 0.01 이하라면 위치나 색상 범위가 여전히 틀린 것입니다.
+                    sys.stdout.write(f"\r🔍 텐션 감시중... [위험도: {tension_ratio*100:.1f}%]  ")
+                    sys.stdout.flush()
+
+                    # 로직 실행
                     if time.time() - fight_start_time < 1.0:
+                        # 진입 초기 1초는 안정적인 장력을 위해 당김 유지
                         if not is_pulling:
-                            send_cmd('L')
-                            is_pulling = True
-                        time.sleep(0.01)
+                            send_cmd('L'); is_pulling = True
                     else:
-                        # 중앙 영역만 감시하므로 배경 노이즈가 적습니다.
-                        # 핫핑크 게이지가 차오르는 것을 확실히 감지하기 위해 임계값을 150픽셀로 설정합니다.
-                        if red_count >= 150:
+                        # 붉은색 점유율이 2%만 넘어도 '위험'으로 간주하고 즉시 뗌 (임계값 하향조정)
+                        if tension_ratio >= 0.02: 
                             if is_pulling:
-                                send_cmd('U') 
-                                is_pulling = False
-                            time.sleep(0.01) # 식힐 때 확실히 대기
+                                send_cmd('U'); is_pulling = False
                         else:
+                            # 화면에 붉은색이 거의 없을 때만 다시 당김
                             if not is_pulling:
-                                send_cmd('L') 
-                                is_pulling = True
-                            time.sleep(0.01) # 연산 딜레이 최소화
+                                send_cmd('L'); is_pulling = True
+                    
+                    original_sleep(0.02) # 아두이노 응답 안정성 확보
                     
                     # 무거운 전체화면 UI 체크는 0.1초에 1번만
                     if time.time() - last_ui_check > 0.1:

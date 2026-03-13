@@ -918,13 +918,13 @@ def fishing_bot(max_allowed_seconds):
 
     while True:
         try:
-            # [시간 누적 클러치] State 0(잠수방지 대기) 및 State -1(초기화/정지)에서는 스톱워치를 일시 정지합니다.
-            if bot_active and state > 0:
-                # 정상 낚시 모드 진입 시 스톱워치 가동
+            # [시간 누적 클러치] 초기화/정지(State -1)에서만 스톱워치를 일시 정지하고,
+            # 정상 낚시(State 1~5) 및 잠수방지 전용 감시(State 0) 중에는 스톱워치를 정상 가동합니다.
+            if bot_active and state >= 0:
                 if run_start_time is None:
                     run_start_time = time.time()
             else:
-                # 낚시 중이 아닐 때 스톱워치가 돌고 있다면 정지하고 지금까지의 시간만 누적
+                # 봇이 정지(-1)되었을 때만 스톱워치가 돌고 있다면 정지하고 지금까지의 시간만 누적
                 if run_start_time is not None:
                     stats['pure_run_time'] += (time.time() - run_start_time)
                     run_start_time = None

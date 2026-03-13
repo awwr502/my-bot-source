@@ -791,23 +791,33 @@ def get_tension_status(exact_roi):
     """
     if not exact_roi: return 0.0
     try:
-        # 1. 아이콘의 중심점 및 배율에 따른 렌즈 크기 계산
-        # 아이콘 가로 길이의 약 2.5배를 렌즈 크기로 잡아 배율 변화에 대응합니다.
-        cx = exact_roi.left + (exact_roi.width // 2)
-        cy = exact_roi.top + (exact_roi.height // 2)
-        lens_size = int(exact_roi.width * 2.5) 
+        # 1. 아이콘의 중심점 및 배율에 따른 렌즈 크기 계산 (tuple 및 Box 객체 모두 호환)
+        if isinstance(exact_roi, tuple):
+            cx = exact_roi[0] + (exact_roi[2] // 2)
+            cy = exact_roi[1] + (exact_roi[3] // 2)
+            lens_size = exact_roi[2] # get_dynamic_sector8_roi에서 이미 충분한 크기를 반환함
+        else:
+            cx = exact_roi.left + (exact_roi.width // 2)
+            cy = exact_roi.top + (exact_roi.height // 2)
+            # 아이콘 가로 길이의 약 3.5배를 렌즈 크기로 잡아 원형 바깥 게이지까지 넉넉하게 커버
+            lens_size = int(exact_roi.width * 3.5) 
         
+        # 렌즈가 너무 작아지는 현상 방지
+        if lens_size < 150: lens_size = 150
+
         region = (int(cx - lens_size//2), int(cy - lens_size//2), lens_size, lens_size)
 
         target_img = fast_cv_screenshot(region=region, gray=False)
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
         
-        # 2. [정밀 필터] 사진의 핫핑크/마젠타 색상 범위 (H: 140~180)
-        lower_pink = np.array([140, 90, 90])
-        upper_pink = np.array([180, 255, 255])
-        mask = cv2.inRange(img_hsv, lower_pink, upper_pink)
+        # 2. [정밀 필터] 첨부해주신 사진의 '핑크빛이 도는 붉은색(Magenta-Red)' 추출
+        # H(색상) 범위를 145~175 구간으로 맞추고, 형광빛을 띠므로 V(명도) 하한선을 150으로 높여 주변 배경과 분리합니다.
+        lower_pink_red = np.array([145, 100, 150])
+        upper_pink_red = np.array([175, 255, 255])
         
-        # 3. 전체 영역 중 핑크색 점유 비율 반환
+        mask = cv2.inRange(img_hsv, lower_pink_red, upper_pink_red)
+        
+        # 3. 전체 영역 중 게이지 점유 비율 반환
         return cv2.countNonZero(mask) / (target_img.shape[0] * target_img.shape[1])
     except:
         return 0.0
@@ -1311,9 +1321,10 @@ def fishing_bot(max_allowed_seconds):
                 # 낚시 게이지는 항상 캐릭터 주변(화면 정중앙)에 뜨므로, 무조건 화면 정중앙 400x400 영역만 보도록 렌즈를 박아버립니다.
                 gauge_roi = (CENTER_X - 200, CENTER_Y - 200, 400, 400)
 
-                # [위치/배율 최종 해결] 봇이 이미 성공적으로 찾고 있는 이미지 위치를 감지 영역으로 직결합니다.
-                ui_pos = safe_find_image('fishing_mode.png', 0.6)
-                gauge_roi = ui_pos if ui_pos else (CENTER_X - 200, CENTER_Y - 200, 400, 400)
+                # [위치/배율 최종 해결] 사용자의 요청에 따라 낚시 게이지가 화면 중앙 하단(약 85% 지점)에 위치하므로,
+                # 창 배율/해상도에 자동 대응하는 get_dynamic_sector8_roi()를 1순위 타겟으로 설정합니다.
+                dynamic_roi = get_dynamic_sector8_roi()
+                gauge_roi = dynamic_roi if dynamic_roi else (CENTER_X - 200, CENTER_Y + 200, 400, 400)
                 
                 def check_status():
                     nonlocal missing_ui_count
@@ -1352,31 +1363,31 @@ def fishing_bot(max_allowed_seconds):
                 while True: # bot_active로 스르륵 탈출 방지
                     if not bot_active: raise BotStopException() # 즉시 폭파
 
-                    # [동적 위치 갱신] 창 이동이나 배율 변경에 대응하기 위해 0.2초마다 위치를 새로 잡습니다.
+                    # [동적 위치 갱신] 창 이동이나 배율 변경에 대응하기 위해 0.2초마다 하단 중앙 위치를 새로 잡습니다.
                     if time.time() - last_ui_check > 0.2:
-                        current_pos = safe_find_image('fishing_mode.png', 0.6)
+                        current_pos = get_dynamic_sector8_roi()
                         if current_pos: gauge_roi = current_pos
 
-                    # 텐션 점유율(Ratio) 계산
-                    pink_ratio = get_tension_status(gauge_roi)
+                    # 붉은색 게이지 점유율(Ratio) 계산
+                    red_ratio = get_tension_status(gauge_roi)
                     
-                    # [디버그] 콘솔에서 수치가 변하는지 확인하세요. 핑크색일 때 수치가 0.03(3%) 이상 올라가야 합니다.
-                    sys.stdout.write(f"\r🔍 [감지 중] 임계점 비율: {pink_ratio*100:.1f}%   ")
+                    # [디버그] 콘솔에서 수치가 변하는지 확인하세요. 붉은색일 때 수치가 1.5% 이상 올라가야 합니다.
+                    sys.stdout.write(f"\r🔍 [감지 중] 임계점 비율: {red_ratio*100:.2f}%   ")
                     sys.stdout.flush()
 
                     # 2. 텐션 조절 로직 (상하한선 시스템 적용)
-                    # 1.5%와 3% 사이에서 갈팡질팡하지 않도록 '이중 문턱'을 세웁니다.
-                    danger_limit = 0.10  # 10% 이상 차오르면 "손 떼!(U)"
-                    safe_limit = 0.03    # 3% 이하로 떨어지면 "다시 당겨!(L)"
+                    # 얇은 원형 게이지 특성을 반영하여 감지 임계값을 대폭 하향 조정합니다.
+                    danger_limit = 0.015  # 1.5% 이상 붉은색 감지 시 위험! 즉시 "손 떼!(U)"
+                    safe_limit = 0.002    # 0.2% 이하로 붉은색이 사라지면 안전! "다시 당겨!(L)"
 
                     if time.time() - fight_start_time < 1.0:
                         if not is_pulling:
                             send_cmd('L'); is_pulling = True
                     else:
-                        if pink_ratio >= danger_limit:
+                        if red_ratio >= danger_limit:
                             if is_pulling:
                                 send_cmd('U'); is_pulling = False
-                        elif pink_ratio <= safe_limit:
+                        elif red_ratio <= safe_limit:
                             if not is_pulling:
                                 send_cmd('L'); is_pulling = True
                     

@@ -188,7 +188,7 @@ def save_stats_cache():
         save_data = stats.copy()
         save_data["last_report_date"] = last_report_date.strftime("%Y-%m-%d")
         
-        # [번쩍임 제거 패치] subprocess 실행 시 윈도우 콘솔창이 절대 뜨지 않도록 CREATE_NO_WINDOW 플래그 부여
+        # [번쩍임 제거 패치] 
         CREATE_NO_WINDOW = 0x08000000 
         
         if os.path.exists(STATS_CACHE_FILE):

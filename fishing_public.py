@@ -786,41 +786,24 @@ def get_dynamic_sector8_roi():
 
 def get_tension_status(exact_roi):
     """
-    [배율 대응형 정밀 인식] 릴 아이콘의 크기에 비례해서 렌즈 크기를 결정합니다.
-    창 배율이 바뀌어도 게이지 테두리를 항상 정확한 비율로 포착합니다.
+    [v8 하이퍼 옵티마이즈] 무거운 이미지 검색 로직을 전부 폐기하고, 
+    State 4 진입 시 딱 1번 찾아둔 110x110 좌표(exact_roi)만 빛의 속도로 캡처합니다.
     """
-    if not exact_roi: return 0.0
+    if not exact_roi: return 0
     try:
-        # 1. 아이콘의 중심점 및 배율에 따른 렌즈 크기 계산 (tuple 및 Box 객체 모두 호환)
-        if isinstance(exact_roi, tuple):
-            cx = exact_roi[0] + (exact_roi[2] // 2)
-            cy = exact_roi[1] + (exact_roi[3] // 2)
-            lens_size = exact_roi[2] # get_dynamic_sector8_roi에서 이미 충분한 크기를 반환함
-        else:
-            cx = exact_roi.left + (exact_roi.width // 2)
-            cy = exact_roi.top + (exact_roi.height // 2)
-            # 아이콘 가로 길이의 약 3.5배를 렌즈 크기로 잡아 원형 바깥 게이지까지 넉넉하게 커버
-            lens_size = int(exact_roi.width * 3.5) 
-        
-        # 렌즈가 너무 작아지는 현상 방지
-        if lens_size < 150: lens_size = 150
-
-        region = (int(cx - lens_size//2), int(cy - lens_size//2), lens_size, lens_size)
-
-        target_img = fast_cv_screenshot(region=region, gray=False)
+        # exact_roi는 이제 무조건 (x, y, 110, 110) 튜플 형태로 들어옵니다.
+        target_img = fast_cv_screenshot(region=exact_roi, gray=False)
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
         
-        # 2. [정밀 필터] 첨부해주신 사진의 '핑크빛이 도는 붉은색(Magenta-Red)' 추출
-        # H(색상) 범위를 145~175 구간으로 맞추고, 형광빛을 띠므로 V(명도) 하한선을 150으로 높여 주변 배경과 분리합니다.
+        # 앞서 찾은 최적의 핑크-레드 필터 적용
         lower_pink_red = np.array([145, 100, 150])
         upper_pink_red = np.array([175, 255, 255])
-        
         mask = cv2.inRange(img_hsv, lower_pink_red, upper_pink_red)
         
-        # 3. 전체 영역 중 게이지 점유 비율 반환
-        return cv2.countNonZero(mask) / (target_img.shape[0] * target_img.shape[1])
+        # [핵심] 퍼센트(비율)가 아닌 '순수 붉은색 픽셀 개수(정수)'를 반환합니다.
+        return cv2.countNonZero(mask)
     except:
-        return 0.0
+        return 0
 
 def force_exit():
     global run_start_time

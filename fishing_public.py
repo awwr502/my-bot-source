@@ -1284,7 +1284,7 @@ def fishing_bot(max_allowed_seconds):
                     cy = ui_pos.top + ui_pos.height // 2
                     x1 = max(0, cx - 200)
                     y1 = max(0, cy - 200)
-                    gauge_roi = (int(x1), int(y1), 400, 400)
+                    gauge_roi = (int(x1), int(y1), 160, 160)
                 else:
                     gauge_roi = (CENTER_X - 200, CENTER_Y - 200, 400, 400)
                 

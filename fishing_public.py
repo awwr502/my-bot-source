@@ -1392,7 +1392,10 @@ def fishing_bot(max_allowed_seconds):
                 if not bot_active: raise BotStopException()
 
                 time.sleep(0.2)
-                missing_ui_count = 0
+                missing_ui_count = 0 
+                
+                # [핵심 1] 렌즈 고정: 파이팅 시작 시 게이지의 정확한 중심점을 찾아 좌표를 고정합니다.
+                ui_pos = safe_find_image('fishing_mode.png', 0.6)
                 
                 # [해결 핵심] 배율(Scale) 호환성 확보!
                 # 구매자의 창 배율이 커지면 게이지도 커지므로, 110x110 고정 상자도 비율에 맞춰 키워줘야 게이지 밖으로 안 벗어납니다.
@@ -1446,7 +1449,7 @@ def fishing_bot(max_allowed_seconds):
                     
                     return "KEEP"
 
-                bprint("  > [파이팅] 110x110 고정 렌즈 추적 시작")
+                bprint("  > [AI 파이팅] 고정 렌즈 추적 시작 (동적 배율+사용자 로직 통합)")
                 is_pulling = False 
                 last_ui_check = time.time()
                 
@@ -1455,11 +1458,11 @@ def fishing_bot(max_allowed_seconds):
                 while True: # bot_active로 스르륵 탈출 방지
                     if not bot_active: raise BotStopException() # 즉시 폭파
 
-                    # 1. [연산 최적화] 매번 찾지 않고, 110x110 초소형 영역만 0.001초 만에 스캔
+                    # 1. [연산 최적화] 매번 찾지 않고, 초소형 영역만 0.001초 만에 스캔
                     red_count = get_tension_status(gauge_roi)
                     
                     # [디버그] 콘솔에서 수치가 15 이상 올라가는지 직관적으로 확인
-                    sys.stdout.write(f"\r🔍 [감지 중] 임계점 : {red_count} (임계점: 15)   ")
+                    sys.stdout.write(f"\r🔍 [감지 중] 붉은 픽셀 수: {red_count} (임계점: 15)   ")
                     sys.stdout.flush()
                     
                     # 파이팅 진입 직후 1초 동안은 무조건 당김 (잔상 무시)

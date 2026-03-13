@@ -83,10 +83,7 @@ try:
         if TELEGRAM_TOKEN.strip() and CHAT_ID.strip():
             USE_TELEGRAM = True
 except FileNotFoundError:
-    print("🚫텔레그램 원격 봇 이용이 불가능한 오프라인 모드입니다.🚫")
-    print("⬇️⬇️⬇️텔레그램 봇 이용문의는 판매자에게 연락 부탁드립니다.⬇️⬇️⬇️")
-    # 마지막 줄 끝에 \n을 붙여서 시스템(아두이노) 연결 문구와 한 줄 간격을 둡니다.
-    print("📢카카오톡 오픈채팅: https://open.kakao.com/o/sB6Ca9ki\n")
+    pass # 출력 순서를 미루기 위해 맨 위에서는 아무것도 띄우지 않고 조용히 넘어갑니다.
 # =========================================================================
 
 # --- 블랙박스 링 버퍼 시스템 ---
@@ -855,11 +852,17 @@ def fishing_bot(max_allowed_seconds):
 
     # 텔레그램 모드가 켜져 있을 때만 원격 제어 안내 간판을 띄웁니다.
     if USE_TELEGRAM:
-        bprint(f"\n>>> 원격 제어 수신 대기 시작 (명령어: {CMD_PREFIX}시작, {CMD_PREFIX}정지, {CMD_PREFIX}종료, {CMD_PREFIX}보고서, {CMD_PREFIX}상태) <<<")
+        bprint(f"\n>>> 원격 제어 수신 대기 시작 (명령어: {CMD_PREFIX}시작, {CMD_PREFIX}정지, {CMD_PREFIX}종료, {CMD_PREFIX}보고서, {CMD_PREFIX}상태) <<<\n")
+    else:
+        # [출력 순서 변경] 캐싱이 완전히 끝난 직후 오프라인 홍보 문구를 띄웁니다.
+        # 첫 줄 앞과 마지막 줄 뒤에 \n을 넣어서 위아래로 깔끔하게 한 줄씩 간격을 벌립니다.
+        print("\n🚫텔레그램 원격 봇 이용이 불가능한 오프라인 모드입니다.🚫")
+        print("⬇️⬇️⬇️텔레그램 봇 이용문의는 판매자에게 연락 부탁드립니다.⬇️⬇️⬇️")
+        print("📢카카오톡 오픈채팅: https://open.kakao.com/o/sB6Ca9ki\n")
     
     state = -1
-    # 로켓 이모지 앞에 \n(엔터키)을 추가하여 위쪽 문구와 한 줄 띄워지도록 틈을 만듭니다.
-    bprint("\n🚀낚시 매크로 V2.4 가동 시작🚀")
+    # 위에서 이미 \n으로 예쁘게 띄워두었으므로, 여기서는 \n을 제거해 줍니다.
+    bprint("🚀낚시 매크로 V2.4 가동 시작🚀")
     bprint("(작동: ] , 정지: [ )")
 
     cast_fail_count = 0 # 연속 캐스팅 실패 감지용 카운터

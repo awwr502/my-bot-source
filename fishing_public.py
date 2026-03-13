@@ -753,33 +753,47 @@ def align_view_by_anchor(anchor_img):
             continue
     return False
 
+def get_dynamic_sector8_roi():
+    """
+    [배율/위치 대응] 활성화된 게임 창을 찾아 9등분 중 8번(하단 중앙) 좌표를 실시간 계산합니다.
+    """
+    import pygetwindow as gw
+    try:
+        # 'One 자동낚시 봇'이 아니라 실제 게임 창 제목을 입력해야 합니다 (예: "GameTitle")
+        # 만약 창 제목을 정확히 모른다면 현재 활성화된 창(getActiveWindow)을 사용합니다.
+        win = gw.getActiveWindow() 
+        if not win: return None
+        
+        # 창의 실제 위치와 크기 (배율/이동 반영됨)
+        w, h = win.width, win.height
+        left, top = win.left, win.top
+        
+        # 8번 섹터 중심점 (가로 50%, 세로 83% 지점)
+        target_x = left + (w // 2)
+        target_y = top + int(h * 0.83)
+        
+        # 중심점 기준 400x400 ROI 생성
+        return (int(target_x - 200), int(target_y - 200), 400, 400)
+    except:
+        return None
+
 def get_tension_status(exact_roi):
     """
-    [완전 고정 타겟팅] 화면 중앙의 고정된 영역에서 사진과 동일한 핫핑크 색상만 추출합니다.
+    [정밀 마젠타 필터] 실시간으로 계산된 ROI 영역에서 핫핑크 픽셀만 추출합니다.
     """
     if not exact_roi: return 0
     try:
+        # mss는 전체 화면 기준 좌표를 받으므로 계산된 exact_roi를 그대로 넣습니다.
         target_img = fast_cv_screenshot(region=exact_roi, gray=False)
-        
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
         
-        # [수정] 사진에서 추출한 정확한 '핫핑크/마젠타' 계열의 붉은색 프로필
-        # 일반적인 순수 빨간색이 아니라 푸른빛이 도는 핑크레드(H: 155~180) 영역입니다.
-        lower_pink = np.array([155, 100, 150])
+        # 사진 분석 결과: 핫핑크/마젠타 (H: 150~180)
+        lower_pink = np.array([150, 100, 100])
         upper_pink = np.array([180, 255, 255])
+        mask = cv2.inRange(img_hsv, lower_pink, upper_pink)
         
-        # 순수 빨간색(H: 0~5) 영역 (혹시 모를 그라데이션 대비)
-        lower_red = np.array([0, 100, 150])
-        upper_red = np.array([5, 255, 255])
-        
-        mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
-        mask_red = cv2.inRange(img_hsv, lower_red, upper_red)
-        mask = cv2.bitwise_or(mask_pink, mask_red)
-        
-        red_pixels = cv2.countNonZero(mask)
-        return red_pixels
-        
-    except Exception as e:
+        return cv2.countNonZero(mask)
+    except:
         return 0
 
 def force_exit():
@@ -1280,6 +1294,9 @@ def fishing_bot(max_allowed_seconds):
                 # [수정] AI 이미지 인식(fishing_mode.png)이 엉뚱한 곳을 잡는 현상 원천 차단.
                 # 낚시 게이지는 항상 캐릭터 주변(화면 정중앙)에 뜨므로, 무조건 화면 정중앙 400x400 영역만 보도록 렌즈를 박아버립니다.
                 gauge_roi = (CENTER_X - 200, CENTER_Y - 200, 400, 400)
+
+                # 진입 시점에 한 번 창 위치를 파악합니다.
+                gauge_roi = get_dynamic_sector8_roi()
                 
                 def check_status():
                     nonlocal missing_ui_count
@@ -1320,6 +1337,10 @@ def fishing_bot(max_allowed_seconds):
 
                     # 1. 중앙 400x400 영역에서 핫핑크 픽셀 추출
                     red_count = get_tension_status(gauge_roi)
+
+                    # [실시간 추적] 루프마다 8번 섹터 위치를 재계산하여 창 이동에 대응합니다.
+                    current_roi = get_dynamic_sector8_roi()
+                    red_count = get_tension_status(current_roi)
                     
                     # 1초 무조건 당기기 로직 (원상 복구)
                     if time.time() - fight_start_time < 1.0:

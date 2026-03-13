@@ -86,31 +86,17 @@ except FileNotFoundError:
     pass # 출력 순서를 미루기 위해 맨 위에서는 아무것도 띄우지 않고 조용히 넘어갑니다.
 # =========================================================================
 
-# --- 블랙박스 링 버퍼 시스템 ---
-blackbox_buffer = deque(maxlen=20) # 항상 최신 20개의 로그만 기억
-
+# --- 출력 시스템 (배포용: 블랙박스 제거 버전) ---
 def bprint(msg):
-    """일반 콘솔 출력과 동시에 블랙박스에 시간을 찍어 기록합니다."""
-    # [타이머 충돌 방지] 맨 밑에 깔린 타이머 글자를 살짝 지우고 로그를 띄운 뒤, 타이머가 다시 써지게 만듭니다.
-    sys.stdout.write('\r' + ' ' * 50 + '\r')
+    """콘솔 출력 및 타이머 UI 충돌 방지만 수행합니다."""
+    # [타이머 충돌 방지] 하단 실시간 타이머 글자를 지우고 로그를 출력합니다.
+    # 공백 80칸을 밀어주어 타이머 잔상을 완벽히 제거합니다.
+    sys.stdout.write('\r' + ' ' * 80 + '\r')
     print(msg)
-    time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    blackbox_buffer.append(f"[{time_str}] {msg}")
 
 def dump_blackbox_log(reason):
-    """오류 발생 시 기억하고 있던 20개의 로그를 파일로 영구 보존합니다."""
-    try:
-        time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = "fishing_blackbox.txt"
-        with open(filename, "a", encoding="utf-8") as f:
-            f.write(f"\n{'='*50}\n")
-            f.write(f"🛑 [BLACKBOX DUMP] 발생 원인: {reason} | 시간: {time_str}\n")
-            f.write(f"{'='*50}\n")
-            for log in blackbox_buffer:
-                f.write(log + "\n")
-        bprint(f"  > [Blackbox] 오류 전후 로그 20개가 '{filename}'에 보존되었습니다.")
-    except Exception as e:
-        print(f"블랙박스 저장 실패: {e}")
+    """배포용에서는 아무 기록도 하지 않습니다."""
+    pass 
 
 # 즉각 정지를 위한 커스텀 예외 클래스
 class BotStopException(Exception): pass

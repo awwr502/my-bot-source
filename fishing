@@ -816,24 +816,18 @@ def get_tension_status(exact_roi):
     """
     if not exact_roi: return 0
     try:
-        # 110x110 초소형 캡처 전용으로 속도 극대화 (약 0.001~0.005초 소요)
+        # exact_roi는 이제 무조건 (x, y, 110, 110) 튜플 형태로 들어옵니다.
         target_img = fast_cv_screenshot(region=exact_roi, gray=False)
-        
-        # 명도와 채도를 엄격하게 깎아 핫핑크/레드만 반응하도록 유지 (fast_cv_screenshot은 BGR 반환이므로 BGR2HSV 사용)
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
-        lower_red1 = np.array([0, 145, 145])
-        upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([165, 160, 160])
-        upper_red2 = np.array([180, 255, 255])
         
-        mask1 = cv2.inRange(img_hsv, lower_red1, upper_red1)
-        mask2 = cv2.inRange(img_hsv, lower_red2, upper_red2)
-        mask = cv2.bitwise_or(mask1, mask2)
+        # 앞서 찾은 최적의 핑크-레드 필터 적용
+        lower_pink_red = np.array([145, 100, 150])
+        upper_pink_red = np.array([175, 255, 255])
+        mask = cv2.inRange(img_hsv, lower_pink_red, upper_pink_red)
         
-        red_pixels = cv2.countNonZero(mask)
-        return red_pixels
-        
-    except Exception as e:
+        # [핵심] 퍼센트(비율)가 아닌 '순수 붉은색 픽셀 개수(정수)'를 반환합니다.
+        return cv2.countNonZero(mask)
+    except:
         return 0
 
 def force_exit():
@@ -1298,15 +1292,24 @@ def fishing_bot(max_allowed_seconds):
                 # [핵심 1] 렌즈 고정: 파이팅 시작 시 게이지의 정확한 중심점을 단 한 번만 찾아 좌표를 고정합니다.
                 gauge_roi = None
                 ui_pos = safe_find_image('fishing_mode.png', 0.6)
+                
                 if ui_pos:
-                    # ui_pos는 Box(left, top, width, height) 형태
+                    # 1순위: fishing_mode.png 글씨를 찾았을 때의 중앙값
                     cx = ui_pos.left + ui_pos.width // 2
                     cy = ui_pos.top + ui_pos.height // 2
-                    x1 = max(0, cx - 55)
-                    y1 = max(0, cy - 55)
-                    gauge_roi = (int(x1), int(y1), 110, 110)
                 else:
-                    gauge_roi = (CENTER_X - 55, CENTER_Y - 55, 110, 110) # 실패 시 화면 정중앙
+                    # 2순위: 못 찾았을 경우 동적 창 배율(Sector 8) 엔진으로 하단 중앙 백업 계산
+                    dyn_roi = get_dynamic_sector8_roi()
+                    if dyn_roi:
+                        cx = dyn_roi[0] + dyn_roi[2] // 2
+                        cy = dyn_roi[1] + dyn_roi[3] // 2
+                    else:
+                        cx, cy = CENTER_X, CENTER_Y
+                
+                # 계산된 중심점 기준, 사용자의 완벽한 '110x110 고정 렌즈' 장착
+                x1 = max(0, cx - 55)
+                y1 = max(0, cy - 55)
+                gauge_roi = (int(x1), int(y1), 110, 110)
                 
                 def check_status():
                     nonlocal missing_ui_count
@@ -1337,7 +1340,7 @@ def fishing_bot(max_allowed_seconds):
                     
                     return "KEEP"
 
-                bprint("  > [AI 파이팅] 110x110 고정 렌즈 추적 시작 (프레임 널뛰기 방지 패치)")
+                bprint("  > [AI 파이팅] 110x110 고정 렌즈 추적 시작 (동적 배율+사용자 로직 통합)")
                 is_pulling = False 
                 last_ui_check = time.time()
                 
@@ -1349,27 +1352,30 @@ def fishing_bot(max_allowed_seconds):
                     # 1. [연산 최적화] 매번 찾지 않고, 110x110 초소형 영역만 0.001초 만에 스캔
                     red_count = get_tension_status(gauge_roi)
                     
-                    # 파이팅 진입 직후 1.5초 동안은 애니메이션 붉은 잔상을 무시하고 무조건 당김!
-                    if time.time() - fight_start_time < 1:
+                    # [디버그] 콘솔에서 수치가 15 이상 올라가는지 직관적으로 확인
+                    sys.stdout.write(f"\r🔍 [감지 중] 붉은 픽셀 수: {red_count} (임계점: 15)   ")
+                    sys.stdout.flush()
+                    
+                    # 파이팅 진입 직후 1초 동안은 무조건 당김 (잔상 무시)
+                    if time.time() - fight_start_time < 1.0:
                         if not is_pulling:
                             send_cmd('L')
                             is_pulling = True
                         time.sleep(0.01)
                     else:
-                        # 2. 반응 임계값 15픽셀 (1초 이후 정상 텐션 제어 시작)
+                        # 2. 반응 임계값 15픽셀 (절대값 기반 초고속 반응)
                         if red_count >= 15:
                             if is_pulling:
                                 send_cmd('U') 
                                 is_pulling = False
-                            time.sleep(0.01) # 식힐 때 확실히 대기 (잔상 방지)
+                            time.sleep(0.01) # 식힐 때 확실히 대기
                         else:
                             if not is_pulling:
                                 send_cmd('L') 
                                 is_pulling = True
-                            time.sleep(0.01) # 연산 딜레이 최소화 (초고속 반응 유지)
+                            time.sleep(0.01)
                     
-                    # [핵심 2] 랜덤 렉의 진짜 원인 해결 (병목 제거)
-                    # 전체 화면을 뒤지는 무거운 check_status()를 매 턴마다 실행하지 않고, 0.1초에 1번만 확인합니다.
+                    # [핵심 2] 랜덤 렉 방지. 전체 화면 스캔은 0.1초에 1번만
                     if time.time() - last_ui_check > 0.1:
                         res = check_status()
                         last_ui_check = time.time()
@@ -1379,7 +1385,7 @@ def fishing_bot(max_allowed_seconds):
                         if res == "RESET": 
                             send_cmd('U'); state = 1; break
                         if res == "QTE": 
-                            bprint("  > [QTE] 대응 완료. 0.01초 대기 후 텐션 조절 재개")
+                            bprint("\n  > [QTE] 대응 완료. 0.01초 대기 후 텐션 조절 재개")
                             is_pulling = False
                             time.sleep(0.01)
                             continue

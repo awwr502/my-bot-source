@@ -903,7 +903,8 @@ def fishing_bot(max_allowed_seconds):
                 sys.stdout.write(f"\r⏳ 남은 시간: {h}시간 {m}분 {s}초{' '*20}")
             
             sys.stdout.flush()
-            time.sleep(0.5) # 0.5초마다 즉각 갱신
+            # [스레드 폭파 버그 픽스] 메인 봇용 폭탄이 아닌 순정 수면 함수를 사용하여 백그라운드 자폭을 막습니다.
+            original_sleep(0.5)
             
     threading.Thread(target=timer_overlay, daemon=True).start()
 

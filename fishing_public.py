@@ -763,9 +763,12 @@ def get_tension_status(exact_roi):
         
         # 임계 도달 시 변하는 '붉은색'만 정밀하게 타겟팅하여 원상 복구
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
-        lower_red1 = np.array([0, 145, 145])
+        
+        # [수정] 채도(S)와 명도(V) 하한선을 145 -> 200으로 극단적으로 높임.
+        # 배경의 탁한 빨간색은 모두 무시하고, 빛나는 UI 붉은색만 엄격하게 잡습니다.
+        lower_red1 = np.array([0, 200, 200])
         upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([165, 160, 160])
+        lower_red2 = np.array([170, 200, 200])
         upper_red2 = np.array([180, 255, 255])
         
         mask1 = cv2.inRange(img_hsv, lower_red1, upper_red1)
@@ -1280,12 +1283,12 @@ def fishing_bot(max_allowed_seconds):
                 if ui_pos:
                     cx = ui_pos.left + ui_pos.width // 2
                     cy = ui_pos.top + ui_pos.height // 2
-                    # [수정] 400x400은 노이즈가 너무 심함. 안정적인 160x160으로 타협
-                    x1 = max(0, cx - 80)
-                    y1 = max(0, cy - 80)
-                    gauge_roi = (int(x1), int(y1), 160, 160)
+                    # 원형 테두리를 완전히 덮기 위해 다시 400x400으로 확장합니다.
+                    x1 = max(0, cx - 200)
+                    y1 = max(0, cy - 200)
+                    gauge_roi = (int(x1), int(y1), 400, 400)
                 else:
-                    gauge_roi = (CENTER_X - 80, CENTER_Y - 80, 160, 160) # 실패 시 화면 정중앙
+                    gauge_roi = (CENTER_X - 200, CENTER_Y - 200, 400, 400) # 실패 시 화면 정중앙
                 
                 def check_status():
                     nonlocal missing_ui_count
@@ -1334,8 +1337,8 @@ def fishing_bot(max_allowed_seconds):
                             is_pulling = True
                         time.sleep(0.01)
                     else:
-                        # [오리지널 반응 임계값] 15픽셀
-                        if red_count >= 40:
+                        # 렌즈는 400x400으로 넓혔지만, 엄격한 색상 필터를 적용했으므로 임계값은 30으로 세팅
+                        if red_count >= 30:
                             if is_pulling:
                                 send_cmd('U') 
                                 is_pulling = False

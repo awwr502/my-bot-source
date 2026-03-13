@@ -648,7 +648,13 @@ def safe_find_image(img_path, conf=0.6, region=None):
             res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             
-            if max_val >= conf:
+            # [오탐(False Positive) 완벽 차단 로직]
+            # 크기를 억지로 줄여서 비교할 때는 흐릿해진 픽셀 때문에 아무 배경이나 정답으로 착각하는 '오탐'이 발생합니다.
+            # 따라서 '이미 검증된 원래 비율(last_scale)'일 때는 요청한 conf를 그대로 적용하되,
+            # '새로운 비율'을 찔러볼 때는 엉뚱한 배경을 잡지 못하게 무조건 0.85 이상의 깐깐한 잣대를 들이댑니다!
+            required_conf = conf if scale == last_scale else max(conf, 0.85)
+            
+            if max_val >= required_conf:
                 IMAGE_SCALE_CACHE[img_path] = scale # 다음 턴을 위해 성공한 창 크기 비율을 두뇌에 기억!
                 real_x = max_loc[0] + target_monitor["left"]
                 real_y = max_loc[1] + target_monitor["top"]
@@ -680,11 +686,19 @@ def find_anchor_final(target_img_path):
         for scale in unique_scales:
             w, h = int(template.shape[1] * scale), int(template.shape[0] * scale)
             if w < 10 or h < 10: continue
-            resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
+            
+            if scale == 1.0:
+                resized = template
+            else:
+                resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
+                
             res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-            if max_val > 0.65 and max_val > best_score:
+            # 앵커(닻) 역시 다른 스케일을 찔러볼 때는 허공을 앵커로 잡지 않도록 0.85의 엄격한 잣대를 적용합니다.
+            req_conf = 0.65 if scale == last_success_scale else 0.85
+
+            if max_val > req_conf and max_val > best_score:
                 best_score = max_val
                 last_success_scale = scale
                 
@@ -1118,54 +1132,28 @@ def fishing_bot(max_allowed_seconds):
                 found_target = False
                 target_name = ""
 
-                # [최적화 핵심] 루프 진입 전에 이미지를 딱 한 번만 미리 읽어옵니다. 
-                # 목표 어종 발견 속도는 더 빨라지고, 특히 10번을 다 돌아야 하는 잡어 판독 속도가 수 배 이상 쾌적해집니다.
-                template_j = cv2.imread('jellyfish.png', cv2.IMREAD_GRAYSCALE)
-                template_e = cv2.imread('eel.png', cv2.IMREAD_GRAYSCALE)
-                
-                # 잡어(Early Rejection) 판독용 이미지 로드
-                template_n1 = cv2.imread('none1.png', cv2.IMREAD_GRAYSCALE)
-                template_n2 = cv2.imread('none2.png', cv2.IMREAD_GRAYSCALE)
-                template_n3 = cv2.imread('none3.png', cv2.IMREAD_GRAYSCALE)
-
-                # [v9 판독 안정성 강화] UI가 뜨는 트랜지션 시간(애니메이션 딜레이)을 고려하여
-                # 최대 대기 시간을 0.5초(10회)에서 2.0초(40회)로 대폭 늘려 어종을 놓치는 현상을 차단합니다.
+                # [배포용 수정] 낡은 하드코딩 방식을 버리고, 해상도 자동 조절이 완벽히 적용된 safe_find_image 엔진에 판독을 맡깁니다.
                 for i in range(60):
                     if keyboard.is_pressed(']'): break
 
-                    # [초고속 파이프라인] PIL 객체를 거치지 않고 mss 메모리에서 OpenCV 배열로 직접 꽂아넣음
-                    sct_img = sct.grab(sct.monitors[1])
-                    screen_np = np.array(sct_img)
-                    # mss는 기본적으로 BGRA를 반환하므로 COLOR_BGRA2GRAY를 사용하여 즉시 흑백 변환
-                    screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
-
                     # 1. 해파리 고속 판별
-                    if template_j is not None:
-                        res_j = cv2.matchTemplate(screen_gray, template_j, cv2.TM_CCOEFF_NORMED)
-                        if cv2.minMaxLoc(res_j)[1] >= 0.6:
-                            found_target = True; target_name = "해파리"; break
+                    if safe_find_image('jellyfish.png', 0.6):
+                        found_target = True; target_name = "해파리"; break
 
                     # 2. 뱀장어 고속 판별
-                    if template_e is not None:
-                        res_e = cv2.matchTemplate(screen_gray, template_e, cv2.TM_CCOEFF_NORMED)
-                        if cv2.minMaxLoc(res_e)[1] >= 0.6:
-                            found_target = True; target_name = "전기뱀장어"; break
+                    if safe_find_image('eel.png', 0.6):
+                        found_target = True; target_name = "전기뱀장어"; break
                     
                     # 3. 등록된 잡어 고속 판별 (조기 차단)
-                    # 대상 어종이 안 보일 때, '확실한 잡어' UI가 화면에 떴다면 40번을 다 기다리지 않고 즉시 끊습니다.
                     found_trash = False
-                    for t_none in [template_n1, template_n2, template_n3]:
-                        if t_none is not None:
-                            res_n = cv2.matchTemplate(screen_gray, t_none, cv2.TM_CCOEFF_NORMED)
-                            if cv2.minMaxLoc(res_n)[1] >= 0.6:
-                                found_trash = True
-                                break
+                    for trash_img in ['none1.png', 'none2.png', 'none3.png']:
+                        if safe_find_image(trash_img, 0.6):
+                            found_trash = True; break
                     
                     if found_trash:
                         bprint("  > [잡어] 등록된 잡어 UI 확인 -> 즉시 줄 끊기 진입")
-                        break # 타겟을 못 찾은 상태(found_target=False)로 즉시 강제 탈출함
+                        break
 
-                    # 아무 UI도 아직 안 떴다면 (애니메이션 딜레이 중) 0.05초 대기 후 다시 화면 캡처
                     time.sleep(0.05)
 
                 if found_target:
@@ -1226,18 +1214,29 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.2)
                 missing_ui_count = 0 
                 
-                # [핵심 1] 렌즈 고정: 파이팅 시작 시 게이지의 정확한 중심점을 단 한 번만 찾아 좌표를 고정합니다.
+                # [핵심 1] 렌즈 고정 및 동적 스케일링 연산
                 gauge_roi = None
+                dynamic_threshold = 15 # 기본 임계값
                 ui_pos = safe_find_image('fishing_mode.png', 0.6)
+                
                 if ui_pos:
-                    # ui_pos는 Box(left, top, width, height) 형태
+                    # 현재 모니터 해상도에 맞게 스케일링된 비율(0.8배, 1.2배 등)을 가져옵니다.
+                    current_scale = IMAGE_SCALE_CACHE.get('fishing_mode.png', 1.0)
+                    
                     cx = ui_pos.left + ui_pos.width // 2
                     cy = ui_pos.top + ui_pos.height // 2
-                    x1 = max(0, cx - 55)
-                    y1 = max(0, cy - 55)
-                    gauge_roi = (int(x1), int(y1), 110, 110)
+                    
+                    # 110x110 박스도 현재 해상도 비율에 맞춰서 줄이거나 늘립니다. (예: 4K면 200x200으로 커짐)
+                    half_size = int(55 * current_scale)
+                    full_size = half_size * 2
+                    x1 = max(0, cx - half_size)
+                    y1 = max(0, cy - half_size)
+                    gauge_roi = (int(x1), int(y1), full_size, full_size)
+                    
+                    # 빨간색 픽셀 임계값(15)도 해상도 면적(제곱)에 비례하여 동적으로 뻥튀기합니다!
+                    dynamic_threshold = max(5, int(15 * (current_scale ** 2)))
                 else:
-                    gauge_roi = (CENTER_X - 55, CENTER_Y - 55, 110, 110) # 실패 시 화면 정중앙
+                    gauge_roi = (CENTER_X - 55, CENTER_Y - 55, 110, 110)
                 
                 def check_status():
                     nonlocal missing_ui_count
@@ -1287,8 +1286,8 @@ def fishing_bot(max_allowed_seconds):
                             is_pulling = True
                         time.sleep(0.01)
                     else:
-                        # 2. 반응 임계값 15픽셀 (1초 이후 정상 텐션 제어 시작)
-                        if red_count >= 15:
+                        # 2. 동적 반응 임계값 적용 (해상도에 맞춰 조절된 픽셀 수 사용)
+                        if red_count >= dynamic_threshold:
                             if is_pulling:
                                 send_cmd('U') 
                                 is_pulling = False

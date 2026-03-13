@@ -811,24 +811,34 @@ def align_view_by_anchor(anchor_img):
 
 def get_tension_status(exact_roi):
     """
-    [v8 하이퍼 옵티마이즈] 무거운 이미지 검색 로직을 전부 폐기하고, 
-    State 4 진입 시 딱 1번 찾아둔 110x110 좌표(exact_roi)만 빛의 속도로 캡처합니다.
+    [렌즈 확장형 인식] 릴 아이콘(exact_roi)의 중심을 기준으로 
+    주변 테두리(250x250)를 캡처하여 사진 속 핫핑크 비율을 계산합니다.
     """
-    if not exact_roi: return 0
+    if not exact_roi: return 0.0
     try:
-        # exact_roi는 이제 무조건 (x, y, 110, 110) 튜플 형태로 들어옵니다.
-        target_img = fast_cv_screenshot(region=exact_roi, gray=False)
+        # 1. 릴 아이콘의 실제 중심점 계산
+        cx = exact_roi.left + (exact_roi.width // 2)
+        cy = exact_roi.top + (exact_roi.height // 2)
+        
+        # 2. 아이콘 바깥쪽 원형 게이지를 다 담기 위해 250x250으로 렌즈 확장
+        lens_size = 250
+        region = (int(cx - lens_size//2), int(cy - lens_size//2), lens_size, lens_size)
+
+        # 3. 확장된 영역 캡처 및 HSV 변환
+        target_img = fast_cv_screenshot(region=region, gray=False)
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
         
-        # 앞서 찾은 최적의 핑크-레드 필터 적용
-        lower_pink_red = np.array([145, 100, 150])
-        upper_pink_red = np.array([175, 255, 255])
-        mask = cv2.inRange(img_hsv, lower_pink_red, upper_pink_red)
+        # 4. [정밀 타겟팅] 사진의 핫핑크/마젠타 색상 범위 (H: 140~180)
+        lower_pink = np.array([140, 100, 100])
+        upper_pink = np.array([180, 255, 255])
+        mask = cv2.inRange(img_hsv, lower_pink, upper_pink)
         
-        # [핵심] 퍼센트(비율)가 아닌 '순수 붉은색 픽셀 개수(정수)'를 반환합니다.
-        return cv2.countNonZero(mask)
-    except:
-        return 0
+        # 5. 전체 렌즈 영역 중 핑크색 픽셀의 점유 비율 반환
+        ratio = cv2.countNonZero(mask) / (target_img.shape[0] * target_img.shape[1])
+        return ratio
+        
+    except Exception as e:
+        return 0.0
 
 def force_exit():
     global run_start_time
@@ -1289,29 +1299,18 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.2)
                 missing_ui_count = 0 
                 
-                # [개인용 코드 완벽 이식] 
-                # 거대한 동적 렌즈 갱신과 0.015 비율 연산을 완전히 폐기하고, 
-                # 가장 완벽하게 작동했던 '110x110 고정 렌즈' + '15픽셀 절대값' 로직으로 교체합니다.
-
+                # [위치/배율 통합 해결] 봇이 이미 찾고 있는 아이콘 위치를 그대로 렌즈의 기점으로 삼습니다.
                 ui_pos = safe_find_image('fishing_mode.png', 0.6)
-                
+                gauge_roi = ui_pos # 찾은 Box 객체 자체를 넘겨줍니다.
                 if ui_pos:
-                    # 1순위: fishing_mode.png 글씨 중앙값
+                    # ui_pos는 Box(left, top, width, height) 형태
                     cx = ui_pos.left + ui_pos.width // 2
                     cy = ui_pos.top + ui_pos.height // 2
+                    x1 = max(0, cx - 55)
+                    y1 = max(0, cy - 55)
+                    gauge_roi = (int(x1), int(y1), 110, 110)
                 else:
-                    # 2순위: 못 찾았을 경우 동적 창 배율(Sector 8) 엔진으로 하단 중앙 백업 계산
-                    dyn_roi = get_dynamic_sector8_roi()
-                    if dyn_roi:
-                        cx = dyn_roi[0] + dyn_roi[2] // 2
-                        cy = dyn_roi[1] + dyn_roi[3] // 2
-                    else:
-                        cx, cy = CENTER_X, CENTER_Y
-                
-                # 계산된 중심점 기준, 개인용 코드와 동일한 '110x110 고정 렌즈' 장착
-                x1 = max(0, cx - 55)
-                y1 = max(0, cy - 55)
-                gauge_roi = (int(x1), int(y1), 110, 110)
+                    gauge_roi = (CENTER_X - 55, CENTER_Y - 55, 110, 110) # 실패 시 화면 정중앙
                 
                 def check_status():
                     nonlocal missing_ui_count
@@ -1332,6 +1331,7 @@ def fishing_bot(max_allowed_seconds):
 
                     if not safe_find_image('fishing_mode.png', 0.6): 
                         missing_ui_count += 1
+
                         if missing_ui_count >= 50: 
                             bprint("  > [유실] 낚시 UI가 장시간 보이지 않음 -> 초기화")
                             dump_blackbox_log("파이팅중_UI장시간유실")
@@ -1341,42 +1341,48 @@ def fishing_bot(max_allowed_seconds):
                     
                     return "KEEP"
 
-                bprint("  > [AI 파이팅] 110x110 고정 렌즈 추적 시작 (개인용 로직 완벽 통합)")
+                bprint("  > [AI 파이팅] 110x110 고정 렌즈 추적 시작 (프레임 널뛰기 방지 패치)")
                 is_pulling = False 
                 last_ui_check = time.time()
-                fight_start_time = time.time() 
                 
-                while True: 
-                    if not bot_active: raise BotStopException()
+                fight_start_time = time.time() # 파이팅 진입 시간 기록
+                
+                while True: # bot_active로 스르륵 탈출 방지
+                    if not bot_active: raise BotStopException() # 즉시 폭파
 
-                    # 1. 0.2초마다 렌즈를 덮어씌우던 악성 루프 제거 완료
-                    # 110x110 초소형 영역만 0.001초 만에 절대값(픽셀 수) 스캔
+                    # 1. [연산 최적화] 매번 찾지 않고, 110x110 초소형 영역만 0.001초 만에 스캔
                     red_count = get_tension_status(gauge_roi)
                     
-                    # [디버그] 콘솔에서 수치 확인 (비율이 아닌 정수)
-                    sys.stdout.write(f"\r🔍 [감지 중] 붉은 픽셀 수: {red_count} (임계점: 15)   ")
-                    sys.stdout.flush()
+                    # [동적 위치 갱신] 창이 이동해도 아이콘을 따라가도록 0.2초마다 위치만 새로 잡습니다.
+                    if time.time() - last_ui_check > 0.2:
+                        current_pos = safe_find_image('fishing_mode.png', 0.6)
+                        if current_pos: gauge_roi = current_pos
+
+                    # 실시간 핫핑크 점유율(%) 감지
+                    pink_ratio = get_tension_status(gauge_roi)
                     
-                    # 파이팅 진입 직후 1초 동안은 잔상 무시하고 당김
+                    # [디버그] 콘솔창에 현재 위험도가 표시됩니다. 0.0%가 나오는지, 숫자가 변하는지 확인하세요.
+                    sys.stdout.write(f"\r🔍 [감지 모드] 핫핑크 비율: {pink_ratio*100:.1f}%   ")
+                    sys.stdout.flush()
+
+                    # 텐션 제어 로직 (1초 무조건 당기기 유지)
                     if time.time() - fight_start_time < 1.0:
                         if not is_pulling:
-                            send_cmd('L')
-                            is_pulling = True
+                            send_cmd('L'); is_pulling = True
                         time.sleep(0.01)
                     else:
-                        # 2. 비율이 아닌 '15픽셀' 절대값 기준 초고속 반응
-                        if red_count >= 15:
+                        # 핑크색 테두리가 3% 이상 보이면 즉시 손 뗌 (U)
+                        if pink_ratio >= 0.03: 
                             if is_pulling:
-                                send_cmd('U') 
-                                is_pulling = False
-                            time.sleep(0.01) 
+                                send_cmd('U'); is_pulling = False
+                            time.sleep(0.01) # 잔상 방지용 최소 대기
                         else:
                             if not is_pulling:
-                                send_cmd('L') 
-                                is_pulling = True
+                                send_cmd('L'); is_pulling = True
                             time.sleep(0.01)
                     
-                    # 3. 랜덤 렉 방지용 0.1초 UI 체크
+                    # [핵심 2] 랜덤 렉의 진짜 원인 해결 (병목 제거)
+                    # 전체 화면을 뒤지는 무거운 check_status()를 매 턴마다 실행하지 않고, 0.1초에 1번만 확인합니다.
                     if time.time() - last_ui_check > 0.1:
                         res = check_status()
                         last_ui_check = time.time()
@@ -1386,7 +1392,7 @@ def fishing_bot(max_allowed_seconds):
                         if res == "RESET": 
                             send_cmd('U'); state = 1; break
                         if res == "QTE": 
-                            bprint("\n  > [QTE] 대응 완료. 0.01초 대기 후 텐션 조절 재개")
+                            bprint("  > [QTE] 대응 완료. 0.01초 대기 후 텐션 조절 재개")
                             is_pulling = False
                             time.sleep(0.01)
                             continue

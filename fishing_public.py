@@ -755,44 +755,43 @@ def align_view_by_anchor(anchor_img):
 
 def get_dynamic_sector8_roi():
     """
-    [배율/위치 대응] 활성화된 게임 창을 찾아 9등분 중 8번(하단 중앙) 좌표를 실시간 계산합니다.
+    [섹터 8 추적] 게임 화면의 하단 중앙(8번 구역) 좌표를 실시간 계산합니다.
+    창 위치나 배율이 바뀌어도 해당 비율 지점을 캡처 영역으로 반환합니다.
     """
-    import pygetwindow as gw
-    try:
-        # 'One 자동낚시 봇'이 아니라 실제 게임 창 제목을 입력해야 합니다 (예: "GameTitle")
-        # 만약 창 제목을 정확히 모른다면 현재 활성화된 창(getActiveWindow)을 사용합니다.
-        win = gw.getActiveWindow() 
-        if not win: return None
-        
-        # 창의 실제 위치와 크기 (배율/이동 반영됨)
-        w, h = win.width, win.height
-        left, top = win.left, win.top
-        
-        # 8번 섹터 중심점 (가로 50%, 세로 83% 지점)
-        target_x = left + (w // 2)
-        target_y = top + int(h * 0.83)
-        
-        # 중심점 기준 400x400 ROI 생성
-        return (int(target_x - 200), int(target_y - 200), 400, 400)
-    except:
-        return None
+    # 1920x1080 전체 화면 기준 비율 계산
+    target_x = CENTER_X 
+    target_y = int(SCREEN_H * 0.83) # 하단 83% 지점 (사용자님의 섹터 8)
+    
+    # 캡처 렌즈 크기 (400x400)
+    roi_w, roi_h = 400, 400
+    left = target_x - (roi_w // 2)
+    top = target_y - (roi_h // 2)
+    
+    return (int(left), int(top), roi_w, roi_h)
 
-def get_dynamic_sector8_roi():
+def get_tension_status(exact_roi):
     """
-    [배율/위치 통합 연산] 현재 게임 화면에서 게이지가 있는 하단 중앙(섹터 8)을 
-    배율과 상관없이 비율로 실시간 계산합니다.
+    [배율 독립형 인식] 사진 속 '핫핑크'가 전체 영역 중 몇 %를 차지하는지 계산합니다.
+    픽셀 개수가 아닌 '비율'을 보므로 창 크기가 작아져도 임계값이 무너지지 않습니다.
     """
-    # mss의 전체 화면 정보를 기준으로 계산
-    mon = sct.monitors[1]
-    w, h = mon['width'], mon['height']
-    
-    # 가로 중앙, 세로 하단 83% 지점을 타겟팅
-    target_x = w // 2
-    target_y = int(h * 0.83)
-    
-    # 배율 대응을 위해 ROI 크기를 화면 높이의 약 20%로 유동적 설정
-    roi_size = int(h * 0.2) 
-    return (int(target_x - roi_size//2), int(target_y - roi_size//2), roi_size, roi_size)
+    if not exact_roi: return 0.0
+    try:
+        # mss 기반 초고속 캡처
+        target_img = fast_cv_screenshot(region=exact_roi, gray=False)
+        img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
+        
+        # [정밀 필터] 사진에서 확인된 핫핑크/마젠타 색상 영역 (H: 150~180)
+        lower_pink = np.array([150, 100, 100])
+        upper_pink = np.array([180, 255, 255])
+        mask = cv2.inRange(img_hsv, lower_pink, upper_pink)
+        
+        pink_pixels = cv2.countNonZero(mask)
+        total_pixels = target_img.shape[0] * target_img.shape[1]
+        
+        # 0.0 ~ 1.0 사이의 비율 반환
+        return pink_pixels / total_pixels
+    except:
+        return 0.0
 
 def force_exit():
     global run_start_time

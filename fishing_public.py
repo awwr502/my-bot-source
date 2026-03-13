@@ -908,14 +908,19 @@ def fishing_bot(max_allowed_seconds):
                 current_run = stats['pure_run_time']
                 if bot_active and run_start_time is not None:
                     current_run += (time.time() - run_start_time)
-                rem = max(0, max_allowed_seconds - current_run)
-                h = int(rem // 3600)
-                m = int((rem % 3600) // 60)
-                s = int(rem % 60)
                 
-                # [직관성 개선] 타이머가 왜 멈춰있는지 알 수 있도록 현재 시간 차감 상태를 함께 표시합니다.
-                status_text = "▶️ 가동중 (시간 차감됨)" if bot_active else "⏸️ 대기중 (시간 멈춤)"
-                sys.stdout.write(f"\r⏳ 남은 시간: {h}시간 {m}분 {s}초  |  {status_text}{' '*15}")
+                # 남은 시간이 0보다 작아지지 않게 방어
+                rem = max(0, max_allowed_seconds - current_run)
+                
+                if rem <= 0:
+                    # 시간이 다 되면 타이머 영역에 '만료됨' 표시
+                    sys.stdout.write(f"\r⏳ 남은 시간: 0시간 0분 0초  |  ⛔ 이용 시간 만료{' '*20}")
+                else:
+                    h = int(rem // 3600)
+                    m = int((rem % 3600) // 60)
+                    s = int(rem % 60)
+                    status_text = "▶️ 가동중 (시간 차감됨)" if bot_active else "⏸️ 대기중 (시간 멈춤)"
+                    sys.stdout.write(f"\r⏳ 남은 시간: {h}시간 {m}분 {s}초  |  {status_text}{' '*15}")
             
             sys.stdout.flush()
             original_sleep(0.5)
@@ -946,15 +951,24 @@ def fishing_bot(max_allowed_seconds):
             if bot_active and run_start_time is not None:
                 current_total_time = stats['pure_run_time'] + (time.time() - run_start_time)
                 
-                # [라이선스 실시간 락] 누적 가동 시간이 할당된 시간을 초과하면 봇 강제 폭파
+                # [라이선스 실시간 락 - 소프트 랜딩 버전]
+                # 시간이 다 되면 꺼지지 않고 안내 문구 출력 후 봇을 강제로 '대기' 상태에 가둡니다.
                 if max_allowed_seconds > 0 and current_total_time >= max_allowed_seconds:
-                    bprint(f"\n==================================================")
-                    bprint(f"⏳ [이용 시간 만료] 할당된 이용 시간({max_allowed_seconds/3600}시간)을 모두 소진했습니다.")
-                    bprint(f"관리자에게 문의하여 시간을 충전해주세요.")
-                    bprint(f"==================================================")
-                    send_blynk_notification("⏳ 이용 시간 만료 (봇 가동 중지)")
-                    dump_blackbox_log("라이선스_누적시간_만료")
-                    force_exit()
+                    if bot_active:
+                        # 1회만 출력 및 정지 작업 수행
+                        toggle_stop() 
+                        bprint(f"\n" + "!"*50)
+                        bprint(f"⏳ [이용 시간 만료] 충전된 시간을 모두 소진했습니다.")
+                        bprint(f"   ( 현재 누적 가동: {int(current_total_time//60)}분 )")
+                        bprint(f"추가 이용을 원하시면 관리자에게 시간을 충전해 주세요.")
+                        bprint("!"*50 + "\n")
+                        send_blynk_notification("⏳ 이용 시간 만료 (대기 모드 전환)")
+                        dump_blackbox_log("라이선스_시간만료_대기전환")
+                    
+                    # 시간이 만료된 상태에서는 시작(])을 눌러도 작동하지 못하도록 강제로 상태 고정
+                    state = -1
+                    original_sleep(1)
+                    continue
 
                 if current_total_time - stats['last_snapshot_time'] >= 3600.0:
                     # 델타 연산은 영구히 깎이지 않는 빅데이터(total_*)를 기준으로 삼아야 정확합니다.

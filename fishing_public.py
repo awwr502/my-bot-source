@@ -784,21 +784,24 @@ def get_dynamic_sector8_roi():
         # 실패 시 화면 정중앙 폴백
         return (int(CENTER_X - 200), int(CENTER_Y + 350), 400, 400)
 
-def get_tension_status(roi):
+def get_tension_status(exact_roi):
     """
-    [배율 대응 텐션 계산] 8번 섹터 내 핫핑크(위험) 색상 점유율을 계산합니다.
+    [좌표 직결형 인식] 봇이 찾은 이미지의 실제 위치(Box 객체)를 그대로 넘겨받아 
+    그 안의 핫핑크/마젠타 비율을 계산합니다. 배율이 바뀌어도 찾은 이미지 크기 기준이라 완벽합니다.
     """
-    if not roi: return 0.0
+    if not exact_roi: return 0.0
     try:
-        img = fast_cv_screenshot(region=roi, gray=False)
+        # Box 객체(left, top, width, height)에서 좌표 추출
+        region = (int(exact_roi.left), int(exact_roi.top), int(exact_roi.width), int(exact_roi.height))
+        img = fast_cv_screenshot(region=region, gray=False)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         
-        # 핫핑크/마젠타 필터 (사용자님 사진 기반 정밀 타겟)
+        # [정밀 필터] 사진과 똑같은 핫핑크/마젠타 영역
         lower_pink = np.array([145, 100, 100])
-        upper_pink = np.array([180, 255, 255])
+        upper_pink = np.array([175, 255, 255])
         mask = cv2.inRange(hsv, lower_pink, upper_pink)
         
-        # 픽셀 수가 아닌 '점유 비율'로 반환 (배율 문제 해결 핵심)
+        # 해당 이미지 영역 내에서 핑크색이 차지하는 비율 계산
         ratio = cv2.countNonZero(mask) / (img.shape[0] * img.shape[1])
         return ratio
     except:
@@ -1303,8 +1306,9 @@ def fishing_bot(max_allowed_seconds):
                 # 낚시 게이지는 항상 캐릭터 주변(화면 정중앙)에 뜨므로, 무조건 화면 정중앙 400x400 영역만 보도록 렌즈를 박아버립니다.
                 gauge_roi = (CENTER_X - 200, CENTER_Y - 200, 400, 400)
 
-                # 진입 시점에 한 번 창 위치를 파악합니다.
-                gauge_roi = get_dynamic_sector8_roi()
+                # [위치/배율 최종 해결] 봇이 이미 성공적으로 찾고 있는 이미지 위치를 감지 영역으로 직결합니다.
+                ui_pos = safe_find_image('fishing_mode.png', 0.6)
+                gauge_roi = ui_pos if ui_pos else (CENTER_X - 200, CENTER_Y - 200, 400, 400)
                 
                 def check_status():
                     nonlocal missing_ui_count
@@ -1343,30 +1347,33 @@ def fishing_bot(max_allowed_seconds):
                 while True: # bot_active로 스르륵 탈출 방지
                     if not bot_active: raise BotStopException() # 즉시 폭파
 
-                    # 1. 8번 섹터 실시간 추적 및 위험도(Ratio) 계산
-                    current_roi = get_dynamic_sector8_roi()
-                    pink_ratio = get_tension_status(current_roi)
+                    # [동적 위치 갱신] 창 이동이나 배율 변경에 대응하기 위해 0.2초마다 위치를 새로 잡습니다.
+                    if time.time() - last_ui_check > 0.2:
+                        current_pos = safe_find_image('fishing_mode.png', 0.6)
+                        if current_pos: gauge_roi = current_pos
+
+                    # 텐션 점유율(Ratio) 계산
+                    pink_ratio = get_tension_status(gauge_roi)
                     
-                    # [디버그] 게이지가 차오를 때 이 수치가 올라가는지 확인하세요!
-                    sys.stdout.write(f"\r🔍 [섹터8 감시중] 위험도: {pink_ratio*100:.1f}%   ")
+                    # [디버그] 콘솔에서 수치가 변하는지 확인하세요. 핑크색일 때 수치가 0.03(3%) 이상 올라가야 합니다.
+                    sys.stdout.write(f"\r🔍 [감지 중] 임계점 비율: {pink_ratio*100:.1f}%   ")
                     sys.stdout.flush()
 
-                    # 2. 텐션 조절 로직
+                    # 2. 텐션 조절 로직 (사용자님 1초 당기기 유지)
                     if time.time() - fight_start_time < 1.0:
-                        # 초기 1초는 안정적 장력을 위해 풀링
                         if not is_pulling:
                             send_cmd('L'); is_pulling = True
+                        time.sleep(0.01)
                     else:
-                        # 핫핑크 게이지 점유율 3% 이상이면 즉시 휴식
+                        # 핑크색 비율이 3%만 넘어도 '위험'으로 간주하고 즉시 뗌 (U)
                         if pink_ratio >= 0.03: 
                             if is_pulling:
                                 send_cmd('U'); is_pulling = False
+                            time.sleep(0.01) # 식힐 때 대기
                         else:
-                            # 안전 구역이면 다시 당기기
                             if not is_pulling:
                                 send_cmd('L'); is_pulling = True
-                    
-                    original_sleep(0.01) # 아두이노 응답 안정화
+                            time.sleep(0.01)
                     
                     # 무거운 전체화면 UI 체크는 0.1초에 1번만
                     if time.time() - last_ui_check > 0.1:

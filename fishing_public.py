@@ -786,23 +786,36 @@ def get_dynamic_sector8_roi():
 
 def get_tension_status(exact_roi):
     """
-    [좌표 직결형 인식] 봇이 찾은 이미지의 실제 위치(Box 객체)를 그대로 넘겨받아 
-    그 안의 핫핑크/마젠타 비율을 계산합니다. 배율이 바뀌어도 찾은 이미지 크기 기준이라 완벽합니다.
+    [렌즈 확장형 인식] 릴 아이콘(exact_roi)을 중심으로 탐색 범위를 넓혀서 
+    바깥쪽 원형 게이지의 핫핑크 색상을 포착합니다.
     """
     if not exact_roi: return 0.0
     try:
-        # Box 객체(left, top, width, height)에서 좌표 추출
-        region = (int(exact_roi.left), int(exact_roi.top), int(exact_roi.width), int(exact_roi.height))
-        img = fast_cv_screenshot(region=region, gray=False)
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        # 1. 릴 아이콘의 중심점 계산
+        cx = exact_roi.left + (exact_roi.width // 2)
+        cy = exact_roi.top + (exact_roi.height // 2)
         
-        # [정밀 필터] 사진과 똑같은 핫핑크/마젠타 영역
-        lower_pink = np.array([145, 100, 100])
-        upper_pink = np.array([175, 255, 255])
-        mask = cv2.inRange(hsv, lower_pink, upper_pink)
+        # 2. 탐색 범위를 아이콘 크기보다 훨씬 넓게 확장 (250x250)
+        # 아이콘 바깥의 원형 게이지까지 모두 포함시키기 위함입니다.
+        lens_size = 250 
+        region = (int(cx - lens_size//2), int(cy - lens_size//2), lens_size, lens_size)
+
+        target_img = fast_cv_screenshot(region=region, gray=False)
+        img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
         
-        # 해당 이미지 영역 내에서 핑크색이 차지하는 비율 계산
-        ratio = cv2.countNonZero(mask) / (img.shape[0] * img.shape[1])
+        # 3. [정밀 핫핑크 필터] 사진 속 게이지의 강렬한 색상 범위를 넓게 잡습니다.
+        # 핫핑크/마젠타 영역 (H: 140~180) + 순수 레드 영역 (H: 0~10) 통합
+        lower_pink = np.array([140, 80, 80])
+        upper_pink = np.array([180, 255, 255])
+        lower_red = np.array([0, 80, 80])
+        upper_red = np.array([10, 255, 255])
+        
+        mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
+        mask_red = cv2.inRange(img_hsv, lower_red, upper_red)
+        mask = cv2.bitwise_or(mask_pink, mask_red)
+        
+        # 4. 전체 렌즈 영역 대비 핫핑크 비율 계산
+        ratio = cv2.countNonZero(mask) / (target_img.shape[0] * target_img.shape[1])
         return ratio
     except:
         return 0.0

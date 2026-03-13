@@ -1281,23 +1281,22 @@ def fishing_bot(max_allowed_seconds):
                 ui_pos = safe_find_image('fishing_mode.png', 0.6)
                 
                 if ui_pos:
-                    # 현재 모니터 해상도에 맞게 스케일링된 비율(0.8배, 1.2배 등)을 가져옵니다.
                     current_scale = IMAGE_SCALE_CACHE.get('fishing_mode.png', 1.0)
-                    
                     cx = ui_pos.left + ui_pos.width // 2
                     cy = ui_pos.top + ui_pos.height // 2
                     
-                    # 110x110 박스도 현재 해상도 비율에 맞춰서 줄이거나 늘립니다. (예: 4K면 200x200으로 커짐)
-                    half_size = int(55 * current_scale)
+                    # [패치 2: 스캔 렌즈 확장] 110x110은 너무 좁아 텐션바가 시야에서 도망갑니다.
+                    # 박스를 200x200으로 4배 넓혀서 텐션 게이지가 어디서 깜빡이든 모조리 잡아냅니다.
+                    half_size = int(100 * current_scale)
                     full_size = half_size * 2
                     x1 = max(0, cx - half_size)
                     y1 = max(0, cy - half_size)
                     gauge_roi = (int(x1), int(y1), full_size, full_size)
                     
-                    # 빨간색 픽셀 임계값(15)도 해상도 면적(제곱)에 비례하여 동적으로 뻥튀기합니다!
-                    dynamic_threshold = max(5, int(15 * (current_scale ** 2)))
+                    # 영역이 넓어진 만큼 잡음(오탐)을 방지하기 위해 픽셀 감지 요구치를 살짝 올립니다.
+                    dynamic_threshold = max(10, int(20 * (current_scale ** 2)))
                 else:
-                    gauge_roi = (CENTER_X - 55, CENTER_Y - 55, 110, 110)
+                    gauge_roi = (CENTER_X - 100, CENTER_Y - 100, 200, 200)
                 
                 def check_status():
                     nonlocal missing_ui_count

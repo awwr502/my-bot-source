@@ -777,24 +777,22 @@ def get_dynamic_sector8_roi():
     except:
         return None
 
-def get_tension_status(exact_roi):
+def get_dynamic_sector8_roi():
     """
-    [정밀 마젠타 필터] 실시간으로 계산된 ROI 영역에서 핫핑크 픽셀만 추출합니다.
+    [배율/위치 통합 연산] 현재 게임 화면에서 게이지가 있는 하단 중앙(섹터 8)을 
+    배율과 상관없이 비율로 실시간 계산합니다.
     """
-    if not exact_roi: return 0
-    try:
-        # mss는 전체 화면 기준 좌표를 받으므로 계산된 exact_roi를 그대로 넣습니다.
-        target_img = fast_cv_screenshot(region=exact_roi, gray=False)
-        img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
-        
-        # 사진 분석 결과: 핫핑크/마젠타 (H: 150~180)
-        lower_pink = np.array([150, 100, 100])
-        upper_pink = np.array([180, 255, 255])
-        mask = cv2.inRange(img_hsv, lower_pink, upper_pink)
-        
-        return cv2.countNonZero(mask)
-    except:
-        return 0
+    # mss의 전체 화면 정보를 기준으로 계산
+    mon = sct.monitors[1]
+    w, h = mon['width'], mon['height']
+    
+    # 가로 중앙, 세로 하단 83% 지점을 타겟팅
+    target_x = w // 2
+    target_y = int(h * 0.83)
+    
+    # 배율 대응을 위해 ROI 크기를 화면 높이의 약 20%로 유동적 설정
+    roi_size = int(h * 0.2) 
+    return (int(target_x - roi_size//2), int(target_y - roi_size//2), roi_size, roi_size)
 
 def force_exit():
     global run_start_time

@@ -1428,7 +1428,7 @@ def fishing_bot(max_allowed_seconds):
                     
                     return "KEEP"
 
-                bprint("  > [AI 파이팅] 고정 렌즈 추적 시작 (동적 배율+사용자 로직 통합)")
+                bprint("  > [AI 파이팅] 고정 렌즈 추적 시작")
                 is_pulling = False 
                 last_ui_check = time.time()
                 
@@ -1452,7 +1452,7 @@ def fishing_bot(max_allowed_seconds):
                         time.sleep(0.01)
                     else:
                         # 2. 반응 임계값 15픽셀 (절대값 기반 초고속 반응)
-                        if red_count >= 15:
+                        if red_count >= 50:
                             if is_pulling:
                                 send_cmd('U') 
                                 is_pulling = False

@@ -845,8 +845,7 @@ def align_view_by_anchor(anchor_img):
 
 def get_dynamic_sector8_roi():
     """
-    [무설치형 창 추적] ctypes를 사용하여 외부 라이브러리 설치 없이 
-    현재 창의 하단 중앙(8번 구역) 좌표를 실시간 계산합니다.
+    [광역 스캔 엔진] 화면 9등분 시스템 적용 (8번 구역 전체 영역 반환)
     """
     import ctypes
     from ctypes import wintypes
@@ -862,17 +861,20 @@ def get_dynamic_sector8_roi():
         w = rect.right - rect.left
         h = rect.bottom - rect.top
         
-        # 3. 8번 섹터 중심점 계산 (가로 50%, 세로 85% 지점)
-        center_x = rect.left + (w // 2)
-        target_y = rect.top + int(h * 0.85)
+        # 3. 9등분 시스템 계산 (가로 1/3, 세로 1/3)
+        sub_w = w // 3
+        sub_h = h // 3
         
-        # 4. 렌즈 크기 설정 (창 높이의 20%로 유동적 대응)
-        lens_size = int(h * 0.2)
+        # 4. 8번 구역(하단 중앙 전체) 좌표 도출
+        # x 시작점: 왼쪽에서 1/3 지점
+        # y 시작점: 위에서 2/3 지점
+        x_start = rect.left + sub_w
+        y_start = rect.top + (sub_h * 2)
         
-        return (int(center_x - lens_size//2), int(target_y - lens_size//2), lens_size, lens_size)
+        return (int(x_start), int(y_start), int(sub_w), int(sub_h))
     except:
-        # 실패 시 화면 정중앙 폴백
-        return (int(CENTER_X - 200), int(CENTER_Y + 350), 400, 400)
+        # 실패 시 1920x1080 꽉 찬 모니터 기준 8번 구역 강제 할당
+        return (640, 720, 640, 360)
 
 def get_tension_status(exact_roi):
     """
@@ -1394,32 +1396,9 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.2)
                 missing_ui_count = 0 
                 
-                # [핵심 1] 렌즈 고정: 파이팅 시작 시 게이지의 정확한 중심점을 찾아 좌표를 고정합니다.
-                ui_pos = safe_find_image('fishing_mode.png', 0.6)
-                
-                # [해결 핵심] 배율(Scale) 호환성 확보!
-                # 구매자의 창 배율이 커지면 게이지도 커지므로, 110x110 고정 상자도 비율에 맞춰 키워줘야 게이지 밖으로 안 벗어납니다.
-                current_scale = IMAGE_SCALE_CACHE.get('fishing_mode.png', 1.0)
-                box_size = int(110 * current_scale)
-                half_box = box_size // 2
-
-                if ui_pos:
-                    # 1순위: fishing_mode.png 글씨를 찾았을 때의 중앙값
-                    cx = ui_pos.left + ui_pos.width // 2
-                    cy = ui_pos.top + ui_pos.height // 2
-                else:
-                    # 2순위: 못 찾았을 경우 동적 창 배율(Sector 8) 엔진으로 하단 중앙 백업 계산
-                    dyn_roi = get_dynamic_sector8_roi()
-                    if dyn_roi:
-                        cx = dyn_roi[0] + dyn_roi[2] // 2
-                        cy = dyn_roi[1] + dyn_roi[3] // 2
-                    else:
-                        cx, cy = CENTER_X, CENTER_Y
-                
-                # 계산된 중심점 기준, 배율이 적용된 유동적 렌즈 장착
-                x1 = max(0, cx - half_box)
-                y1 = max(0, cy - half_box)
-                gauge_roi = (int(x1), int(y1), box_size, box_size)
+                # [핵심 1] 렌즈 고정: 화면을 9등분하여 하단 중앙(8번 구역) 전체를 고정 광역 렌즈로 덮어씌웁니다.
+                # 기존의 복잡한 위치 추적/배율 계산 로직을 전부 폐기하여 오탐을 원천 차단합니다.
+                gauge_roi = get_dynamic_sector8_roi()
                 
                 def check_status():
                     nonlocal missing_ui_count

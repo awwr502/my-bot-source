@@ -83,8 +83,9 @@ try:
         if TELEGRAM_TOKEN.strip() and CHAT_ID.strip():
             USE_TELEGRAM = True
 except FileNotFoundError:
-    print("  > 텔레그램 봇 이용불가능한 오프라인 모드로 가동합니다.")
-    print("  > 텔레그램 봇 이용문의는 판매자에게 연락 부탁드립니다.")
+    print("🚫텔레그램 원격 봇 이용이 불가능한 오프라인 모드입니다.🚫")
+    print("⬇️⬇️⬇️텔레그램 봇 이용문의는 판매자에게 연락 부탁드립니다.⬇️⬇️⬇️")
+    print("📢카카오톡 오픈채팅: https://open.kakao.com/o/sB6Ca9ki"\n)
 # =========================================================================
 
 # --- 블랙박스 링 버퍼 시스템 ---

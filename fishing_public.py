@@ -753,22 +753,19 @@ def align_view_by_anchor(anchor_img):
             continue
     return False
 
-def get_tension_status(exact_roi):
+def get_tension_status():
     """
-    [오리지널 하이퍼 옵티마이즈] 파이팅 진입 시 찾아둔 고정 좌표만 초고속 캡처합니다.
+    [전체화면 롤백] AI 좌표 인식의 헛발질을 배제하고 전체화면에서 즉시 붉은색을 탐색합니다.
     """
-    if not exact_roi: return 0
     try:
-        target_img = fast_cv_screenshot(region=exact_roi, gray=False)
+        # region을 None으로 두어 화면 전체 초고속 캡처
+        target_img = fast_cv_screenshot(region=None, gray=False)
         
         # 임계 도달 시 변하는 '붉은색'만 정밀하게 타겟팅하여 원상 복구
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
-        
-        # [수정] 채도(S)와 명도(V) 하한선을 145 -> 200으로 극단적으로 높임.
-        # 배경의 탁한 빨간색은 모두 무시하고, 빛나는 UI 붉은색만 엄격하게 잡습니다.
-        lower_red1 = np.array([0, 200, 200])
+        lower_red1 = np.array([0, 145, 145])
         upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([170, 200, 200])
+        lower_red2 = np.array([165, 160, 160])
         upper_red2 = np.array([180, 255, 255])
         
         mask1 = cv2.inRange(img_hsv, lower_red1, upper_red1)
@@ -1276,19 +1273,7 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.2)
                 missing_ui_count = 0 
                 
-                # [원형 게이지 맞춤 패치] 사진 확인 결과 110x110은 원 안쪽 빈 공간만 봅니다!
-                # 커다란 원형 테두리 전체가 한눈에 들어오도록 렌즈를 400x400으로 큼직하게 덮어씌웁니다.
-                gauge_roi = None
-                ui_pos = safe_find_image('fishing_mode.png', 0.6)
-                if ui_pos:
-                    cx = ui_pos.left + ui_pos.width // 2
-                    cy = ui_pos.top + ui_pos.height // 2
-                    # 원형 테두리를 완전히 덮기 위해 다시 400x400으로 확장합니다.
-                    x1 = max(0, cx - 200)
-                    y1 = max(0, cy - 200)
-                    gauge_roi = (int(x1), int(y1), 400, 400)
-                else:
-                    gauge_roi = (CENTER_X - 200, CENTER_Y - 200, 400, 400) # 실패 시 화면 정중앙
+                # [전체화면 롤백] AI 좌표 인식을 통한 좁은 구역(ROI) 할당 기능을 완전히 삭제합니다.
                 
                 def check_status():
                     nonlocal missing_ui_count
@@ -1318,7 +1303,7 @@ def fishing_bot(max_allowed_seconds):
                     
                     return "KEEP"
 
-                bprint("  > [AI 파이팅] 오리지널 110x110 고정 렌즈 추적 시작")
+                bprint("  > [파이팅] 텐션 추적 시작")
                 is_pulling = False 
                 last_ui_check = time.time()
                 
@@ -1327,10 +1312,10 @@ def fishing_bot(max_allowed_seconds):
                 while True: # bot_active로 스르륵 탈출 방지
                     if not bot_active: raise BotStopException() # 즉시 폭파
 
-                    # 1. 110x110 영역의 텐션 픽셀 추출
-                    red_count = get_tension_status(gauge_roi)
+                    # 1. 전체 화면 영역에서 텐션 픽셀 추출
+                    red_count = get_tension_status()
                     
-                    # [오리지널 유지] 파이팅 진입 직후 1초 동안은 무조건 당김!
+                    # [오리지널 유지] 사용자님 말씀대로 1초 무조건 당기기는 안전하므로 원상 복구!
                     if time.time() - fight_start_time < 1.0:
                         if not is_pulling:
                             send_cmd('L')

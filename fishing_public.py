@@ -1587,32 +1587,41 @@ if __name__ == "__main__":
         sys.exit()
         
     try:
-        # [완벽 파싱] 부동소수점 오류를 막기 위해 글자(String) 기준으로 자릅니다.
-        raw_str = sys.argv[1]
-        if '.' in raw_str:
-            parts = raw_str.split('.')
-            allocated_hours = int(parts[0])
-            feature_code = int(parts[1][0])
-        else:
-            allocated_minutes = int(float(raw_str))
-            feature_code = 0
-            
-        # [단위 변경] 시간(3600) 대신 분(60)을 곱하여 정밀 제어
+        # [데이터 수신 엔진 업그레이드]
+        # 부동소수점 오차와 정수 변환 충돌을 원천 차단하는 2단계 파싱
+        raw_input = sys.argv[1]
+        f_val = float(raw_input) # 우선 실수로 안전하게 변환
+        
+        # 정수 부분 (이용 시간: 분 단위)
+        allocated_minutes = int(f_val) 
+        
+        # 소수점 첫째 자리 추출 (권한 코드)
+        # 예: 1.2 -> (1.2 - 1) * 10 = 2
+        feature_code = int(round((f_val - allocated_minutes) * 10))
+        
         max_seconds = allocated_minutes * 60
         
-        # [라이선스 모듈 세팅]
+        # [라이선스 모듈 플래그 설정]
         if feature_code == 1:
             ENABLE_FISHING, ENABLE_IDLE_AFK = True, True
             print("💎 [라이선스] 통합 패키지 (낚시 + 단독 잠수방지) 활성화")
         elif feature_code == 2:
             ENABLE_FISHING, ENABLE_IDLE_AFK = False, True
             print("🛡️ [라이선스] 단독 잠수방지 전용 모드 활성화")
-        else: # 0 또는 그 외
+        else:
             ENABLE_FISHING, ENABLE_IDLE_AFK = True, False
             print("🎣 [라이선스] 기본 낚시 모드 활성화 (단독 잠수방지 미포함)")
             
-    except Exception:
-        print("❌ 라이선스 데이터 수신 오류.")
+        # 봇 가동 시작
+        fishing_bot(max_seconds)
+            
+    except Exception as e:
+        # 이제 "수신 오류"라고만 띄우지 않고, 무엇이 잘못되었는지 상세 추적 로그를 출력합니다.
+        import traceback
+        print(f"\n❌ [시스템 치명적 오류] 실행 중 충돌이 발생했습니다.")
+        print("="*50)
+        traceback.print_exc() # 상세 에러 내용 출력
+        print("="*50)
+        print(f"\n수신된 원본 데이터: {sys.argv[1] if len(sys.argv)>1 else '없음'}")
+        input("\n위 에러 내용을 캡처하여 관리자에게 전달하세요 (엔터 시 종료)...")
         sys.exit()
-        
-    fishing_bot(max_seconds)

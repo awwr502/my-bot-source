@@ -581,6 +581,16 @@ IMAGE_CACHE = {}
 IMAGE_SCALE_CACHE = {}
 
 class Box:
+# [스마트 비전 엔진] 이미지 램(RAM) 캐싱 저장소
+IMAGE_CACHE = {} 
+
+# [데이터 샘플링 엔진] 점진적 확장(Incremental Expansion) ROI 저장소
+from collections import deque
+ROI_SAMPLER = {}
+ROI_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "roi_cache.json")
+FALLBACK_COOLDOWN = {} # 부하 방지용 폴백 쿨다운 저장소
+
+class Box:
     """pyautogui의 리턴값과 100% 동일하게 동작하도록 만든 가짜 Box 객체 (하위 호환성 유지)"""
     def __init__(self, left, top, width, height):
         self.left = left
@@ -588,9 +598,40 @@ class Box:
         self.width = width
         self.height = height
 
+def load_roi_cache():
+    """저장된 ROI 기억(json)을 불러옵니다."""
+    global ROI_SAMPLER
+    try:
+        if os.path.exists(ROI_CACHE_FILE):
+            with open(ROI_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for k, v in data.items():
+                    ROI_SAMPLER[k] = {
+                        'samples': deque(v.get('samples', []), maxlen=10),
+                        'master_box': v.get('master_box')
+                    }
+    except Exception as e:
+        print(f"  > [경고] ROI 캐시 불러오기 실패: {e}")
+
+def save_roi_cache():
+    """현재까지 학습된 ROI 기억을 json 파일로 영구 저장합니다."""
+    global ROI_SAMPLER
+    try:
+        save_data = {}
+        for k, v in ROI_SAMPLER.items():
+            save_data[k] = {
+                'samples': list(v['samples']),
+                'master_box': v['master_box']
+            }
+        with open(ROI_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(save_data, f, indent=4, ensure_ascii=False)
+    except:
+        pass
+
 def preload_all_images():
     """현재 폴더의 모든 PNG 이미지를 봇 구동 시점에 '흑백(Grayscale) cv2 포맷'으로 사전 적재합니다."""
     global IMAGE_CACHE
+    load_roi_cache() # 사진을 메모리에 올리기 전에 과거 학습 데이터부터 복구
     count = 0
     
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -610,9 +651,8 @@ def preload_all_images():
     bprint(f">>> [시스템] 총 {count}개의 이미지 캐싱 완료! (탐색 준비 끝) <<<\n")
 
 def safe_find_image(img_path, conf=0.6, region=None):
-    """[배포용 범용 엔진] 해상도/창 크기를 무시하고 화면 전체에서 다중 스케일링으로 이미지를 찾아냅니다."""
-    global IMAGE_CACHE
-    global IMAGE_SCALE_CACHE
+    """[배포용 완전체 엔진] ROI 위치 기억(속도) + 다중 스케일 적응(호환성) 통합"""
+    global IMAGE_CACHE, ROI_SAMPLER, IMAGE_SCALE_CACHE, FALLBACK_COOLDOWN
     template = IMAGE_CACHE.get(img_path)
     
     try:
@@ -626,16 +666,33 @@ def safe_find_image(img_path, conf=0.6, region=None):
             else:
                 return None
 
-        # 배포용은 Region 파라미터가 들어와도 무시하고 항상 전체 화면을 캡처하여 오류를 막습니다.
-        target_monitor = sct.monitors[1]
+        # 딕셔너리 및 deque 초기화 (최초 1회)
+        if img_path not in ROI_SAMPLER:
+            ROI_SAMPLER[img_path] = {'samples': deque(maxlen=10), 'master_box': None}
+            
+        cache_data = ROI_SAMPLER[img_path]
+        target_monitor = None
+        is_using_master = False
+
+        # [핵심] 탐색 구역(Monitor) 결정 로직
+        if region == "FULL_SCREEN":
+            target_monitor = sct.monitors[1]
+            region = None 
+        elif region:
+            target_monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
+        elif cache_data['master_box']:
+            target_monitor = cache_data['master_box']
+            is_using_master = True
+        else:
+            target_monitor = sct.monitors[1]
+
+        # 캡처 
         sct_img = sct.grab(target_monitor)
         screen_np = np.array(sct_img)
         screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
 
-        # [핵심 최적화] 가장 최근에 성공했던 크기(Scale)를 1순위로 꺼내옵니다.
+        # [다중 스케일 엔진 융합] 배포용 호환성을 위해 가장 최근 성공한 배율을 1순위로 스캔
         last_scale = IMAGE_SCALE_CACHE.get(img_path, 1.0)
-        
-        # 1순위(기억) -> 원본 -> 90% -> 110% -> 80% -> 120% 순으로 유연하게 스캔합니다.
         scales = [last_scale, 1.0, 0.9, 1.1, 0.8, 1.2]
         unique_scales = []
         [unique_scales.append(x) for x in scales if x not in unique_scales]
@@ -644,7 +701,7 @@ def safe_find_image(img_path, conf=0.6, region=None):
             w, h = int(template.shape[1] * scale), int(template.shape[0] * scale)
             if w < 10 or h < 10: continue
 
-            # 스케일이 1.0이면 리사이즈를 생략하여 CPU 낭비를 없앱니다.
+            # 배율이 1.0이면 연산 낭비 없이 원본 사용
             if scale == 1.0:
                 resized = template
             else:
@@ -653,17 +710,54 @@ def safe_find_image(img_path, conf=0.6, region=None):
             res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             
-            # [오탐(False Positive) 완벽 차단 로직]
-            # 크기를 억지로 줄여서 비교할 때는 흐릿해진 픽셀 때문에 아무 배경이나 정답으로 착각하는 '오탐'이 발생합니다.
-            # 따라서 '이미 검증된 원래 비율(last_scale)'일 때는 요청한 conf를 그대로 적용하되,
-            # '새로운 비율'을 찔러볼 때는 엉뚱한 배경을 잡지 못하게 무조건 0.85 이상의 깐깐한 잣대를 들이댑니다!
+            # 오탐 방지를 위한 엄격한 잣대 (새로운 비율을 찔러볼 때는 0.85 이상)
             required_conf = conf if scale == last_scale else max(conf, 0.85)
-            
+
+            # 신뢰도를 넘었을 경우
             if max_val >= required_conf:
-                IMAGE_SCALE_CACHE[img_path] = scale # 다음 턴을 위해 성공한 창 크기 비율을 두뇌에 기억!
+                # 성공한 배율을 두뇌에 각인
+                IMAGE_SCALE_CACHE[img_path] = scale
+                
                 real_x = max_loc[0] + target_monitor["left"]
                 real_y = max_loc[1] + target_monitor["top"]
+
+                # [점진적 확장 로직] 하드코딩된 region이 아닐 때 무조건 좌표를 큐에 밀어넣음
+                if not region:
+                    cache_data['samples'].append((real_x, real_y, w, h))
+                    
+                    # 단 1개의 데이터만 있어도 즉시 상자를 갱신 (점진적 팽창 및 축소)
+                    pad = 30
+                    min_x = min(s[0] for s in cache_data['samples']) - pad
+                    min_y = min(s[1] for s in cache_data['samples']) - pad
+                    max_x = max(s[0] + s[2] for s in cache_data['samples']) + pad
+                    max_y = max(s[1] + s[3] for s in cache_data['samples']) + pad
+                    
+                    cache_data['master_box'] = {
+                        "left": int(max(0, min_x)),
+                        "top": int(max(0, min_y)),
+                        "width": int(max_x - min_x),
+                        "height": int(max_y - min_y)
+                    }
+
+                    # 상자 크기가 늘어나거나 줄어들며 갱신될 때마다 즉시 세이브 파일 덮어쓰기
+                    save_roi_cache()
+
                 return Box(real_x, real_y, w, h)
+            
+        # 다중 스케일을 모두 돌았는데도 못 찾았을 때의 폴백(Fallback) 안전망
+        if is_using_master:
+            # [파이팅 게이지 렉 해결] 전체화면 스캔 도배 방지 (1초 쿨다운)
+            last_fallback = FALLBACK_COOLDOWN.get(img_path, 0)
+            if time.time() - last_fallback > 1.0: # 1초에 단 1번만 전체화면 스캔 허용
+                # 전체 화면 재귀 탐색
+                res_fallback = safe_find_image(img_path, conf, region="FULL_SCREEN")
+                if res_fallback is None:
+                    # 전체 화면에서도 못 찾음 = 화면에 진짜 없는 상태 -> 1초 쿨다운 부여
+                    FALLBACK_COOLDOWN[img_path] = time.time()
+                return res_fallback
+            else:
+                # 쿨다운 중이므로 무거운 전체화면 스캔을 생략하고 즉시 포기 (렉 방지)
+                return None
 
         return None
     except Exception as e:

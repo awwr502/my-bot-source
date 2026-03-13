@@ -1062,14 +1062,14 @@ def fishing_bot(max_allowed_seconds):
                 if ENABLE_FISHING:
                     # 봇 시작 시 특정 사진(예: start_condition.png) 확인
                     if safe_find_image('start_condition.png', 0.75):
-                        bprint("  > [확인] 정상 낚시 모드 진입")
+                        bprint("  > 🟢[확인] 정상 낚시 모드 진입")
                         state = 1
                     else:
                         if ENABLE_IDLE_AFK:
-                            bprint("  > [대기] 단독 잠수방지 모드 작동")
+                            bprint("  > 🟢[대기] 단독 잠수방지 모드 작동")
                             state = 0
                         else:
-                            bprint("  > [경고] 봇을 대기 모드([)로 강제 전환합니다.")
+                            bprint("  > 🔴[경고] 봇을 대기 모드([)로 강제 전환합니다.")
                             toggle_stop() 
                             continue
                 elif ENABLE_IDLE_AFK:

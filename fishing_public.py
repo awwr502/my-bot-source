@@ -91,6 +91,8 @@ blackbox_buffer = deque(maxlen=20) # 항상 최신 20개의 로그만 기억
 
 def bprint(msg):
     """일반 콘솔 출력과 동시에 블랙박스에 시간을 찍어 기록합니다."""
+    # [타이머 충돌 방지] 맨 밑에 깔린 타이머 글자를 살짝 지우고 로그를 띄운 뒤, 타이머가 다시 써지게 만듭니다.
+    sys.stdout.write('\r' + ' ' * 50 + '\r')
     print(msg)
     time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     blackbox_buffer.append(f"[{time_str}] {msg}")
@@ -881,7 +883,29 @@ def fishing_bot(max_allowed_seconds):
     state = -1
     # 위에서 이미 \n으로 예쁘게 띄워두었으므로, 여기서는 \n을 제거해 줍니다.
     bprint("🚀낚시 매크로 V2.4 가동 시작🚀")
-    bprint("(작동: ] , 정지: [ )")
+    bprint("(작동: ] , 정지: [ )\n") # 요청하신 대로 타이머와 한 칸 띄우기 위해 \n 추가
+
+    # [하단 고정형 실시간 타이머 엔진]
+    def timer_overlay():
+        while True:
+            if max_allowed_seconds >= 9000 * 3600:
+                # 영구제 사용자용 텍스트
+                sys.stdout.write(f"\r⏳ 남은 시간: [영구제] 무제한 작동 중...{' '*20}")
+            else:
+                # 시간제 사용자용 실시간 차감 연산
+                current_run = stats['pure_run_time']
+                if bot_active and run_start_time is not None:
+                    current_run += (time.time() - run_start_time)
+                rem = max(0, max_allowed_seconds - current_run)
+                h = int(rem // 3600)
+                m = int((rem % 3600) // 60)
+                s = int(rem % 60)
+                sys.stdout.write(f"\r⏳ 남은 시간: {h}시간 {m}분 {s}초{' '*20}")
+            
+            sys.stdout.flush()
+            time.sleep(0.5) # 0.5초마다 즉각 갱신
+            
+    threading.Thread(target=timer_overlay, daemon=True).start()
 
     cast_fail_count = 0 # 연속 캐스팅 실패 감지용 카운터
     

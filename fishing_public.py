@@ -753,17 +753,21 @@ def align_view_by_anchor(anchor_img):
             continue
     return False
 
-def get_tension_status(exact_roi):
+def get_tension_status():
     """
-    [v8 하이퍼 옵티마이즈] 무거운 이미지 검색 로직을 전부 폐기하고, 
-    State 4 진입 시 딱 1번 찾아둔 110x110 좌표(exact_roi)만 빛의 속도로 캡처합니다.
+    [광역 스캔 패치] 좁은 추적 박스를 완전히 버리고, 화면 중앙의 거대한 영역(1200x800)을 광역 스캔합니다.
+    (완전한 전체화면은 빨간색 채팅이나 UI 요소 때문에 오작동할 수 있어 가장자리 간섭만 잘라냅니다.)
     """
-    if not exact_roi: return 0
     try:
-        # 110x110 초소형 캡처 전용으로 속도 극대화 (약 0.001~0.005초 소요)
-        target_img = fast_cv_screenshot(region=exact_roi, gray=False)
+        # 화면 중앙을 꽉 채우는 1200 x 800 광역 렌즈 생성
+        wide_w, wide_h = 1200, 800
+        wide_x = max(0, CENTER_X - (wide_w // 2))
+        wide_y = max(0, CENTER_Y - (wide_h // 2))
+        wide_region = (wide_x, wide_y, wide_w, wide_h)
         
-        # 명도와 채도를 엄격하게 깎아 핫핑크/레드만 반응하도록 유지 (fast_cv_screenshot은 BGR 반환이므로 BGR2HSV 사용)
+        target_img = fast_cv_screenshot(region=wide_region, gray=False)
+        
+        # 색상 범위는 넓혀둔 상태(100)를 그대로 유지합니다.
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
         lower_red1 = np.array([0, 145, 145])
         upper_red1 = np.array([10, 255, 255])
@@ -1275,28 +1279,13 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.2)
                 missing_ui_count = 0 
                 
-                # [핵심 1] 렌즈 고정 및 동적 스케일링 연산
-                gauge_roi = None
-                dynamic_threshold = 15 # 기본 임계값
+                # [핵심 1] 광역 스캔으로 변경되면서 복잡한 렌즈 위치 추적 로직을 전부 폐기합니다!
                 ui_pos = safe_find_image('fishing_mode.png', 0.6)
+                current_scale = IMAGE_SCALE_CACHE.get('fishing_mode.png', 1.0) if ui_pos else 1.0
                 
-                if ui_pos:
-                    current_scale = IMAGE_SCALE_CACHE.get('fishing_mode.png', 1.0)
-                    cx = ui_pos.left + ui_pos.width // 2
-                    cy = ui_pos.top + ui_pos.height // 2
-                    
-                    # [패치 2: 스캔 렌즈 확장] 110x110은 너무 좁아 텐션바가 시야에서 도망갑니다.
-                    # 박스를 200x200으로 4배 넓혀서 텐션 게이지가 어디서 깜빡이든 모조리 잡아냅니다.
-                    half_size = int(100 * current_scale)
-                    full_size = half_size * 2
-                    x1 = max(0, cx - half_size)
-                    y1 = max(0, cy - half_size)
-                    gauge_roi = (int(x1), int(y1), full_size, full_size)
-                    
-                    # 영역이 넓어진 만큼 잡음(오탐)을 방지하기 위해 픽셀 감지 요구치를 살짝 올립니다.
-                    dynamic_threshold = max(10, int(20 * (current_scale ** 2)))
-                else:
-                    gauge_roi = (CENTER_X - 100, CENTER_Y - 100, 200, 200)
+                # 렌즈가 1200x800으로 어마어마하게 커졌으므로, 허공의 미세한 빨간 먼지에 반응하지 않도록
+                # 픽셀 요구치(임계값)를 대폭(100픽셀 이상) 올려서 "진짜 텐션바"에만 반응하게 만듭니다.
+                dynamic_threshold = max(80, int(150 * (current_scale ** 2)))
                 
                 def check_status():
                     nonlocal missing_ui_count
@@ -1339,7 +1328,7 @@ def fishing_bot(max_allowed_seconds):
                     # 1. [연산 최적화] 매번 찾지 않고, 110x110 초소형 영역만 0.001초 만에 스캔
                     red_count = get_tension_status(gauge_roi)
                     
-                    # 파이팅 진입 직후 1.5초 동안은 애니메이션 붉은 잔상을 무시하고 무조건 당김!
+                    # 파이팅 진입 직후 1초 동안은 애니메이션 붉은 잔상을 무시하고 무조건 당김!
                     if time.time() - fight_start_time < 1:
                         if not is_pulling:
                             send_cmd('L')

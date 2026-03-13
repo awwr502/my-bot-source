@@ -177,29 +177,29 @@ last_report_date = date.today() # 부팅 날짜 기록
 STATS_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stats_cache.json")
 
 def load_stats_cache():
-    """부팅 시 하드디스크에 저장된 이전 통계 기록을 불러옵니다."""
-    global stats, last_report_date
-    try:
-        if os.path.exists(STATS_CACHE_FILE):
-            with open(STATS_CACHE_FILE, "r", encoding="utf-8") as f:
-                saved_data = json.load(f)
-                for k in stats.keys():
-                    if k in saved_data:
-                        stats[k] = saved_data[k]
-                if "last_report_date" in saved_data:
-                    last_report_date = datetime.strptime(saved_data["last_report_date"], "%Y-%m-%d").date()
-    except Exception as e:
-        print(f"  > [경고] 통계 캐시 불러오기 실패: {e}")
+    """부팅 시 하드디스크에 저장된 이전 통계 기록을 불러옵니다."""
+    global stats, last_report_date
+    try:
+        if os.path.exists(STATS_CACHE_FILE):
+            with open(STATS_CACHE_FILE, "r", encoding="utf-8") as f:
+                saved_data = json.load(f)
+                for k in stats.keys():
+                    if k in saved_data:
+                        stats[k] = saved_data[k]
+                if "last_report_date" in saved_data:
+                    last_report_date = datetime.strptime(saved_data["last_report_date"], "%Y-%m-%d").date()
+    except Exception as e:
+        print(f"  > [경고] 통계 캐시 불러오기 실패: {e}")
 
 def save_stats_cache():
-    """현재 메모리의 통계를 하드디스크에 영구 저장합니다."""
-    try:
-        save_data = stats.copy()
-        save_data["last_report_date"] = last_report_date.strftime("%Y-%m-%d")
-        with open(STATS_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(save_data, f, indent=4, ensure_ascii=False)
-    except:
-        pass
+    """현재 메모리의 통계를 하드디스크에 영구 저장합니다."""
+    try:
+        save_data = stats.copy()
+        save_data["last_report_date"] = last_report_date.strftime("%Y-%m-%d")
+        with open(STATS_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(save_data, f, indent=4, ensure_ascii=False)
+    except:
+        pass
 
 # 파이썬 실행 시 즉시 통계 복구
 load_stats_cache()
@@ -764,13 +764,13 @@ def get_tension_status(exact_roi):
 
 def force_exit():
     global run_start_time
-    bprint("\n\n!!! 긴급 종료 요청 감지 !!!")
-    dump_blackbox_log("사용자_강제종료_요청") # [블랙박스 트리거 추가]
-    
-    # 봇이 종료되기 직전에 마지막 가동 시간을 쥐어짜서 기록하고 영구 세이브
-    if bot_active and run_start_time is not None:
-        stats['pure_run_time'] += (time.time() - run_start_time)
-    save_stats_cache()
+    bprint("\n\n!!! 긴급 종료 요청 감지 !!!")
+    dump_blackbox_log("사용자_강제종료_요청") # [블랙박스 트리거 추가]
+    
+    # 봇이 종료되기 직전에 마지막 가동 시간을 쥐어짜서 기록하고 영구 세이브
+    if bot_active and run_start_time is not None:
+        stats['pure_run_time'] += (time.time() - run_start_time)
+    save_stats_cache()
     try:
         send_cmd('U'); send_cmd('R')
     except: pass
@@ -908,9 +908,9 @@ def fishing_bot(max_allowed_seconds):
                     bprint(f"  > [통계 시스템] 1시간 단위 스냅샷 저장! (입질 {hook_delta} / 포획 {catch_delta} / 스킵 {skip_delta})")
                     save_stats_cache() # 1시간 스냅샷 달성 시 CMD가 꺼져도 안 날아가게 영구 세이브
             # ----------------------------------------
-            
-            # 1. 상태가 넘어가면(정상 진행) 타이머를 0초로 리셋
-            if state != last_state:
+            
+            # 1. 상태가 넘어가면(정상 진행) 타이머를 0초로 리셋
+            if state != last_state:
                 state_start_time = time.time()
                 last_state = state
                 

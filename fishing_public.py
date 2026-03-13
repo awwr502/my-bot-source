@@ -577,14 +577,14 @@ def send_cmd(cmd):
 # [스마트 비전 엔진] 이미지 램(RAM) 캐싱 저장소
 IMAGE_CACHE = {} 
 
-# [다중 스케일 엔진] 창 배율(Scale) 기억 장치
-IMAGE_SCALE_CACHE = {}
+# [초고속 단일 배율 엔진] 사용자 아이디어 적용 (전역 배율 잠금)
+GLOBAL_SCALE = None 
 
 # [데이터 샘플링 엔진] 점진적 확장(Incremental Expansion) ROI 저장소
 from collections import deque
 ROI_SAMPLER = {}
 ROI_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "roi_cache.json")
-FALLBACK_COOLDOWN = {} # 부하 방지용 폴백 쿨다운 저장소
+FALLBACK_COOLDOWN = {} 
 
 class Box:
     """pyautogui의 리턴값과 100% 동일하게 동작하도록 만든 가짜 Box 객체 (하위 호환성 유지)"""
@@ -595,13 +595,14 @@ class Box:
         self.height = height
 
 def load_roi_cache():
-    """저장된 ROI 기억(json)을 불러옵니다."""
-    global ROI_SAMPLER
+    """저장된 ROI 기억 및 전역 배율(Scale)을 불러옵니다."""
+    global ROI_SAMPLER, GLOBAL_SCALE
     try:
         if os.path.exists(ROI_CACHE_FILE):
             with open(ROI_CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                for k, v in data.items():
+                GLOBAL_SCALE = data.get('global_scale')
+                for k, v in data.get('rois', {}).items():
                     ROI_SAMPLER[k] = {
                         'samples': deque(v.get('samples', []), maxlen=10),
                         'master_box': v.get('master_box')
@@ -610,12 +611,12 @@ def load_roi_cache():
         print(f"  > [경고] ROI 캐시 불러오기 실패: {e}")
 
 def save_roi_cache():
-    """현재까지 학습된 ROI 기억을 json 파일로 영구 저장합니다."""
-    global ROI_SAMPLER
+    """현재까지 학습된 ROI 기억과 전역 배율을 영구 저장합니다."""
+    global ROI_SAMPLER, GLOBAL_SCALE
     try:
-        save_data = {}
+        save_data = {'global_scale': GLOBAL_SCALE, 'rois': {}}
         for k, v in ROI_SAMPLER.items():
-            save_data[k] = {
+            save_data['rois'][k] = {
                 'samples': list(v['samples']),
                 'master_box': v['master_box']
             }
@@ -646,9 +647,9 @@ def preload_all_images():
                 print(f"  > [경고] {filename} 메모리 적재 실패: {e}")
     bprint(f">>> [시스템] 총 {count}개의 이미지 캐싱 완료! (탐색 준비 끝) <<<\n")
 
-def safe_find_image(img_path, conf=0.6, region=None):
-    """[배포용 완전체 엔진] ROI 위치 기억(속도) + 다중 스케일 적응(호환성) 통합"""
-    global IMAGE_CACHE, ROI_SAMPLER, IMAGE_SCALE_CACHE, FALLBACK_COOLDOWN
+def safe_find_image(img_path, conf=0.6, region=None, exact_only=False):
+    """[전역 배율 엔진 탑재] exact_only 플래그를 통해 CPU 부하를 0%로 만드는 탐색 엔진"""
+    global IMAGE_CACHE, ROI_SAMPLER, GLOBAL_SCALE, FALLBACK_COOLDOWN
     template = IMAGE_CACHE.get(img_path)
     
     try:
@@ -662,7 +663,6 @@ def safe_find_image(img_path, conf=0.6, region=None):
             else:
                 return None
 
-        # 딕셔너리 및 deque 초기화 (최초 1회)
         if img_path not in ROI_SAMPLER:
             ROI_SAMPLER[img_path] = {'samples': deque(maxlen=10), 'master_box': None}
             
@@ -670,7 +670,6 @@ def safe_find_image(img_path, conf=0.6, region=None):
         target_monitor = None
         is_using_master = False
 
-        # [핵심] 탐색 구역(Monitor) 결정 로직
         if region == "FULL_SCREEN":
             target_monitor = sct.monitors[1]
             region = None 
@@ -682,22 +681,21 @@ def safe_find_image(img_path, conf=0.6, region=None):
         else:
             target_monitor = sct.monitors[1]
 
-        # 캡처 
         sct_img = sct.grab(target_monitor)
         screen_np = np.array(sct_img)
         screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
 
-        # [다중 스케일 엔진 융합] 배포용 호환성을 위해 가장 최근 성공한 배율을 1순위로 스캔
-        last_scale = IMAGE_SCALE_CACHE.get(img_path, 1.0)
-        scales = [last_scale, 1.0, 0.9, 1.1, 0.8, 1.2]
-        unique_scales = []
-        [unique_scales.append(x) for x in scales if x not in unique_scales]
+        # [전역 배율 잠금 엔진] 사용자 아이디어 완벽 적용!
+        # 파이팅 모드(exact_only=True)이거나 이미 배율을 구했다면 연산 낭비 없이 1번만 검사
+        if exact_only or GLOBAL_SCALE is not None:
+            scales = [GLOBAL_SCALE if GLOBAL_SCALE else 1.0]
+        else:
+            scales = [1.0, 0.9, 1.1, 0.8, 1.2]
 
-        for scale in unique_scales:
+        for scale in scales:
             w, h = int(template.shape[1] * scale), int(template.shape[0] * scale)
             if w < 10 or h < 10: continue
 
-            # 배율이 1.0이면 연산 낭비 없이 원본 사용
             if scale == 1.0:
                 resized = template
             else:
@@ -706,22 +704,19 @@ def safe_find_image(img_path, conf=0.6, region=None):
             res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             
-            # 오탐 방지를 위한 엄격한 잣대 (새로운 비율을 찔러볼 때는 0.85 이상)
-            required_conf = conf if scale == last_scale else max(conf, 0.85)
+            if max_val >= conf:
+                # 최초로 이미지를 찾았을 때, 해당 배율을 전역으로 잠그고 파일에 저장합니다.
+                if GLOBAL_SCALE is None and not exact_only:
+                    GLOBAL_SCALE = scale
+                    save_roi_cache()
+                    bprint(f"\n  > [시스템] 모니터 배율 자동 측정 완료! 전역 배율 {scale*100:.0f}% 로 영구 고정합니다.\n")
 
-            # 신뢰도를 넘었을 경우
-            if max_val >= required_conf:
-                # 성공한 배율을 두뇌에 각인
-                IMAGE_SCALE_CACHE[img_path] = scale
-                
                 real_x = max_loc[0] + target_monitor["left"]
                 real_y = max_loc[1] + target_monitor["top"]
 
-                # [점진적 확장 로직] 하드코딩된 region이 아닐 때 무조건 좌표를 큐에 밀어넣음
                 if not region:
                     cache_data['samples'].append((real_x, real_y, w, h))
                     
-                    # 단 1개의 데이터만 있어도 즉시 상자를 갱신 (점진적 팽창 및 축소)
                     pad = 30
                     min_x = min(s[0] for s in cache_data['samples']) - pad
                     min_y = min(s[1] for s in cache_data['samples']) - pad
@@ -735,24 +730,19 @@ def safe_find_image(img_path, conf=0.6, region=None):
                         "height": int(max_y - min_y)
                     }
 
-                    # 상자 크기가 늘어나거나 줄어들며 갱신될 때마다 즉시 세이브 파일 덮어쓰기
                     save_roi_cache()
 
                 return Box(real_x, real_y, w, h)
             
-        # 다중 스케일을 모두 돌았는데도 못 찾았을 때의 폴백(Fallback) 안전망
         if is_using_master:
-            # [파이팅 게이지 렉 해결] 전체화면 스캔 도배 방지 (1초 쿨다운)
             last_fallback = FALLBACK_COOLDOWN.get(img_path, 0)
-            if time.time() - last_fallback > 1.0: # 1초에 단 1번만 전체화면 스캔 허용
-                # 전체 화면 재귀 탐색
-                res_fallback = safe_find_image(img_path, conf, region="FULL_SCREEN")
+            if time.time() - last_fallback > 1.0: 
+                # exact_only 플래그를 재귀 호출에도 그대로 전달
+                res_fallback = safe_find_image(img_path, conf, region="FULL_SCREEN", exact_only=exact_only)
                 if res_fallback is None:
-                    # 전체 화면에서도 못 찾음 = 화면에 진짜 없는 상태 -> 1초 쿨다운 부여
                     FALLBACK_COOLDOWN[img_path] = time.time()
                 return res_fallback
             else:
-                # 쿨다운 중이므로 무거운 전체화면 스캔을 생략하고 즉시 포기 (렉 방지)
                 return None
 
         return None
@@ -1394,27 +1384,26 @@ def fishing_bot(max_allowed_seconds):
                 missing_ui_count = 0 
                 
                 # [핵심 1] 렌즈 고정: 화면을 9등분하여 하단 중앙(8번 구역) 전체를 고정 광역 렌즈로 덮어씌웁니다.
-                # 기존의 복잡한 위치 추적/배율 계산 로직을 전부 폐기하여 오탐을 원천 차단합니다.
                 gauge_roi = get_dynamic_sector8_roi()
                 
                 def check_status():
                     nonlocal missing_ui_count
                     if check_exit_notification(): return "RESET"
 
-                    # QTE 탐지
+                    # QTE 탐지 (CPU 렉 방지를 위해 배율 1개만 검사하는 exact_only=True 적용)
                     for img, key in [('press_A.png', 'A'), ('press_D.png', 'D')]:
-                        if safe_find_image(img, 0.6):
+                        if safe_find_image(img, 0.6, exact_only=True):
                             missing_ui_count = 0 
                             send_cmd('U') # QTE 시 당기기 중지
                             bprint(f"  ! [QTE] {key} 대응 시작")
-                            while safe_find_image(img, 0.6) and bot_active:
+                            while safe_find_image(img, 0.6, exact_only=True) and bot_active:
                                 send_cmd(key); time.sleep(0.05)
                             send_cmd('R')
                             return "QTE"
 
-                    if safe_find_image('catch_F.png', 0.7): return "FINISH"
+                    if safe_find_image('catch_F.png', 0.7, exact_only=True): return "FINISH"
 
-                    if not safe_find_image('fishing_mode.png', 0.6): 
+                    if not safe_find_image('fishing_mode.png', 0.6, exact_only=True): 
                         missing_ui_count += 1
                         if missing_ui_count >= 50: 
                             bprint("  > [유실] 낚시 UI가 장시간 보이지 않음 -> 초기화")
@@ -1428,43 +1417,32 @@ def fishing_bot(max_allowed_seconds):
                 bprint("  > [AI 파이팅] 고정 렌즈 추적 시작")
                 is_pulling = False 
                 last_ui_check = time.time()
+                fight_start_time = time.time()
                 
-                fight_start_time = time.time() # 파이팅 진입 시간 기록
-                
-                while True: # bot_active로 스르륵 탈출 방지
-                    if not bot_active: raise BotStopException() # 즉시 폭파
+                while True: 
+                    if not bot_active: raise BotStopException() 
 
-                    # 1. [연산 최적화] 매번 찾지 않고, 초소형 영역만 0.001초 만에 스캔
                     red_count = get_tension_status(gauge_roi)
                     
-                    # [해결 핵심] 이중 문턱(Hysteresis) 시스템 도입
-                    # 단일 임계점 사용 시, 14~15 사이를 오가며 1초에 수십 번의 L/U 명령이 아두이노에 폭격됩니다.
-                    # 이로 인해 아두이노가 뻗어서 '꾹 누름(L)' 상태로 굳어버리는 통신 버그를 원천 차단합니다.
-                    danger_limit = 20  # 20 이상이면 위험! 즉시 손 떼기 (U)
-                    safe_limit = 2     # 2 이하로 안전하게 식을 때까지 대기 후 다시 당기기 (L)
+                    danger_limit = 20  
+                    safe_limit = 2     
 
-                    # [디버그] 콘솔에서 수치 확인
                     sys.stdout.write(f"\r🔍 [감지 중] 픽셀: {red_count} (위험:{danger_limit} / 안전:{safe_limit})   ")
                     sys.stdout.flush()
                     
-                    # 파이팅 진입 직후 1초 동안은 무조건 당김 (잔상 무시)
                     if time.time() - fight_start_time < 1.0:
                         if not is_pulling:
-                            send_cmd('L')
-                            is_pulling = True
+                            send_cmd('L'); is_pulling = True
                         time.sleep(0.01)
                     else:
                         if red_count >= danger_limit:
                             if is_pulling:
-                                send_cmd('U') 
-                                is_pulling = False
+                                send_cmd('U'); is_pulling = False
                         elif red_count <= safe_limit:
                             if not is_pulling:
-                                send_cmd('L') 
-                                is_pulling = True
+                                send_cmd('L'); is_pulling = True
                         time.sleep(0.01)
                     
-                    # [핵심 2] 랜덤 렉 방지. 전체 화면 스캔은 0.1초에 1번만
                     if time.time() - last_ui_check > 0.1:
                         res = check_status()
                         last_ui_check = time.time()
@@ -1474,9 +1452,10 @@ def fishing_bot(max_allowed_seconds):
                         if res == "RESET": 
                             send_cmd('U'); state = 1; break
                         if res == "QTE": 
-                            bprint("\n  > [QTE] 대응 완료. 0.01초 대기 후 텐션 조절 재개")
+                            bprint("\n  > [QTE] 대응 완료. 게이지 안정화 대기 (0.5초)")
                             is_pulling = False
-                            time.sleep(0.01)
+                            send_cmd('U') # 확실하게 손을 뗌
+                            time.sleep(0.5) # [핵심] QTE 동안 차오른 빨간 게이지를 완전히 식힘!
                             continue
 
             # --- [State 5] 수거 (완결성 검증 로직) ---

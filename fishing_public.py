@@ -753,24 +753,28 @@ def align_view_by_anchor(anchor_img):
             continue
     return False
 
-def get_tension_status():
+def get_tension_status(exact_roi):
     """
-    [전체화면 롤백] AI 좌표 인식의 헛발질을 배제하고 전체화면에서 즉시 붉은색을 탐색합니다.
+    [완전 고정 타겟팅] 화면 중앙의 고정된 영역에서 사진과 동일한 핫핑크 색상만 추출합니다.
     """
+    if not exact_roi: return 0
     try:
-        # region을 None으로 두어 화면 전체 초고속 캡처
-        target_img = fast_cv_screenshot(region=None, gray=False)
+        target_img = fast_cv_screenshot(region=exact_roi, gray=False)
         
-        # 임계 도달 시 변하는 '붉은색'만 정밀하게 타겟팅하여 원상 복구
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
-        lower_red1 = np.array([0, 145, 145])
-        upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([165, 160, 160])
-        upper_red2 = np.array([180, 255, 255])
         
-        mask1 = cv2.inRange(img_hsv, lower_red1, upper_red1)
-        mask2 = cv2.inRange(img_hsv, lower_red2, upper_red2)
-        mask = cv2.bitwise_or(mask1, mask2)
+        # [수정] 사진에서 추출한 정확한 '핫핑크/마젠타' 계열의 붉은색 프로필
+        # 일반적인 순수 빨간색이 아니라 푸른빛이 도는 핑크레드(H: 155~180) 영역입니다.
+        lower_pink = np.array([155, 100, 150])
+        upper_pink = np.array([180, 255, 255])
+        
+        # 순수 빨간색(H: 0~5) 영역 (혹시 모를 그라데이션 대비)
+        lower_red = np.array([0, 100, 150])
+        upper_red = np.array([5, 255, 255])
+        
+        mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
+        mask_red = cv2.inRange(img_hsv, lower_red, upper_red)
+        mask = cv2.bitwise_or(mask_pink, mask_red)
         
         red_pixels = cv2.countNonZero(mask)
         return red_pixels
@@ -1273,7 +1277,9 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.2)
                 missing_ui_count = 0 
                 
-                # [전체화면 롤백] AI 좌표 인식을 통한 좁은 구역(ROI) 할당 기능을 완전히 삭제합니다.
+                # [수정] AI 이미지 인식(fishing_mode.png)이 엉뚱한 곳을 잡는 현상 원천 차단.
+                # 낚시 게이지는 항상 캐릭터 주변(화면 정중앙)에 뜨므로, 무조건 화면 정중앙 400x400 영역만 보도록 렌즈를 박아버립니다.
+                gauge_roi = (CENTER_X - 200, CENTER_Y - 200, 400, 400)
                 
                 def check_status():
                     nonlocal missing_ui_count
@@ -1312,18 +1318,19 @@ def fishing_bot(max_allowed_seconds):
                 while True: # bot_active로 스르륵 탈출 방지
                     if not bot_active: raise BotStopException() # 즉시 폭파
 
-                    # 1. 전체 화면 영역에서 텐션 픽셀 추출
-                    red_count = get_tension_status()
+                    # 1. 중앙 400x400 영역에서 핫핑크 픽셀 추출
+                    red_count = get_tension_status(gauge_roi)
                     
-                    # [오리지널 유지] 사용자님 말씀대로 1초 무조건 당기기는 안전하므로 원상 복구!
+                    # 1초 무조건 당기기 로직 (원상 복구)
                     if time.time() - fight_start_time < 1.0:
                         if not is_pulling:
                             send_cmd('L')
                             is_pulling = True
                         time.sleep(0.01)
                     else:
-                        # 렌즈는 400x400으로 넓혔지만, 엄격한 색상 필터를 적용했으므로 임계값은 30으로 세팅
-                        if red_count >= 400:
+                        # 중앙 영역만 감시하므로 배경 노이즈가 적습니다.
+                        # 핫핑크 게이지가 차오르는 것을 확실히 감지하기 위해 임계값을 150픽셀로 설정합니다.
+                        if red_count >= 150:
                             if is_pulling:
                                 send_cmd('U') 
                                 is_pulling = False

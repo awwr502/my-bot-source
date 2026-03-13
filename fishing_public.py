@@ -755,15 +755,13 @@ def align_view_by_anchor(anchor_img):
 
 def get_tension_status(exact_roi):
     """
-    [오리지널 하이퍼 옵티마이즈] 무거운 전체화면 스캔을 폐기하고, 
-    파이팅 진입 시 찾아둔 110x110 고정 좌표만 빛의 속도로 캡처합니다.
+    [오리지널 하이퍼 옵티마이즈] 파이팅 진입 시 찾아둔 고정 좌표만 초고속 캡처합니다.
     """
     if not exact_roi: return 0
     try:
-        # 110x110 초소형 캡처 전용으로 속도 극대화 (약 0.001~0.005초 소요)
         target_img = fast_cv_screenshot(region=exact_roi, gray=False)
         
-        # 명도와 채도를 엄격하게 깎아 핫핑크/레드만 완벽하게 반응하도록 원상 복구
+        # 임계 도달 시 변하는 '붉은색'만 정밀하게 타겟팅하여 원상 복구
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
         lower_red1 = np.array([0, 145, 145])
         upper_red1 = np.array([10, 255, 255])

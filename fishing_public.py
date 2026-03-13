@@ -769,9 +769,9 @@ def get_tension_status():
         
         # 색상 범위는 넓혀둔 상태(100)를 그대로 유지합니다.
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
-        lower_red1 = np.array([0, 145, 145])
+        lower_red1 = np.array([0, 100, 100])
         upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([165, 160, 160])
+        lower_red2 = np.array([160, 100, 100])
         upper_red2 = np.array([180, 255, 255])
         
         mask1 = cv2.inRange(img_hsv, lower_red1, upper_red1)

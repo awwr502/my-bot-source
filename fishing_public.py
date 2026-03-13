@@ -845,7 +845,7 @@ def align_view_by_anchor(anchor_img):
 
 def get_dynamic_sector8_roi():
     """
-    [광역 스캔 엔진] 화면 9등분 시스템 적용 (8번 구역 전체 영역 반환)
+    [광역 스캔 엔진] 디버그 결과 반영: 중앙~하단(캐릭터 허리 부근) 커스텀 영역 반환
     """
     import ctypes
     from ctypes import wintypes
@@ -861,20 +861,20 @@ def get_dynamic_sector8_roi():
         w = rect.right - rect.left
         h = rect.bottom - rect.top
         
-        # 3. 9등분 시스템 계산 (가로 1/3, 세로 1/3)
+        # 3. 디버그 사진 분석에 따른 최적 ROI 도출
+        # 가로는 화면 중앙 1/3 영역을 그대로 유지합니다.
         sub_w = w // 3
-        sub_h = h // 3
-        
-        # 4. 8번 구역(하단 중앙 전체) 좌표 도출
-        # x 시작점: 왼쪽에서 1/3 지점
-        # y 시작점: 위에서 2/3 지점
         x_start = rect.left + sub_w
-        y_start = rect.top + (sub_h * 2)
         
-        return (int(x_start), int(y_start), int(sub_w), int(sub_h))
+        # 세로는 화면 상단 기준 45% 지점부터 시작하여 35% 만큼의 높이만 캡처합니다. (45% ~ 80% 구간)
+        # 이렇게 하면 윗배경(하늘, 머리)과 최하단(스태미나 바)이 완벽하게 잘려나가고 게이지만 남습니다.
+        y_start = rect.top + int(h * 0.45)
+        target_h = int(h * 0.35)
+        
+        return (int(x_start), int(y_start), int(sub_w), int(target_h))
     except:
-        # 실패 시 1920x1080 꽉 찬 모니터 기준 8번 구역 강제 할당
-        return (640, 720, 640, 360)
+        # 실패 시 1920x1080 모니터 기준 안전 폴백
+        return (640, 486, 640, 378)
 
 def get_tension_status(exact_roi):
     """

@@ -1065,8 +1065,9 @@ def fishing_bot(max_allowed_seconds):
                 send_cmd('U') # 혹시 모를 클릭 해제
                 send_cmd('R')
                 
-                # 알림 처리 후에도 사진 유무를 다시 평가하여 복귀 상태 결정
-                if safe_find_image('start_condition.png', 0.70):
+                # [버그 픽스] 잠수방지 단독 모드(.2) 구매자가 알림을 해제한 직후, 
+                # 낚시 화면이 보인다고 해서 불법으로 낚시(State 1)를 시작해버리는 현상을 원천 차단합니다!
+                if ENABLE_FISHING and safe_find_image('start_condition.png', 0.70):
                     state = 1
                 else:
                     state = 0
@@ -1571,10 +1572,16 @@ if __name__ == "__main__":
         sys.exit()
         
     try:
-        raw_val = float(sys.argv[1])
-        allocated_hours = int(raw_val) # 정수 부분
-        feature_code = round((raw_val - allocated_hours) * 10) # 소수점 첫째 자리
-        
+        # [완벽 파싱] 부동소수점 오류를 막기 위해 글자(String) 기준으로 자릅니다.
+        raw_str = sys.argv[1]
+        if '.' in raw_str:
+            parts = raw_str.split('.')
+            allocated_hours = int(parts[0])
+            feature_code = int(parts[1][0])
+        else:
+            allocated_hours = int(float(raw_str))
+            feature_code = 0
+            
         max_seconds = allocated_hours * 3600
         
         # [라이선스 모듈 세팅]

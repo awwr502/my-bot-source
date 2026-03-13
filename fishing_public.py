@@ -845,36 +845,34 @@ def align_view_by_anchor(anchor_img):
 
 def get_dynamic_sector8_roi():
     """
-    [광역 스캔 엔진] 디버그 결과 반영: 중앙~하단(캐릭터 허리 부근) 커스텀 영역 반환
+    [초정밀 타겟팅 엔진] 디버그 피드백 반영: 불필요한 상단/좌우 제거 및 하단 릴 전체 확보
     """
     import ctypes
     from ctypes import wintypes
     
     try:
         user32 = ctypes.windll.user32
-        # 1. 현재 활성화된 창 핸들 취득
         hwnd = user32.GetForegroundWindow()
         rect = wintypes.RECT()
         
-        # 2. 창의 실제 좌표 획득 (left, top, right, bottom)
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
         w = rect.right - rect.left
         h = rect.bottom - rect.top
         
-        # 3. 디버그 사진 분석에 따른 최적 ROI 도출
-        # 가로는 화면 중앙 1/3 영역을 그대로 유지합니다.
-        sub_w = w // 3
-        x_start = rect.left + sub_w
+        # 3. 사진 분석 결과 적용 (초정밀 타겟팅)
+        # 가로: 기존 33%는 너무 넓습니다. 릴 아이콘이 있는 정중앙 20% 폭만 가져옵니다. (화면의 40% ~ 60% 구간)
+        sub_w = int(w * 0.20)
+        x_start = rect.left + int(w * 0.40)
         
-        # 세로는 화면 상단 기준 45% 지점부터 시작하여 35% 만큼의 높이만 캡처합니다. (45% ~ 80% 구간)
-        # 이렇게 하면 윗배경(하늘, 머리)과 최하단(스태미나 바)이 완벽하게 잘려나가고 게이지만 남습니다.
-        y_start = rect.top + int(h * 0.45)
-        target_h = int(h * 0.35)
+        # 세로: 기존(45%)은 너무 위쪽이었습니다. 물고기 이름과 체력바를 피하기 위해 시작점을 65%로 대폭 내립니다.
+        # 동시에 아래쪽에 잘려나갔던 릴 테두리를 온전히 담기 위해 끝나는 지점을 90%까지 확장합니다. (65% ~ 90% 구간)
+        y_start = rect.top + int(h * 0.65)
+        target_h = int(h * 0.25)
         
         return (int(x_start), int(y_start), int(sub_w), int(target_h))
     except:
-        # 실패 시 1920x1080 모니터 기준 안전 폴백
-        return (640, 486, 640, 378)
+        # 실패 시 1920x1080 모니터 기준 안전 폴백 (x:768, y:702, w:384, h:270)
+        return (768, 702, 384, 270)
 
 def get_tension_status(exact_roi):
     """

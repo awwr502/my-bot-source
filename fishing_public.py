@@ -1437,8 +1437,14 @@ def fishing_bot(max_allowed_seconds):
                     # 1. [연산 최적화] 매번 찾지 않고, 초소형 영역만 0.001초 만에 스캔
                     red_count = get_tension_status(gauge_roi)
                     
-                    # [디버그] 콘솔에서 수치가 15 이상 올라가는지 직관적으로 확인
-                    sys.stdout.write(f"\r🔍 [감지 중] 붉은 픽셀 수: {red_count} (임계점: 15)   ")
+                    # [해결 핵심] 이중 문턱(Hysteresis) 시스템 도입
+                    # 단일 임계점 사용 시, 14~15 사이를 오가며 1초에 수십 번의 L/U 명령이 아두이노에 폭격됩니다.
+                    # 이로 인해 아두이노가 뻗어서 '꾹 누름(L)' 상태로 굳어버리는 통신 버그를 원천 차단합니다.
+                    danger_limit = 20  # 20 이상이면 위험! 즉시 손 떼기 (U)
+                    safe_limit = 2     # 2 이하로 안전하게 식을 때까지 대기 후 다시 당기기 (L)
+
+                    # [디버그] 콘솔에서 수치 확인
+                    sys.stdout.write(f"\r🔍 [감지 중] 픽셀: {red_count} (위험:{danger_limit} / 안전:{safe_limit})   ")
                     sys.stdout.flush()
                     
                     # 파이팅 진입 직후 1초 동안은 무조건 당김 (잔상 무시)
@@ -1448,17 +1454,15 @@ def fishing_bot(max_allowed_seconds):
                             is_pulling = True
                         time.sleep(0.01)
                     else:
-                        # 2. 반응 임계값 15픽셀 (절대값 기반 초고속 반응)
-                        if red_count >= 15:
+                        if red_count >= danger_limit:
                             if is_pulling:
                                 send_cmd('U') 
                                 is_pulling = False
-                            time.sleep(0.01) # 식힐 때 확실히 대기
-                        else:
+                        elif red_count <= safe_limit:
                             if not is_pulling:
                                 send_cmd('L') 
                                 is_pulling = True
-                            time.sleep(0.01)
+                        time.sleep(0.01)
                     
                     # [핵심 2] 랜덤 렉 방지. 전체 화면 스캔은 0.1초에 1번만
                     if time.time() - last_ui_check > 0.1:

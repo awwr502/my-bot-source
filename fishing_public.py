@@ -1323,7 +1323,7 @@ def fishing_bot(max_allowed_seconds):
                         time.sleep(0.01)
                     else:
                         # 렌즈는 400x400으로 넓혔지만, 엄격한 색상 필터를 적용했으므로 임계값은 30으로 세팅
-                        if red_count >= 30:
+                        if red_count >= 400:
                             if is_pulling:
                                 send_cmd('U') 
                                 is_pulling = False

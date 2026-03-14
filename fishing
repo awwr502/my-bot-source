@@ -117,9 +117,26 @@ class BotStopException(Exception): pass
 # 모든 time.sleep 에 일괄적으로 +-0.05초 랜덤 딜레이 적용
 original_sleep = time.sleep
 
+victory_active = False # [승리코인] 전역 상태 변수 추가
+
 def jitter_sleep(seconds):
-    global bot_active
+    global bot_active, victory_active
     # -0.05 ~ 0.05초 사이의 랜덤한 실수 생성
+    jitter = random.uniform(-0.05, 0.05)
+    # 딜레이가 0보다 작아지는 것을 방지
+    final_time = max(0, seconds + jitter)
+    
+    # 함수가 실행될 때(대기 시작 시점)의 봇 가동 상태를 기억합니다.
+    was_active_at_start = bot_active or victory_active
+    
+    # [핵심] 대기 시간을 0.05초 단위로 쪼개어 감시
+    start_t = time.time()
+    while time.time() - start_t < final_time:
+        # '가동 중'에 sleep에 들어왔는데, 도중에 '정지(False)'로 바뀌었을 때만 즉시 폭파!
+        current_active = bot_active or victory_active
+        if was_active_at_start and not current_active:
+            raise BotStopException()
+        original_sleep(max(0, min(0.05, final_time - (time.time() - start_t))))
     jitter = random.uniform(-0.05, 0.05)
     # 딜레이가 0보다 작아지는 것을 방지
     final_time = max(0, seconds + jitter)
@@ -500,12 +517,12 @@ bot_active = False
 remote_task = None # [핵심] 텔레그램 스레드와 메인 봇을 연결하는 지시용 우체통 변수
 
 def toggle_stop():
-    global bot_active, run_start_time
+    global bot_active, victory_active, run_start_time
     
     # 사용자가 '정지됨'을 명확히 알 수 있도록 즉각적인 피드백 출력
-    if bot_active:
+    if bot_active or victory_active:
         bprint("\n=============================================")
-        bprint("🔴 [정지 명령 접수] 단축키([) 입력 감지")
+        bprint("🔴 [정지 명령 접수] 단축키([ 또는 <) 입력 감지")
         bprint("=============================================")
     else:
         # 멈춘 줄 모르고 여러 번 눌렀을 때의 답답함 해소용 안내
@@ -517,6 +534,7 @@ def toggle_stop():
         run_start_time = None
         
     bot_active = False
+    victory_active = False
     save_stats_cache() # 봇이 대기 모드로 들어갈 때까지의 통계와 가동 시간을 안전하게 세이브
     try:
         # 강제 정지 시 마우스 좌클릭(당기기) 상태를 무조건 해제(U)
@@ -526,11 +544,21 @@ def toggle_stop():
         pass
 
 def toggle_start():
-    global bot_active, run_start_time
+    global bot_active, victory_active, run_start_time
+    if victory_active: toggle_stop() # 승리코인 동작 중이면 정지
     bot_active = True
     run_start_time = time.time()
     bprint("\n=============================================")
-    bprint("🟢 [시작 명령 접수] 단축키(]) 입력 감지")
+    bprint("🟢 [낚시 시작 명령 접수] 단축키(]) 입력 감지")
+    bprint("=============================================")
+
+def toggle_victory_start():
+    global bot_active, victory_active, run_start_time
+    if bot_active: toggle_stop() # 낚시봇 동작 중이면 정지
+    victory_active = True
+    run_start_time = time.time()
+    bprint("\n=============================================")
+    bprint("🟡 [승리코인 시작 명령 접수] 단축키(>) 입력 감지")
     bprint("=============================================")
 
 # --- 아두이노 자동 연결 (플러그 앤 플레이) ---
@@ -563,9 +591,9 @@ except Exception as e:
     sys.exit()
 
 def send_cmd(cmd):
-    global bot_active
+    global bot_active, victory_active
     # [핵심] 봇 정지 상태일 때 입력되는 모든 움직임/클릭 명령을 원천 차단하고 예외 발생
-    if not bot_active and cmd not in ['U', 'R']:
+    if not (bot_active or victory_active) and cmd not in ['U', 'R']:
         raise BotStopException()
     arduino.write(cmd.encode())
     arduino.flush()
@@ -912,9 +940,111 @@ def check_exit_notification(skip_esc=False):
         return True
     return False
 
+def victory_coin_bot_loop():
+    global victory_active
+    state = 1
+    
+    def check_img(img_name):
+        return safe_find_image(img_name, 0.7)
+        
+    def wait_vanish(img_name):
+        while check_img(img_name) and victory_active:
+            time.sleep(0.1)
+            
+    while True:
+        try:
+            if not victory_active:
+                time.sleep(0.1)
+                state = 1
+                continue
+            
+            if state == 1:
+                bprint("  > [승리코인] 1단계: 1.png / 2.png 탐색 중...")
+                found = None
+                for _ in range(11):
+                    if check_img('1.png'): found = '1.png'; break
+                    if check_img('2.png'): found = '2.png'; break
+                    time.sleep(0.05)
+                    
+                if found:
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                    wait_vanish(found)
+                    state = 2
+                else:
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                    
+            elif state == 2:
+                bprint("  > [승리코인] 2단계: 3.png 탐색 중...")
+                found = False
+                for _ in range(11):
+                    if check_img('3.png'): found = True; break
+                    time.sleep(0.05)
+                if found:
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                    wait_vanish('3.png')
+                state = 3
+                
+            elif state == 3:
+                bprint("  > [승리코인] 3단계: 4.jpg 탐색 중...")
+                found = False
+                for _ in range(11):
+                    if check_img('4.jpg'): found = True; break
+                    time.sleep(0.05)
+                if found:
+                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                    wait_vanish('4.jpg')
+                state = 4
+                
+            elif state == 4:
+                bprint("  > [승리코인] 4단계: 0.5초 대기")
+                time.sleep(0.5)
+                state = 5
+                
+            elif state == 5:
+                bprint("  > [승리코인] 5단계: 5.jpg 탐색 중...")
+                if check_img('5.jpg'):
+                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                    wait_vanish('5.jpg')
+                state = 6
+                
+            elif state == 6:
+                bprint("  > [승리코인] 6단계: 6.png 탐색 중...")
+                found = False
+                for _ in range(11):
+                    if check_img('6.png'): found = True; break
+                    time.sleep(0.05)
+                if found:
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                    wait_vanish('6.png')
+                state = 7
+                
+            elif state == 7:
+                bprint("  > [승리코인] 7단계: 7.png 탐색 중...")
+                found = False
+                for _ in range(11):
+                    if check_img('7.png'): found = True; break
+                    time.sleep(0.05)
+                if found:
+                    wait_vanish('7.png')
+                    time.sleep(0.5)
+                    state = 1
+                else:
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                    
+        except BotStopException:
+            bprint("  > [승리코인 정지] 작동을 중지하고 대기합니다.")
+            try:
+                arduino.write('U'.encode()); arduino.flush()
+                arduino.write('R'.encode()); arduino.flush()
+            except: pass
+            continue
+
 def fishing_bot(max_allowed_seconds):
     # 함수 내부에서도 전역 변수를 쓰겠다고 선언해야 오류가 나지 않습니다.
     global bot_active, run_start_time
+    
+    # 승리코인 백그라운드 스레드 가동
+    threading.Thread(target=victory_coin_bot_loop, daemon=True).start()
     
     # 봇이 켜지자마자 가장 먼저 사진들부터 메모리에 싹 다 올립니다.
     preload_all_images()
@@ -924,6 +1054,8 @@ def fishing_bot(max_allowed_seconds):
 
     keyboard.add_hotkey('[', toggle_stop)
     keyboard.add_hotkey(']', toggle_start)
+    keyboard.add_hotkey('<', toggle_stop)
+    keyboard.add_hotkey('>', toggle_victory_start)
 
     # 텔레그램 모드가 켜져 있을 때만 원격 제어 안내 간판을 띄웁니다.
     if USE_TELEGRAM:

@@ -949,151 +949,155 @@ def victory_coin_bot_loop():
     global victory_active
     state = 1
 
-    def check_img(img_name):
-        # 모든 UI 위치가 랜덤이므로 전체 화면 강제 할당
-        region = {"left": 0, "top": 0, "width": SCREEN_W, "height": SCREEN_H}
-        try:
-            # 1. 흑백 변환 없이 원본 컬러(BGR) 그대로 캡처
-            sct_img = sct.grab(region)
-            screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-            
-            # 2. [핵심] 한글 경로 버그 우회 (np.fromfile 사용)
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            full_path = os.path.join(base_dir, img_name)
-            
+    # 1. 이미지 디스크 I/O 병목 제거를 위한 1회성 사전 메모리 적재
+    VICTORY_CACHE = {}
+    target_images = ['1.png', '2.png', '3.png', '4.jpg', '5.jpg', '6.png', '7.png']
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    for img_name in target_images:
+        full_path = os.path.join(base_dir, img_name)
+        if os.path.exists(full_path):
             img_array = np.fromfile(full_path, np.uint8)
-            template = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-            
+            VICTORY_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+    def check_img(img_name, thread_sct):
+        try:
+            template = VICTORY_CACHE.get(img_name)
             if template is None: return False
             
-            # 3. 매칭 연산
+            # 2. 하드코딩된 region 제거 및 스레드 전용 캡처기 사용
+            sct_img = thread_sct.grab(thread_sct.monitors[1])
+            screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+            
             res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, _ = cv2.minMaxLoc(res)
             
             return max_val >= 0.65
-        except:
+        except Exception as e:
+            # 3. 무음 예외 처리 제거 (에러 은닉 방지)
+            print(f"  > [승리코인 탐색 에러] {img_name} 검색 실패: {e}")
             return False
         
-    def wait_vanish(img_name):
+    def wait_vanish(img_name, thread_sct):
         bprint(f"  > [대기] {img_name} 사라짐 대기 중...")
-        while check_img(img_name) and victory_active:
+        while check_img(img_name, thread_sct) and victory_active:
             time.sleep(0.1)
         bprint(f"  > [완료] {img_name} 소멸 확인!")
 
-    while True:
-        try:
-            if not victory_active:
-                time.sleep(0.1)
-                state = 1
-                continue
-            
-            if state == 1:
-                bprint("  > [승리코인] 1단계: 1.png / 2.png 탐색 중...")
-                found = None
-                for _ in range(11):
-                    if check_img('1.png'): found = '1.png'; break
-                    if check_img('2.png'): found = '2.png'; break
-                    time.sleep(0.05)
-                    
-                if found:
-                    bprint(f"  > [인식 성공] {found} 발견! F 입력")
-                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                    wait_vanish(found)
-                    state = 2
-                else:
-                    bprint("  > [인식 실패] 1.png / 2.png 미발견. F 누르고 재탐색합니다.")
-                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                    # state = 1 유지
-                    
-            elif state == 2:
-                bprint("  > [승리코인] 2단계: 3.png 탐색 중...")
-                found = False
-                for _ in range(11):
-                    if check_img('3.png'): found = True; break
-                    time.sleep(0.05)
-                    
-                if found:
-                    bprint("  > [인식 성공] 3.png 발견! F 입력")
-                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                    wait_vanish('3.png')
-                else:
-                    bprint("  > [인식 실패] 3.png 미발견. 다음 단계로 넘어갑니다.")
-                state = 3
-                
-            elif state == 3:
-                bprint("  > [승리코인] 3단계: 4.jpg 탐색 중...")
-                found = False
-                for _ in range(11):
-                    if check_img('4.jpg'): found = True; break
-                    time.sleep(0.05)
-                    
-                if found:
-                    bprint("  > [인식 성공] 4.jpg 발견! ESC 입력")
-                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                    wait_vanish('4.jpg')
-                else:
-                    bprint("  > [인식 실패] 4.jpg 미발견. 다음 단계로 넘어갑니다.")
-                state = 4
-                
-            elif state == 4:
-                bprint("  > [승리코인] 4단계: 0.5초 대기")
-                time.sleep(0.5)
-                state = 5
-                
-            elif state == 5:
-                bprint("  > [승리코인] 5단계: 5.jpg 탐색 중...")
-                found = False
-                for _ in range(11):
-                    if check_img('5.jpg'): found = True; break
-                    time.sleep(0.05)
-                    
-                if found:
-                    bprint("  > [인식 성공] 5.jpg 발견! ESC 입력")
-                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                    wait_vanish('5.jpg')
-                else:
-                    bprint("  > [인식 실패] 5.jpg 미발견. 다음 단계로 넘어갑니다.")
-                state = 6
-                
-            elif state == 6:
-                bprint("  > [승리코인] 6단계: 6.png 탐색 중...")
-                found = False
-                for _ in range(11):
-                    if check_img('6.png'): found = True; break
-                    time.sleep(0.05)
-                    
-                if found:
-                    bprint("  > [인식 성공] 6.png 발견! F 입력")
-                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                    wait_vanish('6.png')
-                else:
-                    bprint("  > [인식 실패] 6.png 미발견. 다음 단계로 넘어갑니다.")
-                state = 7
-                
-            elif state == 7:
-                bprint("  > [승리코인] 7단계: 7.png 탐색 중...")
-                found = False
-                for _ in range(11):
-                    if check_img('7.png'): found = True; break
-                    time.sleep(0.05)
-                    
-                if found:
-                    bprint("  > [인식 성공] 7.png 발견! 대기합니다.")
-                    wait_vanish('7.png')
-                    time.sleep(0.5)
-                    state = 1
-                else:
-                    bprint("  > [인식 실패] 7.png 미발견. F 누르고 재탐색합니다.")
-                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                    # state = 7 유지
-                    
-        except BotStopException:
-            bprint("  > [승리코인 정지] 작동을 중지하고 대기합니다.")
+    # 4. 메인 봇과 sct 객체 충돌 방지를 위한 스레드 전용 독립 인스턴스 할당
+    with mss.mss() as thread_sct:
+        while True:
             try:
-                arduino.write('U'.encode()); arduino.flush()
-                arduino.write('R'.encode()); arduino.flush()
-            except: pass
-            continue
+                if not victory_active:
+                    time.sleep(0.1)
+                    state = 1
+                    continue
+                
+                if state == 1:
+                    bprint("  > [승리코인] 1단계: 1.png / 2.png 탐색 중...")
+                    found = None
+                    for _ in range(11):
+                        if check_img('1.png', thread_sct): found = '1.png'; break
+                        if check_img('2.png', thread_sct): found = '2.png'; break
+                        time.sleep(0.05)
+                        
+                    if found:
+                        bprint(f"  > [인식 성공] {found} 발견! F 입력")
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        wait_vanish(found, thread_sct)
+                        state = 2
+                    else:
+                        bprint("  > [인식 실패] 1.png / 2.png 미발견. F 누르고 재탐색합니다.")
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        
+                elif state == 2:
+                    bprint("  > [승리코인] 2단계: 3.png 탐색 중...")
+                    found = False
+                    for _ in range(11):
+                        if check_img('3.png', thread_sct): found = True; break
+                        time.sleep(0.05)
+                        
+                    if found:
+                        bprint("  > [인식 성공] 3.png 발견! F 입력")
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        wait_vanish('3.png', thread_sct)
+                    else:
+                        bprint("  > [인식 실패] 3.png 미발견. 다음 단계로 넘어갑니다.")
+                    state = 3
+                    
+                elif state == 3:
+                    bprint("  > [승리코인] 3단계: 4.jpg 탐색 중...")
+                    found = False
+                    for _ in range(11):
+                        if check_img('4.jpg', thread_sct): found = True; break
+                        time.sleep(0.05)
+                        
+                    if found:
+                        bprint("  > [인식 성공] 4.jpg 발견! ESC 입력")
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        wait_vanish('4.jpg', thread_sct)
+                    else:
+                        bprint("  > [인식 실패] 4.jpg 미발견. 다음 단계로 넘어갑니다.")
+                    state = 4
+                    
+                elif state == 4:
+                    bprint("  > [승리코인] 4단계: 0.5초 대기")
+                    time.sleep(0.5)
+                    state = 5
+                    
+                elif state == 5:
+                    bprint("  > [승리코인] 5단계: 5.jpg 탐색 중...")
+                    found = False
+                    for _ in range(11):
+                        if check_img('5.jpg', thread_sct): found = True; break
+                        time.sleep(0.05)
+                        
+                    if found:
+                        bprint("  > [인식 성공] 5.jpg 발견! ESC 입력")
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        wait_vanish('5.jpg', thread_sct)
+                    else:
+                        bprint("  > [인식 실패] 5.jpg 미발견. 다음 단계로 넘어갑니다.")
+                    state = 6
+                    
+                elif state == 6:
+                    bprint("  > [승리코인] 6단계: 6.png 탐색 중...")
+                    found = False
+                    for _ in range(11):
+                        if check_img('6.png', thread_sct): found = True; break
+                        time.sleep(0.05)
+                        
+                    if found:
+                        bprint("  > [인식 성공] 6.png 발견! F 입력")
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        wait_vanish('6.png', thread_sct)
+                    else:
+                        bprint("  > [인식 실패] 6.png 미발견. 다음 단계로 넘어갑니다.")
+                    state = 7
+                    
+                elif state == 7:
+                    bprint("  > [승리코인] 7단계: 7.png 탐색 중...")
+                    found = False
+                    for _ in range(11):
+                        if check_img('7.png', thread_sct): found = True; break
+                        time.sleep(0.05)
+                        
+                    if found:
+                        bprint("  > [인식 성공] 7.png 발견! 대기합니다.")
+                        wait_vanish('7.png', thread_sct)
+                        time.sleep(0.5)
+                        state = 1
+                    else:
+                        bprint("  > [인식 실패] 7.png 미발견. F 누르고 재탐색합니다.")
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        
+            except BotStopException:
+                bprint("  > [승리코인 정지] 작동을 중지하고 대기합니다.")
+                try:
+                    arduino.write('U'.encode()); arduino.flush()
+                    arduino.write('R'.encode()); arduino.flush()
+                except: pass
+                continue
 
 def fishing_bot(max_allowed_seconds):
     # 함수 내부에서도 전역 변수를 쓰겠다고 선언해야 오류가 나지 않습니다.

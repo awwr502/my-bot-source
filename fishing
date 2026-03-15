@@ -994,20 +994,104 @@ def victory_coin_bot_loop():
             img_array = np.fromfile(full_path, np.uint8)
             VICTORY_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
-    def check_img(img_name, thread_sct):
+    # [데이터 샘플링 엔진] 승리코인 전용 AI 동적 탐색 영역(ROI) 저장소
+    VICTORY_ROI = {}
+    VICTORY_ROI_FILE = os.path.join(base_dir, "victory_roi_cache.json")
+
+    def load_victory_roi():
+        """하드디스크에 저장된 승리코인 UI 위치 기억을 불러옵니다."""
+        try:
+            if os.path.exists(VICTORY_ROI_FILE):
+                with open(VICTORY_ROI_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    for k, v in data.items():
+                        VICTORY_ROI[k] = {
+                            'samples': deque(v.get('samples', []), maxlen=10),
+                            'master_box': v.get('master_box'),
+                            'last_fallback': 0
+                        }
+        except: pass
+
+    def save_victory_roi():
+        """현재까지 학습된 위치를 하드디스크(json)에 영구 저장합니다."""
+        try:
+            save_data = {}
+            for k, v in VICTORY_ROI.items():
+                save_data[k] = {
+                    'samples': list(v['samples']), # deque는 json 저장이 안 되므로 리스트 변환
+                    'master_box': v['master_box']
+                }
+            with open(VICTORY_ROI_FILE, "w", encoding="utf-8") as f:
+                json.dump(save_data, f, indent=4, ensure_ascii=False)
+        except: pass
+
+    # 봇 시작 시 단 1번, 하드디스크에서 과거의 학습 데이터를 뇌(메모리)로 복구합니다.
+    load_victory_roi()
+
+    def check_img(img_name, thread_sct, force_full=False):
         try:
             template = VICTORY_CACHE.get(img_name)
             if template is None: return False
             
-            sct_img = thread_sct.grab(thread_sct.monitors[1])
+            # 딕셔너리 초기화 (최초 1회)
+            if img_name not in VICTORY_ROI:
+                VICTORY_ROI[img_name] = {'samples': deque(maxlen=10), 'master_box': None, 'last_fallback': 0}
+                
+            roi_data = VICTORY_ROI[img_name]
+            monitor = thread_sct.monitors[1] # 기본 전체 화면
+            is_using_master = False
+            
+            # 마스터 박스가 학습되어 있고, 강제 전체화면 탐색 모드가 아닐 때만 좁은 구역 스캔 (연산량 90% 감소)
+            if not force_full and roi_data['master_box']:
+                monitor = roi_data['master_box']
+                is_using_master = True
+            
+            sct_img = thread_sct.grab(monitor)
             screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
             
             res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, _ = cv2.minMaxLoc(res)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
             
-            # 고정값 0.75 대신, VICTORY_CONF 사전에 적힌 개별 인식률을 가져와서 비교합니다.
-            target_conf = VICTORY_CONF.get(img_name, 0.75) # 만약 사전에 실수로 빠져있다면 기본값 0.75 적용
-            return max_val >= target_conf
+            target_conf = VICTORY_CONF.get(img_name, 0.75)
+            
+            if max_val >= target_conf:
+                # [AI 학습] 찾은 절대 좌표를 계산하여 샘플에 추가하고 박스 크기를 점진적으로 최적화
+                h, w = template.shape[:2]
+                real_x = max_loc[0] + monitor["left"]
+                real_y = max_loc[1] + monitor["top"]
+                
+                roi_data['samples'].append((real_x, real_y, w, h))
+                
+                pad = 30 # 유격 대비 여백 30픽셀 부여
+                min_x = min(s[0] for s in roi_data['samples']) - pad
+                min_y = min(s[1] for s in roi_data['samples']) - pad
+                max_x = max(s[0] + s[2] for s in roi_data['samples']) + pad
+                max_y = max(s[1] + s[3] for s in roi_data['samples']) + pad
+                
+                # 새롭게 최적화된 마스터 박스 갱신
+                roi_data['master_box'] = {
+                    "left": int(max(0, min_x)),
+                    "top": int(max(0, min_y)),
+                    "width": int(max_x - min_x),
+                    "height": int(max_y - min_y)
+                }
+                
+                # [영구 보존] 위치가 업데이트될 때마다 하드디스크에 즉시 덮어쓰기
+                save_victory_roi()
+                
+                return True
+            else:
+                # [스마트 폴백] 좁은 영역에서 못 찾았을 때 전체 화면으로 재검색 (전체 스캔 도배에 의한 렉 방지용 1초 쿨다운 적용)
+                if is_using_master:
+                    if time.time() - roi_data['last_fallback'] > 1.0:
+                        found_fallback = check_img(img_name, thread_sct, force_full=True)
+                        if not found_fallback:
+                            roi_data['last_fallback'] = time.time()
+                        return found_fallback
+                    else:
+                        return False
+                return False
+                
         except Exception as e:
             vprint(f"  > [승리코인 탐색 에러] {img_name} 검색 실패: {e}")
             return False
@@ -1069,7 +1153,7 @@ def victory_coin_bot_loop():
                         if check_img('8.png', thread_sct):
                             found_img = '8.png'
                             break
-                        time.sleep(0.5) 
+                        time.sleep(0.05) 
                         
                     if found_img == '4.png':
                         vprint("  > [인식 성공] 4.png 발견! (보스 처치 완료) ESC 입력")
@@ -1084,7 +1168,7 @@ def victory_coin_bot_loop():
                         
                 elif state == 4:
                     vprint("  > [승리코인] 4단계: 0.5초 대기")
-                    time.sleep(0.5)
+                    time.sleep(0.05)
                     state = 5
                     
                 elif state == 5:
@@ -1127,7 +1211,7 @@ def victory_coin_bot_loop():
                     if found:
                         vprint("  > [인식 성공] 7.png 발견! 대기합니다.")
                         wait_vanish('7.png', thread_sct)
-                        time.sleep(0.5)
+                        time.sleep(0.05)
                         state = 1
                     else:
                         vprint("  > [인식 실패] 7.png 미발견. F 누르고 재탐색합니다.")

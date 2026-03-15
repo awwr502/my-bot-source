@@ -971,7 +971,19 @@ def victory_coin_bot_loop():
         full_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         blackbox_buffer.append(f"[{full_time}] {msg}")
 
-    # [수정] 1. 이미지 디스크 I/O 병목 제거를 위한 1회성 사전 메모리 적재
+    # [인식률 커스텀 사전] 각 사진별로 원하는 인식률(0.0 ~ 1.0)을 개별 설정할 수 있습니다.
+    # 숫자가 낮을수록 잘 찾지만 엉뚱한 걸 누를 확률이 높아지고, 높을수록 엄격해집니다.
+    VICTORY_CONF = {
+        '1.png': 0.75,
+        '2.png': 0.75,
+        '3.png': 0.75,
+        '4.png': 0.70,  # 보스 결과창 등 반투명/배경변화가 있는 곳은 살짝 낮추면 좋습니다.
+        '5.png': 0.75,
+        '6.png': 0.70,  # 실패 창도 4.png와 동일하게 유연한 잣대 적용
+        '7.png': 0.75
+    }
+
+    # 1. 이미지 디스크 I/O 병목 제거를 위한 1회성 사전 메모리 적재
     VICTORY_CACHE = {}
     target_images = ['1.png', '2.png', '3.png', '4.png', '5.png', '6.png', '7.png']
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -993,7 +1005,9 @@ def victory_coin_bot_loop():
             res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, _ = cv2.minMaxLoc(res)
             
-            return max_val >= 0.65
+            # 고정값 0.75 대신, VICTORY_CONF 사전에 적힌 개별 인식률을 가져와서 비교합니다.
+            target_conf = VICTORY_CONF.get(img_name, 0.75) # 만약 사전에 실수로 빠져있다면 기본값 0.75 적용
+            return max_val >= target_conf
         except Exception as e:
             vprint(f"  > [승리코인 탐색 에러] {img_name} 검색 실패: {e}")
             return False
@@ -1045,15 +1059,15 @@ def victory_coin_bot_loop():
                     state = 3
                     
                 elif state == 3:
-                    vprint("  > [승리코인] 3단계: 보스 처치 대기 중... (4.png 성공 또는 6.png 실패 대기)")
+                    vprint("  > [승리코인] 3단계: 보스 처치 대기 중... (4.png 성공 또는 8.png 실패 대기)")
                     found_img = None
                     
                     while victory_active:
                         if check_img('4.png', thread_sct): 
                             found_img = '4.png'
                             break
-                        if check_img('6.png', thread_sct):
-                            found_img = '6.png'
+                        if check_img('8.png', thread_sct):
+                            found_img = '8.png'
                             break
                         time.sleep(0.5) 
                         
@@ -1062,8 +1076,8 @@ def victory_coin_bot_loop():
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         wait_vanish('4.png', thread_sct)
                         state = 4
-                    elif found_img == '6.png':
-                        vprint("  > [분기 전환] 6.png 발견! (클리어 실패 감지) 바로 6단계로 점프합니다.")
+                    elif found_img == '8.png':
+                        vprint("  > [분기 전환] 8.png 발견! (클리어 실패 감지) 바로 6단계로 점프합니다.")
                         state = 6
                     else:
                         vprint("  > [정지] 보스 대기 중 승리코인 가동이 중지되었습니다.")

@@ -118,6 +118,7 @@ class BotStopException(Exception): pass
 original_sleep = time.sleep
 
 victory_active = False # [승리코인] 전역 상태 변수 추가
+victory_mode = 1 # [추가] 승리코인 모드 선택 변수 (1 또는 2)
 
 def jitter_sleep(seconds):
     global bot_active, victory_active
@@ -157,7 +158,7 @@ def jitter_sleep(seconds):
 time.sleep = jitter_sleep
 
 # 파이썬 내장 keyboard 라이브러리 가로채기 (가짜 키 입력 인식용)
-remote_keys = {'[': False, ']': False, '<': False, '>': False}
+remote_keys = {'[': False, ']': False, '<': False, '>': False, '?': False} # 모드 2 단축키(?) 추가
 orig_is_pressed = keyboard.is_pressed
 
 def _custom_is_pressed(key):
@@ -355,10 +356,15 @@ def _telegram_listener():
                             toggle_start()
                             remote_keys[']'] = True; original_sleep(0.3); remote_keys[']'] = False
                         
-                        elif msg_text == f"{CMD_PREFIX}승리시작":
-                            bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} 승리코인 가동 트리거 <<<")
-                            toggle_victory_start()
+                        elif msg_text == f"{CMD_PREFIX}승리시작" or msg_text == f"{CMD_PREFIX}승리시작1":
+                            bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} 승리코인(모드1) 가동 트리거 <<<")
+                            toggle_victory_start(1)
                             remote_keys['>'] = True; original_sleep(0.3); remote_keys['>'] = False
+                            
+                        elif msg_text == f"{CMD_PREFIX}승리시작2":
+                            bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} 승리코인(모드2) 가동 트리거 <<<")
+                            toggle_victory_start(2)
+                            remote_keys['?'] = True; original_sleep(0.3); remote_keys['?'] = False
                         
                         elif msg_text == f"{CMD_PREFIX}정지":
                             bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} 정지 트리거 <<<")
@@ -435,8 +441,8 @@ def _telegram_listener():
                             # [스마트 UI] 텔레그램 하단에 앱처럼 고정되는 커스텀 키보드 배치
                             reply_markup = {
                                 "keyboard": [
-                                    [{"text": f"{CMD_PREFIX}낚시시작"}, {"text": f"{CMD_PREFIX}승리시작"}, {"text": f"{CMD_PREFIX}정지"}],
-                                    [{"text": f"{CMD_PREFIX}상태"}, {"text": f"{CMD_PREFIX}보고서"}, {"text": f"{CMD_PREFIX}종료"}],
+                                    [{"text": f"{CMD_PREFIX}낚시시작"}, {"text": f"{CMD_PREFIX}승리시작1"}, {"text": f"{CMD_PREFIX}승리시작2"}],
+                                    [{"text": f"{CMD_PREFIX}정지"}, {"text": f"{CMD_PREFIX}상태"}, {"text": f"{CMD_PREFIX}보고서"}],
                                     [{"text": f"{CMD_PREFIX}입력 F"}, {"text": f"{CMD_PREFIX}입력 E"}, {"text": f"{CMD_PREFIX}입력 H"}]
                                 ],
                                 "resize_keyboard": True, # 스마트폰 화면에 맞게 버튼 크기 자동 조절
@@ -570,13 +576,14 @@ def toggle_start():
     bprint("🟢 [낚시 시작 명령 접수] 단축키(]) 입력 감지")
     bprint("=============================================")
 
-def toggle_victory_start():
-    global bot_active, victory_active, run_start_time
+def toggle_victory_start(mode=1):
+    global bot_active, victory_active, run_start_time, victory_mode
     if bot_active: toggle_stop() # 낚시봇 동작 중이면 정지
     victory_active = True
+    victory_mode = mode
     run_start_time = time.time()
     bprint("\n=============================================")
-    bprint("🟡 [승리코인 시작 명령 접수] 단축키(>) 입력 감지")
+    bprint(f"🟡 [승리코인 모드 {mode} 시작 명령 접수] 단축키 입력 감지")
     bprint("=============================================")
 
 # --- 아두이노 자동 연결 (플러그 앤 플레이) ---
@@ -1156,12 +1163,18 @@ def victory_coin_bot_loop():
                     state = 3
                     
                 elif state == 3:
-                    vprint("  > [승리코인] 3단계: 보스 처치 대기 중... (4.png 성공 또는 8.png 실패 대기)")
+                    if victory_mode == 1:
+                        vprint("  > [승리코인] 3단계: 보스 처치 대기 중... (모드 1: 4.png 성공 또는 8.png 실패)")
+                        target_success = '4.png'
+                    else:
+                        vprint("  > [승리코인] 3단계: 보스 처치 대기 중... (모드 2: 6.png 성공 또는 8.png 실패)")
+                        target_success = '6.png'
+                        
                     found_img = None
                     
                     while victory_active:
-                        if check_img('4.png', thread_sct): 
-                            found_img = '4.png'
+                        if check_img(target_success, thread_sct): 
+                            found_img = target_success
                             break
                         if check_img('8.png', thread_sct):
                             found_img = '8.png'
@@ -1173,6 +1186,11 @@ def victory_coin_bot_loop():
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         wait_vanish('4.png', thread_sct)
                         state = 4
+                    elif found_img == '6.png':
+                        vprint("  > [인식 성공] 6.png 발견! (모드 2 클리어) F 입력 및 7단계 전이")
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        wait_vanish('6.png', thread_sct)
+                        state = 7
                     elif found_img == '8.png':
                         vprint("  > [분기 전환] 8.png 발견! (클리어 실패 감지) 바로 6단계로 점프합니다.")
                         state = 6
@@ -1254,16 +1272,17 @@ def fishing_bot(max_allowed_seconds):
     keyboard.add_hotkey('[', toggle_stop)
     keyboard.add_hotkey(']', toggle_start)
     keyboard.add_hotkey('<', toggle_stop)
-    keyboard.add_hotkey('>', toggle_victory_start)
+    keyboard.add_hotkey('>', lambda: toggle_victory_start(1))
+    keyboard.add_hotkey('?', lambda: toggle_victory_start(2)) # 모드 2 단축키 추가
 
     # 텔레그램 모드가 켜져 있을 때만 원격 제어 안내 간판을 띄웁니다.
     if USE_TELEGRAM:
-        bprint(f"\n>>> 원격 제어 수신 대기 시작 (명령어: {CMD_PREFIX}낚시시작, {CMD_PREFIX}승리시작, {CMD_PREFIX}정지, {CMD_PREFIX}종료, {CMD_PREFIX}보고서, {CMD_PREFIX}상태) <<<")
+        bprint(f"\n>>> 원격 제어 수신 대기 시작 (명령어: {CMD_PREFIX}낚시시작, {CMD_PREFIX}승리시작1, {CMD_PREFIX}승리시작2, {CMD_PREFIX}정지, {CMD_PREFIX}종료, {CMD_PREFIX}보고서, {CMD_PREFIX}상태) <<<")
     
     state = -1
     # 로켓 이모지 앞에 \n(엔터키)을 추가하여 위쪽 문구와 한 줄 띄워지도록 틈을 만듭니다.
     bprint("\n🚀낚시 매크로 V2.4 가동 시작🚀")
-    bprint("(작동: ] , 정지: [ )")
+    bprint("(작동: ] , 정지: [ , 승리모드1: > , 승리모드2: ? )")
 
     cast_fail_count = 0 # 연속 캐스팅 실패 감지용 카운터
     

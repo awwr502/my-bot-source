@@ -984,15 +984,17 @@ def victory_coin_bot_loop():
         '1.png': 0.75,
         '2.png': 0.75,
         '3.png': 0.75,
-        '4.png': 0.70,  # 보스 결과창 등 반투명/배경변화가 있는 곳은 살짝 낮추면 좋습니다.
+        '4.png': 0.70,  
         '5.png': 0.75,
-        '6.png': 0.70,  # 실패 창도 4.png와 동일하게 유연한 잣대 적용
-        '7.png': 0.70
+        '6.png': 0.70,  
+        '7.png': 0.70,
+        '8.png': 0.70,  
+        '9.png': 0.75   # 9.png 추가
     }
 
     # 1. 이미지 디스크 I/O 병목 제거를 위한 1회성 사전 메모리 적재
     VICTORY_CACHE = {}
-    target_images = ['1.png', '2.png', '3.png', '4.png', '5.png', '6.png', '7.png']
+    target_images = ['1.png', '2.png', '3.png', '4.png', '5.png', '6.png', '7.png', '8.png', '9.png']
     base_dir = os.path.dirname(os.path.abspath(__file__))
     
     for img_name in target_images:
@@ -1015,7 +1017,8 @@ def victory_coin_bot_loop():
                         VICTORY_ROI[k] = {
                             'samples': deque(v.get('samples', []), maxlen=10),
                             'master_box': v.get('master_box'),
-                            'last_fallback': 0
+                            'last_fallback': 0,
+                            'last_pos': None # 좌표 클릭을 위한 중앙 좌표 기록용
                         }
         except: pass
 
@@ -1042,7 +1045,7 @@ def victory_coin_bot_loop():
             
             # 딕셔너리 초기화 (최초 1회)
             if img_name not in VICTORY_ROI:
-                VICTORY_ROI[img_name] = {'samples': deque(maxlen=10), 'master_box': None, 'last_fallback': 0}
+                VICTORY_ROI[img_name] = {'samples': deque(maxlen=10), 'master_box': None, 'last_fallback': 0, 'last_pos': None}
                 
             roi_data = VICTORY_ROI[img_name]
             monitor = thread_sct.monitors[1] # 기본 전체 화면
@@ -1066,6 +1069,9 @@ def victory_coin_bot_loop():
                 h, w = template.shape[:2]
                 real_x = max_loc[0] + monitor["left"]
                 real_y = max_loc[1] + monitor["top"]
+                
+                # 휠클릭용 정중앙 좌표 기록
+                roi_data['last_pos'] = (int(real_x + w/2), int(real_y + h/2))
                 
                 roi_data['samples'].append((real_x, real_y, w, h))
                 
@@ -1107,7 +1113,7 @@ def victory_coin_bot_loop():
         vprint(f"  > [대기] {img_name} 사라짐 대기 중...")
         
         # [스마트 소멸 검증] 단 1프레임의 오탐(애니메이션, 렉)으로 루프가 깨지는 것을 막기 위해
-        # 연속 5회(약 0.5초) 동안 완전히 안 보여야 진짜 사라진 것으로 인정합니다.
+        # 연속 5회(약 0.25초) 동안 완전히 안 보여야 진짜 사라진 것으로 인정합니다.
         vanish_count = 0
         while victory_active:
             if check_img(img_name, thread_sct):
@@ -1118,11 +1124,12 @@ def victory_coin_bot_loop():
             if vanish_count >= 5:
                 break # 연속 5번 못 찾았을 때만 진짜 소멸로 인정하고 루프 탈출
                 
-            time.sleep(0.1)
+            time.sleep(0.05)
             
         vprint(f"  > [완료] {img_name} 완벽 소멸 확인!")
 
     with mss.mss() as thread_sct:
+        victory_start_img = None # [신규] 1단계에서 찾은 사진을 기억하는 변수
         while True:
             try:
                 if not victory_active:
@@ -1139,6 +1146,7 @@ def victory_coin_bot_loop():
                         time.sleep(0.05)
                         
                     if found:
+                        victory_start_img = found # 다음 단계를 위해 발견한 이미지 기록
                         vprint(f"  > [인식 성공] {found} 발견! F 입력")
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
                         wait_vanish(found, thread_sct)
@@ -1163,11 +1171,35 @@ def victory_coin_bot_loop():
                     state = 3
                     
                 elif state == 3:
+                    # [모드 2 전용] 모드 2이면서 1.png를 1단계에서 찾았을 때만 발동
+                    if victory_mode == 2 and victory_start_img == '1.png':
+                        vprint("  > [승리코인] 3단계: 9.png 탐색 중... (모드 2 연계 발동)")
+                        found_9 = False
+                        for _ in range(11):
+                            if check_img('9.png', thread_sct): 
+                                found_9 = True; break
+                            time.sleep(0.05)
+                            
+                        if found_9:
+                            vprint("  > [인식 성공] 9.png 발견! 마우스 휠클릭 실행")
+                            cx, cy = VICTORY_ROI['9.png']['last_pos']
+                            # 아두이노 마우스 휠클릭 미지원으로 인해 임시 pyautogui 사용
+                            pyautogui.moveTo(cx, cy)
+                            time.sleep(0.05)
+                            pyautogui.middleClick()
+                        else:
+                            vprint("  > [인식 실패] 9.png 미발견. 다음 단계로 넘어갑니다.")
+                    else:
+                        # 모드 1이거나 조건에 맞지 않으면 불필요한 로그 없이 조용히 스킵
+                        pass 
+                    state = 4
+                    
+                elif state == 4:
                     if victory_mode == 1:
-                        vprint("  > [승리코인] 3단계: 보스 처치 대기 중... (모드 1: 4.png 성공 또는 8.png 실패)")
+                        vprint("  > [승리코인] 4단계: 보스 처치 대기 중... (모드 1: 4.png 성공 또는 8.png 실패)")
                         target_success = '4.png'
                     else:
-                        vprint("  > [승리코인] 3단계: 보스 처치 대기 중... (모드 2: 6.png 성공 또는 8.png 실패)")
+                        vprint("  > [승리코인] 4단계: 보스 처치 대기 중... (모드 2: 6.png 성공 또는 8.png 실패)")
                         target_success = '6.png'
                         
                     found_img = None
@@ -1185,25 +1217,25 @@ def victory_coin_bot_loop():
                         vprint("  > [인식 성공] 4.png 발견! (보스 처치 완료) ESC 입력")
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         wait_vanish('4.png', thread_sct)
-                        state = 4
+                        state = 5
                     elif found_img == '6.png':
-                        vprint("  > [인식 성공] 6.png 발견! (모드 2 클리어) F 입력 및 7단계 전이")
+                        vprint("  > [인식 성공] 6.png 발견! (모드 2 클리어) F 입력 및 8단계 전이")
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
                         wait_vanish('6.png', thread_sct)
-                        state = 7
+                        state = 8
                     elif found_img == '8.png':
-                        vprint("  > [분기 전환] 8.png 발견! (클리어 실패 감지) 바로 6단계로 점프합니다.")
-                        state = 6
+                        vprint("  > [분기 전환] 8.png 발견! (클리어 실패 감지) 바로 7단계로 점프합니다.")
+                        state = 7
                     else:
                         vprint("  > [정지] 보스 대기 중 승리코인 가동이 중지되었습니다.")
                         
-                elif state == 4:
-                    vprint("  > [승리코인] 4단계: 0.5초 대기")
-                    time.sleep(0.05)
-                    state = 5
-                    
                 elif state == 5:
-                    vprint("  > [승리코인] 5단계: 5.png 탐색 중...")
+                    vprint("  > [승리코인] 5단계: 0.5초 대기")
+                    time.sleep(0.05)
+                    state = 6
+                    
+                elif state == 6:
+                    vprint("  > [승리코인] 6단계: 5.png 탐색 중...")
                     found = False
                     for _ in range(11):
                         if check_img('5.png', thread_sct): found = True; break
@@ -1215,10 +1247,10 @@ def victory_coin_bot_loop():
                         wait_vanish('5.png', thread_sct)
                     else:
                         vprint("  > [인식 실패] 5.png 미발견. 다음 단계로 넘어갑니다.")
-                    state = 6
+                    state = 7
                     
-                elif state == 6:
-                    vprint("  > [승리코인] 6단계: 6.png 탐색 중...")
+                elif state == 7:
+                    vprint("  > [승리코인] 7단계: 6.png 탐색 중...")
                     found = False
                     for _ in range(11):
                         if check_img('6.png', thread_sct): found = True; break
@@ -1230,10 +1262,10 @@ def victory_coin_bot_loop():
                         wait_vanish('6.png', thread_sct)
                     else:
                         vprint("  > [인식 실패] 6.png 미발견. 다음 단계로 넘어갑니다.")
-                    state = 7
+                    state = 8
                     
-                elif state == 7:
-                    vprint("  > [승리코인] 7단계: 7.png 탐색 중...")
+                elif state == 8:
+                    vprint("  > [승리코인] 8단계: 7.png 탐색 중...")
                     found = False
                     for _ in range(11):
                         if check_img('7.png', thread_sct): found = True; break

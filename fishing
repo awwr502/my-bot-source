@@ -18,6 +18,7 @@ from PIL import Image # 이미지 캐싱용 메모리 관리 모듈
 import json
 import mss # [초고속 캡처 엔진]
 import screen_brightness_control as sbc # [화면 밝기 제어]
+import atexit # 프로그램 비정상 종료 시 화면 밝기 자동 복구용
 
 # mss 객체는 딱 한 번만 생성해두고 계속 재사용합니다 (메모리 최적화)
 sct = mss.mss()
@@ -543,17 +544,19 @@ bot_active = False
 remote_task = None # [핵심] 텔레그램 스레드와 메인 봇을 연결하는 지시용 우체통 변수
 
 def toggle_stop():
-    global bot_active, victory_active, run_start_time, original_brightness
+    global bot_active, victory_active, run_start_time, original_brightness, is_dimmed
     
     # 사용자가 '정지됨'을 명확히 알 수 있도록 즉각적인 피드백 출력
     if bot_active or victory_active:
         bprint("\n=============================================")
         bprint("🔴 [정지 명령 접수] 단축키([ 또는 <) 입력 감지")
         bprint("=============================================")
-        try:
-            sbc.set_brightness(original_brightness)
-            bprint(f"  > ☀️ [화면 복구] 모니터 밝기를 원래대로({original_brightness}%) 되돌렸습니다.")
-        except: pass
+        if is_dimmed:
+            try:
+                sbc.set_brightness(original_brightness)
+                is_dimmed = False
+                bprint(f"  > ☀️ [화면 복구] 모니터 밝기를 원래대로({original_brightness}%) 되돌렸습니다.")
+            except: pass
     else:
         # 멈춘 줄 모르고 여러 번 눌렀을 때의 답답함 해소용 안내
         print("  > [안내] 봇이 이미 정지(대기) 상태입니다.")
@@ -574,22 +577,25 @@ def toggle_stop():
         pass
 
 def toggle_start():
-    global bot_active, victory_active, run_start_time, original_brightness
+    global bot_active, victory_active, run_start_time, original_brightness, enable_dimming, is_dimmed
     if victory_active: toggle_stop() # 승리코인 동작 중이면 정지
     bot_active = True
     run_start_time = time.time()
     bprint("\n=============================================")
     bprint("🟢 [낚시 시작 명령 접수] 단축키(]) 입력 감지")
     bprint("=============================================")
-    try:
-        curr_b = sbc.get_brightness()
-        if curr_b: original_brightness = curr_b[0]
-        sbc.set_brightness(0)
-        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
-    except: pass
+    if enable_dimming:
+        try:
+            curr_b = sbc.get_brightness()
+            # [핵심] 현재 밝기가 10 이상일 때만 원본으로 저장하여 0% 무한 갇힘 버그 차단
+            if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
+            sbc.set_brightness(0)
+            is_dimmed = True
+            bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
+        except: pass
 
 def toggle_victory_start(mode=1):
-    global bot_active, victory_active, run_start_time, victory_mode, original_brightness
+    global bot_active, victory_active, run_start_time, victory_mode, original_brightness, enable_dimming, is_dimmed
     if bot_active: toggle_stop() # 낚시봇 동작 중이면 정지
     victory_active = True
     victory_mode = mode
@@ -597,12 +603,15 @@ def toggle_victory_start(mode=1):
     bprint("\n=============================================")
     bprint(f"🟡 [승리코인 모드 {mode} 시작 명령 접수] 단축키 입력 감지")
     bprint("=============================================")
-    try:
-        curr_b = sbc.get_brightness()
-        if curr_b: original_brightness = curr_b[0]
-        sbc.set_brightness(0)
-        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
-    except: pass
+    if enable_dimming:
+        try:
+            curr_b = sbc.get_brightness()
+            # [핵심] 현재 밝기가 10 이상일 때만 원본으로 저장하여 0% 무한 갇힘 버그 차단
+            if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
+            sbc.set_brightness(0)
+            is_dimmed = True
+            bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
+        except: pass
 
 # --- 아두이노 자동 연결 (플러그 앤 플레이) ---
 def auto_connect_arduino():
@@ -908,7 +917,7 @@ def get_tension_status(exact_roi):
         return 0
 
 def force_exit():
-    global run_start_time, original_brightness
+    global run_start_time, original_brightness, is_dimmed
     bprint("\n\n!!! 긴급 종료 요청 감지 !!!")
     dump_blackbox_log("사용자_강제종료_요청") # [블랙박스 트리거 추가]
     
@@ -917,10 +926,22 @@ def force_exit():
         stats['pure_run_time'] += (time.time() - run_start_time)
     save_stats_cache()
     try:
-        sbc.set_brightness(original_brightness) # 긴급 종료 시에도 밝기 복구
+        if is_dimmed:
+            sbc.set_brightness(original_brightness) # 긴급 종료 시에도 밝기 복구
         send_cmd('U'); send_cmd('R')
     except: pass
     os._exit(1)
+
+# 콘솔 우측 상단의 X 버튼 등으로 프로그램이 비정상 종료되어도 화면 밝기를 무조건 복구하는 안전장치
+def restore_brightness_on_exit():
+    global original_brightness, is_dimmed
+    if is_dimmed:
+        try:
+            sbc.set_brightness(original_brightness)
+            print(f"\n💡 [시스템 종료] 모니터 밝기를 원래대로({original_brightness}%) 안전하게 복구했습니다.")
+        except: pass
+
+atexit.register(restore_brightness_on_exit)
 
 # --- [공통 로직] 잠수 방지 알림 제거 함수 ---
 def check_exit_notification(skip_esc=False):

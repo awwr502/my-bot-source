@@ -2151,38 +2151,36 @@ def fishing_bot(max_allowed_seconds):
                 bprint(f"  > 4. '{next_char['name']}' 초정밀 탐색 및 접속...")
                 send_cmd('G'); time.sleep(0.1); send_cmd('R')
                 
+                # [UI 렌더링 안정화] 유저님 피드백 반영: G를 누르고 UI가 투명에서 불투명으로 
+                # 완전히 100% 선명해질 때까지(페이드인) 0.8초간 일부러 눈을 감고 대기합니다.
+                time.sleep(0.8)
+
                 # [초정밀 닉네임 타격 엔진] 한 글자 차이나는 닉네임을 완벽히 구분하기 위한 전용 내부 함수
                 def find_precise_nickname(img_name, threshold=0.88):
                     base_dir = os.path.dirname(os.path.abspath(__file__))
                     full_path = os.path.join(base_dir, img_name)
                     if not os.path.exists(full_path): return None
                     
-                    # 1. 원본 닉네임 사진 로드 및 이진화 (흰색 글씨 형태만 추출)
                     template_rgb = cv2.imread(full_path)
                     if template_rgb is None: return None
                     template_gray = cv2.cvtColor(template_rgb, cv2.COLOR_BGR2GRAY)
                     _, template_mask = cv2.threshold(template_gray, 200, 255, cv2.THRESH_BINARY)
                     th, tw = template_gray.shape
                     
-                    # 2. 현재 화면 캡처 및 이진화 (배경 노이즈 100% 제거)
                     screen_gray = fast_cv_screenshot(gray=True)
                     _, screen_mask = cv2.threshold(screen_gray, 200, 255, cv2.THRESH_BINARY)
                     
-                    # 3. 마스킹된 상태로 정밀 비교 (CCORR_NORMED 방식이 이진화 텍스트 매칭에 최적)
                     res = cv2.matchTemplate(screen_mask, template_mask, cv2.TM_CCORR_NORMED)
                     
-                    # 4. 화면 전체에서 유사도가 높은 모든 점을 수집 후 최고점 1개만 추출
                     loc = np.where(res >= threshold)
                     matches = [(pt, res[pt[1], pt[0]]) for pt in zip(*loc[::-1])]
                     if not matches: return None
                     
-                    # 유사도 내림차순 정렬 후 1등 좌표 획득
                     matches.sort(key=lambda x: x[1], reverse=True)
                     best_match = matches[0]
                     
                     if best_match[1] < threshold: return None
                     
-                    # 기존 로직과 호환되도록 가짜 Box 객체 리턴
                     class DummyBox:
                         def __init__(self, l, t, w, h):
                             self.left = l; self.top = t; self.width = w; self.height = h
@@ -2193,7 +2191,14 @@ def fishing_bot(max_allowed_seconds):
                 start_find = time.time()
                 while time.time() - start_find < 3.0 and bot_active:
                     pos_char = find_precise_nickname(next_char['img'], 0.88)
-                    if pos_char: break
+                    if pos_char: 
+                        # [이중 검증 안전장치] 찾았더라도 흥분해서 바로 누르지 않고, 
+                        # 0.1초 뒤에 한 번 더 찍어서 그 자리에 닉네임이 뚜렷하게 있는지 2차 검증!
+                        time.sleep(0.1)
+                        if find_precise_nickname(next_char['img'], 0.88):
+                            break # 2번 연속 확실하게 통과했을 때만 진짜로 인정하고 루프 탈출!
+                        else:
+                            pos_char = None # 가짜 픽셀 튐 현상이었음. 다시 찾기.
                     time.sleep(0.05)
                     
                 if pos_char:

@@ -123,6 +123,39 @@ victory_mode = 1 # 승리코인 모드 선택 변수 (1 또는 2)
 original_brightness = 100 # [화면 밝기] 모니터 원래 밝기 복구용 저장소
 is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 
+bot_mode = 1 # 1: 일반 낚시, 3: 부캐 릴레이 낚시
+char_index = 0 # 릴레이 모드 캐릭터 순번 추적기
+
+# =====================================================================
+# 👑 [릴레이 낚시 마스터 컨트롤러] 👑
+# - img: 캡처해둔 캐릭터 닉네임 파일명 (반드시 char_1.png, char_2.png 로 저장!)
+# - name: 로그에 출력될 예쁜 이름
+# =====================================================================
+MY_CHARACTERS = [
+    {"img": "char_1.png", "name": "본캐(창고넣음)"},
+    {"img": "char_2.png", "name": "부캐1(인벤만)"},
+    {"img": "char_3.png", "name": "부캐2(인벤만)"}
+]
+CHAR_NAMES = {c["img"]: c["name"] for c in MY_CHARACTERS}
+
+def toggle_relay_start():
+    global bot_active, victory_active, run_start_time, bot_mode, char_index, original_brightness, is_dimmed
+    if victory_active: toggle_stop()
+    bot_active = True
+    bot_mode = 3
+    char_index = 0
+    run_start_time = time.time()
+    bprint("\n=============================================")
+    bprint("🟢 [모드 3: 부캐 릴레이 낚시 시작] 단축키(;) 입력 감지")
+    bprint("=============================================")
+    try:
+        curr_b = sbc.get_brightness()
+        if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
+        sbc.set_brightness(0)
+        is_dimmed = True
+        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
+    except: pass
+
 def jitter_sleep(seconds):
     global bot_active, victory_active
     # -0.05 ~ 0.05초 사이의 랜덤한 실수 생성
@@ -1364,6 +1397,7 @@ def fishing_bot(max_allowed_seconds):
 
     keyboard.add_hotkey('[', toggle_stop)
     keyboard.add_hotkey(']', toggle_start)
+    keyboard.add_hotkey(';', toggle_relay_start) # 모드 3 단축키 추가
     keyboard.add_hotkey('<', toggle_stop)
     keyboard.add_hotkey('>', lambda: toggle_victory_start(1))
     keyboard.add_hotkey('?', lambda: toggle_victory_start(2)) # 모드 2 단축키 추가
@@ -1898,6 +1932,13 @@ def fishing_bot(max_allowed_seconds):
                 # 위 0.5초 감시에서 포착했거나, 탈출 후 혹시 막 떴을 경우를 모두 커버
                 if is_inventory_full or safe_find_image('auto_release.png', 0.7):
                     stats['inventory_clear_count'] += 1
+                    # [모드 3: 부캐 릴레이] 현재 부캐(char_index > 0)라면 창고 보관을 스킵하고 즉시 교체!
+                    if bot_mode == 3 and char_index > 0:
+                        c_name = CHAR_NAMES.get(MY_CHARACTERS[char_index]['img'], "부캐")
+                        bprint(f"\n\n!!! [알림] '{c_name}' 인벤토리 풀! 창고 보관을 스킵하고 다음 캐릭터로 접속합니다 !!!")
+                        state = 10
+                        continue
+
                     bprint("\n\n!!! [알림] 자동 방생(인벤토리 풀) 감지 - 자동 보관 시퀀스 진입 !!!")
                     send_blynk_notification("⚠️ 인벤토리 풀 감지")
                     dump_blackbox_log("인벤토리_가득참_감지") # [블랙박스 트리거 추가]
@@ -1975,6 +2016,11 @@ def fishing_bot(max_allowed_seconds):
                         if time.time() - c_scan_start > 10.0:
                             bprint("  > [보관] 타임아웃(10초): 완료창(C) 미발견. 강제 UI 종료 시도.")
                             send_cmd('E'); time.sleep(1.0); send_cmd('R')
+                            
+                            # [모드 3: 부캐 릴레이] 10초간 안 떴다면 본캐 창고가 꽉 찬 것으로 간주하고 교체!
+                            if bot_mode == 3 and char_index == 0:
+                                bprint("  > 📦 [창고 풀] 본캐 창고가 가득 찼습니다! 부캐 릴레이 접속을 시작합니다.")
+                                state = 10
                             break
 
                         send_cmd('H'); time.sleep(0.1); send_cmd('R')
@@ -2023,6 +2069,115 @@ def fishing_bot(max_allowed_seconds):
                     bprint("  > [정상] 특이사항 없음. 다음 낚시를 시작합니다.")
                     state = 1
 
+            # --- [State 10] 부캐 릴레이 캐릭터 자동 교체 로직 ---
+            elif state == 10:
+                if char_index + 1 >= len(MY_CHARACTERS):
+                    bprint("\n🛑 [릴레이 종료] 등록된 모든 부캐릭터의 인벤토리가 가득 찼습니다! 봇을 대기 상태로 전환합니다.")
+                    send_blynk_notification("🛑 모든 캐릭터 낚시 완료")
+                    toggle_stop()
+                    continue
+                    
+                next_char = MY_CHARACTERS[char_index + 1]
+                bprint(f"\n🚀 [부캐 릴레이] '{next_char['name']}' 접속 시퀀스 시작!")
+                
+                # 내부 능동 대기 헬퍼 함수 (팝업 방어 로직 완벽 이식)
+                def wait_img(img, timeout, check_popups=True):
+                    st = time.time()
+                    while time.time() - st < timeout and bot_active:
+                        if check_popups:
+                            # 1. 메인 자정 팝업 (-350px 체크박스 수학적 정밀 타겟팅)
+                            pos_main = safe_find_image('popup_main.png', 0.8)
+                            if pos_main:
+                                bprint("  > 💡 [자정 팝업] 뉴스 팝업 감지! 체크박스 타겟팅 시도...")
+                                cx = pos_main.left + pos_main.width // 2
+                                cy = pos_main.top + pos_main.height // 2
+                                pyautogui.moveTo(cx - 350, cy); time.sleep(0.1); send_cmd('C'); time.sleep(0.3)
+                                pyautogui.moveTo(cx, cy); time.sleep(0.1); send_cmd('C'); time.sleep(0.1)
+                                pyautogui.moveTo(200, 500); time.sleep(1.0)
+                                st = time.time() # 팝업 처리 후 타임아웃 연장
+                                continue
+                                
+                            # 2. 인게임 팝업 (ESC)
+                            if safe_find_image('popup_char.png', 0.8):
+                                bprint("  > 💡 [자정 팝업] 인게임 팝업 감지! (ESC로 닫기)")
+                                send_cmd('E'); time.sleep(0.1); send_cmd('R'); time.sleep(1.0)
+                                st = time.time()
+                                continue
+
+                        if safe_find_image(img, 0.7): return True
+                        time.sleep(0.1)
+                    return False
+
+                bprint("  > 1. 메뉴창(sys_7.png) 진입...")
+                for _ in range(4):
+                    send_cmd('E'); time.sleep(0.2); send_cmd('R')
+                    if wait_img('sys_7.png', 2.0): break
+                    
+                bprint("  > 2. 캐릭터 선택(sys_1.png) 진입...")
+                for _ in range(4):
+                    send_cmd('E'); time.sleep(0.2); send_cmd('R')
+                    if wait_img('sys_1.png', 2.0): break
+                    
+                bprint("  > 3. 현재 캐릭터 종료 대기...")
+                pos_1 = safe_find_image('sys_1.png', 0.7)
+                if pos_1:
+                    pyautogui.moveTo(pos_1.left + pos_1.width//2, pos_1.top + pos_1.height//2)
+                    time.sleep(0.1); send_cmd('C'); time.sleep(0.1)
+                wait_img('sys_2.png', 6.0)
+                
+                bprint("  > 4. 메인 화면(sys_3.png) 대기...")
+                send_cmd('N'); time.sleep(0.1); send_cmd('R')
+                wait_img('sys_3.png', 12.0)
+                
+                bprint(f"  > 5. '{next_char['name']}' 탐색 및 접속...")
+                send_cmd('G'); time.sleep(0.1); send_cmd('R')
+                time.sleep(1.0)
+                
+                pos_char = safe_find_image(next_char['img'], 0.75, region="FULL_SCREEN")
+                if pos_char:
+                    pyautogui.moveTo(pos_char.left + pos_char.width//2, pos_char.top + pos_char.height//2)
+                    time.sleep(0.1); send_cmd('C'); time.sleep(0.1)
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                else:
+                    bprint("  > [에러] 캐릭터 사진을 찾지 못했습니다. G를 다시 누릅니다.")
+                    send_cmd('G'); time.sleep(0.1); send_cmd('R')
+                    
+                bprint("  > 6. 인게임 진입 대기...")
+                wait_img('sys_6.png', 6.0, check_popups=False) # 로딩창에선 팝업 검사 생략
+                while safe_find_image('sys_6.png', 0.7) and bot_active:
+                    time.sleep(0.1)
+                time.sleep(1.0) # 인게임 렌더링 1초 대기
+                
+                # [유저 제안 핵심 로직] 무기(낚싯대) 장착 상태 검증 및 스왑 엔진
+                bprint("  > 7. 낚싯대 장착(start_condition.png) 상태 검증...")
+                while bot_active:
+                    if safe_find_image('start_condition.png', 0.75):
+                        bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
+                        break
+                        
+                    bprint("  > 🎣 [무기 스왑] 낚싯대 미포착. 좌클릭(C) 시도 후 1초 대기...")
+                    send_cmd('C'); time.sleep(0.1); send_cmd('R')
+                    
+                    sc_found = False
+                    wait_sc = time.time()
+                    while time.time() - wait_sc < 1.0 and bot_active:
+                        if safe_find_image('start_condition.png', 0.75):
+                            sc_found = True
+                            break
+                        time.sleep(0.1)
+                        
+                    if sc_found:
+                        bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
+                        break
+                        
+                    bprint("  > 🔄 [무기 스왑] 여전히 맨손입니다. 숫자 '0' 입력 후 재시도...")
+                    send_cmd('0'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.8) # 0번 누르고 모션 취하는 시간 0.8초 대기
+                    
+                bprint(f"  > ✅ [접속 완료] '{next_char['name']}' 낚시를 시작합니다.")
+                char_index += 1
+                state = 1
+                continue
             # 무조건 예외 처리기(BotStopException)로 넘김
             if not bot_active: 
                 raise BotStopException()

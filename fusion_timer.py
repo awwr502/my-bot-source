@@ -95,16 +95,27 @@ enable_dimming = False # [수정] 기본값을 '꺼짐(False)'으로 변경했�
 is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 char_thread_active = False # 수동 캐릭터 변경 스레드 제어 플래그
 
-# 캐릭터 이미지와 실제 닉네임을 연결하는 딕셔너리
-CHAR_NAMES = {
-    '5.png': '베릭산성1',
-    '8.png': '베릭산성2',
-    '9.png': '베릭산성3',
-    '10.png': '베릭유전1',
-    '11.png': '베릭유전2',
-    '12.png': '베릭유전3',
-    '13.png': '베릭핑크'
-}
+# =====================================================================
+# 👑 [캐릭터 마스터 컨트롤러] 👑
+# 이곳에 캐릭터를 추가/수정/삭제하면 봇 전체의 모든 로직(단축키, 순서 등)이 100% 자동 적용됩니다!
+#  - img: 캡처해둔 파일명 (1.png, 5.png 등)
+#  - name: 로그에 출력될 예쁜 이름
+#  - hotkey: 수동 접속 단축키 (F6 ~ F12 등 자유 지정)
+#  - is_anchor: 타이머 보상을 수령할 앵커 캐릭터인지 (True는 파티에 딱 1명만!)
+#  - use_fusion: 모드 3, 4 (자동 융합) 사이클에 포함시킬지 여부
+# =====================================================================
+MY_CHARACTERS = [
+    {"img": "5.png",  "name": "베릭산성1", "hotkey": "F6",  "is_anchor": True,  "use_fusion": True},
+    {"img": "8.png",  "name": "베릭산성2", "hotkey": "F7",  "is_anchor": False, "use_fusion": True},
+    {"img": "9.png",  "name": "베릭산성3", "hotkey": "F8",  "is_anchor": False, "use_fusion": True},
+    {"img": "10.png", "name": "베릭유전1", "hotkey": "F9",  "is_anchor": False, "use_fusion": True},
+    {"img": "11.png", "name": "베릭유전2", "hotkey": "F10", "is_anchor": False, "use_fusion": True},
+    {"img": "12.png", "name": "베릭유전3", "hotkey": "F11", "is_anchor": False, "use_fusion": True},
+    {"img": "13.png", "name": "베릭핑크",  "hotkey": "F12", "is_anchor": False, "use_fusion": False} # 예시: 융합엔 안 쓰지만 수동접속용
+]
+
+# [1/5 자동화] 마스터 배열을 바탕으로 CHAR_NAMES 자동 생성
+CHAR_NAMES = {c["img"]: c["name"] for c in MY_CHARACTERS}
 
 def toggle_dimming_setting():
     global enable_dimming, is_dimmed, original_brightness
@@ -237,19 +248,23 @@ FUSION_CONF = {
     'item_A2.png': 0.95, 'item_B2.png': 0.95,
     
     'ability_label.png': 0.92,
-    
-    '5.png': 0.92, '8.png': 0.92, '9.png': 0.92, '10.png': 0.92,
-    '11.png': 0.92, '12.png': 0.92, '13.png': 0.92,
     'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72
 }
+
+# [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
+for c in MY_CHARACTERS:
+    FUSION_CONF[c["img"]] = 0.92
 
 FUSION_CACHE = {}
 GRAY_IMAGES = [
     'stop_btn.png', '1.png', '2.png', '3.png', 
-    '5.png', '6.png', '7.png', '8.png', '9.png', '10.png', '11.png', '12.png', '13.png', '14.png',
+    '6.png', '7.png', '14.png',
     'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png',
     'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png'
 ]
+
+# [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
+GRAY_IMAGES.extend([c["img"] for c in MY_CHARACTERS])
 COLOR_IMAGES = [
     'check_mark.png', 'item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png', 
     'level_5.png', 'fusion_start.png',
@@ -497,12 +512,20 @@ def fusion_bot_loop():
                     go_to_state_6_next = False 
                     continue
                 
+                # [4/5 자동화] 중앙 관리 배열(MY_CHARACTERS)에서 동적으로 교체 순서와 개수를 뽑아냅니다.
                 if bot_mode in [3, 4]:
-                    char_images = ['8.png', '9.png', '10.png', '11.png', '12.png', '5.png']
-                    loop_count = 6
+                    # 융합 모드: 앵커가 아닌 서브 캐릭들을 먼저 배치하고, 앵커를 항상 배열의 [마지막]에 자동 배치!
+                    sub_chars = [c["img"] for c in MY_CHARACTERS if c["use_fusion"] and not c["is_anchor"]]
+                    anchor_chars = [c["img"] for c in MY_CHARACTERS if c["use_fusion"] and c["is_anchor"]]
+                    char_images = sub_chars + anchor_chars
+                    loop_count = len(char_images)
+                    anchor_idx = loop_count - 1 # 앵커는 무조건 맨 마지막 번호로 자동 계산됨
                 else:
-                    char_images = ['5.png', '8.png', '9.png', '10.png', '11.png', '12.png', '13.png']
-                    loop_count = 7
+                    # 일반 멀티 모드: 등록된 순서대로 전부 순회합니다.
+                    char_images = [c["img"] for c in MY_CHARACTERS]
+                    loop_count = len(char_images)
+                    # 리스트를 뒤져 앵커(is_anchor=True)의 번호를 자동으로 찾아냅니다.
+                    anchor_idx = next((i for i, c in enumerate(MY_CHARACTERS) if c["is_anchor"]), 0)
                     
                 # --- [신설: Mode 5 감염물 자동 분별 및 분해 모드] ---
                 if bot_mode == 5:
@@ -714,9 +737,10 @@ def fusion_bot_loop():
                 if state == 0:
                     if bot_mode in [3, 4]:
                         mode_name = "모드 3(깡 복사)" if bot_mode == 3 else "모드 4(5/5 복사)"
-                        anchor_name = CHAR_NAMES.get('5.png', '앵커 캐릭')
+                        anchor_img = char_images[anchor_idx] if loop_count > 0 else '5.png'
+                        anchor_name = CHAR_NAMES.get(anchor_img, '앵커 캐릭')
                         bprint(f"✨ [{mode_name} 시작] 앵커({anchor_name}) 융합 보상 수령 및 세팅(State 7) 진입.")
-                        char_index = 5 
+                        char_index = anchor_idx # 과거의 하드코딩 숫자 5를 능동형 변수로 교체! 
                         fusion_end_time = 0.0 
                         state = 7
                         continue
@@ -1051,10 +1075,10 @@ def fusion_bot_loop():
                         remaining_sec = int(fusion_end_time - time.time())
                         
                         # [절대 타이머 방어] 현재 생존한 앵커 캐릭터를 동적으로 판별하여 타이머 대기!
-                        current_anchor = 5
-                        if 5 in skipped_chars:
+                        current_anchor = anchor_idx
+                        if anchor_idx in skipped_chars:
                             current_anchor = 0
-                            while current_anchor in skipped_chars and current_anchor < 5:
+                            while current_anchor in skipped_chars and current_anchor < anchor_idx:
                                 current_anchor += 1
                                 
                         if char_index == current_anchor and remaining_sec > 0:
@@ -1153,10 +1177,10 @@ def fusion_bot_loop():
                             break 
                             
                         # 5) 보상이 없다면 앵커/기타 캐릭터 세팅 분기
-                        current_anchor = 5
-                        if 5 in skipped_chars:
+                        current_anchor = anchor_idx
+                        if anchor_idx in skipped_chars:
                             current_anchor = 0
-                            while current_anchor in skipped_chars and current_anchor < 5:
+                            while current_anchor in skipped_chars and current_anchor < anchor_idx:
                                 current_anchor += 1
                                 
                         if char_index == current_anchor:
@@ -1697,21 +1721,21 @@ def fusion_bot_loop():
                                     time.sleep(0.1)
 
                             if bot_mode in [3, 4]:
-                                # [핵심 수정] 스킵 시에도 방금 건너뛴 녀석이 마지막 서브 캐릭터였는지 검사하여 사이클 종료 여부를 똑똑하게 판별합니다.
+                                # [핵심 수정] 스킵 시에도 방금 건너뛴 녀석이 마지막 서브 캐릭터였는지 검사
                                 last_active_index = -1
-                                for i in range(4, -1, -1):
+                                for i in range(anchor_idx - 1, -1, -1):
                                     if i not in skipped_chars:
                                         last_active_index = i
                                         break
                                         
-                                if char_index == 5 or char_index > last_active_index:
+                                if char_index == anchor_idx or char_index > last_active_index:
                                     bprint(f"\n✨ [사이클 완료] 모든 캐릭터 세팅이 완료되었습니다. 대기 앵커로 이동합니다.")
                                     go_to_state_6_next = True 
                                     
-                                    wait_anchor = 5
-                                    if 5 in skipped_chars:
+                                    wait_anchor = anchor_idx
+                                    if anchor_idx in skipped_chars:
                                         wait_anchor = 0
-                                        while wait_anchor in skipped_chars and wait_anchor < 5:
+                                        while wait_anchor in skipped_chars and wait_anchor < anchor_idx:
                                             wait_anchor += 1
                                     char_index = wait_anchor
                                 else:
@@ -1814,13 +1838,14 @@ def fusion_bot_loop():
                             bprint(f"  > 👑 [단일 생존] 마지막 남은 '{c_name}' 입니다! 접속 해제 없이 즉시 대기 모드로 돌입합니다.")
                             state = 7
                         else:
+                            # 과거의 숫자 4(앵커 5의 앞번호)를 anchor_idx 기준으로 자동 대응되게 수정
                             last_active_index = -1
-                            for i in range(4, -1, -1):
+                            for i in range(anchor_idx - 1, -1, -1):
                                 if i not in skipped_chars:
                                     last_active_index = i
                                     break
                                     
-                            if char_index == 5 or char_index < last_active_index: 
+                            if char_index == anchor_idx or char_index < last_active_index: 
                                 bprint(f"\n🔄 [세팅 완료] 다음 생존 캐릭터로 교체하기 위해 탐색을 시작합니다.\n")
                                 while True:
                                     char_index += 1
@@ -1831,10 +1856,10 @@ def fusion_bot_loop():
                                 bprint(f"\n✨ [사이클 완료] 모든 캐릭터 세팅이 완료되었습니다. 대기 앵커로 이동합니다.")
                                 go_to_state_6_next = True 
                                 
-                                wait_anchor = 5
-                                if 5 in skipped_chars:
+                                wait_anchor = anchor_idx
+                                if anchor_idx in skipped_chars:
                                     wait_anchor = 0
-                                    while wait_anchor in skipped_chars and wait_anchor < 5:
+                                    while wait_anchor in skipped_chars and wait_anchor < anchor_idx:
                                         wait_anchor += 1
                                 char_index = wait_anchor
                                 state = 1
@@ -2024,13 +2049,11 @@ def main_bot():
     keyboard.add_hotkey(';', lambda: toggle_start(5)) # 모드 5: 감염물 분별
     keyboard.add_hotkey('-', toggle_dimming_setting) # 모니터 절전 토글
     
-    # 수동 캐릭터 변경 단축키 (F6 ~ F11)
-    keyboard.add_hotkey('F6', lambda: threading.Thread(target=force_change_character, args=('5.png',), daemon=True).start())
-    keyboard.add_hotkey('F7', lambda: threading.Thread(target=force_change_character, args=('8.png',), daemon=True).start())
-    keyboard.add_hotkey('F8', lambda: threading.Thread(target=force_change_character, args=('9.png',), daemon=True).start())
-    keyboard.add_hotkey('F9', lambda: threading.Thread(target=force_change_character, args=('10.png',), daemon=True).start())
-    keyboard.add_hotkey('F10', lambda: threading.Thread(target=force_change_character, args=('11.png',), daemon=True).start())
-    keyboard.add_hotkey('F11', lambda: threading.Thread(target=force_change_character, args=('12.png',), daemon=True).start())
+    # [5/5 자동화] 중앙 관리 배열(MY_CHARACTERS)을 스캔하여 수동 캐릭터 단축키를 자동으로 생성합니다!
+    for c in MY_CHARACTERS:
+        if c.get("hotkey"):
+            # 람다 클로저 충돌을 피하기 위해 k=c["img"]로 변수 바인딩
+            keyboard.add_hotkey(c["hotkey"], lambda k=c["img"]: threading.Thread(target=force_change_character, args=(k,), daemon=True).start())
 
     bprint("\n=========================================")
     bprint(" 🚀 원스휴먼 스마트 융합 봇 가동 준비 🚀")
@@ -2044,8 +2067,11 @@ def main_bot():
     bprint(" - : 모니터 절전(밝기 0%) 자동 켜기/끄기")
     bprint(" ---------------------------------------")
     bprint(" [수동 캐릭터 변경 단축키]")
-    bprint(" F6 ~ F8  : 베릭산성 1~3")
-    bprint(" F9 ~ F11 : 베릭유전 1~3")
+    
+    # 생성된 단축키를 메뉴판에 보기 좋게 자동 출력
+    for c in MY_CHARACTERS:
+        if c.get("hotkey"):
+            bprint(f" {c['hotkey']:<4} : {c['name']}")
     bprint("=========================================\n")
 
     while True:

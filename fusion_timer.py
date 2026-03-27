@@ -873,6 +873,8 @@ def fusion_bot_loop():
                                 if check_img('3.png', thread_sct):
                                     found_3 = True
                                     break
+                                # 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C) 연속 타격
+                                send_cmd('C'); time.sleep(0.05); send_cmd('R')
                                 time.sleep(0.05)
                             
                             if found_3:
@@ -1959,6 +1961,8 @@ def force_change_character(char_key):
                             if check_img('3.png', thread_sct):
                                 found_3 = True
                                 break
+                            # 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C) 연속 타격
+                            send_cmd('C'); time.sleep(0.05); send_cmd('R')
                             time.sleep(0.05)
                             
                         if not char_thread_active: break

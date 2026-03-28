@@ -214,22 +214,22 @@ def is_truly_tier_1(roi, x, y, h):
     center_y = y + (h // 2)
     
     # [수정] 폰트 변경에 대응하여 왼쪽 탐색 범위를 넓히고(12->18), 밝기 허용치를 낮춰(80->40) 3, 4의 몸통 픽셀을 완벽히 감지합니다.
-    probe_x_start = max(0, x - 18)
-    probe_x_end = max(0, x - 3)
-    center_y = y + (h // 2)
+    probe_x_start = max(0, x - 18)
+    probe_x_end = max(0, x - 3)
+    center_y = y + (h // 2)
 
-    probe_y_start = max(0, center_y - 2)
-    probe_y_end = min(roi.shape[0], center_y + 3)
+    probe_y_start = max(0, center_y - 2)
+    probe_y_end = min(roi.shape[0], center_y + 3)
 
-    if probe_x_start >= roi.shape[1]: return True
+    if probe_x_start >= roi.shape[1]: return True
 
-    sample_area = roi[probe_y_start:probe_y_end, probe_x_start:probe_x_end]
-    
-    if sample_area.size == 0: return True
+    sample_area = roi[probe_y_start:probe_y_end, probe_x_start:probe_x_end]
+    
+    if sample_area.size == 0: return True
 
-    if np.max(sample_area) > 40: 
-        return False 
-    return True 
+    if np.max(sample_area) > 40: 
+        return False 
+    return True 
 
 # === [AI 비전 엔진 및 융합 환경 설정] ===
 FUSION_CONF = {
@@ -2011,22 +2011,22 @@ def force_change_character(char_key):
     global bot_active, char_thread_active
     
     # 만약 융합 매크로가 가동 중이라면 꼬이지 않게 융합 봇부터 자동 정지시킵니다.
-    was_active = bot_active
-    if was_active:
-        toggle_stop()
-        
-    # [핵심 수정] toggle_stop()이 char_thread_active를 강제로 False로 변경하므로,
-    # sleep(jitter_sleep)이 호출되기 전에 스레드 생존 플래그를 먼저 True로 복구해주어야 에러가 발생하지 않습니다.
-    char_thread_active = True
+    was_active = bot_active
+    if was_active:
+        toggle_stop()
+        
+    # [핵심 수정] toggle_stop()이 char_thread_active를 강제로 False로 변경하므로,
+    # sleep(jitter_sleep)이 호출되기 전에 스레드 생존 플래그를 먼저 True로 복구해주어야 에러가 발생하지 않습니다.
+    char_thread_active = True
 
-    if was_active:
-        time.sleep(0.5)
+    if was_active:
+        time.sleep(0.5)
 
-    c_name = CHAR_NAMES.get(char_key, char_key)
-    bprint(f"\n🚀 [수동 캐릭터 변경] '{c_name}' 접속 시퀀스 시작!")
+    c_name = CHAR_NAMES.get(char_key, char_key)
+    bprint(f"\n🚀 [수동 캐릭터 변경] '{c_name}' 접속 시퀀스 시작!")
 
-    with mss.mss() as thread_sct:
-        state = 1
+    with mss.mss() as thread_sct:
+        state = 1
         
         try: # [핵심] 정지 명령(BotStopException)을 부드럽게 받아내기 위한 안전망 추가
             while char_thread_active:

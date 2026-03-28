@@ -1265,7 +1265,7 @@ def fusion_bot_loop():
                                     time.sleep(0.5)
                                     break
                                 else:
-                                    send_cmd('M', 60, 0); time.sleep(0.15)
+                                    send_cmd('M', 400, 0); time.sleep(0.01)
                                     
                             continue # State 7 처음으로 돌아가서 정상적으로 상태 확인 수행
 

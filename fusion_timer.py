@@ -2006,16 +2006,22 @@ def force_change_character(char_key):
     global bot_active, char_thread_active
     
     # 만약 융합 매크로가 가동 중이라면 꼬이지 않게 융합 봇부터 자동 정지시킵니다.
-    if bot_active:
-        toggle_stop()
-        time.sleep(0.5)
+    was_active = bot_active
+    if was_active:
+        toggle_stop()
+        
+    # [핵심 수정] toggle_stop()이 char_thread_active를 강제로 False로 변경하므로,
+    # sleep(jitter_sleep)이 호출되기 전에 스레드 생존 플래그를 먼저 True로 복구해주어야 에러가 발생하지 않습니다.
+    char_thread_active = True
 
-    c_name = CHAR_NAMES.get(char_key, char_key)
-    bprint(f"\n🚀 [수동 캐릭터 변경] '{c_name}' 접속 시퀀스 시작!")
+    if was_active:
+        time.sleep(0.5)
 
-    with mss.mss() as thread_sct:
-        char_thread_active = True
-        state = 1
+    c_name = CHAR_NAMES.get(char_key, char_key)
+    bprint(f"\n🚀 [수동 캐릭터 변경] '{c_name}' 접속 시퀀스 시작!")
+
+    with mss.mss() as thread_sct:
+        state = 1
         
         try: # [핵심] 정지 명령(BotStopException)을 부드럽게 받아내기 위한 안전망 추가
             while char_thread_active:

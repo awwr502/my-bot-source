@@ -924,16 +924,17 @@ def fusion_bot_loop():
                             
                             wait_3 = time.time()
                             found_3 = False
-                            # [핵심] 서버 렉에 대비하여 능동 대기 상한선을 5.0초에서 10.0초로 대폭 상향합니다.
+                            # [요청 반영] 10초 동안 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C)을 반복합니다.
                             while time.time() - wait_3 < 10.0 and bot_active:
                                 check_popup_main(thread_sct)
-                                if check_img('3.png', thread_sct):
+                                # 화면에 3.png가 떠 있음에도 인식하지 못하는 현상을 방지하기 위해 force_full=True를 추가했습니다.
+                                if check_img('3.png', thread_sct, force_full=True):
                                     found_3 = True
                                     break
-                                # 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C) 연속 타격
-                                send_cmd('C'); time.sleep(0.05); send_cmd('R')
-                                time.sleep(0.05)
-                            
+                                
+                                send_cmd('C')
+                                time.sleep(0.1)
+                                
                             if found_3:
                                 bprint("  > [동적 대기 성공] 3.png 확인 완료. 3단계 이동.")
                                 state = 3
@@ -2053,16 +2054,17 @@ def force_change_character(char_key):
                         send_cmd('N'); time.sleep(0.1); send_cmd('R')
                         
                         wait_3 = time.time()
-                        found_3 = False
-                        while time.time() - wait_3 < 10.0 and char_thread_active:
-                            check_popup_main(thread_sct)
-                            if check_img('3.png', thread_sct):
-                                found_3 = True
-                                break
-                            # 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C) 연속 타격
-                            send_cmd('C'); time.sleep(0.05); send_cmd('R')
-                            time.sleep(0.05)
-                            
+                            found_3 = False
+                            # [요청 반영] 10초 동안 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C)을 반복합니다.
+                            while time.time() - wait_3 < 10.0 and char_thread_active:
+                                check_popup_main(thread_sct)
+                                if check_img('3.png', thread_sct, force_full=True):
+                                    found_3 = True
+                                    break
+                                
+                                send_cmd('C')
+                                time.sleep(0.1)
+                                
                         if not char_thread_active: break
                         
                         if found_3:

@@ -1640,25 +1640,25 @@ def fusion_bot_loop():
                                             if check_img('select_2_2.png', thread_sct):
                                                 bprint("  > ✅ [확인] 2/2 세팅 완료.")
                                                 break
-                                            bprint("  > ⚠️ [재시도] 2/2 미달성. 다시 클릭합니다.")
-                                            time.sleep(0.2)
-                                            
-                                            # [추가된 방어 로직] 다시 클릭하기 전, 꼬여있는 체크마크가 있다면 모두 해제하여 0/2 상태로 초기화합니다.
-                                            dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
-                                            res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
-                                            loc_dc = np.where(res_dc >= 0.85)
-                                            pts_dc = list(zip(*loc_dc[::-1]))
-                                            
-                                            if len(pts_dc) > 0:
-                                                bprint("  > 🛡️ [방어 로직] 체크 꼬임 감지! 체크마크를 모두 해제하고 초기화합니다.")
-                                                dc_unique = []
-                                                for ptd in pts_dc:
-                                                    if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
-                                                        dc_unique.append(ptd)
-                                                for ptd in dc_unique:
-                                                    hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
-                                                    pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
-                                                pyautogui.moveTo(200, 500); time.sleep(0.2)
+                                            bprint("  > ⚠️ [재시도] 2/2 미달성. 다시 클릭합니다.")
+                                            time.sleep(0.2)
+                                            
+                                            # [추가된 방어 로직] 다시 클릭하기 전, 꼬여있는 체크마크가 있다면 모두 해제하여 0/2 상태로 초기화합니다.
+                                            dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
+                                            res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
+                                            loc_dc = np.where(res_dc >= 0.85)
+                                            pts_dc = list(zip(*loc_dc[::-1]))
+                                            
+                                            if len(pts_dc) > 0:
+                                                bprint("  > 🛡️ [방어 로직] 체크 꼬임 감지! 체크마크를 모두 해제하고 초기화합니다.")
+                                                dc_unique = []
+                                                for ptd in pts_dc:
+                                                    if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
+                                                        dc_unique.append(ptd)
+                                                for ptd in dc_unique:
+                                                    hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
+                                                    pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
+                                                pyautogui.moveTo(200, 500); time.sleep(0.2)
                                             
                                         last_cx, last_cy = safe_pts[-1][2], safe_pts[-1][3]
                                         pair_found = True
@@ -1817,25 +1817,25 @@ def fusion_bot_loop():
                                         if check_img('select_2_2.png', thread_sct):
                                             bprint("  > ✅ [확인] 2/2 세팅 완료.")
                                             break
-                                        bprint("  > ⚠️ [재시도] 2/2 미달성. 다시 클릭합니다.")
-                                        time.sleep(0.2)
-                                        
-                                        # [추가된 방어 로직] 다시 클릭하기 전, 꼬여있는 체크마크가 있다면 모두 해제하여 0/2 상태로 초기화합니다.
-                                        dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
-                                        res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
-                                        loc_dc = np.where(res_dc >= 0.85)
-                                        pts_dc = list(zip(*loc_dc[::-1]))
-                                        
-                                        if len(pts_dc) > 0:
-                                            bprint("  > 🛡️ [방어 로직] 체크 꼬임 감지! 체크마크를 모두 해제하고 초기화합니다.")
-                                            dc_unique = []
-                                            for ptd in pts_dc:
-                                                if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
-                                                    dc_unique.append(ptd)
-                                            for ptd in dc_unique:
-                                                hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
-                                                pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
-                                            fast_clear_tooltip()
+                                        bprint("  > ⚠️ [재시도] 2/2 미달성. 다시 클릭합니다.")
+                                        time.sleep(0.2)
+                                        
+                                        # [추가된 방어 로직] 다시 클릭하기 전, 꼬여있는 체크마크가 있다면 모두 해제하여 0/2 상태로 초기화합니다.
+                                        dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
+                                        res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
+                                        loc_dc = np.where(res_dc >= 0.85)
+                                        pts_dc = list(zip(*loc_dc[::-1]))
+                                        
+                                        if len(pts_dc) > 0:
+                                            bprint("  > 🛡️ [방어 로직] 체크 꼬임 감지! 체크마크를 모두 해제하고 초기화합니다.")
+                                            dc_unique = []
+                                            for ptd in pts_dc:
+                                                if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
+                                                    dc_unique.append(ptd)
+                                            for ptd in dc_unique:
+                                                hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
+                                                pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
+                                            fast_clear_tooltip()
                                         
                                     last_cx, last_cy = safe_pts[-1][2], safe_pts[-1][3]
                                     pair_found = True

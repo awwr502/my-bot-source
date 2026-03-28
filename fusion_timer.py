@@ -248,7 +248,8 @@ FUSION_CONF = {
     'item_A2.png': 0.95, 'item_B2.png': 0.95,
     
     'ability_label.png': 0.92,
-    'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72
+    'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72,
+    'exit_notice.png': 0.85
 }
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
@@ -260,7 +261,8 @@ GRAY_IMAGES = [
     'stop_btn.png', '1.png', '2.png', '3.png', 
     '6.png', '7.png', '14.png',
     'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png',
-    'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png'
+    'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png',
+    'exit_notice.png'
 ]
 
 # [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
@@ -422,6 +424,59 @@ def check_popup_char(thread_sct):
         bprint("  > 💡 [자정 팝업] 인게임 팝업(신청하기) 감지! (ESC로 닫기)")
         send_cmd('E'); time.sleep(0.1); send_cmd('R')
         wait_vanish('popup_char.png', thread_sct)
+        return True
+    return False
+
+def check_fusion_afk(thread_sct):
+    """융합기 대기 전용 잠수 방지 해제 로직"""
+    if check_img('exit_notice.png', thread_sct, force_full=True):
+        bprint("  > [긴급] 융합 중 잠수 방지 알림 감지! 전용 해제 시퀀스 진입")
+        
+        # 1. F 입력하여 알림창 닫기 (완전히 사라질 때까지 검증)
+        while check_img('exit_notice.png', thread_sct, force_full=True):
+            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+            for _ in range(20):
+                time.sleep(0.1)
+                if not check_img('exit_notice.png', thread_sct, force_full=True):
+                    break
+        
+        bprint("  > [1단계] 알림창 소멸 확인. ESC 1회 입력")
+        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+        
+        # 2. 7.png 최대 3초 능동 대기
+        bprint("  > [2단계] 7.png 탐색 중 (최대 3초)...")
+        wait_7_start = time.time()
+        found_7 = False
+        while time.time() - wait_7_start < 3.0 and bot_active:
+            if check_img('7.png', thread_sct, force_full=True):
+                found_7 = True
+                bprint("  > [성공] 7.png 포착 완료")
+                break
+            time.sleep(0.05)
+            
+        if not found_7:
+            bprint("  > [실패] 3초 내 7.png 미발견. ESC 추가 1회 입력")
+            send_cmd('E'); time.sleep(0.1); send_cmd('R')
+            
+        # 3. 위치 보정 (S 0.8초 -> W 0.8초)
+        bprint("  > [3단계] 위치 보정: S(후진) 0.8초 -> W(전진) 0.8초")
+        time.sleep(0.5)
+        send_cmd('S'); time.sleep(0.8); send_cmd('R')
+        time.sleep(0.2)
+        send_cmd('W'); time.sleep(0.8); send_cmd('R')
+        time.sleep(0.5)
+        
+        # 4. 14.png 탐색 (마우스 회전) 및 F 입력
+        bprint("  > [4단계] 14.png 융합기 탐색 시작 (마우스 회전)")
+        while bot_active:
+            if check_img('14.png', thread_sct, force_full=True):
+                bprint("  > [완료] 14.png 발견! F 입력 후 융합 대기로 복귀합니다.")
+                send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                break
+            else:
+                send_cmd('M', 60, 0); time.sleep(0.15)
+        
+        time.sleep(1.0)
         return True
     return False
 
@@ -755,6 +810,7 @@ def fusion_bot_loop():
                                 bprint("⏳ [모드 1] 10분(600초) 카운트다운 시작...")
                                 for remaining_sec in range(600, -1, -1):
                                     if not bot_active: raise BotStopException()
+                                    check_fusion_afk(thread_sct)
                                     mins = remaining_sec // 60
                                     secs = remaining_sec % 60
                                     print(f"\r  > 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초   ", end="", flush=True)
@@ -1034,6 +1090,7 @@ def fusion_bot_loop():
                     bprint("  > [State 6] 백그라운드 융합 완료 시간 대기 중...")
                     while bot_active:
                         if not bot_active: raise BotStopException() 
+                        check_fusion_afk(thread_sct)
                             
                         remaining_sec = int(fusion_end_time - time.time())
                         
@@ -1107,6 +1164,7 @@ def fusion_bot_loop():
                         if check_img('stop_btn.png', thread_sct):
                             c_name = CHAR_NAMES.get(char_images[char_index], "캐릭")
                             print(f"\r  > ⏳ '{c_name}' 융합 대기 중... (기계 가동 중)                                        ", end="", flush=True)
+                            check_fusion_afk(thread_sct)
                             time.sleep(1)
                             continue
                             

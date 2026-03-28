@@ -927,7 +927,6 @@ def fusion_bot_loop():
                             # [요청 반영] 30초 동안 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C)을 반복합니다.
                             while time.time() - wait_3 < 30.0 and bot_active:
                                 check_popup_main(thread_sct)
-                                # 화면에 3.png가 떠 있음에도 인식하지 못하는 현상을 방지하기 위해 force_full=True를 추가했습니다.
                                 if check_img('3.png', thread_sct, force_full=True):
                                     found_3 = True
                                     break
@@ -2054,18 +2053,18 @@ def force_change_character(char_key):
                         send_cmd('N'); time.sleep(0.1); send_cmd('R')
                         
                         wait_3 = time.time()
-                            found_3 = False
-                            # [요청 반영] 30초 동안 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C)을 반복합니다.
-                            while time.time() - wait_3 < 30.0 and char_thread_active:
-                                check_popup_main(thread_sct)
-                                if check_img('3.png', thread_sct, force_full=True):
-                                    found_3 = True
-                                    break
-                                
-                                send_cmd('C')
-                                time.sleep(0.1)
-                                
-                        if not char_thread_active: break
+                        found_3 = False
+                        # [요청 반영] 30초 동안 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C)을 반복합니다.
+                        while time.time() - wait_3 < 30.0 and char_thread_active:
+                            check_popup_main(thread_sct)
+                            if check_img('3.png', thread_sct, force_full=True):
+                                found_3 = True
+                                break
+                            
+                            send_cmd('C')
+                            time.sleep(0.1)
+                            
+                    if not char_thread_active: break
                         
                         if found_3:
                             bprint("  > [동적 대기 성공] 3.png 확인 완료. 3단계 이동.")

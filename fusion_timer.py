@@ -924,8 +924,8 @@ def fusion_bot_loop():
                             
                             wait_3 = time.time()
                             found_3 = False
-                            # [요청 반영] 10초 동안 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C)을 반복합니다.
-                            while time.time() - wait_3 < 10.0 and bot_active:
+                            # [요청 반영] 30초 동안 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C)을 반복합니다.
+                            while time.time() - wait_3 < 30.0 and bot_active:
                                 check_popup_main(thread_sct)
                                 # 화면에 3.png가 떠 있음에도 인식하지 못하는 현상을 방지하기 위해 force_full=True를 추가했습니다.
                                 if check_img('3.png', thread_sct, force_full=True):
@@ -2055,8 +2055,8 @@ def force_change_character(char_key):
                         
                         wait_3 = time.time()
                             found_3 = False
-                            # [요청 반영] 10초 동안 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C)을 반복합니다.
-                            while time.time() - wait_3 < 10.0 and char_thread_active:
+                            # [요청 반영] 30초 동안 3.png가 확인될 때까지 0.1초 간격으로 마우스 좌클릭(C)을 반복합니다.
+                            while time.time() - wait_3 < 30.0 and char_thread_active:
                                 check_popup_main(thread_sct)
                                 if check_img('3.png', thread_sct, force_full=True):
                                     found_3 = True

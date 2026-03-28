@@ -249,7 +249,8 @@ FUSION_CONF = {
     
     'ability_label.png': 0.92,
     'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72,
-    'exit_notice.png': 0.85
+    'exit_notice.png': 0.85,
+    'bug_time.png': 0.85
 }
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
@@ -262,7 +263,7 @@ GRAY_IMAGES = [
     '6.png', '7.png', '14.png',
     'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png',
     'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png',
-    'exit_notice.png'
+    'exit_notice.png', 'bug_time.png'
 ]
 
 # [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
@@ -1236,6 +1237,38 @@ def fusion_bot_loop():
                             is_machine_empty = False
                             break 
                             
+                        # [디싱크 버그 감지 및 강제 치유 로직]
+                        if check_img('stop_btn.png', thread_sct) and not check_img('bug_time.png', thread_sct):
+                            print() # 줄바꿈 복구
+                            bprint("  > 🚨 [버그 감지] UI 디싱크 버그 확인! 기계를 강제로 재부팅합니다.")
+                            send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                            
+                            bprint("  > [버그 치유 1/2] 메인 화면(7.png) 복귀 대기 중...")
+                            wait_7 = time.time()
+                            is_out = False
+                            while time.time() - wait_7 < 3.0 and bot_active:
+                                if check_img('7.png', thread_sct, force_full=True):
+                                    is_out = True
+                                    break
+                                time.sleep(0.1)
+                                
+                            if not is_out:
+                                bprint("  > [재시도] 화면 닫기 지연. ESC 추가 입력.")
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                time.sleep(1.0)
+                                
+                            bprint("  > [버그 치유 2/2] 14.png 탐색(마우스 회전) 및 상호작용(F) 재진입...")
+                            while bot_active:
+                                if check_img('14.png', thread_sct, force_full=True):
+                                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                    bprint("  > ✅ [버그 치유 완료] 융합기 재진입 성공! 상태를 재확인합니다.")
+                                    time.sleep(0.5)
+                                    break
+                                else:
+                                    send_cmd('M', 60, 0); time.sleep(0.15)
+                                    
+                            continue # State 7 처음으로 돌아가서 정상적으로 상태 확인 수행
+
                         # 5) 보상이 없다면 앵커/기타 캐릭터 세팅 분기
                         current_anchor = anchor_idx
                         if anchor_idx in skipped_chars:

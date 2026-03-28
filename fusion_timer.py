@@ -2064,7 +2064,7 @@ def force_change_character(char_key):
                             send_cmd('C')
                             time.sleep(0.1)
                             
-                    if not char_thread_active: break
+                        if not char_thread_active: break
                         
                         if found_3:
                             bprint("  > [동적 대기 성공] 3.png 확인 완료. 3단계 이동.")

@@ -1260,12 +1260,32 @@ def fusion_bot_loop():
                             bprint("  > [버그 치유 2/2] 14.png 탐색(마우스 회전) 및 상호작용(F) 재진입...")
                             while bot_active:
                                 if check_img('14.png', thread_sct, force_full=True):
-                                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                    bprint("  > ✅ [버그 치유 완료] 융합기 재진입 성공! 상태를 재확인합니다.")
-                                    time.sleep(0.5)
-                                    break
+                                    bprint("  > [확인] 14.png 발견! 상호작용(F) 시도 및 융합기 진입 대기...")
+                                    entered_machine = False
+                                    
+                                    while bot_active:
+                                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                        
+                                        wait_chance = time.time()
+                                        found_chance = False
+                                        # 최대 3초간 0.1초 간격으로 chance.png 능동 대기
+                                        while time.time() - wait_chance < 3.0 and bot_active:
+                                            if check_img('chance.png', thread_sct):
+                                                found_chance = True
+                                                break
+                                            time.sleep(0.1)
+                                            
+                                        if found_chance:
+                                            bprint("  > ✅ [버그 치유 완료] 융합기(chance.png) 재진입 성공! 상태를 재확인합니다.")
+                                            entered_machine = True
+                                            break
+                                        else:
+                                            bprint("  > ⚠️ [재시도] 3초간 chance.png 미발견(서버 렉). F키를 다시 입력합니다.")
+                                            
+                                    if entered_machine:
+                                        break # 바깥쪽 14.png 탐색(마우스 회전) 루프까지 완전히 탈출
                                 else:
-                                    send_cmd('M', 400, 0); time.sleep(0.01)
+                                    send_cmd('M', 60, 0); time.sleep(0.15)
                                     
                             continue # State 7 처음으로 돌아가서 정상적으로 상태 확인 수행
 

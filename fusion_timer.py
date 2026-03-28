@@ -1263,6 +1263,13 @@ def fusion_bot_loop():
                                     is_machine_empty = False 
                                     break
                         else:
+                            # [핵심 수정] 부캐릭터의 경우 절대 타이머 보호가 없으므로, 1.5단계 진입 전 'stop_btn.png'를 최종 교차 검증하여 오판을 방어합니다.
+                            if check_img('stop_btn.png', thread_sct):
+                                print() # 동적 타이머 줄바꿈 복구
+                                c_name_err = CHAR_NAMES.get(char_images[char_index], "부캐")
+                                bprint(f"  > ⚠️ [서버 렉 방어] '{c_name_err}' 융합 완료 오판 감지! 기계가 여전히 가동 중이므로 대기로 복귀합니다.")
+                                continue
+
                             c_name = CHAR_NAMES.get(char_images[char_index], "부캐")
                             bprint(f"  > ['{c_name}' 세팅] 무조건 체크 해제가 필요하므로 즉시 1.5단계로 진입합니다.")
                             is_machine_empty = False

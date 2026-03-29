@@ -214,27 +214,22 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    probe_x_start = max(0, x - 12)
-    probe_x_end = max(0, x - 4)
-    center_y = y + (h // 2)
-    
-    # [수정] 폰트 변경에 대응하여 왼쪽 탐색 범위를 넓히고(12->18), 밝기 허용치를 낮춰(80->40) 3, 4의 몸통 픽셀을 완벽히 감지합니다.
-    probe_x_start = max(0, x - 18)
-    probe_x_end = max(0, x - 3)
-    center_y = y + (h // 2)
+    # [수정] 중앙(center_y)만 검사하면 3번 숫자의 패인 공간(빈틈)을 만나 1로 오탐할 수 있습니다.
+    # 전체 높이(y 부터 y+h 까지)를 모두 스캔하여 왼쪽에 픽셀이 하나라도 있으면 즉시 차단합니다!
+    probe_x_start = max(0, x - 18)
+    probe_x_end = max(0, x - 3)
+    probe_y_start = max(0, y)
+    probe_y_end = min(roi.shape[0], y + h)
 
-    probe_y_start = max(0, center_y - 2)
-    probe_y_end = min(roi.shape[0], center_y + 3)
+    if probe_x_start >= roi.shape[1]: return True
 
-    if probe_x_start >= roi.shape[1]: return True
+    sample_area = roi[probe_y_start:probe_y_end, probe_x_start:probe_x_end]
+    if sample_area.size == 0: return True
 
-    sample_area = roi[probe_y_start:probe_y_end, probe_x_start:probe_x_end]
-    
-    if sample_area.size == 0: return True
-
-    if np.max(sample_area) > 40: 
-        return False 
-    return True 
+    # 숫자 몸통(밝은 픽셀)이 왼쪽에 감지되면 1이 아닙니다. 허용치를 40에서 50으로 살짝 조절하여 노이즈 대비.
+    if np.max(sample_area) > 50: 
+        return False 
+    return True 
 
 # === [AI 비전 엔진 및 융합 환경 설정] ===
 FUSION_CONF = {
@@ -724,20 +719,32 @@ def fusion_bot_loop():
                                 t1_img = FUSION_CACHE.get('tier_1.png')
                                 t1_h = t1_img.shape[0] if t1_img is not None else 24
                                 
-                                for t_idx in [4, 3, 2, 1]: 
-                                    t_img = FUSION_CACHE.get(f'tier_{t_idx}.png')
-                                    if t_img is None: continue
-                                    t_img_g = cv2.cvtColor(t_img, cv2.COLOR_BGR2GRAY)
-                                    if roi_col.shape[0] < t_img_g.shape[0] or roi_col.shape[1] < t_img_g.shape[1]: continue
-                                    
-                                    res_o = cv2.matchTemplate(roi_col, t_img_g, cv2.TM_CCOEFF_NORMED)
-                                    _, max_val_o, _, max_loc_o = cv2.minMaxLoc(res_o)
-                                    
-                                    if max_val_o >= FUSION_CONF.get(f'tier_{t_idx}.png', 0.75):
-                                        if t_idx == 1 and not is_truly_tier_1(roi_col, max_loc_o[0], max_loc_o[1], t1_h):
-                                            continue
-                                        found_other = True
-                                        break
+                                # [100% 인식률 핵심 로직] 1번의 템플릿(세로 짝대기)은 3, 4번의 기둥에 겹치면 인식률이 0.90 이상 나오는 치명적 오류가 있습니다.
+                                # 따라서 4, 3, 2번을 먼저 독립적으로 검사하여 찾으면 즉시 확정짓고 탈출합니다.
+                                for t_idx in [4, 3, 2]: 
+                                    t_img = FUSION_CACHE.get(f'tier_{t_idx}.png')
+                                    if t_img is None: continue
+                                    t_img_g = cv2.cvtColor(t_img, cv2.COLOR_BGR2GRAY)
+                                    if roi_col.shape[0] < t_img_g.shape[0] or roi_col.shape[1] < t_img_g.shape[1]: continue
+                                    
+                                    res_o = cv2.matchTemplate(roi_col, t_img_g, cv2.TM_CCOEFF_NORMED)
+                                    _, max_val_o, _, max_loc_o = cv2.minMaxLoc(res_o)
+                                    
+                                    if max_val_o >= FUSION_CONF.get(f'tier_{t_idx}.png', 0.72):
+                                        found_other = True
+                                        break
+                                        
+                                # 4, 3, 2 중에 없을 때만 마지막으로 1번을 엄격하게 스캔합니다.
+                                if not found_other:
+                                    t_img_1 = FUSION_CACHE.get('tier_1.png')
+                                    if t_img_1 is not None:
+                                        t_img_g_1 = cv2.cvtColor(t_img_1, cv2.COLOR_BGR2GRAY)
+                                        if roi_col.shape[0] >= t_img_g_1.shape[0] and roi_col.shape[1] >= t_img_g_1.shape[1]:
+                                            res_1 = cv2.matchTemplate(roi_col, t_img_g_1, cv2.TM_CCOEFF_NORMED)
+                                            _, max_val_1, _, max_loc_1 = cv2.minMaxLoc(res_1)
+                                            if max_val_1 >= FUSION_CONF.get('tier_1.png', 0.72):
+                                                if is_truly_tier_1(roi_col, max_loc_1[0], max_loc_1[1], t1_h):
+                                                    found_other = True
                                 
                                 # [핵심 로직] 5레벨은 없지만 다른 숫자(4,3,2,1)를 찾았다면 -> 정상적인 쓰레기 감염물임! (재시도 없이 0.01초 컷 확정)
                                 if found_other:
@@ -1536,33 +1543,33 @@ def fusion_bot_loop():
                                         t1_img = FUSION_CACHE.get('tier_1.png')
                                         t1_h = t1_img.shape[0] if t1_img is not None else 24
                                         
-                                        best_match_idx = 0
-                                        best_match_score = 0
-                                        best_match_loc = (0, 0)
+                                        # [100% 인식률 핵심 로직] 점수가 제일 높은 것을 고르는 방식(최댓값 비교)을 버립니다!
+                                        # 1번 템플릿(직선)이 3번 기둥을 긁었을 때 나오는 비정상적인 높은 점수(0.9+)가 3번 정상 점수(0.85)를 이겨버리는 문제를 원천 차단합니다.
+                                        for t_idx in [4, 3, 2]: 
+                                            t_img = FUSION_CACHE.get(f'tier_{t_idx}.png')
+                                            if t_img is None: continue
+                                            t_img_g = cv2.cvtColor(t_img, cv2.COLOR_BGR2GRAY)
 
-                                        # [발상의 전환] 4, 3, 2, 1 순서로 검사
-                                        for t_idx in [4, 3, 2, 1]: 
-                                            t_img = FUSION_CACHE.get(f'tier_{t_idx}.png')
-                                            if t_img is None: continue
-                                            t_img_g = cv2.cvtColor(t_img, cv2.COLOR_BGR2GRAY)
+                                            if roi_other.shape[0] < t_img_g.shape[0] or roi_other.shape[1] < t_img_g.shape[1]: continue
 
-                                            if roi_other.shape[0] < t_img_g.shape[0] or roi_other.shape[1] < t_img_g.shape[1]: continue
+                                            res_o = cv2.matchTemplate(roi_other, t_img_g, cv2.TM_CCOEFF_NORMED)
+                                            _, max_val_o, _, max_loc_o = cv2.minMaxLoc(res_o)
 
-                                            res_o = cv2.matchTemplate(roi_other, t_img_g, cv2.TM_CCOEFF_NORMED)
-                                            _, max_val_o, _, max_loc_o = cv2.minMaxLoc(res_o)
+                                            if max_val_o >= FUSION_CONF.get(f'tier_{t_idx}.png', 0.72):
+                                                found_other = t_idx
+                                                break
 
-                                            if max_val_o > best_match_score:
-                                                best_match_score = max_val_o
-                                                best_match_idx = t_idx
-                                                best_match_loc = max_loc_o
-
-                                        target_conf = FUSION_CONF.get(f'tier_{best_match_idx}.png', 0.75)
-                                        if best_match_score >= target_conf:
-                                            if best_match_idx == 1:
-                                                if is_truly_tier_1(roi_other, best_match_loc[0], best_match_loc[1], t1_h):
-                                                    found_other = 1
-                                            else:
-                                                found_other = best_match_idx
+                                        # 4, 3, 2가 없다고 판명되었을 때만 1번을 엄격하게 검증합니다.
+                                        if found_other == 0:
+                                            t_img_1 = FUSION_CACHE.get('tier_1.png')
+                                            if t_img_1 is not None:
+                                                t_img_g_1 = cv2.cvtColor(t_img_1, cv2.COLOR_BGR2GRAY)
+                                                if roi_other.shape[0] >= t_img_g_1.shape[0] and roi_other.shape[1] >= t_img_g_1.shape[1]:
+                                                    res_1 = cv2.matchTemplate(roi_other, t_img_g_1, cv2.TM_CCOEFF_NORMED)
+                                                    _, max_val_1, _, max_loc_1 = cv2.minMaxLoc(res_1)
+                                                    if max_val_1 >= FUSION_CONF.get('tier_1.png', 0.72):
+                                                        if is_truly_tier_1(roi_other, max_loc_1[0], max_loc_1[1], t1_h):
+                                                            found_other = 1
                                                 
                                         if found_other != 0:
                                             parse_success = True

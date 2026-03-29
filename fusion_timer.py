@@ -175,17 +175,22 @@ def auto_connect_arduino():
             target_port = p.device
             break
     if target_port:
-        bprint(f">>> [시스템] 아두이노 감지 성공: {target_port} 포트 <<<")
-        return serial.Serial(target_port, 115200)
+        bprint(f">>> [시스템] 아두이노({target_port}) 발견! 포트 개방 시도 중... <<<")
+        # 무한 대기(행) 방지용 타임아웃 안전장치 추가
+        return serial.Serial(target_port, 115200, timeout=2, write_timeout=2)
     else:
         bprint("!!! [오류] 아두이노를 찾을 수 없습니다 !!!")
         sys.exit()
 
 try:
     arduino = auto_connect_arduino()
+    bprint(">>> [시스템] 아두이노 포트 통신 개방 완벽 성공! <<<")
     original_sleep(2)
 except Exception as e:
-    sys.exit()
+    bprint(f"\n!!! [치명적 오류] 아두이노 연결 실패: {e}")
+    bprint("원인: 백그라운드에 꼬여있는 봇 프로세스가 포트를 점유 중이거나 장치 인식이 불안정합니다.")
+    input("엔터키를 누르면 종료됩니다...")
+    sys.exit(1)
 
 def send_cmd(cmd, dx=None, dy=None):
     global bot_active, char_thread_active

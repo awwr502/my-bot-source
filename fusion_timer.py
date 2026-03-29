@@ -1038,7 +1038,7 @@ def fusion_bot_loop():
                         if check_popup_char(thread_sct): continue 
                         
                         if check_img('7.png', thread_sct):
-                            bprint("  > [성공] 7.png 확인! 14.png 탐색 전 '눈 감고 즉각 상호작용(F)'을 시도합니다.")
+                            bprint("  > [성공] 7.png 확인! '즉각 상호작용(F)'을 시도합니다.")
                             
                             # [초가속 돌파] 이미 캐릭터가 융합기를 바라보고 있을 확률이 높으므로, 마우스를 돌리기 전 F부터 입력해 봅니다.
                             send_cmd('F'); time.sleep(0.1); send_cmd('R')

@@ -1045,39 +1045,53 @@ def fusion_bot_loop():
                             
                             blind_f_success = False
                             wait_chance = time.time()
-                            while time.time() - wait_chance < 1.5 and bot_active:
-                                # [핵심] chance.png에 ROI가 자동 적용되어 초고속 감지 수행
-                                if check_img('chance.png', thread_sct):
-                                    blind_f_success = True
-                                    break
-                                time.sleep(0.05)
-                            
-                            if blind_f_success:
-                                bprint("  > 🎯 [진입 성공!] 융합기 창(chance.png) 다이렉트 팝업 확인! State 7로 직행합니다.")
-                            else:
-                                bprint("  > 🔄 즉각 진입 실패. 14.png 탐색(마우스 회전) 루프로 진입합니다.")
-                                while bot_active:
-                                    if not bot_active: raise BotStopException()
-                                    if check_popup_char(thread_sct): continue 
-                                    
-                                    # [주의] 14.png는 지도 텍스트이므로 오탐 방지를 위해 force_full=True를 유지합니다.
-                                    if check_img('14.png', thread_sct, force_full=True):
-                                        bprint("  > [성공] 14.png 확인! F를 입력하여 융합기에 진입합니다.")
-                                        while bot_active:
-                                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                            
-                                            vanish_start = time.time()
-                                            is_vanished = False
-                                            
-                                            # 2초간 능동 대기하며 소멸 검증
-                                            while time.time() - vanish_start < 2.0 and bot_active:
-                                                # 확실한 소멸을 위해 연달아 2번 안 보일 때만 소멸로 판정
-                                                if not check_img('14.png', thread_sct, force_full=True):
-                                                    time.sleep(0.05)
-                                                    if not check_img('14.png', thread_sct, force_full=True):
-                                                        is_vanished = True
-                                                        break
-                                                time.sleep(0.05)
+                            # [핵심 방어 1] 1.5초 대기 중 자정 팝업이 chance.png를 가리는 현상을 실시간으로 방어합니다.
+                            while time.time() - wait_chance < 1.5 and bot_active:
+                                if check_popup_char(thread_sct): 
+                                    wait_chance = time.time() # 팝업을 치우느라 소모된 시간을 보상하기 위해 타이머를 리셋합니다.
+                                    continue
+                                    
+                                if check_img('chance.png', thread_sct):
+                                    blind_f_success = True
+                                    break
+                                time.sleep(0.05)
+                            
+                            if blind_f_success:
+                                bprint("  > 🎯 [진입 성공!] 융합기 창(chance.png) 다이렉트 팝업 확인! State 7로 직행합니다.")
+                            else:
+                                bprint("  > 🔄 [정상 패턴 전환] 즉각 진입 실패. 14.png 탐색(마우스 회전) 루프로 진입합니다.")
+                                while bot_active:
+                                    if not bot_active: raise BotStopException()
+                                    if check_popup_char(thread_sct): continue 
+                                    
+                                    # [핵심 방어 2] 눈감고 F가 실패한 줄 알았는데, 팝업을 치우고 보니 이미 융합기 안(chance.png)일 수 있습니다! (지연 진입 확인)
+                                    if check_img('chance.png', thread_sct):
+                                        bprint("  > 🎯 [지연 진입 성공] 팝업에 가려졌던 융합기 창(chance.png)이 확인되었습니다! State 7로 직행합니다.")
+                                        break
+                                        
+                                    # [주의] 14.png는 지도 텍스트이므로 오탐 방지를 위해 force_full=True를 유지합니다.
+                                    if check_img('14.png', thread_sct, force_full=True):
+                                        bprint("  > [성공] 14.png 확인! F를 입력하여 융합기에 진입합니다.")
+                                        while bot_active:
+                                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                            
+                                            vanish_start = time.time()
+                                            is_vanished = False
+                                            
+                                            # 2초간 능동 대기하며 소멸 검증
+                                            while time.time() - vanish_start < 2.0 and bot_active:
+                                                # [핵심 방어 3] 14.png 소멸 대기 중에도 팝업이 뜨면 타이머를 리셋합니다.
+                                                if check_popup_char(thread_sct):
+                                                    vanish_start = time.time()
+                                                    continue
+                                                    
+                                                # 확실한 소멸을 위해 연달아 2번 안 보일 때만 소멸로 판정
+                                                if not check_img('14.png', thread_sct, force_full=True):
+                                                    time.sleep(0.05)
+                                                    if not check_img('14.png', thread_sct, force_full=True):
+                                                        is_vanished = True
+                                                        break
+                                                time.sleep(0.05)
                                             
                                             if is_vanished:
                                                 bprint("  > [완료] 14.png 소멸 확인! 다음 단계로 이동합니다.")

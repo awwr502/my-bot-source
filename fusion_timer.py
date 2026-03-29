@@ -1038,62 +1038,62 @@ def fusion_bot_loop():
                         if check_popup_char(thread_sct): continue 
                         
                         if check_img('7.png', thread_sct):
-                            bprint("  > [성공] 7.png 확인! 14.png 탐색 전 '눈 감고 즉각 상호작용(F)'을 시도합니다.")
-                            
-                            # [초가속 돌파] 이미 캐릭터가 융합기를 바라보고 있을 확률이 높으므로, 마우스를 돌리기 전 F부터 입력해 봅니다.
-                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                            
-                            blind_f_success = False
-                            wait_chance = time.time()
-                            while time.time() - wait_chance < 1.5 and bot_active:
-                                # [핵심] chance.png에 ROI가 자동 적용되어 초고속 감지 수행
-                                if check_img('chance.png', thread_sct):
-                                    blind_f_success = True
-                                    break
-                                time.sleep(0.05)
-                            
-                            if blind_f_success:
-                                bprint("  > 🎯 [진입 성공!] 융합기 창(chance.png) 다이렉트 팝업 확인! State 7로 직행합니다.")
-                            else:
-                                bprint("  > 🔄 즉각 진입 실패. 14.png 탐색(마우스 회전) 루프로 진입합니다.")
-                                while bot_active:
-                                    if not bot_active: raise BotStopException()
-                                    if check_popup_char(thread_sct): continue 
-                                    
-                                    # [주의] 14.png는 지도 텍스트이므로 오탐 방지를 위해 force_full=True를 유지합니다.
-                                    if check_img('14.png', thread_sct, force_full=True):
-                                        bprint("  > [성공] 14.png 확인! F를 입력하여 융합기에 진입합니다.")
-                                        while bot_active:
-                                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                            
-                                            vanish_start = time.time()
-                                            is_vanished = False
-                                            
-                                            # 2초간 능동 대기하며 소멸 검증
-                                            while time.time() - vanish_start < 2.0 and bot_active:
-                                                # 확실한 소멸을 위해 연달아 2번 안 보일 때만 소멸로 판정
-                                                if not check_img('14.png', thread_sct, force_full=True):
-                                                    time.sleep(0.05)
-                                                    if not check_img('14.png', thread_sct, force_full=True):
-                                                        is_vanished = True
-                                                        break
-                                                time.sleep(0.05)
-                                            
-                                            if is_vanished:
-                                                bprint("  > [완료] 14.png 소멸 확인! 다음 단계로 이동합니다.")
-                                                break
-                                            else:
-                                                bprint("  > ⚠️ [재시도] 2초 대기 초과. F키를 다시 입력합니다.")
-                                        break
-                                    else:
-                                        if bot_mode in [3, 4]:
-                                            print("\r  > 14.png 탐색 중... (마우스 이동)   ", end="", flush=True)
-                                            pyautogui.moveTo(CENTER_X, CENTER_Y)
-                                            time.sleep(0.01)
-                                            send_cmd('M', 400, 0)
-                                            time.sleep(0.01) 
-                                        time.sleep(0.02)
-                                print() # 줄바꿈 복구
+                            bprint("  > [성공] 7.png 확인! 14.png 탐색 전 '눈 감고 즉각 상호작용(F)'을 시도합니다.")
+                            
+                            # [초가속 돌파] 이미 캐릭터가 융합기를 바라보고 있을 확률이 높으므로, 마우스를 돌리기 전 F부터 입력해 봅니다.
+                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                            
+                            blind_f_success = False
+                            wait_chance = time.time()
+                            while time.time() - wait_chance < 1.5 and bot_active:
+                                # [핵심] chance.png에 ROI가 자동 적용되어 초고속 감지 수행
+                                if check_img('chance.png', thread_sct):
+                                    blind_f_success = True
+                                    break
+                                time.sleep(0.05)
+                            
+                            if blind_f_success:
+                                bprint("  > 🎯 [진입 성공!] 융합기 창(chance.png) 다이렉트 팝업 확인! State 7로 직행합니다.")
+                            else:
+                                bprint("  > 🔄 즉각 진입 실패. 14.png 탐색(마우스 회전) 루프로 진입합니다.")
+                                while bot_active:
+                                    if not bot_active: raise BotStopException()
+                                    if check_popup_char(thread_sct): continue 
+                                    
+                                    # [주의] 14.png는 지도 텍스트이므로 오탐 방지를 위해 force_full=True를 유지합니다.
+                                    if check_img('14.png', thread_sct, force_full=True):
+                                        bprint("  > [성공] 14.png 확인! F를 입력하여 융합기에 진입합니다.")
+                                        while bot_active:
+                                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                            
+                                            vanish_start = time.time()
+                                            is_vanished = False
+                                            
+                                            # 2초간 능동 대기하며 소멸 검증
+                                            while time.time() - vanish_start < 2.0 and bot_active:
+                                                # 확실한 소멸을 위해 연달아 2번 안 보일 때만 소멸로 판정
+                                                if not check_img('14.png', thread_sct, force_full=True):
+                                                    time.sleep(0.05)
+                                                    if not check_img('14.png', thread_sct, force_full=True):
+                                                        is_vanished = True
+                                                        break
+                                                time.sleep(0.05)
+                                            
+                                            if is_vanished:
+                                                bprint("  > [완료] 14.png 소멸 확인! 다음 단계로 이동합니다.")
+                                                break
+                                            else:
+                                                bprint("  > ⚠️ [재시도] 2초 대기 초과. F키를 다시 입력합니다.")
+                                        break
+                                    else:
+                                        if bot_mode in [3, 4]:
+                                            print("\r  > 14.png 탐색 중... (마우스 이동)   ", end="", flush=True)
+                                            pyautogui.moveTo(CENTER_X, CENTER_Y)
+                                            time.sleep(0.01)
+                                            send_cmd('M', 400, 0)
+                                            time.sleep(0.01) 
+                                        time.sleep(0.02)
+                                print() # 줄바꿈 복구
 
                             if bot_mode in [3, 4]:
                                 if go_to_state_6_next:

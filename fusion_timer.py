@@ -100,7 +100,7 @@ char_thread_active = False # 수동 캐릭터 변경 스레드 제어 플래그
 # 이곳에 캐릭터를 추가/수정/삭제하면 봇 전체의 모든 로직(단축키, 순서 등)이 100% 자동 적용됩니다!
 #  - img: 캡처해둔 파일명 (1.png, 5.png 등)
 #  - name: 로그에 출력될 예쁜 이름
-#  - hotkey: 수동 접속 단축키 (F6 ~ F12 등 자유 지정)
+#  - hotkey: 수동 접속 단축키 (F5 ~ F11 등 자유 지정)
 #  - is_anchor: 타이머 보상을 수령할 앵커 캐릭터인지 (True는 파티에 딱 1명만!)
 #  - use_fusion: 모드 3, 4 (자동 융합) 사이클에 포함시킬지 여부
 # =====================================================================
@@ -111,7 +111,7 @@ MY_CHARACTERS = [
     {"img": "10.png", "name": "베릭유전1", "hotkey": "F9",  "is_anchor": False, "use_fusion": True},
     {"img": "11.png", "name": "베릭유전2", "hotkey": "F10", "is_anchor": False, "use_fusion": True},
     {"img": "12.png", "name": "베릭유전3", "hotkey": "F11", "is_anchor": False, "use_fusion": True},
-    {"img": "13.png", "name": "베릭핑크",  "hotkey": "F12", "is_anchor": False, "use_fusion": False} # 예시: 융합엔 안 쓰지만 수동접속용
+    {"img": "13.png", "name": "베릭핑크",  "hotkey": "F5", "is_anchor": False, "use_fusion": False} # 예시: 융합엔 안 쓰지만 수동접속용
 ]
 
 # [1/5 자동화] 마스터 배열을 바탕으로 CHAR_NAMES 자동 생성

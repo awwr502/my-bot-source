@@ -105,13 +105,13 @@ char_thread_active = False # 수동 캐릭터 변경 스레드 제어 플래그
 #  - use_fusion: 모드 3, 4 (자동 융합) 사이클에 포함시킬지 여부
 # =====================================================================
 MY_CHARACTERS = [
+    {"img": "13.png", "name": "베릭핑크",  "hotkey": "F5", "is_anchor": False, "use_fusion": False},
     {"img": "5.png",  "name": "베릭산성1", "hotkey": "F6",  "is_anchor": True,  "use_fusion": True},
     {"img": "8.png",  "name": "베릭산성2", "hotkey": "F7",  "is_anchor": False, "use_fusion": True},
     {"img": "9.png",  "name": "베릭산성3", "hotkey": "F8",  "is_anchor": False, "use_fusion": True},
     {"img": "10.png", "name": "베릭유전1", "hotkey": "F9",  "is_anchor": False, "use_fusion": True},
     {"img": "11.png", "name": "베릭유전2", "hotkey": "F10", "is_anchor": False, "use_fusion": True},
-    {"img": "12.png", "name": "베릭유전3", "hotkey": "F11", "is_anchor": False, "use_fusion": True},
-    {"img": "13.png", "name": "베릭핑크",  "hotkey": "F5", "is_anchor": False, "use_fusion": False} # 예시: 융합엔 안 쓰지만 수동접속용
+    {"img": "12.png", "name": "베릭유전3", "hotkey": "F11", "is_anchor": False, "use_fusion": True}
 ]
 
 # [1/5 자동화] 마스터 배열을 바탕으로 CHAR_NAMES 자동 생성

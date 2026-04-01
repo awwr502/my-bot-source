@@ -858,7 +858,7 @@ def fusion_bot_loop():
                                         
                                     # 게임 화면(chance.png)이 닫혀 있다면 복구될 때까지 대기
                                     if not check_img('chance.png', thread_sct):
-                                        print(f"\r  > ✅ 게임 화면(chance.png) 복구 대기 중...                                        ", end="", flush=True)
+                                        print(f"\r  > ✅ 게임 화면(chance.png) 복구 대기 중...                                                             ", end="", flush=True)
                                         time.sleep(0.5)
                                         continue
                                         

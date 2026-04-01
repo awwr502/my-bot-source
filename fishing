@@ -1405,99 +1405,100 @@ def animal_bot_loop():
         full_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         blackbox_buffer.append(f"[{full_time}] {msg}")
 
-    while True:
-        try:
-            if not animal_active:
-                time.sleep(0.1)
-                state = 1
-                continue
-
-            if state == 1:
-                aprint("  > [동물포획] 1단계: '모노리스(animal_1.png)' 인식 및 소멸 대기 중...")
-                
-                # [X-ray 디버깅 엔진] 이미지를 아예 찾지 못하는 원인 실시간 분석
-                import os, cv2, numpy as np
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                img_path = os.path.join(base_dir, 'animal_1.png')
-                
-                if not os.path.exists(img_path):
-                    aprint("  > 🚨 [치명적 오류] 폴더에 'animal_1.png' 파일이 없습니다!")
-                    aprint("  > 💡 팁: 윈도우 확장자 숨김 때문에 'animal_1.png.png'로 저장되었는지 확인하세요.")
-                    time.sleep(3)
-                    continue
-                    
-                first_check = False
-                for _ in range(20): 
-                    if safe_find_image('animal_1.png', 0.75, region="FULL_SCREEN"): 
-                        first_check = True
-                        break
-                    time.sleep(0.05)
-                
-                if not first_check:
-                    try:
-                        template = cv2.imdecode(np.fromfile(img_path, np.uint8), cv2.IMREAD_GRAYSCALE)
-                        with mss.mss() as tmp_sct:
-                            screen = cv2.cvtColor(np.array(tmp_sct.grab(tmp_sct.monitors[1])), cv2.COLOR_BGRA2GRAY)
-                        res = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
-                        _, max_val, _, _ = cv2.minMaxLoc(res)
-                        
-                        aprint(f"  > 📸 [X-ray] 봇이 본 일치율: {max_val*100:.1f}% (75.0% 이상 필요)")
-                        
-                        if max_val < 0.6:
-                            aprint("  > ⚠️ [진단] 윈도우 배율(125% 등) 문제로 픽셀 크기가 완전히 어긋났습니다.")
-                        elif max_val < 0.75:
-                            aprint("  > ⚠️ [진단] 글자 뒤의 배경색 노이즈 때문에 인식을 실패했습니다. 글자만 더 타이트하게 캡처하세요.")
-                    except Exception as e: 
-                        aprint(f"  > 🚨 [X-ray 에러] {e}")
-                        
-                    aprint("  > ⚠️ [대기] 화면에 모노리스 이미지가 아직 없습니다. 뜰 때까지 대기합니다...")
-                    time.sleep(1.0)
-                    continue
-                
-                aprint("  > ✅ [동물포획] 모노리스 인식 성공! 이제 소멸을 감시합니다.")
-                vanish_count = 0
-                while animal_active:
-                    # [핵심 수정] ROI 꼬임 방지
-                    if safe_find_image('animal_1.png', 0.75, region="FULL_SCREEN"): 
-                        vanish_count = 0
-                    else:
-                        vanish_count += 1
-
-                    if vanish_count >= 5: # 연속 5프레임(약 0.25초) 안 보여야 소멸 확정
-                        break
-                    time.sleep(0.05)
-                
-                if not animal_active: raise BotStopException()
-                
-                aprint("  > [동물포획] 1단계 완료: '모노리스' 완벽 소멸 확인! 비프음 출력.")
-                winsound.Beep(700, 600) # 비프음 1회 출력 (800Hz, 0.6초)
-                state = 2
-
-            elif state == 2:
-                aprint("  > [동물포획] 2단계: '복구(animal_2.png)' 등장 대기 중...")
-                found = False
-                while animal_active:
-                    # [핵심 수정] ROI 꼬임 방지 및 인식률 0.75 롤백
-                    if safe_find_image('animal_2.png', 0.75, region="FULL_SCREEN"):
-                        found = True
-                        break
-                    time.sleep(0.05)
-
-                if not animal_active: raise BotStopException()
-
-                if found:
-                    aprint("  > [동물포획] 2단계 완료: '복구' 사진 확인! H키 입력 후 복귀.")
-                    send_cmd('H'); time.sleep(0.1); send_cmd('R')
-                    time.sleep(0.5) # 루프 과부하 및 중복 인식 방지 대기
-                    state = 1
-
-        except BotStopException:
-            aprint("  > [동물포획 정지] 작동을 중지하고 대기합니다.")
+    # [핵심 원인 해결] 
+    # 기존 낚시봇의 safe_find_image는 메인 봇과 카메라(mss)를 공유하는데,
+    # 동물포획(서브 스레드)이 카메라를 동시에 접근하려다 윈도우 충돌이 발생해 조용히 None을 반환했던 것입니다.
+    # 이를 해결하기 위해 동물포획 스레드 전용 독립 카메라(thread_sct)와 두뇌(animal_cache)를 부여합니다.
+    
+    import os, cv2, numpy as np
+    import mss
+    
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    animal_cache = {}
+    
+    with mss.mss() as thread_sct:
+        def check_animal_img(img_name, conf=0.70):
             try:
-                arduino.write('U'.encode()); arduino.flush()
-                arduino.write('R'.encode()); arduino.flush()
-            except: pass
-            continue
+                if img_name not in animal_cache:
+                    path = os.path.join(base_dir, img_name)
+                    if not os.path.exists(path): return False
+                    animal_cache[img_name] = cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_GRAYSCALE)
+                
+                template = animal_cache[img_name]
+                if template is None: return False
+                
+                screen = cv2.cvtColor(np.array(thread_sct.grab(thread_sct.monitors[1])), cv2.COLOR_BGRA2GRAY)
+                res = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, _ = cv2.minMaxLoc(res)
+                return max_val >= conf
+            except:
+                return False
+
+        while True:
+            try:
+                if not animal_active:
+                    time.sleep(0.1)
+                    state = 1
+                    continue
+
+                if state == 1:
+                    aprint("  > [동물포획] 1단계: '모노리스(animal_1.png)' 인식 및 소멸 대기 중...")
+                    
+                    first_check = False
+                    for _ in range(20): 
+                        if check_animal_img('animal_1.png', 0.70):
+                            first_check = True
+                            break
+                        time.sleep(0.05)
+                    
+                    if not first_check:
+                        aprint("  > ⚠️ [대기] 화면에 모노리스 이미지가 아직 없습니다. 뜰 때까지 대기합니다...")
+                        time.sleep(0.5)
+                        continue 
+                    
+                    aprint("  > ✅ [동물포획] 모노리스 인식 성공! 이제 소멸을 감시합니다.")
+                    vanish_count = 0
+                    while animal_active:
+                        if check_animal_img('animal_1.png', 0.70): 
+                            vanish_count = 0
+                        else:
+                            vanish_count += 1
+
+                        if vanish_count >= 5: 
+                            break
+                        time.sleep(0.05)
+                    
+                    if not animal_active: raise BotStopException()
+                    
+                    aprint("  > [동물포획] 1단계 완료: '모노리스' 완벽 소멸 확인! 비프음 출력.")
+                    import winsound
+                    winsound.Beep(700, 600) 
+                    state = 2
+
+                elif state == 2:
+                    aprint("  > [동물포획] 2단계: '복구(animal_2.png)' 등장 대기 중...")
+                    found = False
+                    while animal_active:
+                        if check_animal_img('animal_2.png', 0.70):
+                            found = True
+                            break
+                        time.sleep(0.05)
+
+                    if not animal_active: raise BotStopException()
+
+                    if found:
+                        aprint("  > [동물포획] 2단계 완료: '복구' 사진 확인! H키 입력 후 복귀.")
+                        send_cmd('H'); time.sleep(0.1); send_cmd('R')
+                        time.sleep(0.5) 
+                        state = 1
+
+            except BotStopException:
+                aprint("  > [동물포획 정지] 작동을 중지하고 대기합니다.")
+                try:
+                    arduino.write('U'.encode()); arduino.flush()
+                    arduino.write('R'.encode()); arduino.flush()
+                except: pass
+                continue
 
 def fishing_bot(max_allowed_seconds):
     # 함수 내부에서도 전역 변수를 쓰겠다고 선언해야 오류가 나지 않습니다.

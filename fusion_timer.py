@@ -828,41 +828,45 @@ def fusion_bot_loop():
                                 bprint("⏳ [모드 1] 스마트 10분(600초) 카운트다운 시작...")
                                 fusion_end_time = time.time() + 600.0
                                 
+                                # 1단계: 순수 카운트다운 루프
                                 while bot_active:
                                     if not bot_active: raise BotStopException()
                                     check_fusion_afk(thread_sct)
-                                    
                                     remaining_sec = int(fusion_end_time - time.time())
                                     
-                                    if remaining_sec > 0:
-                                        mins = remaining_sec // 60
-                                        secs = remaining_sec % 60
-                                        print(f"\r  > 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초   ", end="", flush=True)
-                                        original_sleep(1)
-                                        continue
-                                        
-                                    # --- 모드 3, 4와 동일한 시각적 융합 종료 검증 로직 ---
-                                    # 1) 타이머가 끝났음에도 기계가 시각적으로 여전히 돌아가고 있다면 서버 렉 보정 대기
+                                    if remaining_sec <= 0: break # 타이머 종료 시 즉시 탈출
+                                    
+                                    mins = remaining_sec // 60
+                                    secs = remaining_sec % 60
+                                    print(f"\r  > 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초   ", end="", flush=True)
+                                    original_sleep(1)
+
+                                # 2단계: 타이머 종료 직후 '즉시' 비프음 출력
+                                print()
+                                bprint("✅ 10분 경과! 멜로디를 재생하며 시각적 검증을 시작합니다.")
+                                play_melody()
+                                
+                                # 3단계: 시각적 사후 검증 (서버 렉 및 화면 복구 대기)
+                                while bot_active:
+                                    if not bot_active: raise BotStopException()
+                                    
+                                    # 기계가 시각적으로 여전히 돌아가고 있다면 서버 렉 보정 대기
                                     if check_img('stop_btn.png', thread_sct):
                                         print(f"\r  > ⏳ 융합 대기 중... (서버 렉 보정: 기계 가동 중)                                        ", end="", flush=True)
                                         time.sleep(1)
                                         continue
                                         
-                                    # 2) 게임 화면(chance.png)이 닫혀 있다면 복구될 때까지 대기
+                                    # 게임 화면(chance.png)이 닫혀 있다면 복구될 때까지 대기
                                     if not check_img('chance.png', thread_sct):
                                         print(f"\r  > ✅ 게임 화면(chance.png) 복구 대기 중...                                        ", end="", flush=True)
                                         time.sleep(0.5)
                                         continue
                                         
-                                    # 3) [레이스 컨디션 방어] 화면은 떴으나 버튼이 렌더링되지 않은 찰나 방지
+                                    # 레이스 컨디션 방어 및 최종 확정
                                     time.sleep(0.2)
-                                    if check_img('stop_btn.png', thread_sct):
-                                        continue
-                                        
-                                    # 4) 완전히 종료됨을 시각적으로 확정
-                                    print()
-                                    bprint("✅ 타이머 및 시각적 검증 완료! 융합이 완벽히 종료되었습니다.")
-                                    play_melody()
+                                    if check_img('stop_btn.png', thread_sct): continue
+                                    
+                                    bprint("✅ 시각적 검증 완료! 융합이 완벽히 종료되었습니다.")
                                     original_sleep(0.5)
                                     bprint("  > [모드 1] 기본 타이머 종료. 버튼 재감지 대기...")
                                     time.sleep(1)

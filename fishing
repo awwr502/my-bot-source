@@ -19,6 +19,7 @@ import json
 import mss # [초고속 캡처 엔진]
 import screen_brightness_control as sbc # [화면 밝기 제어]
 import atexit # 프로그램 비정상 종료 시 화면 밝기 자동 복구용
+import winsound # 비프음 출력 모듈 추가
 
 # mss 객체는 딱 한 번만 생성해두고 계속 재사용합니다 (메모리 최적화)
 sct = mss.mss()
@@ -119,6 +120,7 @@ class BotStopException(Exception): pass
 # 모든 time.sleep 에 일괄적으로 +-0.005초 랜덤 딜레이 적용
 original_sleep = time.sleep
 victory_active = False # [승리코인] 전역 상태 변수 추가
+animal_active = False # [동물포획] 전역 상태 변수 추가
 victory_mode = 1 # 승리코인 모드 선택 변수 (1 또는 2)
 original_brightness = 100 # [화면 밝기] 모니터 원래 밝기 복구용 저장소
 is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
@@ -148,8 +150,8 @@ if not MY_CHARACTERS:
 CHAR_NAMES = {c["img"]: c["name"] for c in MY_CHARACTERS}
 
 def toggle_relay_start():
-    global bot_active, victory_active, run_start_time, bot_mode, char_index, original_brightness, is_dimmed
-    if victory_active: toggle_stop()
+    global bot_active, victory_active, animal_active, run_start_time, bot_mode, char_index, original_brightness, is_dimmed
+    if victory_active or animal_active: toggle_stop()
     bot_active = True
     bot_mode = 3
     char_index = 0
@@ -173,13 +175,13 @@ def jitter_sleep(seconds):
     final_time = max(0, seconds + jitter)
     
     # 함수가 실행될 때(대기 시작 시점)의 봇 가동 상태를 기억합니다.
-    was_active_at_start = bot_active or victory_active
+    was_active_at_start = bot_active or victory_active or animal_active
     
     # [핵심] 대기 시간을 0.05초 단위로 쪼개어 감시
     start_t = time.time()
     while time.time() - start_t < final_time:
         # '가동 중'에 sleep에 들어왔는데, 도중에 '정지(False)'로 바뀌었을 때만 즉시 폭파!
-        current_active = bot_active or victory_active
+        current_active = bot_active or victory_active or animal_active
         if was_active_at_start and not current_active:
             raise BotStopException()
         original_sleep(max(0, min(0.05, final_time - (time.time() - start_t))))
@@ -188,7 +190,7 @@ def jitter_sleep(seconds):
 time.sleep = jitter_sleep
 
 # 파이썬 내장 keyboard 라이브러리 가로채기 (가짜 키 입력 인식용)
-remote_keys = {'[': False, ']': False, '<': False, '>': False, '?': False, ';': False} # 모드 2, 3 단축키 추가
+remote_keys = {'[': False, ']': False, '<': False, '>': False, '?': False, ';': False, "'": False} # 모드 2, 3, 동물 단축키 추가
 orig_is_pressed = keyboard.is_pressed
 
 def _custom_is_pressed(key):
@@ -577,10 +579,10 @@ bot_active = False
 remote_task = None # [핵심] 텔레그램 스레드와 메인 봇을 연결하는 지시용 우체통 변수
 
 def toggle_stop():
-    global bot_active, victory_active, run_start_time, original_brightness, is_dimmed
+    global bot_active, victory_active, animal_active, run_start_time, original_brightness, is_dimmed
     
     # 멈춘 줄 모르고 여러 번 눌렀을 때의 답답함 해소용 안내
-    if not (bot_active or victory_active):
+    if not (bot_active or victory_active or animal_active):
         print("  > [안내] 봇이 이미 정지(대기) 상태입니다.")
         return
 
@@ -591,6 +593,7 @@ def toggle_stop():
 
     bot_active = False
     victory_active = False
+    animal_active = False
 
     # 스위치가 완전히 꺼져서 메인 로직이 정지된 후, 안전하게 화면 밝기를 복구합니다.
     bprint("\n=============================================")
@@ -613,8 +616,8 @@ def toggle_stop():
 
 def toggle_start():
     # [버그 수정] 존재하지 않는 enable_dimming 제거
-    global bot_active, victory_active, run_start_time, original_brightness, is_dimmed
-    if victory_active: toggle_stop() # 승리코인 동작 중이면 정지
+    global bot_active, victory_active, animal_active, run_start_time, original_brightness, is_dimmed
+    if victory_active or animal_active: toggle_stop() # 다른 봇 동작 중이면 정지
     bot_active = True
     run_start_time = time.time()
     bprint("\n=============================================")
@@ -631,8 +634,8 @@ def toggle_start():
 
 def toggle_victory_start(mode=1):
     # [버그 수정] 존재하지 않는 enable_dimming 제거
-    global bot_active, victory_active, run_start_time, victory_mode, original_brightness, is_dimmed
-    if bot_active: toggle_stop() # 낚시봇 동작 중이면 정지
+    global bot_active, victory_active, animal_active, run_start_time, victory_mode, original_brightness, is_dimmed
+    if bot_active or animal_active: toggle_stop() # 다른 봇 동작 중이면 정지
     victory_active = True
     victory_mode = mode
     run_start_time = time.time()
@@ -641,7 +644,22 @@ def toggle_victory_start(mode=1):
     bprint("=============================================")
     try:
         curr_b = sbc.get_brightness()
-        # [핵심] 현재 밝기가 10 이상일 때만 원본으로 저장하여 0% 무한 갇힘 버그 차단
+        if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
+        sbc.set_brightness(0)
+        is_dimmed = True
+        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
+    except: pass
+
+def toggle_animal_start():
+    global bot_active, victory_active, animal_active, run_start_time, original_brightness, is_dimmed
+    if bot_active or victory_active: toggle_stop()
+    animal_active = True
+    run_start_time = time.time()
+    bprint("\n=============================================")
+    bprint("🦝 [동물포획 모드 시작 명령 접수] 단축키(') 입력 감지")
+    bprint("=============================================")
+    try:
+        curr_b = sbc.get_brightness()
         if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
         sbc.set_brightness(0)
         is_dimmed = True
@@ -678,9 +696,9 @@ except Exception as e:
     sys.exit()
 
 def send_cmd(cmd):
-    global bot_active, victory_active
+    global bot_active, victory_active, animal_active
     # [핵심] 봇 정지 상태일 때 입력되는 모든 움직임/클릭 명령을 원천 차단하고 예외 발생
-    if not (bot_active or victory_active) and cmd not in ['U', 'R']:
+    if not (bot_active or victory_active or animal_active) and cmd not in ['U', 'R']:
         raise BotStopException()
     arduino.write(cmd.encode())
     arduino.flush()
@@ -1377,12 +1395,75 @@ def victory_coin_bot_loop():
                 except: pass
                 continue
 
+def animal_bot_loop():
+    global animal_active
+    state = 1
+
+    def aprint(msg):
+        current_time = datetime.now().strftime("%H:%M:%S")
+        print(f"[{current_time}] {msg}")
+        full_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        blackbox_buffer.append(f"[{full_time}] {msg}")
+
+    while True:
+        try:
+            if not animal_active:
+                time.sleep(0.1)
+                state = 1
+                continue
+
+            if state == 1:
+                aprint("  > [동물포획] 1단계: '모노리스(animal_1.png)' 소멸 대기 중...")
+                vanish_count = 0
+                while animal_active:
+                    # ROI 엔진 연동, 인식률 0.70 적용
+                    if safe_find_image('animal_1.png', 0.70):
+                        vanish_count = 0
+                    else:
+                        vanish_count += 1
+
+                    if vanish_count >= 5: # 연속 5프레임(약 0.25초) 안 보여야 소멸 확정
+                        break
+                    time.sleep(0.05)
+                
+                if not animal_active: raise BotStopException()
+                
+                aprint("  > [동물포획] 1단계 완료: '모노리스' 소멸 확인! 비프음 출력.")
+                winsound.Beep(800, 300) # 비프음 1회 출력 (800Hz, 0.3초)
+                state = 2
+
+            elif state == 2:
+                aprint("  > [동물포획] 2단계: '복구(animal_2.png)' 등장 대기 중...")
+                found = False
+                while animal_active:
+                    if safe_find_image('animal_2.png', 0.70):
+                        found = True
+                        break
+                    time.sleep(0.05)
+
+                if not animal_active: raise BotStopException()
+
+                if found:
+                    aprint("  > [동물포획] 2단계 완료: '복구' 사진 확인! H키 입력 후 복귀.")
+                    send_cmd('H'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.5) # 루프 과부하 및 중복 인식 방지 대기
+                    state = 1
+
+        except BotStopException:
+            aprint("  > [동물포획 정지] 작동을 중지하고 대기합니다.")
+            try:
+                arduino.write('U'.encode()); arduino.flush()
+                arduino.write('R'.encode()); arduino.flush()
+            except: pass
+            continue
+
 def fishing_bot(max_allowed_seconds):
     # 함수 내부에서도 전역 변수를 쓰겠다고 선언해야 오류가 나지 않습니다.
     global bot_active, run_start_time, bot_mode, char_index
     
-    # 승리코인 백그라운드 스레드 가동
+    # 서브 봇 백그라운드 스레드 가동
     threading.Thread(target=victory_coin_bot_loop, daemon=True).start()
+    threading.Thread(target=animal_bot_loop, daemon=True).start()
     
     # 봇이 켜지자마자 가장 먼저 사진들부터 메모리에 싹 다 올립니다.
     preload_all_images()
@@ -1396,6 +1477,7 @@ def fishing_bot(max_allowed_seconds):
     keyboard.add_hotkey('<', toggle_stop)
     keyboard.add_hotkey('>', lambda: toggle_victory_start(1))
     keyboard.add_hotkey('?', lambda: toggle_victory_start(2)) # 모드 2 단축키 추가
+    keyboard.add_hotkey("'", toggle_animal_start) # 동물포획 단축키 추가
 
     # 텔레그램 모드가 켜져 있을 때만 원격 제어 안내 간판을 띄웁니다.
     if USE_TELEGRAM:
@@ -1404,7 +1486,7 @@ def fishing_bot(max_allowed_seconds):
     state = -1
     # 로켓 이모지 앞에 \n(엔터키)을 추가하여 위쪽 문구와 한 줄 띄워지도록 틈을 만듭니다.
     bprint("\n🚀낚시 매크로 V2.4 가동 시작🚀")
-    bprint("(작동: ] , 정지: [ , 릴레이모드: ; , 승리모드1: > , 승리모드2: ? )")
+    bprint("(작동: ] , 정지: [ , 릴레이모드: ; , 승리모드1: > , 승리모드2: ? , 동물포획: ' )")
 
     cast_fail_count = 0 # 연속 캐스팅 실패 감지용 카운터
     

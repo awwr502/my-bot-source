@@ -1315,7 +1315,7 @@ def fusion_bot_loop():
                             break 
                             
                         # [디싱크 버그 감지 및 강제 치유 로직]
-                        if check_img('stop_btn.png', thread_sct) and not check_img('bug_time.png', thread_sct):
+                        if not check_img('stop_btn.png', thread_sct) and check_img('bug_time.png', thread_sct):
                             print() # 줄바꿈 복구
                             bprint("  > 🚨 [버그 감지] UI 디싱크 버그 확인! 기계를 강제로 재부팅합니다.")
                             send_cmd('E'); time.sleep(0.15); send_cmd('R')
@@ -2012,14 +2012,21 @@ def fusion_bot_loop():
                     
                     # [단계 4.5] 융합 시작 버튼 좌클릭 및 F 입력
                     bprint("  > 4.5. '융합 시작(fusion_start.png)' 버튼 탐색 중...")
+                    bug_detected_in_start = False
                     while bot_active:
                         if not bot_active: raise BotStopException()
+                        
+                        # [방어 로직] 4.5 탐색 중 디싱크 버그 감지
+                        if not check_img('stop_btn.png', thread_sct) and check_img('bug_time.png', thread_sct):
+                            bug_detected_in_start = True
+                            break
+                            
                         # [핵심] 융합 시작 버튼 fusion_start.png ROI 적용 (force_full 제거)
                         if check_img('fusion_start.png', thread_sct):
                             bprint("  > [성공] 융합 시작 버튼 확인! 좌클릭 후 F를 입력합니다.")
                             cx, cy = FUSION_ROI['fusion_start.png']['last_pos']
                             pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C')
-                            time.sleep(0.05) 
+                            time.sleep(0.05)
                             
                             send_cmd('F'); time.sleep(0.05); send_cmd('R')
                             break
@@ -2027,36 +2034,88 @@ def fusion_bot_loop():
                         
                     if not bot_active: continue
                     
-                    # [단계 4.8] 융합 진행 상태(stop_btn.png) 전환 능동 대기 중...
-                    bprint("  > 4.8. 융합 진행 상태(stop_btn.png) 전환 능동 대기 중...")
-                    wait_stop = time.time()
-                    while bot_active:
-                        if not bot_active: raise BotStopException()
-                        if check_popup_char(thread_sct): 
-                            wait_stop = time.time()
-                            continue
+                    if not bug_detected_in_start:
+                        # [단계 4.8] 융합 진행 상태(stop_btn.png) 전환 능동 대기 중...
+                        bprint("  > 4.8. 융합 진행 상태(stop_btn.png) 전환 능동 대기 중...")
+                        wait_stop = time.time()
+                        while bot_active:
+                            if not bot_active: raise BotStopException()
+                            if check_popup_char(thread_sct):
+                                wait_stop = time.time()
+                                continue
+                                
+                            # [추가된 방어 로직] 4.8 대기 중 무한 루프 빠짐 방지 (버그 자가치유)
+                            if not check_img('stop_btn.png', thread_sct) and check_img('bug_time.png', thread_sct):
+                                bug_detected_in_start = True
+                                break
                             
-                        # [핵심] stop_btn.png ROI 적용 (force_full 제거)
-                        if check_img('stop_btn.png', thread_sct):
-                            bprint("  > [성공] stop_btn.png 전환 완료! ESC 탈출을 위해 State 1로 배턴을 넘깁니다.")
+                            # [핵심] stop_btn.png ROI 적용 (force_full 제거)
+                            if check_img('stop_btn.png', thread_sct):
+                                bprint("  > [성공] stop_btn.png 전환 완료! ESC 탈출을 위해 State 1로 배턴을 넘깁니다.")
+                                
+                                current_anchor = 5
+                                if 5 in skipped_chars:
+                                    current_anchor = 0
+                                    while current_anchor in skipped_chars and current_anchor < 5:
+                                        current_anchor += 1
+                                        
+                                if bot_mode in [3, 4] and char_index == current_anchor:
+                                    fusion_end_time = time.time() + 600.0
+                                    bprint("  > ⏱️ [타이머 갱신] 앵커 캐릭터 융합 가동 시작! 10분(600초) 타이머가 설정되었습니다.")
+                                break
+                                
+                            if time.time() - wait_stop > 1.0:
+                                bprint("  > [재시도] 기계 가동 미확인(서버 렉). 시작(F) 재입력 시도...")
+                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                wait_stop = time.time()
+                                
+                            time.sleep(0.05)
+
+                    # [통합 버그 치유 로직] 단계 4.5 ~ 4.8 구간에서 버그가 발생했을 때 공통 처리
+                    if bug_detected_in_start:
+                        print() # 줄바꿈 복구
+                        bprint("  > 🚨 [버그 감지] 융합 시작 시퀀스 중 UI 디싱크 버그 확인! 기계를 강제로 재부팅합니다.")
+                        send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                        
+                        bprint("  > [버그 치유 1/2] 메인 화면(7.png) 복귀 대기 중...")
+                        wait_7 = time.time()
+                        is_out = False
+                        while time.time() - wait_7 < 3.0 and bot_active:
+                            if check_img('7.png', thread_sct, force_full=True):
+                                is_out = True
+                                break
+                            time.sleep(0.1)
                             
-                            current_anchor = 5
-                            if 5 in skipped_chars:
-                                current_anchor = 0
-                                while current_anchor in skipped_chars and current_anchor < 5:
-                                    current_anchor += 1
-                                    
-                            if bot_mode in [3, 4] and char_index == current_anchor:
-                                fusion_end_time = time.time() + 600.0
-                                bprint("  > ⏱️ [타이머 갱신] 앵커 캐릭터 융합 가동 시작! 10분(600초) 타이머가 설정되었습니다.")
-                            break
+                        if not is_out:
+                            bprint("  > [재시도] 화면 닫기 지연. ESC 추가 입력.")
+                            send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                            time.sleep(1.0)
                             
-                        if time.time() - wait_stop > 1.0:
-                            bprint("  > [재시도] 기계 가동 미확인(서버 렉). 시작(F) 재입력 시도...")
-                            send_cmd('F'); time.sleep(0.05); send_cmd('R')
-                            wait_stop = time.time() 
-                            
-                        time.sleep(0.05)
+                        bprint("  > [버그 치유 2/2] 14.png 탐색(마우스 회전) 및 상호작용(F) 재진입...")
+                        entered_machine = False
+                        while bot_active:
+                            if check_img('14.png', thread_sct, force_full=True):
+                                bprint("  > [확인] 14.png 발견! 상호작용(F) 시도 및 융합기 진입 대기...")
+                                while bot_active:
+                                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                    wait_chance = time.time()
+                                    found_chance = False
+                                    while time.time() - wait_chance < 3.0 and bot_active:
+                                        if check_img('chance.png', thread_sct):
+                                            found_chance = True
+                                            break
+                                        time.sleep(0.1)
+                                    if found_chance:
+                                        bprint("  > ✅ [버그 치유 완료] 융합기(chance.png) 재진입 성공! 세팅을 처음부터 다시 시작합니다.")
+                                        entered_machine = True
+                                        break
+                                    else:
+                                        bprint("  > ⚠️ [재시도] 3초간 chance.png 미발견(서버 렉). F키를 다시 입력합니다.")
+                                if entered_machine:
+                                    break
+                            else:
+                                send_cmd('M', 60, 0); time.sleep(0.15)
+                        continue # State 7 처음으로 돌아가서 정상적으로 상태 확인 수행
 
                     if not bot_active: continue
 

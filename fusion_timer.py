@@ -145,7 +145,7 @@ def toggle_dimming_setting():
             try:
                 curr_b = sbc.get_brightness()
                 if curr_b and curr_b[0] > 10: original_brightness = curr_b[0]
-                sbc.set_brightness(0)
+                set_all_monitors_brightness(0)
                 is_dimmed = True
                 bprint("  > 🌙 [절전 모드] 즉시 모니터 밝기를 0%로 낮춥니다.")
             except: pass
@@ -514,7 +514,7 @@ def toggle_stop():
         bprint("=============================================")
         if is_dimmed:
             try:
-                sbc.set_brightness(original_brightness)
+                set_all_monitors_brightness(original_brightness)
                 is_dimmed = False
                 bprint(f"  > ☀️ [화면 복구] 모니터 밝기를 원래대로({original_brightness}%) 되돌렸습니다.")
             except: pass
@@ -536,7 +536,7 @@ def toggle_start(mode=1):
             # [수정] 현재 밝기가 10% 이상일 때만 원본 밝기로 저장하여 0% 고정 버그 완벽 차단
             if curr_b and curr_b[0] > 10: 
                 original_brightness = curr_b[0]
-            sbc.set_brightness(0)
+            set_all_monitors_brightness(0)
             is_dimmed = True
             bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다. (이미지 인식 정상 작동)")
         except: pass

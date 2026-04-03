@@ -94,6 +94,7 @@ original_brightness = 100 # 모니터 원래 밝기 복구용 저장소
 enable_dimming = False # [수정] 기본값을 '꺼짐(False)'으로 변경했습니다. 단축키(-)를 눌러야 활성화됩니다.
 is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 char_thread_active = False # 수동 캐릭터 변경 스레드 제어 플래그
+char_inventory_memory = {} # 캐릭터별 인벤토리 탐색 위치 기억용 딕셔너리
 
 # =====================================================================
 # 👑 [캐릭터 마스터 컨트롤러] 👑
@@ -537,6 +538,9 @@ def toggle_start(mode=1):
     elif mode == 5:
         bprint("🔍 [모드 5: 감염물 분별 모드 시작] 단축키(;) 입력 감지")
     bprint("=============================================")
+    
+    # 매크로 새로 시작 시 캐릭터 인벤토리 탐색 기억 초기화
+    char_inventory_memory.clear()
     
     # 모든 세팅과 콘솔 메시지 출력이 완전히 끝난 후 봇 스레드 가동
     bot_active = True
@@ -1435,6 +1439,12 @@ def fusion_bot_loop():
                         skip_current_char = False
                         last_cx, last_cy = CENTER_X, CENTER_Y
                         
+                        # [메모리 초기화]
+                        char_key = char_images[char_index]
+                        if char_key not in char_inventory_memory:
+                            char_inventory_memory[char_key] = (0, 0)
+                        is_memory_rescan = False
+                        
                         while bot_active:
                             if not bot_active: raise BotStopException()
                             pyautogui.moveTo(200, 500); time.sleep(0.25)
@@ -1491,6 +1501,12 @@ def fusion_bot_loop():
                                 for pt_data in all_candidates:
                                     if pair_found: break
                                     real_x, real_y, w, h, item_name = pt_data
+                                    # [스마트 메모리 패스 로직]
+                                    curr_sort_key = (real_x // 100, real_y)
+                                    mem_x, mem_y = char_inventory_memory[char_key]
+                                    if not is_memory_rescan and curr_sort_key < (mem_x // 100, mem_y):
+                                        continue # 이미 과거에 확인했던 위치이므로 즉시 패스
+                                        
                                     cx, cy = real_x + w//2, real_y + h//2
                                     
                                     pyautogui.moveTo(cx, cy)
@@ -1669,6 +1685,7 @@ def fusion_bot_loop():
                                         safe_pts.append((match_cx, match_cy, match_cx, match_cy))
                                         safe_pts.append((real_x, real_y, cx, cy)) 
                                         pair_found = True
+                                        char_inventory_memory[char_key] = (real_x, real_y) # [메모리 저장] 찾은 위치 기록
                                     else:
                                         memory_pool[(ability, activity)] = (cx, cy)
                                             
@@ -1738,6 +1755,14 @@ def fusion_bot_loop():
                                         
                                 if pair_found: break
                                 
+                                # [메모리 리스캔(안전망) 로직]
+                                mem_x, mem_y = char_inventory_memory[char_key]
+                                if not is_memory_rescan and (mem_x > 0 or mem_y > 0):
+                                    bprint("  > 🧠 [메모리 리스캔] 기억된 위치 이후로 짝을 찾지 못했습니다. 안전을 위해 처음부터 1회 전체 스캔을 재진행합니다.")
+                                    is_memory_rescan = True
+                                    char_inventory_memory[char_key] = (0, 0) # 메모리 초기화 후 루프 재시작
+                                    continue
+
                                 search_attempts += 1
                                 if search_attempts >= 1:
                                     bprint("  > 🛑 [재료 고갈] 5/5 페어링 가능한 감염물이 없습니다. 해당 캐릭터를 스킵합니다.")
@@ -1780,6 +1805,12 @@ def fusion_bot_loop():
                                 for pt_data in all_candidates:
                                     if len(safe_pts) >= 2: break
                                     real_x, real_y, w, h, item_name = pt_data
+                                    # [스마트 메모리 패스 로직]
+                                    curr_sort_key = (real_x // 100, real_y)
+                                    mem_x, mem_y = char_inventory_memory[char_key]
+                                    if not is_memory_rescan and curr_sort_key < (mem_x // 100, mem_y):
+                                        continue # 과거 확인 위치 패스
+                                        
                                     cx, cy = real_x + w//2, real_y + h//2
                                     pyautogui.moveTo(cx, cy)
                                     
@@ -1911,10 +1942,19 @@ def fusion_bot_loop():
                                         
                                     last_cx, last_cy = safe_pts[-1][2], safe_pts[-1][3]
                                     pair_found = True
+                                    char_inventory_memory[char_key] = (safe_pts[-1][0], safe_pts[-1][1]) # [메모리 저장] 마지막 채택 감염물 위치 기록
                                     break
                                     
                                 if pair_found: break
                                 
+                                # [메모리 리스캔(안전망) 로직]
+                                mem_x, mem_y = char_inventory_memory[char_key]
+                                if not is_memory_rescan and (mem_x > 0 or mem_y > 0):
+                                    bprint("  > 🧠 [메모리 리스캔] 기억된 위치 이후로 짝을 찾지 못했습니다. 안전을 위해 처음부터 1회 전체 스캔을 재진행합니다.")
+                                    is_memory_rescan = True
+                                    char_inventory_memory[char_key] = (0, 0)
+                                    continue
+
                                 search_attempts += 1
                                 if search_attempts >= 1:
                                     bprint("  > 🛑 [재료 고갈] 안전한 페어링 감염물이 없습니다. 해당 캐릭터를 스킵합니다.")

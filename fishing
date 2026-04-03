@@ -2375,29 +2375,58 @@ def fishing_bot(max_allowed_seconds):
                 bprint("  > 6. 낚싯대 장착(start_condition.png) 초고속 스왑 엔진...")
                 while bot_active:
                     # [팝업 방어] 접속 직후 무기 스왑 중 팝업이 뜨면 즉시 ESC로 닫아냅니다.
-                    if safe_find_image('popup_char.png', 0.75) or safe_find_image('popup_char.png', 0.75):
+                    if safe_find_image('popup_main.png', 0.75) or safe_find_image('popup_char.png', 0.75):
                         bprint("  > 💡 [자정 팝업] 장착 중 팝업 감지! ESC 1회 입력...")
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         time.sleep(0.5)
                         continue
-                        
-                    # [핵심] 오탐 방지를 위해 낚싯대 장착 확인 인식률을 0.75 -> 0.85로 엄격하게 상향합니다.
+
+                    # 0) 이미 완벽하게 장착된 상태인지 최우선 확인 (불필요한 0번/클릭 방지)
                     if safe_find_image('start_condition.png', 0.85):
-                        bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
+                        bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
                         break
-                        
-                    bprint("  > 🎣 [무기 스왑] 좌클릭(C) 시도...")
+
+                    # 1) '던지기(throw_btn.png)' 사진 능동 대기 (최대 3초)
+                    bprint("  > 🎣 [탐색 1단계] '던지기(throw_btn.png)' 아이콘 확인 중...")
+                    found_throw = False
+                    wait_throw = time.time()
+                    while time.time() - wait_throw < 3.0 and bot_active:
+                        if safe_find_image('throw_btn.png', 0.75): # ROI 탐색 우선
+                            found_throw = True
+                            break
+                        if safe_find_image('throw_btn.png', 0.75, region="FULL_SCREEN"): # ROI 실패 시 전체화면 탐색
+                            found_throw = True
+                            break
+                        time.sleep(0.1)
+
+                    # 3초 동안 전체화면에서도 못 찾았으면 0번 입력 후 루프 재시작
+                    if not found_throw:
+                        bprint("  > 🔄 [무기 스왑] '던지기' 아이콘 미인식. 숫자 '0' 입력 후 재탐색...")
+                        send_cmd('0'); time.sleep(0.1); send_cmd('R')
+                        time.sleep(0.6) # 0번 누른 직후 강제 모션 딜레이
+                        continue
+
+                    # 2) 던지기 아이콘 확인됨 -> 좌클릭(C) 후 start_condition.png 능동 대기 (최대 3초)
+                    bprint("  > 🎣 [클릭 2단계] '던지기' 확인 완료! 좌클릭(C) 입력 후 낚싯대 아이콘 대기...")
                     send_cmd('C'); time.sleep(0.1); send_cmd('R')
                     
-                    # 능동 대기 1초 (무기 꺼내는 모션 중 아이콘이 뜨면 즉시 탈출)
-                    # [핵심] 좌클릭 애니메이션 잔상에 속지 않도록 conf=0.85 파라미터를 명시적으로 강제합니다.
-                    if fast_wait_img('start_condition.png', 1.0, check_popups=False, conf=0.85):
+                    found_start = False
+                    wait_start = time.time()
+                    while time.time() - wait_start < 3.0 and bot_active:
+                        if safe_find_image('start_condition.png', 0.85): # ROI 탐색 우선
+                            found_start = True
+                            break
+                        if safe_find_image('start_condition.png', 0.85, region="FULL_SCREEN"): # ROI 실패 시 전체화면 탐색
+                            found_start = True
+                            break
+                        time.sleep(0.1)
+
+                    if found_start:
                         bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
                         break
-                        
-                    bprint("  > 🔄 [무기 스왑] 여전히 맨손입니다. 숫자 '0' 입력...")
-                    send_cmd('0'); time.sleep(0.1); send_cmd('R')
-                    time.sleep(0.6) # 0번 누른 직후 강제 모션 딜레이를 0.8 -> 0.6초로 단축
+                    else:
+                        bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터(팝업검사->던지기검사) 다시 시도합니다.")
+                        continue # 상단으로 돌아가 다시 팝업/던지기 확인 후 좌클릭을 수행하므로 가장 안전한 로직입니다.
                     
                 bprint(f"  > ✅ [접속 완료] '{next_char['name']}' 낚시를 시작합니다.")
                 char_index += 1

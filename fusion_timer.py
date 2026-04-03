@@ -20,6 +20,22 @@ import winsound
 import math
 import screen_brightness_control as sbc
 
+# [밝기 제어 최적화] 듀얼 모니터 개별 타겟팅 함수
+def set_all_monitors_brightness(target_val):
+    try:
+        monitors = sbc.list_monitors()
+        if not monitors:
+            sbc.set_brightness(target_val)
+            return
+        for m in monitors:
+            try:
+                sbc.set_brightness(target_val, display=m)
+            except:
+                pass
+    except:
+        try: sbc.set_brightness(target_val)
+        except: pass
+
 # === [초고속 캡처 엔진] ===
 sct = mss.mss()
 

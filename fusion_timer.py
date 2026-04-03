@@ -244,7 +244,7 @@ FUSION_CONF = {
     'chance.png': 0.85,
     'level_5.png': 0.75,
     'fusion_material.png': 0.85,
-    'select_0_2.png': 0.95,
+    'select_0_2.png': 0.85,
     'popup_main.png': 0.85,
     'popup_char.png': 0.85, 
     'inv_title.png': 0.85,

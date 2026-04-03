@@ -1228,7 +1228,7 @@ def fusion_bot_loop():
                                 print(f"\r  > ⏳ [스마트 대기] 기계 가동 확인. '{c_name}' 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초        ", end="", flush=True)
                             # [핵심] chance.png ROI 적용 (force_full 제거)
                             elif not check_img('chance.png', thread_sct):
-                                print(f"\r  > 🙈 [화면 최소화] 백그라운드 융합 남은 시간: {mins:02d}분 {secs:02d}초                                     ", end="", flush=True)
+                                print(f"\r  > 🙈 [화면 최소화] 백그라운드 융합 남은 시간: {mins:02d}분 {secs:02d}초                                                      ", end="", flush=True)
                             else:
                                 print(f"\r  > ⏳ [서버 렉 방어] 기계 UI 렌더링 동기화 대기 중... 남은 시간: {mins:02d}분 {secs:02d}초        ", end="", flush=True)
                             

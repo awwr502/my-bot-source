@@ -2072,12 +2072,7 @@ def fusion_bot_loop():
                     while bot_active:
                         if not bot_active: raise BotStopException()
                         
-                        # [방어 로직] 4.5 탐색 중 디싱크 버그 감지
-                        if not check_img('stop_btn.png', thread_sct) and check_img('bug_time.png', thread_sct):
-                            bug_detected_in_start = True
-                            break
-                            
-                        # [핵심] 융합 시작 버튼 fusion_start.png ROI 적용 (force_full 제거)
+                        # [최적화] 메인 타겟인 fusion_start.png를 최우선으로 스캔하여 풀스크린 탐색 병목 제거
                         if check_img('fusion_start.png', thread_sct):
                             bprint("  > [성공] 융합 시작 버튼 확인! 좌클릭 후 F를 입력합니다.")
                             cx, cy = FUSION_ROI['fusion_start.png']['last_pos']
@@ -2085,6 +2080,11 @@ def fusion_bot_loop():
                             time.sleep(0.05)
                             
                             send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                            break
+
+                        # [방어 로직] 4.5 탐색 중 디싱크 버그 감지 (주 목표가 없을 때만 후순위 검사)
+                        if not check_img('stop_btn.png', thread_sct) and check_img('bug_time.png', thread_sct):
+                            bug_detected_in_start = True
                             break
                         time.sleep(0.05)
                         

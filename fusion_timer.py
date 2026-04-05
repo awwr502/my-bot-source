@@ -106,11 +106,25 @@ class BotStopException(Exception): pass
 original_sleep = time.sleep
 bot_active = False
 bot_mode = 1 # 1: 단일 타이머, 2: 멀티 루프, 3: 자동 융합, 4: 5/5 복사, 5: 분별 모드
-original_brightness = 100 # 모니터 원래 밝기 복구용 저장소
+original_brightness = [100] # 모니터 원래 밝기 복구용 저장소 (다중 모니터 대응 리스트)
 enable_dimming = False # [수정] 기본값을 '꺼짐(False)'으로 변경했습니다. 단축키(-)를 눌러야 활성화됩니다.
 is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 char_thread_active = False # 수동 캐릭터 변경 스레드 제어 플래그
 char_inventory_memory = {} # 캐릭터별 인벤토리 탐색 위치 기억용 딕셔너리
+
+# [밝기 제어 최적화] 듀얼 모니터 개별 복구 함수 추가
+def restore_monitors_brightness(bright_data):
+    try:
+        if isinstance(bright_data, list):
+            monitors = sbc.list_monitors()
+            if monitors:
+                for i, m in enumerate(monitors):
+                    if i < len(bright_data):
+                        try: sbc.set_brightness(bright_data[i], display=m)
+                        except: pass
+                return
+        sbc.set_brightness(bright_data)
+    except: pass
 
 # =====================================================================
 # 👑 [캐릭터 마스터 컨트롤러] 👑
@@ -144,7 +158,7 @@ def toggle_dimming_setting():
         if bot_active and not is_dimmed:
             try:
                 curr_b = sbc.get_brightness()
-                if curr_b and curr_b[0] > 10: original_brightness = curr_b[0]
+                if curr_b and any(b > 10 for b in curr_b): original_brightness = curr_b
                 set_all_monitors_brightness(0)
                 is_dimmed = True
                 bprint("  > 🌙 [절전 모드] 즉시 모니터 밝기를 0%로 낮춥니다.")
@@ -153,7 +167,7 @@ def toggle_dimming_setting():
         bprint("💡 [설정 변경] '모니터 자동 절전' 기능이 [비활성화] 되었습니다.")
         if bot_active and is_dimmed:
             try:
-                sbc.set_brightness(original_brightness)
+                restore_monitors_brightness(original_brightness)
                 is_dimmed = False
                 bprint(f"  > ☀️ [화면 복구] 즉시 모니터 밝기를 원래대로({original_brightness}%) 되돌립니다.")
             except: pass
@@ -514,7 +528,7 @@ def toggle_stop():
         bprint("=============================================")
         if is_dimmed:
             try:
-                set_all_monitors_brightness(original_brightness)
+                restore_monitors_brightness(original_brightness)
                 is_dimmed = False
                 bprint(f"  > ☀️ [화면 복구] 모니터 밝기를 원래대로({original_brightness}%) 되돌렸습니다.")
             except: pass
@@ -533,9 +547,9 @@ def toggle_start(mode=1):
     if enable_dimming:
         try:
             curr_b = sbc.get_brightness()
-            # [수정] 현재 밝기가 10% 이상일 때만 원본 밝기로 저장하여 0% 고정 버그 완벽 차단
-            if curr_b and curr_b[0] > 10: 
-                original_brightness = curr_b[0]
+            # 모니터별 밝기를 리스트 형태로 모두 기억
+            if curr_b and any(b > 10 for b in curr_b): 
+                original_brightness = curr_b
             set_all_monitors_brightness(0)
             is_dimmed = True
             bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다. (이미지 인식 정상 작동)")

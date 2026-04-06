@@ -2115,7 +2115,53 @@ def fusion_bot_loop():
                             if not bot_active: raise BotStopException()
                             # [핵심] 2/2 확인용 select_2_2.png ROI 적용 (force_full 제거)
                             if check_img('select_2_2.png', thread_sct):
-                                bprint("  > [성공] 2/2 선택 완료 확인! F를 입력하여 선택창을 닫습니다.")
+                                # [결함 방어] 2/2 상태가 되었더라도, 내가 클릭한 감염물(safe_pts)이 아닌 엉뚱한 곳에 버그성 체크가 발생했는지 무결성 교차 검증!
+                                dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
+                                res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
+                                loc_dc = np.where(res_dc >= 0.85)
+                                pts_dc = list(zip(*loc_dc[::-1]))
+
+                                rogue_check_found = False
+                                rogue_pts = []
+
+                                if len(pts_dc) > 0:
+                                    dc_unique = []
+                                    for ptd in pts_dc:
+                                        if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
+                                            dc_unique.append(ptd)
+                                            
+                                    for ptd in dc_unique:
+                                        abs_check_x = ptd[0] + 960
+                                        abs_check_y = ptd[1]
+                                        
+                                        is_safe = False
+                                        for sp in safe_pts:
+                                            # sp[0], sp[1]은 목표 감염물 이미지 인식 좌상단 좌표입니다.
+                                            # 체크마크가 타겟 감염물 반경 100픽셀 이내에 있는지 확인하여 본인이 맞는지 대조합니다.
+                                            if math.hypot(abs_check_x - sp[0], abs_check_y - sp[1]) < 100:
+                                                is_safe = True
+                                                break
+                                                
+                                        if not is_safe:
+                                            rogue_check_found = True
+                                            rogue_pts.append(ptd)
+                                            
+                                if rogue_check_found:
+                                    bprint("  > 🚨 [치명적 버그 방어] 의도하지 않은 과거 감염물에 버그성 체크마크가 발생했습니다!")
+                                    # 버그 체크마크 클릭하여 강제 해제
+                                    for ptd in rogue_pts:
+                                        hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
+                                        pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
+                                        
+                                    bprint("  > 🔄 버그 체크마크 해제 완료. 올바른 감염물을 다시 클릭합니다.")
+                                    for idx, (px, py, pcx, pcy) in enumerate(safe_pts):
+                                        pyautogui.moveTo(pcx, pcy); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
+                                    pyautogui.moveTo(200, 500); time.sleep(0.2)
+                                    
+                                    wait_sel = time.time() # 2/2 대기 타이머 리셋
+                                    continue # F를 누르지 않고 while 루프로 돌아가 select_2_2.png 상태를 처음부터 재검증합니다.
+
+                                bprint("  > [성공] 2/2 선택 완료 및 무결성 검증 통과! F를 입력하여 선택창을 닫습니다.")
                                 send_cmd('F'); time.sleep(0.05); send_cmd('R')
                                 wait_vanish('select_2_2.png', thread_sct)
                                 break

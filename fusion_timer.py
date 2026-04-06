@@ -2135,21 +2135,41 @@ def fusion_bot_loop():
                     while bot_active:
                         if not bot_active: raise BotStopException()
                         
-                        # [최적화] 메인 타겟인 fusion_start.png를 최우선으로 스캔하여 풀스크린 탐색 병목 제거
-                        if check_img('fusion_start.png', thread_sct):
-                            bprint("  > [성공] 융합 시작 버튼 확인! 좌클릭 후 F를 입력합니다.")
-                            cx, cy = FUSION_ROI['fusion_start.png']['last_pos']
-                            pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C')
-                            time.sleep(0.05)
+                        found_in_2s = False
+                        wait_start_btn = time.time()
+                        
+                        # 2초 동안 0.1초 간격으로 능동 대기
+                        while time.time() - wait_start_btn < 2.0 and bot_active:
+                            if check_img('fusion_start.png', thread_sct):
+                                bprint("  > [성공] 융합 시작 버튼 확인! 좌클릭 후 F를 입력합니다.")
+                                cx, cy = FUSION_ROI['fusion_start.png']['last_pos']
+                                pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C')
+                                time.sleep(0.05)
+                                
+                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                found_in_2s = True
+                                break
+                                
+                            # [방어 로직] 4.5 탐색 중 디싱크 버그 감지 (주 목표가 없을 때만 후순위 검사)
+                            if not check_img('stop_btn.png', thread_sct) and check_img('bug_time.png', thread_sct):
+                                bug_detected_in_start = True
+                                found_in_2s = True
+                                break
+                                
+                            time.sleep(0.1)
                             
+                        # 2초 이내에 성공적으로 찾았으면 루프 탈출
+                        if found_in_2s:
+                            break
+                            
+                        # 2초를 초과하여 못 찾았을 경우 select_2_2.png 소멸 여부 재확인
+                        bprint("  > ⚠️ [시간 초과] 2초간 융합 시작 버튼 미인식. select_2_2.png 소멸 여부를 재확인합니다.")
+                        if check_img('select_2_2.png', thread_sct):
+                            bprint("  > [꼬임 방지] select_2_2.png가 남아있습니다! F를 재입력하여 닫기를 시도합니다.")
                             send_cmd('F'); time.sleep(0.05); send_cmd('R')
-                            break
-
-                        # [방어 로직] 4.5 탐색 중 디싱크 버그 감지 (주 목표가 없을 때만 후순위 검사)
-                        if not check_img('stop_btn.png', thread_sct) and check_img('bug_time.png', thread_sct):
-                            bug_detected_in_start = True
-                            break
-                        time.sleep(0.05)
+                            wait_vanish('select_2_2.png', thread_sct)
+                        else:
+                            bprint("  > [확인] select_2_2.png는 정상 소멸 상태입니다. 융합 시작 버튼을 다시 탐색합니다.")
                         
                     if not bot_active: continue
                     

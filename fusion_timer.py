@@ -2141,10 +2141,18 @@ def fusion_bot_loop():
                         # 2초 동안 0.1초 간격으로 능동 대기
                         while time.time() - wait_start_btn < 2.0 and bot_active:
                             if check_img('fusion_start.png', thread_sct):
-                                bprint("  > [성공] 융합 시작 버튼 확인! 좌클릭 후 F를 입력합니다.")
                                 cx, cy = FUSION_ROI['fusion_start.png']['last_pos']
-                                pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C')
-                                time.sleep(0.05)
+                                pyautogui.moveTo(cx, cy); time.sleep(0.02)
+                                
+                                # [찰나의 버그 방어] 마우스 이동 직후, 클릭 방아쇠를 당기기 직전에 bug_time.png가 튀어나왔는지 최종 교차 검증!
+                                if not check_img('stop_btn.png', thread_sct) and check_img('bug_time.png', thread_sct):
+                                    bprint("  > 🚨 [긴급 방어] 클릭 직전 디싱크 버그(bug_time.png) 난입 감지! 클릭을 즉시 취소합니다.")
+                                    bug_detected_in_start = True
+                                    found_in_2s = True
+                                    break
+
+                                bprint("  > [성공] 융합 시작 버튼 최종 확인! 좌클릭 후 F를 입력합니다.")
+                                send_cmd('C'); time.sleep(0.05)
                                 
                                 send_cmd('F'); time.sleep(0.05); send_cmd('R')
                                 found_in_2s = True

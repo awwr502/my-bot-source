@@ -20,6 +20,7 @@ import mss # [초고속 캡처 엔진]
 import screen_brightness_control as sbc # [화면 밝기 제어]
 import atexit # 프로그램 비정상 종료 시 화면 밝기 자동 복구용
 import winsound # 비프음 출력 모듈 추가
+import hashlib
 
 # mss 객체는 딱 한 번만 생성해두고 계속 재사용합니다 (메모리 최적화)
 sct = mss.mss()
@@ -136,9 +137,13 @@ char_index = 0 # 릴레이 모드 캐릭터 순번 추적기
 MY_CHARACTERS = []
 _base_scan_dir = os.path.dirname(os.path.abspath(__file__))
 
+# [독립 폴더 생성] 낚시 봇 전용 이미지 폴더
+BASE_IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fishing_imgs")
+os.makedirs(BASE_IMG_DIR, exist_ok=True)
+
 for _i in range(1, 11):
     _img_name = f"char_{_i}.png"
-    if os.path.exists(os.path.join(_base_scan_dir, _img_name)):
+    if os.path.exists(os.path.join(BASE_IMG_DIR, _img_name)):
         _name = "본캐(창고넣음)" if _i == 1 else f"부캐{_i-1}(인벤만)"
         MY_CHARACTERS.append({"img": _img_name, "name": _name})
 
@@ -227,29 +232,29 @@ last_report_date = date.today() # 부팅 날짜 기록
 STATS_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stats_cache.json")
 
 def load_stats_cache():
-    """부팅 시 하드디스크에 저장된 이전 통계 기록을 불러옵니다."""
-    global stats, last_report_date
-    try:
-        if os.path.exists(STATS_CACHE_FILE):
-            with open(STATS_CACHE_FILE, "r", encoding="utf-8") as f:
-                saved_data = json.load(f)
-                for k in stats.keys():
-                    if k in saved_data:
-                        stats[k] = saved_data[k]
-                if "last_report_date" in saved_data:
-                    last_report_date = datetime.strptime(saved_data["last_report_date"], "%Y-%m-%d").date()
-    except Exception as e:
-        print(f"  > [경고] 통계 캐시 불러오기 실패: {e}")
+    """부팅 시 하드디스크에 저장된 이전 통계 기록을 불러옵니다."""
+    global stats, last_report_date
+    try:
+        if os.path.exists(STATS_CACHE_FILE):
+            with open(STATS_CACHE_FILE, "r", encoding="utf-8") as f:
+                saved_data = json.load(f)
+                for k in stats.keys():
+                    if k in saved_data:
+                        stats[k] = saved_data[k]
+                if "last_report_date" in saved_data:
+                    last_report_date = datetime.strptime(saved_data["last_report_date"], "%Y-%m-%d").date()
+    except Exception as e:
+        print(f"  > [경고] 통계 캐시 불러오기 실패: {e}")
 
 def save_stats_cache():
-    """현재 메모리의 통계를 하드디스크에 영구 저장합니다."""
-    try:
-        save_data = stats.copy()
-        save_data["last_report_date"] = last_report_date.strftime("%Y-%m-%d")
-        with open(STATS_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(save_data, f, indent=4, ensure_ascii=False)
-    except:
-        pass
+    """현재 메모리의 통계를 하드디스크에 영구 저장합니다."""
+    try:
+        save_data = stats.copy()
+        save_data["last_report_date"] = last_report_date.strftime("%Y-%m-%d")
+        with open(STATS_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(save_data, f, indent=4, ensure_ascii=False)
+    except:
+        pass
 
 # 파이썬 실행 시 즉시 통계 복구
 load_stats_cache()
@@ -751,19 +756,47 @@ def save_roi_cache():
     except:
         pass
 
+def get_git_sha(filepath):
+    if not os.path.exists(filepath): return None
+    with open(filepath, 'rb') as f: data = f.read()
+    return hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+
 def preload_all_images():
-    """현재 폴더의 모든 PNG 이미지를 봇 구동 시점에 '흑백(Grayscale) cv2 포맷'으로 사전 적재합니다."""
+    """봇 구동 시점에 깃허브 해시 자동 패치 후 모든 이미지를 RAM에 사전 적재합니다."""
     global IMAGE_CACHE
-    load_roi_cache() # 사진을 메모리에 올리기 전에 과거 학습 데이터부터 복구
+    load_roi_cache()
     count = 0
     
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    bprint(">>> [시스템] 클라우드 해시 스캔 및 메모리(RAM) 적재 시작...")
     
-    for filename in os.listdir(base_dir):
+    API_URL = "https://api.github.com/repos/awwr502/my-bot-source/contents/fishing_imgs"
+    try:
+        res = requests.get(API_URL, timeout=5)
+        if res.status_code == 200:
+            github_data = {item['name']: item for item in res.json() if item['type'] == 'file'}
+            
+            for img_name, item_data in github_data.items():
+                if not img_name.endswith('.png'): continue
+                full_path = os.path.join(BASE_IMG_DIR, img_name)
+                
+                remote_sha = item_data['sha']
+                local_sha = get_git_sha(full_path)
+                
+                # 깃허브 파일과 로컬 파일의 해시가 다르면 즉시 다운로드하여 덮어쓰기
+                if local_sha != remote_sha:
+                    bprint(f"  > ☁️ [클라우드 패치] '{img_name}' 최신화 다운로드 중...")
+                    dl_res = requests.get(item_data['download_url'], timeout=5)
+                    dl_res.raise_for_status()
+                    with open(full_path, 'wb') as f:
+                        f.write(dl_res.content)
+    except Exception as e:
+        bprint(f"  > ⚠️ 클라우드 연결 실패. 기존 로컬 환경으로 부팅합니다: {e}")
+
+    # 패치가 완료된 로컬 폴더 내의 모든 사진(공용 UI + 캐릭터)을 RAM에 일괄 적재
+    for filename in os.listdir(BASE_IMG_DIR):
         if filename.lower().endswith('.png'):
             try:
-                full_path = os.path.join(base_dir, filename)
-                # [안전 업그레이드] PIL 대신 cv2 흑백으로 즉시 캐싱 + 한글 경로 에러 방지
+                full_path = os.path.join(BASE_IMG_DIR, filename)
                 img_array = np.fromfile(full_path, np.uint8)
                 img = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
                 if img is not None:
@@ -771,7 +804,8 @@ def preload_all_images():
                     count += 1
             except Exception as e:
                 print(f"  > [경고] {filename} 메모리 적재 실패: {e}")
-    bprint(f">>> [시스템] 총 {count}개의 이미지 캐싱 완료! (탐색 준비 끝) <<<\n")
+                
+    bprint(f">>> [시스템] 총 {count}개의 낚시 이미지 RAM 캐싱 완료! (탐색 준비 끝) <<<\n")
 
 def safe_find_image(img_path, conf=0.6, region=None):
     """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진"""
@@ -781,14 +815,8 @@ def safe_find_image(img_path, conf=0.6, region=None):
     
     try:
         if template is None:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            full_path = os.path.join(base_dir, img_path)
-            img_array = np.fromfile(full_path, np.uint8)
-            template = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
-            if template is not None:
-                IMAGE_CACHE[img_path] = template
-            else:
-                return None
+            # 이미 부팅(preload) 시점에 전부 RAM에 올렸으므로, 여기서 못 찾은 파일은 아예 없는 파일입니다.
+            return None
 
         # 딕셔너리 및 deque 초기화 (최초 1회)
         if img_path not in ROI_SAMPLER:
@@ -873,8 +901,8 @@ def find_anchor_final(target_img_path):
     global last_success_scale
     try:
         screen_gray = fast_cv_screenshot(gray=True)
-        img_array = np.fromfile(target_img_path, np.uint8)
-        template = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+        # 부팅 시 올려둔 RAM 캐시에서 즉시 꺼내옵니다 (하드디스크 읽기 제거)
+        template = IMAGE_CACHE.get(target_img_path)
         if template is None: return None
 
         ADJUST_Y = 0.35 # 하단 쏠림 방지 고정값
@@ -1088,17 +1116,17 @@ def victory_coin_bot_loop():
     # 1. 이미지 디스크 I/O 병목 제거를 위한 1회성 사전 메모리 적재
     VICTORY_CACHE = {}
     target_images = ['1.png', '2.png', '3.png', '4.png', '5.png', '6.png', '7.png', '8.png', '9.png']
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    
     for img_name in target_images:
-        full_path = os.path.join(base_dir, img_name)
+        full_path = os.path.join(BASE_IMG_DIR, img_name)
+        
+        # 깃허브 패치는 봇 부팅 시점에 이미 완료되었으므로, 여기서는 RAM에 Color 포맷으로 올리기만 합니다.
         if os.path.exists(full_path):
             img_array = np.fromfile(full_path, np.uint8)
             VICTORY_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
     # [데이터 샘플링 엔진] 승리코인 전용 AI 동적 탐색 영역(ROI) 저장소
     VICTORY_ROI = {}
-    VICTORY_ROI_FILE = os.path.join(base_dir, "victory_roi_cache.json")
+    VICTORY_ROI_FILE = os.path.join(BASE_IMG_DIR, "victory_roi_cache.json")
 
     def load_victory_roi():
         """하드디스크에 저장된 승리코인 UI 위치 기억을 불러옵니다."""
@@ -1413,15 +1441,15 @@ def animal_bot_loop():
     import os, cv2, numpy as np
     import mss
     
-    base_dir = os.path.dirname(os.path.abspath(__file__))
     animal_cache = {}
     
     with mss.mss() as thread_sct:
         def check_animal_img(img_name, conf=0.70):
             try:
                 if img_name not in animal_cache:
-                    path = os.path.join(base_dir, img_name)
+                    path = os.path.join(BASE_IMG_DIR, img_name)
                     if not os.path.exists(path): return False
+                    
                     animal_cache[img_name] = cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_GRAYSCALE)
                 
                 template = animal_cache[img_name]
@@ -1576,9 +1604,9 @@ def fishing_bot(max_allowed_seconds):
                     bprint(f"  > [통계 시스템] 1시간 단위 스냅샷 저장! (입질 {hook_delta} / 포획 {catch_delta} / 스킵 {skip_delta})")
                     save_stats_cache() # 1시간 스냅샷 달성 시 CMD가 꺼져도 안 날아가게 영구 세이브
             # ----------------------------------------
-            
-            # 1. 상태가 넘어가면(정상 진행) 타이머를 0초로 리셋
-            if state != last_state:
+            
+            # 1. 상태가 넘어가면(정상 진행) 타이머를 0초로 리셋
+            if state != last_state:
                 state_start_time = time.time()
                 last_state = state
                 

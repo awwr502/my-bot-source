@@ -593,7 +593,8 @@ def toggle_start(mode=1):
     bot_mode = mode
     bprint("\n=============================================")
     
-    if enable_dimming:
+    # [모드 5 강제 예외] 감염물 분별 모드는 사용자가 화면을 봐야 하므로, 절전 토글 상태와 무관하게 항상 밝기를 유지합니다.
+    if enable_dimming and mode != 5:
         try:
             curr_b = sbc.get_brightness()
             # 모니터별 밝기를 리스트 형태로 모두 기억

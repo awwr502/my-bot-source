@@ -19,6 +19,7 @@ import mss
 import winsound
 import math
 import screen_brightness_control as sbc
+import hashlib
 
 # [밝기 제어 최적화] 듀얼 모니터 개별 타겟팅 함수
 def set_all_monitors_brightness(target_val):
@@ -313,10 +314,58 @@ target_images = GRAY_IMAGES + COLOR_IMAGES
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 
+# [독립 폴더 생성] 융합 봇 전용 이미지 폴더
+base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fusion_imgs")
+os.makedirs(base_dir, exist_ok=True)
+
+# [깃허브 해시 생성기] 파이썬 메모리에서 Git SHA-1 알고리즘을 100% 동일하게 모방하여 해시값을 계산합니다.
+def get_git_sha(filepath):
+    if not os.path.exists(filepath): return None
+    with open(filepath, 'rb') as f: data = f.read()
+    return hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+
+bprint(">>> [시스템] 클라우드 해시 스캔 및 메모리(RAM) 적재 시작...")
+API_URL = "https://api.github.com/repos/awwr502/my-bot-source/contents/fusion_imgs"
+
+try:
+    res = requests.get(API_URL, timeout=5)
+    if res.status_code == 200:
+        github_data = {item['name']: item for item in res.json() if item['type'] == 'file'}
+        
+        # 1. 깃허브에 있는 파일 목록을 돌며 내 컴퓨터와 해시(SHA) 대조
+        for img_name, item_data in github_data.items():
+            if not img_name.endswith('.png'): continue
+            full_path = os.path.join(base_dir, img_name)
+            
+            remote_sha = item_data['sha']
+            local_sha = get_git_sha(full_path)
+            
+            # 해시값이 서로 다르거나 내 컴퓨터에 아예 없으면 깃허브에서 다운로드하여 '덮어쓰기'
+            if local_sha != remote_sha:
+                bprint(f"  > ☁️ [클라우드 패치] '{img_name}' 최신화 다운로드 중...")
+                dl_res = requests.get(item_data['download_url'], timeout=5)
+                dl_res.raise_for_status()
+                with open(full_path, 'wb') as f:
+                    f.write(dl_res.content)
+except Exception as e:
+    bprint(f"  > ⚠️ 클라우드 연결 실패. 기존 로컬 환경으로 부팅합니다: {e}")
+
+CHAR_IMG_NAMES = [c["img"] for c in MY_CHARACTERS]
+
+# 2. 패치가 완료된 로컬 폴더에서 RAM으로 일괄 적재 (캐릭터 사진 포함)
 for img_name in target_images:
     full_path = os.path.join(base_dir, img_name)
+    img_array = None
+    
     if os.path.exists(full_path):
         img_array = np.fromfile(full_path, np.uint8)
+    else:
+        # 공용 UI는 위에서 다운로드 되므로, 여기서 없다는 건 캡처 안 한 캐릭터 사진뿐임
+        if img_name in CHAR_IMG_NAMES:
+            bprint(f"  > ❌ [경고] 캐릭터 사진({img_name})이 폴더에 없습니다! 직접 캡처해주세요.")
+        continue
+        
+    if img_array is not None:
         if img_name in GRAY_IMAGES:
             FUSION_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
         else:

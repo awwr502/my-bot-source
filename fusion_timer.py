@@ -913,36 +913,47 @@ def fusion_bot_loop():
                                 fusion_end_time = time.time() + 600.0
                                 
                                 # 1단계: 순수 카운트다운 루프
-                                while bot_active:
+                                while True:
                                     if not bot_active: raise BotStopException()
-                                    check_fusion_afk(thread_sct)
+                                    
+                                    # 수동 캐릭터 변경 중일 때는 팝업창 간섭 방지를 위해 AFK 체크를 임시 중단합니다.
+                                    if not char_thread_active:
+                                        check_fusion_afk(thread_sct)
+                                        
                                     remaining_sec = int(fusion_end_time - time.time())
                                     
-                                    if remaining_sec <= 0: break # 타이머 종료 시 즉시 탈출
+                                    if remaining_sec <= 0: 
+                                        # 2단계: 타이머 종료 직후 '즉시' 비프음 출력
+                                        print(f"\r  > 융합 완료까지 남은 시간: 00분 00초   ", flush=True)
+                                        print()
+                                        bprint("✅ 10분 경과! 멜로디를 재생하며 시각적 검증을 시작합니다.")
+                                        play_melody()
+                                        break
                                     
                                     mins = remaining_sec // 60
                                     secs = remaining_sec % 60
-                                    print(f"\r  > 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초   ", end="", flush=True)
+                                    
+                                    # 수동 캐릭터 변경 스레드가 작동 중일 때는 화면이 깨지지 않게 \r 동적 출력을 잠시 멈춥니다.
+                                    if not char_thread_active:
+                                        print(f"\r  > 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초   ", end="", flush=True)
+                                    
                                     original_sleep(1)
 
-                                # 2단계: 타이머 종료 직후 '즉시' 비프음 출력
-                                print()
-                                bprint("✅ 10분 경과! 멜로디를 재생하며 시각적 검증을 시작합니다.")
-                                play_melody()
-                                
                                 # 3단계: 시각적 사후 검증 (서버 렉 및 화면 복구 대기)
-                                while bot_active:
+                                while True:
                                     if not bot_active: raise BotStopException()
                                     
                                     # 기계가 시각적으로 여전히 돌아가고 있다면 서버 렉 보정 대기
                                     if check_img('stop_btn.png', thread_sct):
-                                        print(f"\r  > ⏳ 융합 대기 중... (서버 렉 보정: 기계 가동 중)                                        ", end="", flush=True)
+                                        if not char_thread_active:
+                                            print(f"\r  > ⏳ 융합 대기 중... (서버 렉 보정: 기계 가동 중)                                        ", end="", flush=True)
                                         time.sleep(1)
                                         continue
                                         
                                     # 게임 화면(chance.png)이 닫혀 있다면 복구될 때까지 대기
                                     if not check_img('chance.png', thread_sct):
-                                        print(f"\r  > ✅ 게임 화면(chance.png) 복구 대기 중...                                                             ", end="", flush=True)
+                                        if not char_thread_active:
+                                            print(f"\r  > ✅ 게임 화면(chance.png) 복구 대기 중...                                                       ", end="", flush=True)
                                         time.sleep(0.5)
                                         continue
                                         
@@ -950,6 +961,7 @@ def fusion_bot_loop():
                                     time.sleep(0.2)
                                     if check_img('stop_btn.png', thread_sct): continue
                                     
+                                    print()
                                     bprint("✅ 시각적 검증 완료! 융합이 완벽히 종료되었습니다.")
                                     original_sleep(0.5)
                                     bprint("  > [모드 1] 기본 타이머 종료. 버튼 재감지 대기...")
@@ -2367,19 +2379,27 @@ def fusion_bot_loop():
 
 def force_change_character(char_key):
     """F6~F11 단축키를 통해 즉시 실행되는 수동 캐릭터 변경 전용 로직"""
-    global bot_active, char_thread_active
+    global bot_active, char_thread_active, bot_mode
     
-    # 만약 융합 매크로가 가동 중이라면 꼬이지 않게 융합 봇부터 자동 정지시킵니다.
+    # 이미 수동 캐릭터 변경이 진행 중이면 중복 실행을 완벽히 차단합니다.
+    if char_thread_active:
+        bprint("\n⚠️ [경고] 이미 캐릭터 수동 변경이 진행 중입니다. 무시됩니다.")
+        return
+    
     was_active = bot_active
-    if was_active:
+    
+    # [핵심 수정] 모드 1(단일 타이머)이 가동 중일 때는 봇을 끄지 않고 백그라운드 타이머를 유지합니다!
+    # 그 외의 모드(모드 2~4 멀티 교체 등)가 동작 중일 때만 마우스 충돌 방지를 위해 봇을 자동 정지시킵니다.
+    if was_active and bot_mode != 1:
         toggle_stop()
         
-    # [핵심 수정] toggle_stop()이 char_thread_active를 강제로 False로 변경하므로,
-    # sleep(jitter_sleep)이 호출되기 전에 스레드 생존 플래그를 먼저 True로 복구해주어야 에러가 발생하지 않습니다.
     char_thread_active = True
 
     if was_active:
-        time.sleep(0.5)
+        if bot_mode != 1:
+            time.sleep(0.5)
+        else:
+            print() # 동적 타이머( \r )와 로그 텍스트가 겹쳐서 깨지는 현상을 방지하기 위해 강제 줄바꿈
 
     c_name = CHAR_NAMES.get(char_key, char_key)
     bprint(f"\n🚀 [수동 캐릭터 변경] '{c_name}' 접속 시퀀스 시작!")
@@ -2387,7 +2407,7 @@ def force_change_character(char_key):
     with mss.mss() as thread_sct:
         state = 1
         
-        try: # [핵심] 정지 명령(BotStopException)을 부드럽게 받아내기 위한 안전망 추가
+        try: 
             while char_thread_active:
                 # --- [State 1] 1.png 확인 및 초고속 탈출 ---
                 if state == 1:
@@ -2521,14 +2541,21 @@ def force_change_character(char_key):
                         bprint(f"  > ✅ [성공] 6.png 소멸 완료. '{c_name}' 캐릭터 변경 완료!\n")
                         break # 완전히 종료
                     else:
-                        bprint("  > [재시도] 화면 전환(6.png) 미감지. F키를 다시 입력합니다...")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                            bprint("  > [재시도] 화면 전환(6.png) 미감지. F키를 다시 입력합니다...")
+                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
 
         except BotStopException:
-            pass # 에러를 먹어치우고 아래의 정상 종료 메시지로 유도합니다.
+            pass 
+            
+        finally:
+            # [핵심 수정] 스레드가 정상 종료되든 오류가 나든 무조건 플래그를 False로 복구하여 타이머 화면 출력을 재개합니다.
+            char_thread_active = False
 
-        if not char_thread_active:
-            bprint(f"🛑 '{c_name}' 수동 변경 시퀀스가 정지 명령에 의해 중단되었습니다.\n")
+        if bot_active and bot_mode == 1:
+            print()
+            bprint(f"✅ '{c_name}' 수동 변경 완료. 백그라운드 타이머 화면 출력을 재개합니다.")
+        else:
+            bprint(f"🛑 '{c_name}' 수동 변경 시퀀스가 정지 명령에 의해 중단되었거나 완료되었습니다.\n")
 
 # === [시작점 및 단축키 설정] ===
 def main_bot():

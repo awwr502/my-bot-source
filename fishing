@@ -280,7 +280,7 @@ def send_telegram_report():
     if bot_active and run_start_time is not None:
         current_run_time += (time.time() - run_start_time)
 
-    # 1. 일일 통계 (06시 초기화 기준)
+    # 1. 일일 통계 (06시 초기화 기준 -> 수동 초기화로 변경)
     d_hook, d_catch, d_skip = stats['daily_hook'], stats['daily_catch'], stats['daily_skip']
     d_rate = round((d_catch / d_hook) * 100, 1) if d_hook > 0 else 0
 
@@ -316,7 +316,7 @@ def send_telegram_report():
         f"━━━━━━━━━━━━━━\n"
         f"⏱️ <b>가동 시간:</b> {get_formatted_time(current_run_time)}\n"
         f"━━━━━━━━━━━━━━\n"
-        f"📈 <b>[하루 누적 통계]</b> (06시 리셋)\n"
+        f"📈 <b>[하루 누적 통계]</b> (수동 리셋)\n"
         f" ├ 총 입질: {d_hook}회\n"
         f" ├ 총 포획: {d_catch}마리\n"
         f" ├ 잡어 스킵: {d_skip}회\n"
@@ -356,13 +356,11 @@ def reset_stats():
     stats['pure_run_time'] = 0.0
     
     stats['last_snapshot_time'] = 0.0
-    # last_snapshot 시리즈는 '빅데이터'를 기준으로 델타를 계산하므로 06시에 0으로 만들면 안 됩니다!
-    # 대신 06시 시점의 누적값을 스냅샷으로 갱신해 주어 델타 계산이 튀지 않도록 안전하게 동기화합니다.
     stats['last_snapshot_hook'] = stats['total_hook']
     stats['last_snapshot_catch'] = stats['total_catch']
     stats['last_snapshot_skip'] = stats['total_skip']
     
-    save_stats_cache() # 06시 정기 초기화 후 깨끗해진 상태를 세이브 파일에 덮어쓰기
+    save_stats_cache()
     if bot_active:
         run_start_time = time.time()
     else:
@@ -375,17 +373,7 @@ def _telegram_listener():
     
     while True:
         try:
-            # 1. 06시 정기 리포트 검사
-            now = datetime.now()
-            if now.hour == 6 and now.minute == 0:
-                if last_report_date != now.date():
-                    bprint("\n>>> [시스템] 오전 6시 정기 결산 및 데이터 초기화 작동 <<<")
-                    send_telegram_report()
-                    reset_stats()
-                    last_report_date = now.date()
-                    dump_blackbox_log("06시_정기_초기화_완료")
-
-            # 2. 명령어 수신 검사
+            # 1. 명령어 수신 검사 (06시 자동 리셋 기능 삭제됨)
             params = {"offset": last_update_id + 1, "timeout": 5}
             response = requests.get(url, params=params, timeout=10)
             data = response.json()
@@ -448,7 +436,6 @@ def _telegram_listener():
                                     if len(parts) >= 3:
                                         duration = float(parts[2])
                                     
-                                    # 명령을 즉각 수행하지 못하는 병목을 유발하므로, 리스너 스레드에서 아두이노로 즉시 직결합니다.
                                     bprint(f"\n>>> [원격 터미널] 어떠한 간섭도 없이 순수하게 {display_name}({arduino_cmd}) 키를 {duration}초간 발사합니다. <<<")
                                     try:
                                         arduino.write(arduino_cmd.encode())
@@ -465,7 +452,7 @@ def _telegram_listener():
                                     bprint("  > [원격 터미널] 키 인자가 누락되었습니다. (예: /2입력 w 3)")
                             except Exception as e:
                                 bprint(f"  > [원격 터미널] 파싱 오류: {e}")
-                            
+                        
                         elif msg_text == f"{CMD_PREFIX}보고서":
                             bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} 보고서 요청 수신 <<<")
                             send_telegram_report()
@@ -474,7 +461,6 @@ def _telegram_listener():
                             bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} CCTV 요청 수신 <<<")
                             try:
                                 current_time = time.strftime("%H:%M:%S")
-                                # [버그 픽스] 스레드 간 mss 인스턴스 충돌(_thread._local 에러) 방지를 위해 텔레그램 전용 일회용 캡처기 생성
                                 with mss.mss() as temp_sct:
                                     sct_img = temp_sct.grab(temp_sct.monitors[1])
                                     screenshot = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
@@ -489,16 +475,15 @@ def _telegram_listener():
                         elif msg_text == f"{CMD_PREFIX}메뉴":
                             bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} 터치형 리모컨 UI 출력 <<<")
                             
-                            # [스마트 UI] 텔레그램 하단에 앱처럼 고정되는 커스텀 키보드 배치
                             reply_markup = {
                                 "keyboard": [
                                     [{"text": f"{CMD_PREFIX}낚시시작"}, {"text": f"{CMD_PREFIX}릴레이시작"}],
                                     [{"text": f"{CMD_PREFIX}승리시작1"}, {"text": f"{CMD_PREFIX}승리시작2"}],
-                                    [{"text": f"{CMD_PREFIX}정지"}, {"text": f"{CMD_PREFIX}상태"}, {"text": f"{CMD_PREFIX}보고서"}],
+                                    [{"text": f"{CMD_PREFIX}정지"}, {"text": f"{CMD_PREFIX}상태"}, {"text": f"{CMD_PREFIX}보고서"}, {"text": f"{CMD_PREFIX}초기화"}],
                                     [{"text": f"{CMD_PREFIX}입력 F"}, {"text": f"{CMD_PREFIX}입력 E"}, {"text": f"{CMD_PREFIX}입력 H"}]
                                 ],
-                                "resize_keyboard": True, # 스마트폰 화면에 맞게 버튼 크기 자동 조절
-                                "one_time_keyboard": False # 한 번 누르고 사라지지 않게 영구 고정
+                                "resize_keyboard": True,
+                                "one_time_keyboard": False
                             }
                             
                             url_msg = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -514,22 +499,15 @@ def _telegram_listener():
                                 bprint(f"  > [Telegram] 메뉴 UI 출력 에러: {e}")
 
                         elif msg_text == f"{CMD_PREFIX}초기화":
-                            bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} 빅데이터 수동 초기화 요청 수신 <<<")
-                            stats['total_hook'] = 0
-                            stats['total_catch'] = 0
-                            stats['total_skip'] = 0
-                            stats['hourly_records'] = []
-                            stats['last_snapshot_hook'] = stats['daily_hook']
-                            stats['last_snapshot_catch'] = stats['daily_catch']
-                            stats['last_snapshot_skip'] = stats['daily_skip']
-                            save_stats_cache()
+                            bprint(f">>> [텔레그램 원격 제어] {BOT_NAME} 하루 누적 통계 수동 초기화 요청 수신 <<<")
+                            reset_stats() # 오직 일일 통계만 초기화하고 전체 빅데이터는 그대로 보존
                             
                             url_msg = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-                            requests.post(url_msg, json={"chat_id": CHAT_ID, "text": "♻️ **[빅데이터 초기화 완료]**\n전체 누적 통계 및 1시간 평균 지표가 0으로 깨끗하게 리셋되었습니다."}, timeout=5)
+                            requests.post(url_msg, json={"chat_id": CHAT_ID, "text": "♻️ **[하루 누적 통계 초기화 완료]**\n금일 누적된 통계가 0으로 리셋되었습니다.\n(전체 누적 데이터 및 1시간 평균 지표는 안전하게 유지됩니다.)"}, timeout=5)
 
         except:
             pass 
-        original_sleep(1) 
+        original_sleep(1)
 
 threading.Thread(target=_telegram_listener, daemon=True).start()
 

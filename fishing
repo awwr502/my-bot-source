@@ -831,13 +831,36 @@ def safe_find_image(img_path, conf=0.6, region=None):
         screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
         res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
+
+        # [세션 기반 스마트 로깅] 검색 성공 시 1회, 루프 종료/타임아웃 시 1회만 출력 (도배 완벽 차단)
+        if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
+        now = time.time()
         
-        # [디버그 로그] 1초마다 해당 이미지의 현재 인식률(max_val)을 출력합니다.
-        if not hasattr(safe_find_image, 'log_timer'): safe_find_image.log_timer = {}
-        if time.time() - safe_find_image.log_timer.get(img_path, 0) > 1.0:
-            status = "✅통과" if max_val >= conf else "❌미달"
-            print(f"  > [인식률 스캔] {img_path} | 현재: {max_val:.3f} / 기준: {conf:.3f} -> {status}")
-            safe_find_image.log_timer[img_path] = time.time()
+        # 1. 종료된 검색(1.2초 이상 미호출) 중 반복 탐색(3회 이상)했던 항목의 타임아웃을 감지하여 1회 보고
+        for path, ctx in safe_find_image.session.items():
+            if now - ctx['last_time'] > 1.2:
+                if not ctx['found'] and not ctx['reported_fail'] and ctx['max_val'] > 0 and ctx['search_count'] >= 3:
+                    print(f"  > 🔴 [인식 타임아웃] {path} | 최고 인식률: {ctx['max_val']:.3f} / 기준: {ctx['target_conf']:.3f}")
+                    ctx['reported_fail'] = True
+        
+        # 2. 현재 찾고 있는 이미지 세션 관리 및 초기화
+        ctx = safe_find_image.session.setdefault(img_path, {'max_val': 0.0, 'found': False, 'last_time': now, 'reported_fail': False, 'target_conf': conf, 'search_count': 0})
+        if now - ctx['last_time'] > 1.2:
+            ctx['max_val'] = 0.0
+            ctx['found'] = False
+            ctx['reported_fail'] = False
+            ctx['search_count'] = 0
+            
+        ctx['last_time'] = now
+        ctx['target_conf'] = conf
+        ctx['search_count'] += 1
+        if max_val > ctx['max_val']: ctx['max_val'] = max_val
+
+        # 3. 인식 성공 시 딱 1번만 출력
+        if max_val >= conf:
+            if not ctx['found']:
+                print(f"  > 🟢 [인식 완료] {img_path} | 일치율: {max_val:.3f} / 기준: {conf:.3f}")
+                ctx['found'] = True
         
         # 신뢰도를 넘었을 경우
         if max_val >= conf:

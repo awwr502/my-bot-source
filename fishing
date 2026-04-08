@@ -832,19 +832,23 @@ def safe_find_image(img_path, conf=0.6, region=None):
         res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-        # [세션 기반 스마트 로깅] 검색 성공 시 1회, 루프 종료/타임아웃 시 1회만 출력 (도배 완벽 차단)
+        # [세션 및 동적 임계값 관리 엔진]
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
         now = time.time()
         
-        # 1. 종료된 검색(1.2초 이상 미호출) 중 반복 탐색(3회 이상)했던 항목의 타임아웃을 감지하여 1회 보고
+        # 1. 종료된 검색 타임아웃 감지 및 보고
         for path, ctx in safe_find_image.session.items():
             if now - ctx['last_time'] > 1.2:
                 if not ctx['found'] and not ctx['reported_fail'] and ctx['max_val'] > 0 and ctx['search_count'] >= 3:
-                    print(f"  > 🔴 [인식 타임아웃] {path} | 최고 인식률: {ctx['max_val']:.3f} / 기준: {ctx['target_conf']:.3f}")
+                    print(f"  > 🔴 [인식 타임아웃] {path} | 최고 인식률: {ctx['max_val']:.3f} / 현재 컷오프: {ctx['active_conf']:.3f}")
                     ctx['reported_fail'] = True
         
-        # 2. 현재 찾고 있는 이미지 세션 관리 및 초기화
-        ctx = safe_find_image.session.setdefault(img_path, {'max_val': 0.0, 'found': False, 'last_time': now, 'reported_fail': False, 'target_conf': conf, 'search_count': 0})
+        # 2. 현재 이미지 세션 로드 (history 덱 및 재검증 플래그 관리)
+        ctx = safe_find_image.session.setdefault(img_path, {
+            'max_val': 0.0, 'found': False, 'last_time': now, 'reported_fail': False, 
+            'target_conf': conf, 'search_count': 0, 'history': deque(maxlen=10), 'active_conf': conf
+        })
+        
         if now - ctx['last_time'] > 1.2:
             ctx['max_val'] = 0.0
             ctx['found'] = False
@@ -854,12 +858,38 @@ def safe_find_image(img_path, conf=0.6, region=None):
         ctx['last_time'] = now
         ctx['target_conf'] = conf
         ctx['search_count'] += 1
+
+        # 3. 동적 임계값(Adaptive Threshold) 계산
+        active_conf = conf 
+        if len(ctx['history']) == 10:
+            calculated_conf = min(ctx['history']) - 0.02
+            lower_limit = conf - 0.05
+            upper_limit = conf + 0.15
+            active_conf = max(lower_limit, min(upper_limit, calculated_conf))
+        
+        ctx['active_conf'] = active_conf
+
+        # 4. [재검증 로직] 근소한 차이로 미달 시 "한 번 더 찰칵!"
+        is_rechecked = False
+        # 기준치보다는 낮지만, 오차 범위(0.04) 내에 들어왔을 때 실행
+        if active_conf > max_val >= (active_conf - 0.04):
+            time.sleep(0.05) # 0.05초 렌더링 대기
+            # 재촬영 및 재매칭
+            sct_re = sct.grab(target_monitor)
+            screen_re = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2GRAY)
+            res_re = cv2.matchTemplate(screen_re, template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res_re)
+            is_rechecked = True
+
         if max_val > ctx['max_val']: ctx['max_val'] = max_val
 
-        # 3. 인식 성공 시 딱 1번만 출력
-        if max_val >= conf:
+        # 5. 최종 판정 및 로그 출력
+        if max_val >= active_conf:
+            ctx['history'].append(max_val)
             if not ctx['found']:
-                print(f"  > 🟢 [인식 완료] {img_path} | 일치율: {max_val:.3f} / 기준: {conf:.3f}")
+                mode_str = "🧠동적" if len(ctx['history']) == 10 else "⚙️고정"
+                recheck_str = " (♻️재검증통과)" if is_rechecked else ""
+                print(f"  > 🟢 [인식 완료] {img_path} | 일치율: {max_val:.3f} / 컷오프({mode_str}): {active_conf:.3f}{recheck_str}")
                 ctx['found'] = True
         
         # 신뢰도를 넘었을 경우

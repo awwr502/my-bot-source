@@ -21,21 +21,11 @@ import math
 import screen_brightness_control as sbc
 import hashlib
 
-# [밝기 제어 최적화] 듀얼 모니터 개별 타겟팅 함수
+# [밝기 제어 최적화] 낚시 매크로와 동일한 전역 브로드캐스트 방식으로 롤백
 def set_all_monitors_brightness(target_val):
     try:
-        monitors = sbc.list_monitors()
-        if not monitors:
-            sbc.set_brightness(target_val)
-            return
-        for m in monitors:
-            try:
-                sbc.set_brightness(target_val, display=m)
-            except:
-                pass
-    except:
-        try: sbc.set_brightness(target_val)
-        except: pass
+        sbc.set_brightness(target_val) # 연결된 모든 모니터 일괄 적용
+    except: pass
 
 # === [초고속 캡처 엔진] ===
 sct = mss.mss()
@@ -113,18 +103,13 @@ is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 char_thread_active = False # 수동 캐릭터 변경 스레드 제어 플래그
 char_inventory_memory = {} # 캐릭터별 인벤토리 탐색 위치 기억용 딕셔너리
 
-# [밝기 제어 최적화] 듀얼 모니터 개별 복구 함수 추가
+# [밝기 제어 최적화] 낚시 매크로와 동일한 전역 브로드캐스트 방식으로 롤백
 def restore_monitors_brightness(bright_data):
     try:
-        if isinstance(bright_data, list):
-            monitors = sbc.list_monitors()
-            if monitors:
-                for i, m in enumerate(monitors):
-                    if i < len(bright_data):
-                        try: sbc.set_brightness(bright_data[i], display=m)
-                        except: pass
-                return
-        sbc.set_brightness(bright_data)
+        if isinstance(bright_data, list) and len(bright_data) > 0:
+            sbc.set_brightness(bright_data[0]) # 리스트의 첫 번째 값으로 모든 모니터 일괄 복구
+        else:
+            sbc.set_brightness(bright_data)
     except: pass
 
 # =====================================================================

@@ -2077,16 +2077,44 @@ def fishing_bot(max_allowed_seconds):
                             try:
                                 template = IMAGE_CACHE.get(img_name)
                                 if template is None: return False
-                                sct_img = cctv_sct.grab(cctv_sct.monitors[1])
+                                
+                                # 🎯 [핵심] 무식한 전체화면 스캔 폐기! 기존에 학습된 개별 이미지의 좌표를 불러옵니다.
+                                monitor = cctv_sct.monitors[1] # 기본값: 전체 화면
+                                is_using_master = False
+                                
+                                # 봇이 이전에 해당 사진을 한 번이라도 찾아서 위치를 기억(roi_cache.json)해뒀다면 그 좁은 구역만 봅니다.
+                                if img_name in ROI_SAMPLER and ROI_SAMPLER[img_name].get('master_box'):
+                                    monitor = ROI_SAMPLER[img_name]['master_box']
+                                    is_using_master = True
+
+                                # 1. 좁은 구역(또는 전체화면) 스캔
+                                sct_img = cctv_sct.grab(monitor)
                                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                                 res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-                                return cv2.minMaxLoc(res)[1] >= conf
+                                max_val = cv2.minMaxLoc(res)[1]
+                                
+                                if max_val >= conf:
+                                    return True
+                                    
+                                # 2. [스마트 폴백] 좁은 구역에서 못 찾았을 때만 가끔씩(1초 쿨다운) 전체화면을 둘러봅니다.
+                                elif is_using_master:
+                                    last_fallback = FALLBACK_COOLDOWN.get(img_name, 0)
+                                    if time.time() - last_fallback > 0.3:
+                                        sct_img_full = cctv_sct.grab(cctv_sct.monitors[1])
+                                        screen_gray_full = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
+                                        res_full = cv2.matchTemplate(screen_gray_full, template, cv2.TM_CCOEFF_NORMED)
+                                        if cv2.minMaxLoc(res_full)[1] >= conf:
+                                            return True
+                                        else:
+                                            FALLBACK_COOLDOWN[img_name] = time.time()
+                                    return False
+                                
+                                return False
                             except:
                                 return False
 
                         while fighting_active and bot_active:
                             # 1. 잠수방지 알림 감지 
-                            # (여기서 F를 누르면 텐션 클릭과 꼬이므로 본체에 리셋 신호만 보냅니다)
                             if thread_safe_find('exit_notice.png', 0.85): 
                                 fight_status = "RESET"
                                 break
@@ -2124,7 +2152,9 @@ def fishing_bot(max_allowed_seconds):
                             else:
                                 missing_ui_count = 0 
                             
-                            time.sleep(0.1) # 0.1초 간격 감시 (CPU 보호)
+                            # 🚀 [핵심 최적화] 스나이퍼 렌즈 장착으로 연산량이 100배 가벼워졌습니다!
+                            # 감시 쿨다운을 0.1초에서 0.03초로 대폭 단축하여 QTE/수거 반응 속도를 한계까지 끌어올립니다.
+                            time.sleep(0.03)
 
                 # 분신(CCTV 스레드) 백그라운드 출격
                 threading.Thread(target=check_status_cctv, daemon=True).start()

@@ -1935,6 +1935,57 @@ def fishing_bot(max_allowed_seconds):
             # --- [State 3] 어종 판별 및 줄 끊기 (5중 병렬 스캔 엔진) ---
             elif state == 3:
                 if not bot_active: raise BotStopException()
+
+                # [내구도 시스템 대응] 어종 판별 전 낚싯대 파괴 여부 선행 검사
+                bprint("  > [내구도 검사] 낚싯대 파괴 여부 확인 중 (rod_check.png)...")
+                rod_found = False
+                for _ in range(3): # 챔질 후 UI 렌더링 딜레이를 고려하여 최대 0.3초 확인
+                    if safe_find_image('rod_check.png', 0.7):
+                        rod_found = True
+                        break
+                    time.sleep(0.1)
+
+                if not rod_found:
+                    bprint("  > ⚠️ [파괴 감지] 낚싯대가 부서졌습니다! 자동 재장착 로직으로 이동합니다.")
+                    
+                    # [내구도 시스템 대응] 낚싯대 파괴 감지 및 자동 재장착 로직
+                    bprint("  > ⚠️ [내구도 파괴 의심] 낚싯대 미인식! 예비 낚싯대 자동 장착 시도 (0번 입력)")
+                    send_cmd('0'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.6) # 0번 누른 직후 강제 모션 딜레이
+                    
+                    # 1) 장착 후 '던지기(throw_btn.png)' 아이콘 대기 (최대 1.5초)
+                    wait_throw = time.time()
+                    found_throw = False
+                    while time.time() - wait_throw < 1.5 and bot_active:
+                        if safe_find_image('throw_btn.png', 0.8) or safe_find_image('throw_btn.png', 0.8, region="FULL_SCREEN"):
+                            found_throw = True
+                            break
+                        time.sleep(0.1)
+                        
+                    if found_throw:
+                        bprint("  > 🔄 [장착 완료] 새 낚싯대 확인! 낚시 준비 모드(C) 진입...")
+                        time.sleep(0.1)
+                        send_cmd('L'); time.sleep(0.1); send_cmd('R')
+                        
+                        # 2) L 누르고 다시 미끼 아이콘(bait_change.png) 뜰 때까지 최종 대기
+                        wait_ready = time.time()
+                        found_bait = False
+                        while time.time() - wait_ready < 1.5 and bot_active:
+                            if safe_find_image('bait_change.png', 0.75) or safe_find_image('bait_change.png', 0.75, region="FULL_SCREEN"):
+                                found_bait = True
+                                break
+                            time.sleep(0.1)
+                            
+                    # 최종적으로 낚싯대 준비가 안 되었다면 예비 낚싯대 소진 또는 에러
+                    if not found_throw or not (found_bait if 'found_bait' in locals() else False):
+                        bprint("  > ❌ [장착 실패] 예비 낚싯대가 없거나 꼬였습니다. 스마트 복구를 호출합니다.")
+                        state_start_time = time.time() - 200.0
+                        continue
+                        
+                    # 장착 성공 시 다시 캐스팅해야 하므로 State 1로 복귀
+                    state = 1
+                    continue
+
                 stats['daily_hook'] += 1
                 stats['total_hook'] += 1
                 bprint(f"[State 3] 5중 병렬 어종 분석 시작... (입질: {stats['daily_hook']}회)")

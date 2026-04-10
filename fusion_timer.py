@@ -894,8 +894,8 @@ def fusion_bot_loop():
                             bprint("🎯 '융합 중단' 버튼 감지 완료!")
                             
                             if bot_mode == 1:
-                                bprint("⏳ [모드 1] 스마트 10분(600초) 카운트다운 시작...")
-                                fusion_end_time = time.time() + 600.0
+                                bprint("⏳ [모드 1] 스마트 5분(300초) 카운트다운 시작...")
+                                fusion_end_time = time.time() + 300.0
                                 
                                 # 1단계: 순수 카운트다운 루프
                                 while True:
@@ -911,7 +911,7 @@ def fusion_bot_loop():
                                         # 2단계: 타이머 종료 직후 '즉시' 비프음 출력
                                         print(f"\r  > 융합 완료까지 남은 시간: 00분 00초   ", flush=True)
                                         print()
-                                        bprint("✅ 10분 경과! 멜로디를 재생하며 시각적 검증을 시작합니다.")
+                                        bprint("✅ 5분 경과! 멜로디를 재생하며 시각적 검증을 시작합니다.")
                                         play_melody()
                                         break
                                     
@@ -954,14 +954,14 @@ def fusion_bot_loop():
                                     break
                                 
                             elif bot_mode == 2:
-                                bprint("⏳ [모드 2] 백그라운드 10분 타이머 가동! 즉시 멀티 캐릭터 교체 진입.")
-                                fusion_end_time = time.time() + 600.0 
+                                bprint("⏳ [모드 2] 백그라운드 5분 타이머 가동! 즉시 멀티 캐릭터 교체 진입.")
+                                fusion_end_time = time.time() + 300.0 
                                 state = 1
                             
                             elif bot_mode in [3, 4]:
                                 mode_name = "모드 3" if bot_mode == 3 else "모드 4"
-                                bprint(f"⏳ [{mode_name}] 백그라운드 10분 타이머 가동! 즉시 지능형 자동 교체 진입.")
-                                fusion_end_time = time.time() + 600.0 
+                                bprint(f"⏳ [{mode_name}] 백그라운드 5분 타이머 가동! 즉시 지능형 자동 교체 진입.")
+                                fusion_end_time = time.time() + 300.0 
                                 state = 1
                                 
                             break 
@@ -2251,8 +2251,8 @@ def fusion_bot_loop():
                                         current_anchor += 1
                                         
                                 if bot_mode in [3, 4] and char_index == current_anchor:
-                                    fusion_end_time = time.time() + 600.0
-                                    bprint("  > ⏱️ [타이머 갱신] 앵커 캐릭터 융합 가동 시작! 10분(600초) 타이머가 설정되었습니다.")
+                                    fusion_end_time = time.time() + 300.0
+                                    bprint("  > ⏱️ [타이머 갱신] 앵커 캐릭터 융합 가동 시작! 5분(300초) 타이머가 설정되었습니다.")
                                 break
                                 
                             if time.time() - wait_stop > 1.0:

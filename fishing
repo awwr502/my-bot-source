@@ -1925,113 +1925,95 @@ def fishing_bot(max_allowed_seconds):
                 else:
                     cast_fail_count = 0 # 정상적으로 찌 낙하(UI 발견) 시 카운터 초기화
 
-            # --- [State 2] 입질 대기 ---
-            elif state == 2:
-                if not bot_active: raise BotStopException()
-                if safe_find_image('green_float.png', 0.65):
-                    bprint("  > [!] 입질 확인! 챔질(C)!"); send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                    time.sleep(0.2); state = 3
-
-            # --- [State 3] 어종 판별 및 줄 끊기 (정밀 검증 강화) ---
+            # --- [State 3] 어종 판별 및 줄 끊기 (5중 병렬 스캔 엔진) ---
             elif state == 3:
                 if not bot_active: raise BotStopException()
                 stats['daily_hook'] += 1
                 stats['total_hook'] += 1
-                bprint(f"[State 3] 어종 고속 분석 중... (금일 입질: {stats['daily_hook']}회 / 누적: {stats['total_hook']}회)")
+                bprint(f"[State 3] 5중 병렬 어종 분석 시작... (입질: {stats['daily_hook']}회)")
+                
                 found_target = False
+                found_trash = False
                 target_name = ""
 
-                # [v14 RAM 캐시 직결] 하드디스크를 긁는 느린 cv2.imread 대신, 부팅 시 메모리에 올려둔 IMAGE_CACHE에서 빛의 속도로 꺼내옵니다.
-                template_j = IMAGE_CACHE.get('jellyfish.png')
-                template_e = IMAGE_CACHE.get('eel.png')
-                
-                # 잡어(Early Rejection) 판독용 이미지 로드
-                template_n1 = IMAGE_CACHE.get('none1.png')
-                template_n2 = IMAGE_CACHE.get('none2.png')
-                template_n3 = IMAGE_CACHE.get('none3.png')
+                # 스레드들이 공유할 결과 저장소
+                scan_result = {"type": None, "name": ""}
+                result_lock = threading.Lock()
 
-                # [v9 판독 안정성 강화] UI가 뜨는 트랜지션 시간(애니메이션 딜레이)을 고려하여
-                # 최대 대기 시간을 0.5초(10회)에서 2.0초(40회)로 대폭 늘려 어종을 놓치는 현상을 차단합니다.
-                for i in range(60):
-                    if keyboard.is_pressed(']'): break
+                # [분석관 스레드 함수]
+                def species_scanner(img_gray, template, species_type, name):
+                    nonlocal found_target, found_trash, target_name
+                    if template is None: return
+                    
+                    res = cv2.matchTemplate(img_gray, template, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, _ = cv2.minMaxLoc(res)
+                    
+                    if max_val >= 0.6:
+                        with result_lock:
+                            if scan_result["type"] is None: # 먼저 찾은 스레드가 임자
+                                scan_result["type"] = species_type
+                                scan_result["name"] = name
 
-                    # [초고속 파이프라인] PIL 객체를 거치지 않고 mss 메모리에서 OpenCV 배열로 직접 꽂아넣음
+                # 판독 루프 (최대 2초간 시도)
+                start_analysis = time.time()
+                while time.time() - start_analysis < 2.0 and bot_active:
+                    # 1. 카메라 충돌 방지를 위해 메인에서 '딱 한 번'만 캡처
                     sct_img = sct.grab(sct.monitors[1])
-                    screen_np = np.array(sct_img)
-                    # mss는 기본적으로 BGRA를 반환하므로 COLOR_BGRA2GRAY를 사용하여 즉시 흑백 변환
-                    screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
+                    screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
 
-                    # 1. 해파리 고속 판별
-                    if template_j is not None:
-                        res_j = cv2.matchTemplate(screen_gray, template_j, cv2.TM_CCOEFF_NORMED)
-                        if cv2.minMaxLoc(res_j)[1] >= 0.6:
-                            found_target = True; target_name = "해파리"; break
+                    # 2. 5명의 분석관(스레드)에게 사진 한 장을 동시에 던짐
+                    threads = []
+                    # 목표 어종 2종
+                    threads.append(threading.Thread(target=species_scanner, args=(screen_gray, IMAGE_CACHE.get('jellyfish.png'), "TARGET", "해파리")))
+                    threads.append(threading.Thread(target=species_scanner, args=(screen_gray, IMAGE_CACHE.get('eel.png'), "TARGET", "전기뱀장어")))
+                    # 잡어 3종
+                    threads.append(threading.Thread(target=species_scanner, args=(screen_gray, IMAGE_CACHE.get('none1.png'), "TRASH", "잡어1")))
+                    threads.append(threading.Thread(target=species_scanner, args=(screen_gray, IMAGE_CACHE.get('none2.png'), "TRASH", "잡어2")))
+                    threads.append(threading.Thread(target=species_scanner, args=(screen_gray, IMAGE_CACHE.get('none3.png'), "TRASH", "잡어3")))
 
-                    # 2. 뱀장어 고속 판별
-                    if template_e is not None:
-                        res_e = cv2.matchTemplate(screen_gray, template_e, cv2.TM_CCOEFF_NORMED)
-                        if cv2.minMaxLoc(res_e)[1] >= 0.6:
-                            found_target = True; target_name = "전기뱀장어"; break
+                    for t in threads: t.start()
+                    for t in threads: t.join() # 모든 분석관이 보고를 마칠 때까지 대기 (0.01초 내외)
+
+                    # 3. 결과 확인
+                    if scan_result["type"] == "TARGET":
+                        found_target = True
+                        target_name = scan_result["name"]
+                        break
+                    elif scan_result["type"] == "TRASH":
+                        found_trash = True
+                        break
                     
-                    # 3. 등록된 잡어 고속 판별 (조기 차단)
-                    # 대상 어종이 안 보일 때, '확실한 잡어' UI가 화면에 떴다면 40번을 다 기다리지 않고 즉시 끊습니다.
-                    found_trash = False
-                    for t_none in [template_n1, template_n2, template_n3]:
-                        if t_none is not None:
-                            res_n = cv2.matchTemplate(screen_gray, t_none, cv2.TM_CCOEFF_NORMED)
-                            if cv2.minMaxLoc(res_n)[1] >= 0.6:
-                                found_trash = True
-                                break
-                    
-                    if found_trash:
-                        bprint("  > [잡어] 등록된 잡어 UI 확인 -> 즉시 줄 끊기 진입")
-                        break # 타겟을 못 찾은 상태(found_target=False)로 즉시 강제 탈출함
-
-                    # 아무 UI도 아직 안 떴다면 (애니메이션 딜레이 중) 0.05초 대기 후 다시 화면 캡처
-                    time.sleep(0.1)
+                    time.sleep(0.01) # 다음 프레임 대기
 
                 if found_target:
-                    bprint(f"  > [성공] {target_name} 발견! -> 파이팅 진입"); state = 4
+                    bprint(f"  > [성공] {target_name} 포착! -> 파이팅 진입"); state = 4
                 else:
-                    bprint("  > [잡어] 목표 아님 -> 줄 끊기 시퀀스 진입")
-
+                    # 목표를 못 찾았거나 확실한 잡어인 경우
+                    bprint("  > [끊기] 목표 어종 아님 -> 줄 끊기 시퀀스 진입")
                     stats['daily_skip'] += 1
                     stats['total_skip'] += 1
 
                     while bot_active:
                         if keyboard.is_pressed(']'): state = 1; break
-                        
-                        # 1. ESC를 꾹 눌러서 줄 끊기 실행
                         bprint("  > [시도] ESC 누르기 (0.5초)...")
                         send_cmd('E'); time.sleep(0.5); send_cmd('R')
                         
-                        # 2. 서버 응답 대기 (1초) 도중 알림이 뜨면?
-                        # -> F만 눌러서 끄고(skip_esc=True), 바로 캐스팅(state=1)으로 복귀
+                        # 알림 감시 루프
                         wait_end = time.time() + 1.0
+                        reset_by_notice = False
                         while time.time() < wait_end:
-                            # 여기가 핵심입니다! ESC를 또 누르지 않도록 설정
                             if check_exit_notification(skip_esc=True): 
-                                state = 1
-                                break
+                                state = 1; reset_by_notice = True; break
                             time.sleep(0.1)
                         
-                        # 알림이 감지되어 리셋됐다면, 아래 로직 수행하지 말고 루프 탈출
-                        if state == 1: break
+                        if reset_by_notice: break
                         
-                        # 3. UI가 여전히 남아있는지 재검사 (정밀 확인)
-                        # fishing.png나 fishing_mode.png 중 하나라도 발견되면 아직 낚시 중인 것
-                        is_still_fishing = safe_find_image('fishing.png', 0.7) or safe_find_image('fishing_mode.png', 0.7)
-                        
-                        if not is_still_fishing:
-                            # 이미지가 둘 다 검색되지 않아야만 진정한 성공
+                        # UI 잔존 여부 확인
+                        if not (safe_find_image('fishing.png', 0.7) or safe_find_image('fishing_mode.png', 0.7)):
                             bprint("  > [완료] UI 소멸 확인. 줄 끊기 성공.")
-                            time.sleep(1.0)
-                            state = 1
-                            break
+                            time.sleep(1.0); state = 1; break
                         else:
-                            # 이미지가 아직 남아있다면 끊기 실패로 간주하고 루프 재시작
-                            bprint("  > [실패] UI 잔존 감지. 다시 줄 끊기 시도...")
-                            # 여기서 break 없이 다시 위로 올라가서 ESC를 누릅니다.
+                            bprint("  > [실패] UI 잔존. 재시도...")
 
             # --- [State 4] 파이팅 (투트랙 멀티스레딩 최적화) ---
             elif state == 4:

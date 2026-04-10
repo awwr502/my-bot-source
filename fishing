@@ -2033,9 +2033,9 @@ def fishing_bot(max_allowed_seconds):
                             bprint("  > [실패] UI 잔존 감지. 다시 줄 끊기 시도...")
                             # 여기서 break 없이 다시 위로 올라가서 ESC를 누릅니다.
 
-            # --- [State 4] 파이팅 (QTE 로직 및 함수 구조 완전 복구) ---
+            # --- [State 4] 파이팅 (투트랙 멀티스레딩 최적화) ---
             elif state == 4:
-                bprint("[State 4] 파이팅 모드 진입")
+                bprint("[State 4] 파이팅 모드 진입 (투트랙 CCTV 엔진 가동)")
                 
                 # 1. 진입 초기 UI 안착 대기
                 wait_ui_start = time.time()
@@ -2048,98 +2048,117 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.2)
                 missing_ui_count = 0 
                 
-                # [핵심 1] 렌즈 고정: 파이팅 시작 시 게이지의 정확한 중심점을 단 한 번만 찾아 좌표를 고정합니다.
+                # [핵심 1] 렌즈 고정 (250x250)
                 gauge_roi = None
                 ui_pos = safe_find_image('fishing_mode.png', 0.6)
                 if ui_pos:
-                    # ui_pos는 Box(left, top, width, height) 형태
                     cx = ui_pos.left + ui_pos.width // 2
                     cy = ui_pos.top + ui_pos.height // 2
-                    x1 = max(0, cx - 55)
-                    y1 = max(0, cy - 55)
-                    gauge_roi = (int(x1), int(y1), 95, 95)
+                    x1 = max(0, cx - 125)
+                    y1 = max(0, cy - 125)
+                    gauge_roi = (int(x1), int(y1), 250, 250)
                 else:
-                    gauge_roi = (CENTER_X - 55, CENTER_Y - 55, 95, 95) # 실패 시 화면 정중앙
+                    gauge_roi = (CENTER_X - 125, CENTER_Y - 125, 250, 250)
                 
-                def check_status():
-                    nonlocal missing_ui_count
-                    if check_exit_notification(): return "RESET"
+                # 스레드 통신용 플래그 (본체와 분신이 신호를 주고받는 변수들)
+                fight_status = "KEEP"
+                is_qte_active = False
+                fighting_active = True
 
-                    # QTE 탐지
-                    for img, key in [('press_A.png', 'A'), ('press_D.png', 'D')]:
-                        if safe_find_image(img, 0.6):
-                            missing_ui_count = 0 
-                            send_cmd('U') # QTE 시 당기기 중지
-                            bprint(f"  ! [QTE] {key} 대응 시작")
-                            while safe_find_image(img, 0.6) and bot_active:
-                                send_cmd(key); time.sleep(0.05)
-                            send_cmd('R')
-                            return "QTE"
-
-                    if safe_find_image('catch_F.png', 0.70): return "FINISH"
-
-                    if not safe_find_image('fishing_mode.png', 0.6): 
-                        missing_ui_count += 1
-
-                        if missing_ui_count >= 50: 
-                            bprint("  > [유실] 낚시 UI가 장시간 보이지 않음 -> 초기화")
-                            dump_blackbox_log("파이팅중_UI장시간유실")
-                            return "RESET" 
-                    else:
-                        missing_ui_count = 0 
+                # [분신 역할] 백그라운드에서 QTE와 성공 여부만 조용히 감시하는 CCTV
+                def check_status_cctv():
+                    nonlocal missing_ui_count, is_qte_active, fight_status, fighting_active
                     
-                    return "KEEP"
+                    while fighting_active and bot_active:
+                        if check_exit_notification(): 
+                            fight_status = "RESET"
+                            break
 
-                bprint("  > [AI 파이팅] 고정 렌즈 추적 시작 (프레임 널뛰기 방지 패치)")
+                        # QTE 탐지
+                        qte_found = False
+                        for img, key in [('press_A.png', 'A'), ('press_D.png', 'D')]:
+                            if safe_find_image(img, 0.6):
+                                missing_ui_count = 0 
+                                is_qte_active = True # 본체(텐션 관리)에게 잠시 멈추라고 지시
+                                send_cmd('U') 
+                                bprint(f"  ! [QTE] {key} 대응 시작")
+                                while safe_find_image(img, 0.6) and bot_active:
+                                    send_cmd(key); time.sleep(0.05)
+                                send_cmd('R')
+                                is_qte_active = False # QTE 끝났으니 다시 텐션 관리하라고 지시
+                                qte_found = True
+                                break
+                        
+                        if qte_found: continue
+
+                        # 성공 감지
+                        if safe_find_image('catch_F.png', 0.70): 
+                            fight_status = "FINISH"
+                            break
+
+                        # UI 증발 감지
+                        if not safe_find_image('fishing_mode.png', 0.6): 
+                            missing_ui_count += 1
+                            if missing_ui_count >= 50: 
+                                bprint("  > [유실] 낚시 UI가 장시간 보이지 않음 -> 초기화")
+                                dump_blackbox_log("파이팅중_UI장시간유실")
+                                fight_status = "RESET" 
+                                break
+                        else:
+                            missing_ui_count = 0 
+                        
+                        time.sleep(0.1) # 0.1초 간격 감시 (CPU 보호)
+
+                # 분신(CCTV 스레드) 백그라운드 출격
+                threading.Thread(target=check_status_cctv, daemon=True).start()
+
+                bprint("  > [AI 파이팅] 초고속 텐션 전담 모드 가동 (병목 0%)")
                 is_pulling = False 
-                last_ui_check = time.time()
+                fight_start_time = time.time()
                 
-                fight_start_time = time.time() # 파이팅 진입 시간 기록
-                
-                while True: # bot_active로 스르륵 탈출 방지
-                    if not bot_active: raise BotStopException() # 즉시 폭파
+                # [본체 역할] 오로지 텐션만 0.001초 속도로 바라보며 칼같이 마우스를 제어함
+                while True: 
+                    if not bot_active: 
+                        fighting_active = False # 분신도 함께 퇴근시킴
+                        raise BotStopException()
 
-                    # 1. [연산 최적화] 매번 찾지 않고, 초소형 영역만 0.001초 만에 스캔
+                    # CCTV(분신)에서 종료 신호가 왔는지 확인
+                    if fight_status == "FINISH": 
+                        send_cmd('U'); fighting_active = False; state = 5; break
+                    if fight_status == "RESET": 
+                        send_cmd('U'); fighting_active = False; state = 1; break
+                    
+                    # QTE 진행 중이면 마우스에서 손을 떼고 대기
+                    if is_qte_active:
+                        is_pulling = False
+                        time.sleep(0.01)
+                        continue
+
+                    # 1. 텐션 스캔 (렉 유발 로직이 분리되어 무조건 0.001초 응답 보장)
                     red_count = get_tension_status(gauge_roi)
                     
-                    # 파이팅 진입 직후 0.4초 동안만 초기 텐션을 잡기 위해 무조건 당김 (기존 1초는 너무 길어 시작하자마자 끊어짐 유발)
-                    if time.time() - fight_start_time < 0.4:
+                    # 2. 파이팅 진입 직후 0.1초 동안만 살짝 당겨줌 (시작하자마자 터짐 방지)
+                    if time.time() - fight_start_time < 0.1:
                         if not is_pulling:
                             send_cmd('L')
                             is_pulling = True
                         time.sleep(0.01)
                     else:
-                        # 2. 반응 임계값 10픽셀
+                        # 3. 칼같은 텐션 제어 (임계값 10)
                         if red_count >= 10:
                             if is_pulling:
-                                send_cmd('U') 
+                                send_cmd('U')
                                 time.sleep(0.02)
-                                send_cmd('U') # 통신 씹힘 방지 이중 릴리즈
+                                send_cmd('U') # 이중 릴리즈 (신호 씹힘 방지)
                                 is_pulling = False
                             
-                            # [핵심] 손을 뗐으면 게이지가 실제로 내려갈 때까지 '확실하게' 기다려줍니다.
-                            time.sleep(0.4)
+                            # [안전망] 손을 뗐으면 게이지가 물리적으로 가라앉을 때까지 0.2초간 확실히 기다려줍니다.
+                            time.sleep(0.2) 
                         else:
                             if not is_pulling:
                                 send_cmd('L') 
                                 is_pulling = True
-                            time.sleep(0.01) # 연산 딜레이 최소화 (초고속 반응 유지)
-                    
-                    # [핵심 2] 랜덤 렉의 진짜 원인 해결 (병목 제거)
-                    # 전체 화면을 뒤지는 무거운 check_status()를 매 턴마다 실행하지 않고, 0.1초에 1번만 확인합니다.
-                    if time.time() - last_ui_check > 0.1:
-                        res = check_status()
-                        last_ui_check = time.time()
-                        
-                        if res == "FINISH": 
-                            send_cmd('U'); state = 5; break
-                        if res == "RESET": 
-                            send_cmd('U'); state = 1; break
-                        if res == "QTE": 
-                            bprint("  > [QTE] 대응 완료. 0.01초 대기 후 텐션 조절 재개")
-                            is_pulling = False
                             time.sleep(0.01)
-                            continue
 
             # --- [State 5] 수거 (완결성 검증 로직) ---
             elif state == 5:

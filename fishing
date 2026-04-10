@@ -1027,19 +1027,15 @@ def get_tension_status(exact_roi):
         # 초소형 캡처 전용으로 속도 극대화
         target_img = fast_cv_screenshot(region=exact_roi, gray=False)
 
-        # 명도와 채도 변환 (OpenCV BGR -> HSV)
+        # 명도와 채도를 엄격하게 깎아 핫핑크/레드만 반응하도록 유지 (fast_cv_screenshot은 BGR 반환이므로 BGR2HSV 사용)
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
+        lower_red1 = np.array([0, 145, 145])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([165, 160, 160])
+        upper_red2 = np.array([180, 255, 255])
         
-        # 🎯 첨부해주신 사진(핫핑크/마젠타) 기반 초정밀 타겟팅
-        lower_pink = np.array([135, 80, 80])   # 연한 핫핑크 ~ 마젠타 (H: 135부터)
-        upper_pink = np.array([180, 255, 255]) # 진한 핑크/빨강까지 (H: 180까지)
-        
-        # 혹시 모를 순수 빨강(H: 0~5) 영역의 빛 번짐 대비용 얇은 보조 마스크
-        lower_red = np.array([0, 80, 80])
-        upper_red = np.array([5, 255, 255])
-        
-        mask1 = cv2.inRange(img_hsv, lower_pink, upper_pink)
-        mask2 = cv2.inRange(img_hsv, lower_red, upper_red)
+        mask1 = cv2.inRange(img_hsv, lower_red1, upper_red1)
+        mask2 = cv2.inRange(img_hsv, lower_red2, upper_red2)
         mask = cv2.bitwise_or(mask1, mask2)
         
         red_pixels = cv2.countNonZero(mask)
@@ -2094,7 +2090,7 @@ def fishing_bot(max_allowed_seconds):
                     
                     return "KEEP"
 
-                bprint("  > [AI 파이팅] 110x110 고정 렌즈 추적 시작 (프레임 널뛰기 방지 패치)")
+                bprint("  > [AI 파이팅] 고정 렌즈 추적 시작 (프레임 널뛰기 방지 패치)")
                 is_pulling = False 
                 last_ui_check = time.time()
                 
@@ -2103,7 +2099,7 @@ def fishing_bot(max_allowed_seconds):
                 while True: # bot_active로 스르륵 탈출 방지
                     if not bot_active: raise BotStopException() # 즉시 폭파
 
-                    # 1. [연산 최적화] 매번 찾지 않고, 110x110 초소형 영역만 0.001초 만에 스캔
+                    # 1. [연산 최적화] 매번 찾지 않고, 초소형 영역만 0.001초 만에 스캔
                     red_count = get_tension_status(gauge_roi)
                     
                     # 파이팅 진입 직후 0.4초 동안만 초기 텐션을 잡기 위해 무조건 당김 (기존 1초는 너무 길어 시작하자마자 끊어짐 유발)
@@ -2113,12 +2109,12 @@ def fishing_bot(max_allowed_seconds):
                             is_pulling = True
                         time.sleep(0.01)
                     else:
-                        # 2. 반응 임계값 25픽셀 (안정성을 위해 임계값 소폭 하향 및 쿨다운 적용)
+                        # 2. 반응 임계값 10픽셀 (안정성을 위해 임계값 소폭 하향 및 쿨다운 적용)
                         if red_count >= 10:
                             if is_pulling:
                                 send_cmd('U') 
                                 is_pulling = False
-                            time.sleep(0.25) # [핵심 수정] 0.01초는 게이지가 식기 전에 다시 당겨버리므로, 0.25초로 늘려 텐션을 확실히 낮춤
+                            time.sleep(0.01)
                         else:
                             if not is_pulling:
                                 send_cmd('L') 

@@ -2048,19 +2048,19 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.2)
                 missing_ui_count = 0 
                 
-                # [핵심 1] 렌즈 고정 (250x250)
+                # [핵심 1] 렌즈 고정 (95x95)
                 gauge_roi = None
                 ui_pos = safe_find_image('fishing_mode.png', 0.6)
                 if ui_pos:
                     cx = ui_pos.left + ui_pos.width // 2
                     cy = ui_pos.top + ui_pos.height // 2
-                    x1 = max(0, cx - 125)
-                    y1 = max(0, cy - 125)
-                    gauge_roi = (int(x1), int(y1), 250, 250)
+                    x1 = max(0, cx - 47)
+                    y1 = max(0, cy - 47)
+                    gauge_roi = (int(x1), int(y1), 95, 95)
                 else:
-                    gauge_roi = (CENTER_X - 125, CENTER_Y - 125, 250, 250)
+                    gauge_roi = (CENTER_X - 47, CENTER_Y - 47, 95, 95)
                 
-                # 스레드 통신용 플래그 (본체와 분신이 신호를 주고받는 변수들)
+                # 스레드 통신용 플래그
                 fight_status = "KEEP"
                 is_qte_active = False
                 fighting_active = True
@@ -2069,45 +2069,62 @@ def fishing_bot(max_allowed_seconds):
                 def check_status_cctv():
                     nonlocal missing_ui_count, is_qte_active, fight_status, fighting_active
                     
-                    while fighting_active and bot_active:
-                        if check_exit_notification(): 
-                            fight_status = "RESET"
-                            break
+                    # 🛠️ [핵심 수술] 메인 스레드와의 카메라/메모리 충돌 방지!
+                    # 분신 전용 독립 카메라(cctv_sct)와 간소화된 스레드 세이프 탐색 함수를 생성합니다.
+                    import mss
+                    with mss.mss() as cctv_sct:
+                        def thread_safe_find(img_name, conf):
+                            try:
+                                template = IMAGE_CACHE.get(img_name)
+                                if template is None: return False
+                                sct_img = cctv_sct.grab(cctv_sct.monitors[1])
+                                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                                res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+                                return cv2.minMaxLoc(res)[1] >= conf
+                            except:
+                                return False
 
-                        # QTE 탐지
-                        qte_found = False
-                        for img, key in [('press_A.png', 'A'), ('press_D.png', 'D')]:
-                            if safe_find_image(img, 0.6):
+                        while fighting_active and bot_active:
+                            # 1. 잠수방지 알림 감지 
+                            # (여기서 F를 누르면 텐션 클릭과 꼬이므로 본체에 리셋 신호만 보냅니다)
+                            if thread_safe_find('exit_notice.png', 0.85): 
+                                fight_status = "RESET"
+                                break
+
+                            # 2. QTE 탐지
+                            qte_found = False
+                            for img, key in [('press_A.png', 'A'), ('press_D.png', 'D')]:
+                                if thread_safe_find(img, 0.6):
+                                    missing_ui_count = 0 
+                                    is_qte_active = True # 본체에게 당기기 멈추라고 신호
+                                    send_cmd('U') 
+                                    bprint(f"  ! [QTE] {key} 대응 시작")
+                                    while thread_safe_find(img, 0.6) and bot_active:
+                                        send_cmd(key); time.sleep(0.05)
+                                    send_cmd('R')
+                                    is_qte_active = False # 끝났으니 텐션 재개 신호
+                                    qte_found = True
+                                    break
+                            
+                            if qte_found: continue
+
+                            # 3. 성공(수거) 감지
+                            if thread_safe_find('catch_F.png', 0.70): 
+                                fight_status = "FINISH"
+                                break
+
+                            # 4. UI 증발 감지
+                            if not thread_safe_find('fishing_mode.png', 0.6): 
+                                missing_ui_count += 1
+                                if missing_ui_count >= 50: 
+                                    bprint("  > [유실] 낚시 UI가 장시간 보이지 않음 -> 초기화")
+                                    dump_blackbox_log("파이팅중_UI장시간유실")
+                                    fight_status = "RESET" 
+                                    break
+                            else:
                                 missing_ui_count = 0 
-                                is_qte_active = True # 본체(텐션 관리)에게 잠시 멈추라고 지시
-                                send_cmd('U') 
-                                bprint(f"  ! [QTE] {key} 대응 시작")
-                                while safe_find_image(img, 0.6) and bot_active:
-                                    send_cmd(key); time.sleep(0.05)
-                                send_cmd('R')
-                                is_qte_active = False # QTE 끝났으니 다시 텐션 관리하라고 지시
-                                qte_found = True
-                                break
-                        
-                        if qte_found: continue
-
-                        # 성공 감지
-                        if safe_find_image('catch_F.png', 0.70): 
-                            fight_status = "FINISH"
-                            break
-
-                        # UI 증발 감지
-                        if not safe_find_image('fishing_mode.png', 0.6): 
-                            missing_ui_count += 1
-                            if missing_ui_count >= 50: 
-                                bprint("  > [유실] 낚시 UI가 장시간 보이지 않음 -> 초기화")
-                                dump_blackbox_log("파이팅중_UI장시간유실")
-                                fight_status = "RESET" 
-                                break
-                        else:
-                            missing_ui_count = 0 
-                        
-                        time.sleep(0.1) # 0.1초 간격 감시 (CPU 보호)
+                            
+                            time.sleep(0.1) # 0.1초 간격 감시 (CPU 보호)
 
                 # 분신(CCTV 스레드) 백그라운드 출격
                 threading.Thread(target=check_status_cctv, daemon=True).start()

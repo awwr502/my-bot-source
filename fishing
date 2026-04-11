@@ -2572,35 +2572,37 @@ def fishing_bot(max_allowed_seconds):
                 # [초고속 능동 대기 헬퍼] 융합봇과 동일하게 0.03초 간격으로 화면을 미친듯이 스캔합니다!
                 def fast_wait_img(img, timeout, check_popups=True, conf=0.7):
                     st = time.time()
+                    last_popup_check = 0 # 팝업 검사 쿨다운 타이머
+                    
                     while time.time() - st < timeout and bot_active:
-                        if check_popups:
+                        # 1. [핵심 최적화] '진짜 목표'를 무조건 1순위로 가장 먼저 찾습니다. (찾으면 팝업 검사 없이 즉시 탈출)
+                        pos = safe_find_image(img, conf)
+                        if pos: return pos
+                        
+                        # 2. 목표를 못 찾았을 때만, 그리고 0.5초에 한 번씩만 팝업을 곁눈질로 감시합니다. (전체화면 스캔 과부하 완벽 방지)
+                        now = time.time()
+                        if check_popups and (now - last_popup_check > 0.5):
+                            last_popup_check = now
+                            
                             pos_main = safe_find_image('popup_main.png', 0.75)
                             if pos_main:
                                 bprint("  > 💡 [자정 팝업] 메인화면 뉴스 팝업 감지! 체크박스 정밀 타겟팅 시도...")
-                                
-                                # 1. 낚시 매크로의 Box 객체에서 중앙 좌표 추출
                                 cx = pos_main.left + pos_main.width // 2
                                 cy = pos_main.top + pos_main.height // 2
-                                
-                                # 2. 체크박스 거리 재조정 (확인 버튼 중앙에서 좌측으로 약 350픽셀 이동)
                                 target_x = cx - 350
                                 target_y = cy
                                 
                                 pyautogui.moveTo(target_x, target_y); time.sleep(0.1); send_cmd('C'); time.sleep(0.3)
                                 bprint(f"  > ✅ [체크 완료] 기준점({cx},{cy}) -> 체크박스({target_x},{target_y}) 명중")
-                                
-                                # 3. 이중 클릭 방지 및 확인 버튼 클릭 후 마우스 대피
                                 pyautogui.moveTo(cx, cy); time.sleep(0.1); send_cmd('C'); time.sleep(0.1)
                                 pyautogui.moveTo(200, 500); time.sleep(1.5)
                                 
-                                # 4. 팝업 소멸 능동 대기 (낚시 매크로 환경에 맞춘 while 루프 검증)
                                 vanish_st = time.time()
                                 while time.time() - vanish_st < 3.0 and bot_active:
-                                    if not safe_find_image('popup_main.png', 0.75):
-                                        break
+                                    if not safe_find_image('popup_main.png', 0.75): break
                                     time.sleep(0.1)
                                     
-                                st = time.time() # 팝업 치우느라 소모된 대기 타이머 리셋
+                                st = time.time() # 타이머 리셋
                                 continue
                                 
                             if safe_find_image('popup_char.png', 0.75):
@@ -2609,10 +2611,8 @@ def fishing_bot(max_allowed_seconds):
                                 st = time.time()
                                 continue
                                 
-                        # [핵심] 입력받은 conf 값(기본 0.7)을 사용하여 융통성 있게 탐색합니다.
-                        pos = safe_find_image(img, conf)
-                        if pos: return pos
-                        time.sleep(0.03) # 0.1초 -> 0.03초 극단적 단축!
+                        # 3. 0.03초 휴식 후 다음 프레임 진행
+                        time.sleep(0.03)
                     return None
 
                 bprint("  > 1. 메뉴창(sys_1.png) 초고속 진입 시퀀스...")

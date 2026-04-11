@@ -131,6 +131,8 @@ is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 
 bot_mode = 1 # 1: 일반 낚시, 3: 부캐 릴레이 낚시
 char_index = 0 # 릴레이 모드 캐릭터 순번 추적기
+char_start_time = None # [신규] 개별 캐릭터 가동 시간 측정용
+char_pure_run_time = 0.0 # [신규] 개별 캐릭터 순수 가동 시간 누적기
 
 # =====================================================================
 # 👑 [동적 릴레이 낚시 마스터 컨트롤러] 👑
@@ -164,12 +166,14 @@ if not MY_CHARACTERS:
 CHAR_NAMES = {c["img"]: c["name"] for c in MY_CHARACTERS}
 
 def toggle_relay_start():
-    global bot_active, victory_active, animal_active, run_start_time, bot_mode, char_index, original_brightness, is_dimmed
+    global bot_active, victory_active, animal_active, run_start_time, bot_mode, char_index, original_brightness, is_dimmed, char_start_time, char_pure_run_time
     if victory_active or animal_active: toggle_stop()
     bot_active = True
     bot_mode = 3
     char_index = 0
     run_start_time = time.time()
+    char_pure_run_time = 0.0
+    char_start_time = time.time()
     bprint("\n=============================================")
     bprint("🟢 [모드 3: 부캐 릴레이 낚시 시작] 단축키(;) 입력 감지")
     bprint("=============================================")
@@ -571,7 +575,7 @@ bot_active = False
 remote_task = None # [핵심] 텔레그램 스레드와 메인 봇을 연결하는 지시용 우체통 변수
 
 def toggle_stop():
-    global bot_active, victory_active, animal_active, run_start_time, original_brightness, is_dimmed
+    global bot_active, victory_active, animal_active, run_start_time, original_brightness, is_dimmed, char_start_time, char_pure_run_time
     
     # 멈춘 줄 모르고 여러 번 눌렀을 때의 답답함 해소용 안내
     if not (bot_active or victory_active or animal_active):
@@ -582,6 +586,9 @@ def toggle_stop():
     if bot_active and run_start_time is not None:
         stats['pure_run_time'] += (time.time() - run_start_time)
         run_start_time = None
+    if bot_active and char_start_time is not None:
+        char_pure_run_time += (time.time() - char_start_time)
+        char_start_time = None
 
     bot_active = False
     victory_active = False
@@ -608,10 +615,11 @@ def toggle_stop():
 
 def toggle_start():
     # [버그 수정] 존재하지 않는 enable_dimming 제거
-    global bot_active, victory_active, animal_active, run_start_time, original_brightness, is_dimmed
+    global bot_active, victory_active, animal_active, run_start_time, original_brightness, is_dimmed, char_start_time, char_pure_run_time
     if victory_active or animal_active: toggle_stop() # 다른 봇 동작 중이면 정지
     bot_active = True
     run_start_time = time.time()
+    char_start_time = time.time()
     bprint("\n=============================================")
     bprint("🟢 [낚시 시작 명령 접수] 단축키(]) 입력 감지")
     bprint("=============================================")
@@ -1582,7 +1590,7 @@ def animal_bot_loop():
 
 def fishing_bot(max_allowed_seconds):
     # 함수 내부에서도 전역 변수를 쓰겠다고 선언해야 오류가 나지 않습니다.
-    global bot_active, run_start_time, bot_mode, char_index
+    global bot_active, run_start_time, bot_mode, char_index, char_start_time, char_pure_run_time
     
     # 서브 봇 백그라운드 스레드 가동
     threading.Thread(target=victory_coin_bot_loop, daemon=True).start()
@@ -1624,11 +1632,16 @@ def fishing_bot(max_allowed_seconds):
                 # 정상 낚시 모드 진입 시 스톱워치 가동
                 if run_start_time is None:
                     run_start_time = time.time()
+                if char_start_time is None:
+                    char_start_time = time.time()
             else:
                 # 낚시 중이 아닐 때 스톱워치가 돌고 있다면 정지하고 지금까지의 시간만 누적
                 if run_start_time is not None:
                     stats['pure_run_time'] += (time.time() - run_start_time)
                     run_start_time = None
+                if char_start_time is not None:
+                    char_pure_run_time += (time.time() - char_start_time)
+                    char_start_time = None
 
             # --- [1시간 단위 실제 통계 스냅샷 저장] ---
             # 클러치에 의해 run_start_time이 None이 되므로 대기 중에는 스냅샷 연산도 자동으로 멈춥니다.
@@ -2381,11 +2394,18 @@ def fishing_bot(max_allowed_seconds):
                 # 위 0.5초 감시에서 포착했거나, 탈출 후 혹시 막 떴을 경우를 모두 커버
                 if is_inventory_full or safe_find_image('auto_release.png', 0.7):
                     stats['inventory_clear_count'] += 1
+                    
+                    # [개별 캐릭터 가동 시간 계산]
+                    current_char_time = char_pure_run_time
+                    if char_start_time is not None:
+                        current_char_time += (time.time() - char_start_time)
+                    formatted_char_time = get_formatted_time(current_char_time)
+
                     # [모드 3: 부캐 릴레이] 현재 부캐(char_index > 0)라면 창고 보관을 스킵하고 즉시 교체!
                     if bot_mode == 3 and char_index > 0:
                         c_name = CHAR_NAMES.get(MY_CHARACTERS[char_index]['img'], "부캐")
-                        bprint(f"\n\n!!! [알림] '{c_name}' 인벤토리 풀! 창고 보관을 스킵하고 다음 캐릭터로 접속합니다 !!!")
-                        send_blynk_notification(f"🚀 캐릭터 변경 시작 ('{c_name}' 인벤토리 풀)")
+                        bprint(f"\n\n!!! [알림] '{c_name}' 인벤토리 풀! ({formatted_char_time} 가동) 창고 보관을 스킵하고 다음 캐릭터로 접속합니다 !!!")
+                        send_blynk_notification(f"🚀 캐릭터 변경 시작 ('{c_name}' 인벤풀 / ⏱️ {formatted_char_time})")
                         state = 10
                         continue
 
@@ -2469,14 +2489,14 @@ def fishing_bot(max_allowed_seconds):
                             
                             # [모드 3: 부캐 릴레이] 5초간 안 떴다면 본캐 창고가 꽉 찬 것으로 간주하고 교체!
                             if bot_mode == 3 and char_index == 0:
-                                bprint("  > 📦 [창고 풀] 본캐 창고가 가득 찼습니다! 부캐 릴레이 접속을 시작합니다.")
-                                send_blynk_notification("🚀 캐릭터 변경 시작 (본캐 창고 가득 참)")
+                                bprint(f"  > 📦 [창고 풀] 본캐 창고가 가득 찼습니다! ({formatted_char_time} 가동) 부캐 릴레이 접속을 시작합니다.")
+                                send_blynk_notification(f"🚀 캐릭터 변경 시작 (본캐 창고풀 / ⏱️ {formatted_char_time})")
                                 state = 10
                             # [모드 1: 일반 낚시] 5초간 안 떴다면 본캐 창고 풀로 간주하고 대기 모드 전환
                             elif bot_mode == 1:
-                                bprint("  > 📦 [창고 풀] 창고가 가득 찼습니다! 매크로를 대기 모드로 전환합니다.")
+                                bprint(f"  > 📦 [창고 풀] 창고가 가득 찼습니다! ({formatted_char_time} 가동) 매크로를 대기 모드로 전환합니다.")
                                 toggle_stop()
-                                send_blynk_notification("🛑 창고 가득 참. 매크로 대기 모드 전환")
+                                send_blynk_notification(f"🛑 창고 가득 참. 매크로 대기 모드 전환 (⏱️ {formatted_char_time})")
                             break
 
                         send_cmd('H'); time.sleep(0.1); send_cmd('R')
@@ -2545,8 +2565,12 @@ def fishing_bot(max_allowed_seconds):
             # --- [State 10] 부캐 릴레이 캐릭터 자동 교체 로직 ---
             elif state == 10:
                 if char_index + 1 >= len(MY_CHARACTERS):
-                    bprint("\n🛑 [릴레이 종료] 등록된 모든 부캐릭터의 인벤토리가 가득 찼습니다! 봇을 대기 상태로 전환합니다.")
-                    send_blynk_notification("🛑 모든 캐릭터 낚시 완료")
+                    current_char_time = char_pure_run_time
+                    if char_start_time is not None: current_char_time += (time.time() - char_start_time)
+                    formatted_char_time = get_formatted_time(current_char_time)
+                    
+                    bprint(f"\n🛑 [릴레이 종료] 등록된 모든 부캐릭터의 인벤토리가 가득 찼습니다! 봇을 대기 상태로 전환합니다. (마지막 캐릭터 가동: {formatted_char_time})")
+                    send_blynk_notification(f"🛑 모든 캐릭터 낚시 완료 (마지막 ⏱️ {formatted_char_time})")
                     toggle_stop()
                     continue
                     
@@ -2774,15 +2798,20 @@ def fishing_bot(max_allowed_seconds):
                         time.sleep(0.1)
 
                     if found_start:
-                        bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
-                        break
-                    else:
-                        bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터(팝업검사->던지기검사) 다시 시도합니다.")
-                        continue # 상단으로 돌아가 다시 팝업/던지기 확인 후 좌클릭을 수행하므로 가장 안전한 로직입니다.
+                            bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
+                            break
+                        else:
+                            bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터(팝업검사->던지기검사) 다시 시도합니다.")
+                            continue # 상단으로 돌아가 다시 팝업/던지기 확인 후 좌클릭을 수행하므로 가장 안전한 로직입니다.
                     
                 bprint(f"  > ✅ [접속 완료] '{next_char['name']}' 낚시를 시작합니다.")
                 send_blynk_notification(f"✅ 캐릭터 변경 완료 ('{next_char['name']}' 접속 성공)")
                 char_index += 1
+                
+                # [시간 누적 초기화] 새 캐릭터의 가동 시간 측정을 위해 타이머 초기화
+                char_pure_run_time = 0.0
+                char_start_time = time.time()
+                
                 state = 1
                 continue
             # 무조건 예외 처리기(BotStopException)로 넘김

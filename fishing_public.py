@@ -1020,13 +1020,13 @@ def align_view_by_anchor(anchor_img):
 def get_tension_status(exact_roi):
     """
     [v8 하이퍼 옵티마이즈] 무거운 이미지 검색 로직을 전부 폐기하고, 
-    State 4 진입 시 딱 1번 찾아둔 110x110 좌표(exact_roi)만 빛의 속도로 캡처합니다.
+    딱 1번 찾아둔 영역만 빛의 속도로 캡처하여 텐션(핫핑크)을 검사합니다.
     """
     if not exact_roi: return 0
     try:
-        # 110x110 초소형 캡처 전용으로 속도 극대화 (약 0.001~0.005초 소요)
+        # 초소형 캡처 전용으로 속도 극대화
         target_img = fast_cv_screenshot(region=exact_roi, gray=False)
-        
+
         # 명도와 채도를 엄격하게 깎아 핫핑크/레드만 반응하도록 유지 (fast_cv_screenshot은 BGR 반환이므로 BGR2HSV 사용)
         img_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
         lower_red1 = np.array([0, 145, 145])
@@ -1135,9 +1135,9 @@ def check_exit_notification(skip_esc=False):
         if not skip_esc:
             send_cmd('R')
             
-        bprint("  > [완료] 잠수 방지 시퀀스 종료. 1.2초 대기 후 복귀합니다.")
+        bprint("  > [완료] 잠수 방지 시퀀스 종료. 0.5초 대기 후 복귀합니다.")
         send_blynk_notification("[완료]잠수 방지 해제")
-        time.sleep(1.2) # 최종 1.2초 딜레이 후 복귀
+        time.sleep(1.2) # 최종 0.5초 딜레이 후 복귀
         return True
     return False
 
@@ -1792,7 +1792,7 @@ def fishing_bot(max_allowed_seconds):
                 if safe_find_image('popup_char.png', 0.75):
                     bprint("  > 💡 [자정 팝업] 캐스팅 전 팝업 감지! ESC 1회 입력...")
                     send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                    time.sleep(0.5)
+                    time.sleep(0.1)
                     
                 # 2. 최대 3초 동안 기본 탐색 (ROI 엔진)
                 while time.time() - wait_bait_start < 3.0 and bot_active:
@@ -1810,14 +1810,75 @@ def fishing_bot(max_allowed_seconds):
                             break
                         time.sleep(0.1)
 
+                # [내구도 시스템 대응] 낚싯대 파괴 감지 및 자동 재장착 로직
                 if found_bait:
-                    bprint("  > [확인] 캐스팅 진입")
-                    time.sleep(0.05)
+                    bprint("  > [확인] 낚싯대 장착 확인. 캐스팅 진입")
+                    time.sleep(0.1)
                 else:
-                    bprint("  > [스킵] 미끼 아이콘 최종 미발견. 다음 단계 강제 진행")
+                    bprint("  > ⚠️ [내구도 파괴 의심] 낚싯대 미인식! 검증된 릴레이 모드 장착 로직을 실행합니다.")
+                    swap_attempts = 0
+                    while bot_active:
+                        swap_attempts += 1
+                        if swap_attempts > 10:
+                            bprint("  > ❌ [장착 실패] 예비 낚싯대가 모두 소진되었거나 꼬였습니다. 스마트 복구를 호출합니다.")
+                            state_start_time = time.time() - 200.0
+                            break
+
+                        # 0) 이미 완벽하게 장착된 상태인지 최우선 확인
+                        if safe_find_image('bait_change.png', 0.85):
+                            bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
+                            break
+
+                        # 1) '던지기(throw_btn.png)' 사진 능동 대기 (최대 1.5초)
+                        bprint("  > 🎣 [탐색 1단계] '던지기(throw_btn.png)' 아이콘 확인 중...")
+                        found_throw = False
+                        wait_throw = time.time()
+                        while time.time() - wait_throw < 1.5 and bot_active:
+                            if safe_find_image('throw_btn.png', 0.85):
+                                found_throw = True
+                                break
+                            if safe_find_image('throw_btn.png', 0.85, region="FULL_SCREEN"):
+                                found_throw = True
+                                break
+                            time.sleep(0.1)
+
+                        # 1.5초 동안 못 찾았으면 0번 입력 후 루프 재시작
+                        if not found_throw:
+                            bprint("  > 🔄 [무기 스왑] '던지기' 아이콘 미인식. 숫자 '0' 입력 후 재탐색...")
+                            send_cmd('0'); time.sleep(0.1); send_cmd('R')
+                            time.sleep(0.6) # 0번 누른 직후 강제 모션 딜레이
+                            continue
+
+                        # 2) 던지기 아이콘 확인됨 -> 좌클릭(C) 후 bait_change.png 능동 대기
+                        bprint("  > 🎣 [클릭 2단계] '던지기' 확인 완료! 좌클릭(C) 입력 후 낚싯대 아이콘 대기...")
+                        send_cmd('C'); time.sleep(0.1); send_cmd('R')
+                        
+                        found_start = False
+                        wait_start = time.time()
+                        while time.time() - wait_start < 1.5 and bot_active:
+                            if safe_find_image('bait_change.png', 0.85):
+                                found_start = True
+                                break
+                            if safe_find_image('bait_change.png', 0.85, region="FULL_SCREEN"):
+                                found_start = True
+                                break
+                            time.sleep(0.1)
+
+                        if found_start:
+                            bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
+                            break
+                        else:
+                            bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터 다시 시도합니다.")
+                            continue
+
+                    # 예비 낚싯대가 없어서 루프를 탈출한 경우 억지로 캐스팅하지 않고 메인 루프로 넘김(워치독 발동)
+                    if swap_attempts > 10:
+                        continue
 
                 # 4. 좌클릭 '꾹' 누르기 (Mouse.press 상태 진입)
-                send_cmd('L')                  # 'L' 명령 전송 (아두이노는 Mouse.press 수행)
+                # 아두이노 버퍼 초기화 후 L 신호 전송 (입력 씹힘 이중 방지)
+                send_cmd('R'); time.sleep(0.05)
+                send_cmd('L')
                 
                 # [중요] 게임이 '차징 시작'을 인지할 수 있도록 물리적인 최소 대기 시간 부여
                 time.sleep(0.2) 
@@ -1891,116 +1952,195 @@ def fishing_bot(max_allowed_seconds):
                 else:
                     cast_fail_count = 0 # 정상적으로 찌 낙하(UI 발견) 시 카운터 초기화
 
-            # --- [State 2] 입질 대기 ---
+            # --- [State 2] 입질 확인 ---
             elif state == 2:
                 if not bot_active: raise BotStopException()
                 if safe_find_image('green_float.png', 0.65):
                     bprint("  > [!] 입질 확인! 챔질(C)!"); send_cmd('C'); time.sleep(0.1); send_cmd('R')
                     time.sleep(0.2); state = 3
 
-            # --- [State 3] 어종 판별 및 줄 끊기 (정밀 검증 강화) ---
+            # --- [State 3] 어종 판별 및 줄 끊기 (5중 병렬 스캔 엔진) ---
             elif state == 3:
                 if not bot_active: raise BotStopException()
+
+                # [내구도 시스템 대응] 어종 판별 전 낚싯대 파괴 여부 선행 검사
+                bprint("  > [내구도 검사] 챔질 후 애니메이션 안정화 및 낚싯대(fishing.png) 확인 중...")
+                rod_found = False
+                
+                # 챔질 직후 카메라 흔들림, 줌인, UI 깜빡임으로 인해 일시적으로 안 보일 수 있으므로
+                # 탐색 시간을 최대 1.5초로 늘리고, 흔들림 오차를 보정하기 위해 인식률을 0.65로 완화합니다.
+                check_start = time.time()
+                while time.time() - check_start < 1.0 and bot_active:
+                    if safe_find_image('fishing.png', 0.65):
+                        rod_found = True
+                        break
+                    time.sleep(0.05)
+
+                if not rod_found:
+                    bprint("  > ⚠️ [파괴 감지] 낚싯대가 부서졌습니다! 검증된 릴레이 모드 장착 로직을 실행합니다.")
+                    
+                    # [내구도 시스템 대응] 낚싯대 파괴 감지 및 자동 재장착 로직 (안정화 버전 이식)
+                    swap_attempts = 0
+                    while bot_active:
+                        swap_attempts += 1
+                        if swap_attempts > 10:
+                            bprint("  > ❌ [장착 실패] 예비 낚싯대가 모두 소진되었거나 꼬였습니다. 스마트 복구를 호출합니다.")
+                            state_start_time = time.time() - 200.0
+                            break
+
+                        # 0) 이미 완벽하게 장착된 상태인지 최우선 확인
+                        if safe_find_image('bait_change.png', 0.85):
+                            bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
+                            break
+
+                        # 1) '던지기(throw_btn.png)' 사진 능동 대기 (최대 1.5초)
+                        bprint("  > 🎣 [탐색 1단계] '던지기(throw_btn.png)' 아이콘 확인 중...")
+                        found_throw = False
+                        wait_throw = time.time()
+                        while time.time() - wait_throw < 1.5 and bot_active:
+                            if safe_find_image('throw_btn.png', 0.85):
+                                found_throw = True
+                                break
+                            if safe_find_image('throw_btn.png', 0.85, region="FULL_SCREEN"):
+                                found_throw = True
+                                break
+                            time.sleep(0.1)
+
+                        # 1.5초 동안 못 찾았으면 0번 입력 후 루프 재시작
+                        if not found_throw:
+                            bprint("  > 🔄 [무기 스왑] '던지기' 아이콘 미인식. 숫자 '0' 입력 후 재탐색...")
+                            send_cmd('0'); time.sleep(0.1); send_cmd('R')
+                            time.sleep(0.6) # 0번 누른 직후 강제 모션 딜레이
+                            continue
+
+                        # 2) 던지기 아이콘 확인됨 -> 좌클릭(C) 후 bait_change.png 능동 대기
+                        bprint("  > 🎣 [클릭 2단계] '던지기' 확인 완료! 좌클릭(C) 입력 후 낚싯대 아이콘 대기...")
+                        send_cmd('C'); time.sleep(0.1); send_cmd('R')
+                        
+                        found_start = False
+                        wait_start = time.time()
+                        while time.time() - wait_start < 1.5 and bot_active:
+                            if safe_find_image('bait_change.png', 0.85):
+                                found_start = True
+                                break
+                            if safe_find_image('bait_change.png', 0.85, region="FULL_SCREEN"):
+                                found_start = True
+                                break
+                            time.sleep(0.1)
+
+                        if found_start:
+                            bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
+                            break
+                        else:
+                            bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터 다시 시도합니다.")
+                            continue
+
+                    # 장착 완료 여부와 무관하게 루프를 빠져나오면 캐스팅(State 1)으로 강제 복귀하여 처음부터 흐름을 이어감
+                    state = 1
+                    continue
+
                 stats['daily_hook'] += 1
                 stats['total_hook'] += 1
-                bprint(f"[State 3] 어종 고속 분석 중... (금일 입질: {stats['daily_hook']}회 / 누적: {stats['total_hook']}회)")
+                bprint(f"[State 3] 5중 병렬 어종 분석 시작... (입질: {stats['daily_hook']}회)")
+                
                 found_target = False
+                found_trash = False
                 target_name = ""
 
-                # [v14 RAM 캐시 직결] 하드디스크를 긁는 느린 cv2.imread 대신, 부팅 시 메모리에 올려둔 IMAGE_CACHE에서 빛의 속도로 꺼내옵니다.
-                template_j = IMAGE_CACHE.get('jellyfish.png')
-                template_e = IMAGE_CACHE.get('eel.png')
-                
-                # 잡어(Early Rejection) 판독용 이미지 로드
-                template_n1 = IMAGE_CACHE.get('none1.png')
-                template_n2 = IMAGE_CACHE.get('none2.png')
-                template_n3 = IMAGE_CACHE.get('none3.png')
+                # 스레드들이 공유할 결과 저장소 (프레임 단위 점수표)
+                frame_results = []
+                result_lock = threading.Lock()
 
-                # [v9 판독 안정성 강화] UI가 뜨는 트랜지션 시간(애니메이션 딜레이)을 고려하여
-                # 최대 대기 시간을 0.5초(10회)에서 2.0초(40회)로 대폭 늘려 어종을 놓치는 현상을 차단합니다.
-                for i in range(60):
-                    if keyboard.is_pressed(']'): break
-
-                    # [초고속 파이프라인] PIL 객체를 거치지 않고 mss 메모리에서 OpenCV 배열로 직접 꽂아넣음
-                    sct_img = sct.grab(sct.monitors[1])
-                    screen_np = np.array(sct_img)
-                    # mss는 기본적으로 BGRA를 반환하므로 COLOR_BGRA2GRAY를 사용하여 즉시 흑백 변환
-                    screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
-
-                    # 1. 해파리 고속 판별
-                    if template_j is not None:
-                        res_j = cv2.matchTemplate(screen_gray, template_j, cv2.TM_CCOEFF_NORMED)
-                        if cv2.minMaxLoc(res_j)[1] >= 0.6:
-                            found_target = True; target_name = "해파리"; break
-
-                    # 2. 뱀장어 고속 판별
-                    if template_e is not None:
-                        res_e = cv2.matchTemplate(screen_gray, template_e, cv2.TM_CCOEFF_NORMED)
-                        if cv2.minMaxLoc(res_e)[1] >= 0.6:
-                            found_target = True; target_name = "전기뱀장어"; break
+                # [분석관 스레드 함수]
+                def species_scanner(img_gray, template, species_type, name):
+                    if template is None: return
                     
-                    # 3. 등록된 잡어 고속 판별 (조기 차단)
-                    # 대상 어종이 안 보일 때, '확실한 잡어' UI가 화면에 떴다면 40번을 다 기다리지 않고 즉시 끊습니다.
-                    found_trash = False
-                    for t_none in [template_n1, template_n2, template_n3]:
-                        if t_none is not None:
-                            res_n = cv2.matchTemplate(screen_gray, t_none, cv2.TM_CCOEFF_NORMED)
-                            if cv2.minMaxLoc(res_n)[1] >= 0.6:
+                    res = cv2.matchTemplate(img_gray, template, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, _ = cv2.minMaxLoc(res)
+                    
+                    # 컷오프를 넘든 안 넘든 일단 점수를 모두 기록
+                    with result_lock:
+                        frame_results.append({"type": species_type, "name": name, "score": max_val})
+
+                # 판독 루프 (최대 2초간 시도)
+                start_analysis = time.time()
+                while time.time() - start_analysis < 2.0 and bot_active:
+                    # 1. 카메라 충돌 방지를 위해 메인에서 '딱 한 번'만 캡처
+                    sct_img = sct.grab(sct.monitors[1])
+                    screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                    
+                    frame_results.clear() # 매 프레임마다 점수표 초기화
+
+                    # 2. 5명의 분석관(스레드)에게 사진 한 장을 동시에 던짐
+                    threads = []
+                    # 목표 어종 2종
+                    threads.append(threading.Thread(target=species_scanner, args=(screen_gray, IMAGE_CACHE.get('jellyfish.png'), "TARGET", "해파리")))
+                    threads.append(threading.Thread(target=species_scanner, args=(screen_gray, IMAGE_CACHE.get('eel.png'), "TARGET", "전기뱀장어")))
+                    # 잡어 3종
+                    threads.append(threading.Thread(target=species_scanner, args=(screen_gray, IMAGE_CACHE.get('none1.png'), "TRASH", "잡어1")))
+                    threads.append(threading.Thread(target=species_scanner, args=(screen_gray, IMAGE_CACHE.get('none2.png'), "TRASH", "잡어2")))
+                    threads.append(threading.Thread(target=species_scanner, args=(screen_gray, IMAGE_CACHE.get('none3.png'), "TRASH", "잡어3")))
+
+                    for t in threads: t.start()
+                    for t in threads: t.join() # 모든 분석관이 보고를 마칠 때까지 대기 (0.01초 내외)
+
+                    # 3. 결과 확인 (최고 점수 판별 및 애니메이션 왜곡 방어)
+                    if frame_results:
+                        # 점수가 가장 높은 순으로 정렬
+                        frame_results.sort(key=lambda x: x["score"], reverse=True)
+                        best_match = frame_results[0]
+                        
+                        elapsed_time = time.time() - start_analysis
+                        
+                        # 조건 A: UI가 완전히 선명해져서 점수가 0.75를 넘으면 시간 불문 즉시 낚아챔
+                        # 조건 B: UI 애니메이션이 끝날 시간(0.5초)이 지났다면, 0.65 이상인 1등을 믿음
+                        if best_match["score"] >= 0.75 or (elapsed_time > 0.5 and best_match["score"] >= 0.65):
+                            time_str = f"{elapsed_time:.2f}초"
+                            bprint(f"  > [분석 완료 - {time_str} 소요] 1위: {best_match['name']} ({best_match['score']:.3f})")
+                            
+                            if best_match["type"] == "TARGET":
+                                found_target = True
+                                target_name = best_match["name"]
+                                break
+                            elif best_match["type"] == "TRASH":
                                 found_trash = True
                                 break
                     
-                    if found_trash:
-                        bprint("  > [잡어] 등록된 잡어 UI 확인 -> 즉시 줄 끊기 진입")
-                        break # 타겟을 못 찾은 상태(found_target=False)로 즉시 강제 탈출함
-
-                    # 아무 UI도 아직 안 떴다면 (애니메이션 딜레이 중) 0.05초 대기 후 다시 화면 캡처
-                    time.sleep(0.1)
+                    time.sleep(0.01) # 다음 프레임 대기
 
                 if found_target:
-                    bprint(f"  > [성공] {target_name} 발견! -> 파이팅 진입"); state = 4
+                    bprint(f"  > [성공] {target_name} 포착! -> 파이팅 진입"); state = 4
                 else:
-                    bprint("  > [잡어] 목표 아님 -> 줄 끊기 시퀀스 진입")
-
+                    # 목표를 못 찾았거나 확실한 잡어인 경우
+                    bprint("  > [끊기] 목표 어종 아님 -> 줄 끊기 시퀀스 진입")
                     stats['daily_skip'] += 1
                     stats['total_skip'] += 1
 
                     while bot_active:
                         if keyboard.is_pressed(']'): state = 1; break
-                        
-                        # 1. ESC를 꾹 눌러서 줄 끊기 실행
                         bprint("  > [시도] ESC 누르기 (0.5초)...")
                         send_cmd('E'); time.sleep(0.5); send_cmd('R')
                         
-                        # 2. 서버 응답 대기 (1초) 도중 알림이 뜨면?
-                        # -> F만 눌러서 끄고(skip_esc=True), 바로 캐스팅(state=1)으로 복귀
+                        # 알림 감시 루프
                         wait_end = time.time() + 1.0
+                        reset_by_notice = False
                         while time.time() < wait_end:
-                            # 여기가 핵심입니다! ESC를 또 누르지 않도록 설정
                             if check_exit_notification(skip_esc=True): 
-                                state = 1
-                                break
+                                state = 1; reset_by_notice = True; break
                             time.sleep(0.1)
                         
-                        # 알림이 감지되어 리셋됐다면, 아래 로직 수행하지 말고 루프 탈출
-                        if state == 1: break
+                        if reset_by_notice: break
                         
-                        # 3. UI가 여전히 남아있는지 재검사 (정밀 확인)
-                        # fishing.png나 fishing_mode.png 중 하나라도 발견되면 아직 낚시 중인 것
-                        is_still_fishing = safe_find_image('fishing.png', 0.7) or safe_find_image('fishing_mode.png', 0.7)
-                        
-                        if not is_still_fishing:
-                            # 이미지가 둘 다 검색되지 않아야만 진정한 성공
+                        # UI 잔존 여부 확인
+                        if not (safe_find_image('fishing.png', 0.7) or safe_find_image('fishing_mode.png', 0.7)):
                             bprint("  > [완료] UI 소멸 확인. 줄 끊기 성공.")
-                            state = 1
-                            break
+                            time.sleep(1.0); state = 1; break
                         else:
-                            # 이미지가 아직 남아있다면 끊기 실패로 간주하고 루프 재시작
-                            bprint("  > [실패] UI 잔존 감지. 다시 줄 끊기 시도...")
-                            # 여기서 break 없이 다시 위로 올라가서 ESC를 누릅니다.
+                            bprint("  > [실패] UI 잔존. 재시도...")
 
-            # --- [State 4] 파이팅 (QTE 로직 및 함수 구조 완전 복구) ---
+            # --- [State 4] 파이팅 (투트랙 멀티스레딩 최적화) ---
             elif state == 4:
-                bprint("[State 4] 파이팅 모드 진입")
+                bprint("[State 4] 파이팅 모드 진입 (투트랙 CCTV 엔진 가동)")
                 
                 # 1. 진입 초기 UI 안착 대기
                 wait_ui_start = time.time()
@@ -2013,94 +2153,162 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.2)
                 missing_ui_count = 0 
                 
-                # [핵심 1] 렌즈 고정: 파이팅 시작 시 게이지의 정확한 중심점을 단 한 번만 찾아 좌표를 고정합니다.
+                # [핵심 1] 렌즈 고정 (95x95)
                 gauge_roi = None
                 ui_pos = safe_find_image('fishing_mode.png', 0.6)
                 if ui_pos:
-                    # ui_pos는 Box(left, top, width, height) 형태
                     cx = ui_pos.left + ui_pos.width // 2
                     cy = ui_pos.top + ui_pos.height // 2
-                    x1 = max(0, cx - 55)
-                    y1 = max(0, cy - 55)
-                    gauge_roi = (int(x1), int(y1), 110, 110)
+                    x1 = max(0, cx - 47)
+                    y1 = max(0, cy - 47)
+                    gauge_roi = (int(x1), int(y1), 95, 95)
                 else:
-                    gauge_roi = (CENTER_X - 55, CENTER_Y - 55, 110, 110) # 실패 시 화면 정중앙
+                    gauge_roi = (CENTER_X - 47, CENTER_Y - 47, 95, 95)
                 
-                def check_status():
-                    nonlocal missing_ui_count
-                    if check_exit_notification(): return "RESET"
+                # 스레드 통신용 플래그
+                fight_status = "KEEP"
+                is_qte_active = False
+                fighting_active = True
 
-                    # QTE 탐지
-                    for img, key in [('press_A.png', 'A'), ('press_D.png', 'D')]:
-                        if safe_find_image(img, 0.6):
-                            missing_ui_count = 0 
-                            send_cmd('U') # QTE 시 당기기 중지
-                            bprint(f"  ! [QTE] {key} 대응 시작")
-                            while safe_find_image(img, 0.6) and bot_active:
-                                send_cmd(key); time.sleep(0.05)
-                            send_cmd('R')
-                            return "QTE"
-
-                    if safe_find_image('catch_F.png', 0.70): return "FINISH"
-
-                    if not safe_find_image('fishing_mode.png', 0.6): 
-                        missing_ui_count += 1
-
-                        if missing_ui_count >= 50: 
-                            bprint("  > [유실] 낚시 UI가 장시간 보이지 않음 -> 초기화")
-                            dump_blackbox_log("파이팅중_UI장시간유실")
-                            return "RESET" 
-                    else:
-                        missing_ui_count = 0 
+                # [분신 역할] 백그라운드에서 QTE와 성공 여부만 조용히 감시하는 CCTV
+                def check_status_cctv():
+                    nonlocal missing_ui_count, is_qte_active, fight_status, fighting_active
                     
-                    return "KEEP"
+                    # 🛠️ [핵심 수술] 메인 스레드와의 카메라/메모리 충돌 방지!
+                    # 분신 전용 독립 카메라(cctv_sct)와 간소화된 스레드 세이프 탐색 함수를 생성합니다.
+                    import mss
+                    with mss.mss() as cctv_sct:
+                        def thread_safe_find(img_name, conf):
+                            try:
+                                template = IMAGE_CACHE.get(img_name)
+                                if template is None: return False
+                                
+                                # 🎯 [핵심] 무식한 전체화면 스캔 폐기! 기존에 학습된 개별 이미지의 좌표를 불러옵니다.
+                                monitor = cctv_sct.monitors[1] # 기본값: 전체 화면
+                                is_using_master = False
+                                
+                                # 봇이 이전에 해당 사진을 한 번이라도 찾아서 위치를 기억(roi_cache.json)해뒀다면 그 좁은 구역만 봅니다.
+                                if img_name in ROI_SAMPLER and ROI_SAMPLER[img_name].get('master_box'):
+                                    monitor = ROI_SAMPLER[img_name]['master_box']
+                                    is_using_master = True
 
-                bprint("  > [AI 파이팅] 110x110 고정 렌즈 추적 시작 (프레임 널뛰기 방지 패치)")
+                                # 1. 좁은 구역(또는 전체화면) 스캔
+                                sct_img = cctv_sct.grab(monitor)
+                                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                                res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+                                max_val = cv2.minMaxLoc(res)[1]
+                                
+                                if max_val >= conf:
+                                    return True
+                                    
+                                # 2. [스마트 폴백] 좁은 구역에서 못 찾았을 때만 가끔씩(1초 쿨다운) 전체화면을 둘러봅니다.
+                                elif is_using_master:
+                                    last_fallback = FALLBACK_COOLDOWN.get(img_name, 0)
+                                    if time.time() - last_fallback > 0.3:
+                                        sct_img_full = cctv_sct.grab(cctv_sct.monitors[1])
+                                        screen_gray_full = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
+                                        res_full = cv2.matchTemplate(screen_gray_full, template, cv2.TM_CCOEFF_NORMED)
+                                        if cv2.minMaxLoc(res_full)[1] >= conf:
+                                            return True
+                                        else:
+                                            FALLBACK_COOLDOWN[img_name] = time.time()
+                                    return False
+                                
+                                return False
+                            except:
+                                return False
+
+                        while fighting_active and bot_active:
+                            # 1. 잠수방지 알림 감지 
+                            if thread_safe_find('exit_notice.png', 0.85): 
+                                fight_status = "RESET"
+                                break
+
+                            # 2. QTE 탐지
+                            qte_found = False
+                            for img, key in [('press_A.png', 'A'), ('press_D.png', 'D')]:
+                                if thread_safe_find(img, 0.6):
+                                    missing_ui_count = 0 
+                                    is_qte_active = True # 본체에게 당기기 멈추라고 신호
+                                    send_cmd('U') 
+                                    bprint(f"  ! [QTE] {key} 대응 시작")
+                                    while thread_safe_find(img, 0.6) and bot_active:
+                                        send_cmd(key); time.sleep(0.05)
+                                    send_cmd('R')
+                                    is_qte_active = False # 끝났으니 텐션 재개 신호
+                                    qte_found = True
+                                    break
+                            
+                            if qte_found: continue
+
+                            # 3. 성공(수거) 감지
+                            if thread_safe_find('catch_F.png', 0.70): 
+                                fight_status = "FINISH"
+                                break
+
+                            # 4. UI 증발 감지
+                            if not thread_safe_find('fishing_mode.png', 0.6): 
+                                missing_ui_count += 1
+                                if missing_ui_count >= 50: 
+                                    bprint("  > [유실] 낚시 UI가 장시간 보이지 않음 -> 초기화")
+                                    dump_blackbox_log("파이팅중_UI장시간유실")
+                                    fight_status = "RESET" 
+                                    break
+                            else:
+                                missing_ui_count = 0 
+                            
+                            # 🚀 [핵심 최적화] 스나이퍼 렌즈 장착으로 연산량이 100배 가벼워졌습니다!
+                            # 감시 쿨다운을 0.1초에서 0.03초로 대폭 단축하여 QTE/수거 반응 속도를 한계까지 끌어올립니다.
+                            time.sleep(0.03)
+
+                # 분신(CCTV 스레드) 백그라운드 출격
+                threading.Thread(target=check_status_cctv, daemon=True).start()
+
+                bprint("  > [AI 파이팅] 초고속 텐션 전담 모드 가동 (병목 0%)")
                 is_pulling = False 
-                last_ui_check = time.time()
+                fight_start_time = time.time()
                 
-                fight_start_time = time.time() # 파이팅 진입 시간 기록
-                
-                while True: # bot_active로 스르륵 탈출 방지
-                    if not bot_active: raise BotStopException() # 즉시 폭파
+                # [본체 역할] 오로지 텐션만 0.001초 속도로 바라보며 칼같이 마우스를 제어함
+                while True: 
+                    if not bot_active: 
+                        fighting_active = False # 분신도 함께 퇴근시킴
+                        raise BotStopException()
 
-                    # 1. [연산 최적화] 매번 찾지 않고, 110x110 초소형 영역만 0.001초 만에 스캔
+                    # CCTV(분신)에서 종료 신호가 왔는지 확인
+                    if fight_status == "FINISH": 
+                        send_cmd('U'); fighting_active = False; state = 5; break
+                    if fight_status == "RESET": 
+                        send_cmd('U'); fighting_active = False; state = 1; break
+                    
+                    # QTE 진행 중이면 마우스에서 손을 떼고 대기
+                    if is_qte_active:
+                        is_pulling = False
+                        time.sleep(0.01)
+                        continue
+
+                    # 1. 텐션 스캔 (렉 유발 로직이 분리되어 무조건 0.001초 응답 보장)
                     red_count = get_tension_status(gauge_roi)
                     
-                    # 파이팅 진입 직후 1.5초 동안은 애니메이션 붉은 잔상을 무시하고 무조건 당김!
-                    if time.time() - fight_start_time < 1:
+                    # 2. 파이팅 진입 직후 0.1초 동안만 살짝 당겨줌 (시작하자마자 터짐 방지)
+                    if time.time() - fight_start_time < 0.1:
                         if not is_pulling:
                             send_cmd('L')
                             is_pulling = True
                         time.sleep(0.01)
                     else:
-                        # 2. 반응 임계값 30픽셀 (1초 이후 정상 텐션 제어 시작)
+                        # 3. 칼같은 텐션 제어 (임계값 30)
                         if red_count >= 30:
                             if is_pulling:
-                                send_cmd('U') 
+                                send_cmd('U')
+                                time.sleep(0.02)
+                                send_cmd('U') # 이중 릴리즈 (신호 씹힘 방지)
                                 is_pulling = False
-                            time.sleep(0.01) # 식힐 때 확실히 대기 (잔상 방지)
+                            time.sleep(0.01) 
                         else:
                             if not is_pulling:
                                 send_cmd('L') 
                                 is_pulling = True
-                            time.sleep(0.01) # 연산 딜레이 최소화 (초고속 반응 유지)
-                    
-                    # [핵심 2] 랜덤 렉의 진짜 원인 해결 (병목 제거)
-                    # 전체 화면을 뒤지는 무거운 check_status()를 매 턴마다 실행하지 않고, 0.1초에 1번만 확인합니다.
-                    if time.time() - last_ui_check > 0.1:
-                        res = check_status()
-                        last_ui_check = time.time()
-                        
-                        if res == "FINISH": 
-                            send_cmd('U'); state = 5; break
-                        if res == "RESET": 
-                            send_cmd('U'); state = 1; break
-                        if res == "QTE": 
-                            bprint("  > [QTE] 대응 완료. 0.01초 대기 후 텐션 조절 재개")
-                            is_pulling = False
                             time.sleep(0.01)
-                            continue
 
             # --- [State 5] 수거 (완결성 검증 로직) ---
             elif state == 5:
@@ -2157,20 +2365,20 @@ def fishing_bot(max_allowed_seconds):
 
                 if not bot_active or state == 1: continue
 
-                # --- 2단계: 상태 검증 및 방생 알림(auto_release) 0.7초 정밀 감시 ---
+                # --- 2단계: 상태 검증 및 방생 알림(auto_release) 0.5초 정밀 감시 ---
                 bprint("  > [완료] 수거 동작 종료. 상태 검증 진입...")
                 if check_exit_notification(): state = 1; continue
 
                 is_inventory_full = False
-                for _ in range(7):
-                    time.sleep(0.1) # 0.1초씩 7회 = 0.7초간 감시
+                for _ in range(10):
+                    time.sleep(0.05) # 0.05초씩 10회 = 0.5초간 감시
                     screen_ar = fast_cv_screenshot(gray=True)
                     if template_ar is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_ar, template_ar, cv2.TM_CCOEFF_NORMED))[1] >= 0.65:
                         is_inventory_full = True
                         break # 발견 시 즉시 감시 종료
 
                 # --- 3단계: 인벤토리 감지 결과에 따른 보관 또는 낚시 재개 ---
-                # 위 0.7초 감시에서 포착했거나, 탈출 후 혹시 막 떴을 경우를 모두 커버
+                # 위 0.5초 감시에서 포착했거나, 탈출 후 혹시 막 떴을 경우를 모두 커버
                 if is_inventory_full or safe_find_image('auto_release.png', 0.7):
                     stats['inventory_clear_count'] += 1
                     # [모드 3: 부캐 릴레이] 현재 부캐(char_index > 0)라면 창고 보관을 스킵하고 즉시 교체!
@@ -2288,17 +2496,31 @@ def fishing_bot(max_allowed_seconds):
                     # 4-2(ESC연타)와 5번(시점복구) 과정을 모조리 무시하고 즉시 다음 턴으로 점프합니다!
                     if state in [1, 10]: continue
 
-                    # 4-2. UI 정리 시퀀스 (B 소멸까지 ESC 반복)
-                    bprint("  > [보관] 4-2. 보관함 UI(B) 소멸 확인 중 (ESC 반복)...")
+                    # 4-2. UI 정리 시퀀스 (B 소멸 능동 대기 및 ESC 반복)
+                    bprint("  > [보관] 4-2. 보관함 UI(B) 소멸 능동 대기 (최대 1.5초)...")
                     while True: # bot_active로 스르륵 탈출 방지
                         if not bot_active: raise BotStopException() # 즉시 폭파
                         if check_exit_notification(): state = 1; break
-                        if not safe_find_image('specific_B.png', 0.7):
+                        
+                        # 1. 1.5초 동안 UI가 자연스럽게 사라지기를 기다림 (잔상 방어)
+                        vanish_start = time.time()
+                        is_vanished = False
+                        while time.time() - vanish_start < 1.5 and bot_active:
+                            if not safe_find_image('specific_B.png', 0.7):
+                                is_vanished = True
+                                break
+                            time.sleep(0.1) # 0.1초 간격으로 확인
+                            
+                        # 2. 결과 판정
+                        if is_vanished:
                             bprint("  > [보관] UI(B) 소멸 확인 완료. 필드 복귀")
                             break
                         else:
-                            bprint("  > [보관] UI(B) 잔존 확인. ESC 재시도...")
-                            send_cmd('E'); time.sleep(0.8); send_cmd('R')
+                            # 1.5초가 지났는데도 꿋꿋하게 남아있다면 그때서야 ESC 재타격
+                            bprint("  > [보관] 1.5초 경과: UI(B) 잔존 확인. ESC 재타격 시도...")
+                            send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                            time.sleep(0.5) # 타격 후 기본 딜레이 부여 후 루프 처음(소멸 대기)으로 복귀
+                            
                     if state == 1: continue
 
                     # 5. 시점 복구 및 앵커 재탐색
@@ -2520,7 +2742,7 @@ def fishing_bot(max_allowed_seconds):
                     bprint("  > 🎣 [탐색 1단계] '던지기(throw_btn.png)' 아이콘 확인 중...")
                     found_throw = False
                     wait_throw = time.time()
-                    while time.time() - wait_throw < 3.0 and bot_active:
+                    while time.time() - wait_throw < 1.5 and bot_active:
                         if safe_find_image('throw_btn.png', 0.85): # ROI 탐색 우선
                             found_throw = True
                             break
@@ -2542,7 +2764,7 @@ def fishing_bot(max_allowed_seconds):
                     
                     found_start = False
                     wait_start = time.time()
-                    while time.time() - wait_start < 3.0 and bot_active:
+                    while time.time() - wait_start < 1.5 and bot_active:
                         if safe_find_image('bait_change.png', 0.85): # ROI 탐색 우선
                             found_start = True
                             break

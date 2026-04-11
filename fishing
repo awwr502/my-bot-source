@@ -2047,23 +2047,20 @@ def fishing_bot(max_allowed_seconds):
                 found_trash = False
                 target_name = ""
 
-                # 스레드들이 공유할 결과 저장소
-                scan_result = {"type": None, "name": ""}
+                # 스레드들이 공유할 결과 저장소 (프레임 단위 점수표)
+                frame_results = []
                 result_lock = threading.Lock()
 
                 # [분석관 스레드 함수]
                 def species_scanner(img_gray, template, species_type, name):
-                    nonlocal found_target, found_trash, target_name
                     if template is None: return
                     
                     res = cv2.matchTemplate(img_gray, template, cv2.TM_CCOEFF_NORMED)
                     _, max_val, _, _ = cv2.minMaxLoc(res)
                     
-                    if max_val >= 0.6:
-                        with result_lock:
-                            if scan_result["type"] is None: # 먼저 찾은 스레드가 임자
-                                scan_result["type"] = species_type
-                                scan_result["name"] = name
+                    # 컷오프를 넘든 안 넘든 일단 점수를 모두 기록
+                    with result_lock:
+                        frame_results.append({"type": species_type, "name": name, "score": max_val})
 
                 # 판독 루프 (최대 2초간 시도)
                 start_analysis = time.time()
@@ -2071,6 +2068,8 @@ def fishing_bot(max_allowed_seconds):
                     # 1. 카메라 충돌 방지를 위해 메인에서 '딱 한 번'만 캡처
                     sct_img = sct.grab(sct.monitors[1])
                     screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                    
+                    frame_results.clear() # 매 프레임마다 점수표 초기화
 
                     # 2. 5명의 분석관(스레드)에게 사진 한 장을 동시에 던짐
                     threads = []
@@ -2085,14 +2084,22 @@ def fishing_bot(max_allowed_seconds):
                     for t in threads: t.start()
                     for t in threads: t.join() # 모든 분석관이 보고를 마칠 때까지 대기 (0.01초 내외)
 
-                    # 3. 결과 확인
-                    if scan_result["type"] == "TARGET":
-                        found_target = True
-                        target_name = scan_result["name"]
-                        break
-                    elif scan_result["type"] == "TRASH":
-                        found_trash = True
-                        break
+                    # 3. 결과 확인 (최고 점수 판별)
+                    if frame_results:
+                        # 점수가 가장 높은 순으로 정렬
+                        frame_results.sort(key=lambda x: x["score"], reverse=True)
+                        best_match = frame_results[0]
+                        
+                        # 1등 점수가 0.65 이상일 때만 확실한 식별로 인정 (물결 오탐 방지)
+                        if best_match["score"] >= 0.65:
+                            bprint(f"  > [분석] 1위: {best_match['name']} ({best_match['score']:.3f})")
+                            if best_match["type"] == "TARGET":
+                                found_target = True
+                                target_name = best_match["name"]
+                                break
+                            elif best_match["type"] == "TRASH":
+                                found_trash = True
+                                break
                     
                     time.sleep(0.01) # 다음 프레임 대기
 

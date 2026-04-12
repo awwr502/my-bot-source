@@ -481,9 +481,8 @@ def _telegram_listener():
                             
                             reply_markup = {
                                 "keyboard": [
-                                    [{"text": f"{CMD_PREFIX}낚시시작"}, {"text": f"{CMD_PREFIX}릴레이시작"}],
-                                    [{"text": f"{CMD_PREFIX}승리시작1"}, {"text": f"{CMD_PREFIX}승리시작2"}],
-                                    [{"text": f"{CMD_PREFIX}정지"}, {"text": f"{CMD_PREFIX}상태"}, {"text": f"{CMD_PREFIX}보고서"}, {"text": f"{CMD_PREFIX}초기화"}],
+                                    [{"text": f"{CMD_PREFIX}낚시시작"}, {"text": f"{CMD_PREFIX}정지"}],
+                                    [{"text": f"{CMD_PREFIX}상태"}, {"text": f"{CMD_PREFIX}보고서"}, {"text": f"{CMD_PREFIX}초기화"}],
                                     [{"text": f"{CMD_PREFIX}입력 F"}, {"text": f"{CMD_PREFIX}입력 E"}, {"text": f"{CMD_PREFIX}입력 H"}]
                                 ],
                                 "resize_keyboard": True,
@@ -1604,20 +1603,15 @@ def fishing_bot(max_allowed_seconds):
 
     keyboard.add_hotkey('[', toggle_stop)
     keyboard.add_hotkey(']', toggle_start)
-    keyboard.add_hotkey(';', toggle_relay_start) # 모드 3 단축키 추가
-    keyboard.add_hotkey('<', toggle_stop)
-    keyboard.add_hotkey('>', lambda: toggle_victory_start(1))
-    keyboard.add_hotkey('?', lambda: toggle_victory_start(2)) # 모드 2 단축키 추가
-    keyboard.add_hotkey("'", toggle_animal_start) # 동물포획 단축키 추가
 
     # 텔레그램 모드가 켜져 있을 때만 원격 제어 안내 간판을 띄웁니다.
     if USE_TELEGRAM:
-        bprint(f"\n>>> 원격 제어 수신 대기 시작 (명령어: {CMD_PREFIX}낚시시작, {CMD_PREFIX}릴레이시작, {CMD_PREFIX}승리시작1, {CMD_PREFIX}승리시작2, {CMD_PREFIX}정지, {CMD_PREFIX}종료, {CMD_PREFIX}보고서, {CMD_PREFIX}상태) <<<")
+        bprint(f"\n>>> 원격 제어 수신 대기 시작 (명령어: {CMD_PREFIX}낚시시작, {CMD_PREFIX}정지, {CMD_PREFIX}종료, {CMD_PREFIX}보고서, {CMD_PREFIX}상태, {CMD_PREFIX}초기화) <<<")
     
     state = -1
     # 로켓 이모지 앞에 \n(엔터키)을 추가하여 위쪽 문구와 한 줄 띄워지도록 틈을 만듭니다.
     bprint("\n🚀낚시 매크로 V2.4 가동 시작🚀")
-    bprint("(작동: ] , 정지: [ , 릴레이모드: ; , 승리모드1: > , 승리모드2: ? , 동물포획: ' )")
+    bprint("(작동: ] , 정지: [ )")
 
     cast_fail_count = 0 # 연속 캐스팅 실패 감지용 카운터
     

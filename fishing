@@ -916,23 +916,41 @@ def safe_find_image(img_path, conf=0.6, region=None):
             real_x = max_loc[0] + target_monitor["left"]
             real_y = max_loc[1] + target_monitor["top"]
 
-            # [점진적 확장 로직] 하드코딩된 region이 아닐 때 무조건 좌표를 큐에 밀어넣음
+            # [EV>0 ROI 고도화 로직] 하드코딩된 region이 아닐 때 좌표 학습
             if not region:
-                cache_data['samples'].append((real_x, real_y, w, h))
+                # 1. 가비지 인, 가비지 아웃 차단: 컷오프(conf)보다 0.05 이상 높은 '확실한 인식'만 기억
+                if max_val >= min(1.0, conf + 0.05):
+                    cache_data['samples'].append((real_x, real_y, w, h))
                 
-                # 단 1개의 데이터만 있어도 즉시 상자를 갱신 (점진적 팽창 및 축소)
-                pad = 30
-                min_x = min(s[0] for s in cache_data['samples']) - pad
-                min_y = min(s[1] for s in cache_data['samples']) - pad
-                max_x = max(s[0] + s[2] for s in cache_data['samples']) + pad
-                max_y = max(s[1] + s[3] for s in cache_data['samples']) + pad
+                valid_samples = list(cache_data['samples'])
                 
-                cache_data['master_box'] = {
-                    "left": int(max(0, min_x)),
-                    "top": int(max(0, min_y)),
-                    "width": int(max_x - min_x),
-                    "height": int(max_y - min_y)
-                }
+                if len(valid_samples) > 0:
+                    x_coords = sorted([s[0] for s in valid_samples])
+                    y_coords = sorted([s[1] for s in valid_samples])
+                    
+                    # 2. 아웃라이어(이상치) 제거: 샘플이 3개 이상일 때 양극단의 노이즈 데이터 배제 (절사 평균 원리)
+                    if len(valid_samples) >= 3:
+                        x_coords = x_coords[1:-1]
+                        y_coords = y_coords[1:-1]
+                    
+                    core_min_x = x_coords[0]
+                    core_min_y = y_coords[0]
+                    core_max_x = x_coords[-1] + w
+                    core_max_y = y_coords[-1] + h
+                    
+                    # 3. 스마트 패딩: 고정 30px 폐기, 실제 좌표 분산도에 비례하여 5~20px 사이로 타이트하게 조임
+                    x_variance = x_coords[-1] - x_coords[0]
+                    y_variance = y_coords[-1] - y_coords[0]
+                    
+                    pad_x = min(20, max(5, int(x_variance * 0.5)))
+                    pad_y = min(20, max(5, int(y_variance * 0.5)))
+
+                    cache_data['master_box'] = {
+                        "left": int(max(0, core_min_x - pad_x)),
+                        "top": int(max(0, core_min_y - pad_y)),
+                        "width": int((core_max_x - core_min_x) + (pad_x * 2)),
+                        "height": int((core_max_y - core_min_y) + (pad_y * 2))
+                    }
 
                 # 상자 크기가 늘어나거나 줄어들며 갱신될 때마다 즉시 세이브 파일 덮어쓰기
                 save_roi_cache()

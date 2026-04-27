@@ -730,7 +730,9 @@ def fusion_bot_loop():
                             is_pure_confirmed = False
 
                             for attempt in range(2):
-                                time.sleep(0.15 if attempt == 0 else 0.2)
+                                # 첫 시도는 마우스 이동 직후 즉시(0s), 두 번째는 렌더링 지연 시에만 0.15s 대기
+                                if attempt == 1: time.sleep(0.15)
+                                
                                 hover_sct = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2BGR)
                                 hover_gray = cv2.cvtColor(hover_sct, cv2.COLOR_BGR2GRAY)
                                 
@@ -741,6 +743,7 @@ def fusion_bot_loop():
                                 col_y_end = min(hover_gray.shape[0], label_y + 150)
                                 roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
 
+                                # 1. 5레벨 검사 (최우선)
                                 template_5 = FUSION_CACHE.get('level_5.png')
                                 if template_5 is not None:
                                     t5_gray = cv2.cvtColor(template_5, cv2.COLOR_BGR2GRAY)
@@ -748,26 +751,30 @@ def fusion_bot_loop():
                                     if np.max(res_5) >= FUSION_CONF.get('level_5.png', 0.75):
                                         is_level_5 = True; break
 
+                                # 2. 특성 검사
                                 ttrait = FUSION_CACHE.get('trait.png')
                                 if ttrait is not None:
                                     t_trait_g = cv2.cvtColor(ttrait, cv2.COLOR_BGR2GRAY) if len(ttrait.shape)==3 else ttrait
                                     res_t = cv2.matchTemplate(hover_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)
-                                    if np.max(res_t) >= FUSION_CONF.get('trait.png', 0.80):
+                                    # 1차 시도에서 특성이 아주 확실하면(0.9+) 0.15초 대기 없이 즉시 돌파
+                                    if np.max(res_t) >= (0.90 if attempt == 0 else 0.80):
                                         has_trait = True; break
 
                                 if attempt == 1: is_pure_confirmed = True
 
+                            # [최종 의사결정]
                             if is_level_5:
                                 bprint("  > 🛑 [보호] 5레벨 감염물 확인. (스킵)")
                             elif has_trait:
-                                time.sleep(0.1)
-                                final_check_sct = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2BGR)
-                                final_roi_col = cv2.cvtColor(final_check_sct, cv2.COLOR_BGR2GRAY)[col_y_start:col_y_end, col_x_start:col_x_end]
-                                if np.max(cv2.matchTemplate(final_roi_col, t5_gray, cv2.TM_CCOEFF_NORMED)) >= 0.75:
+                                # [최종 방어선] 클릭 전 0.05s만 살짝 늦춰서 5레벨 숫자 지연 렌더링 방어
+                                time.sleep(0.05)
+                                final_roi = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2BGR)
+                                final_roi_gray = cv2.cvtColor(final_roi, cv2.COLOR_BGR2GRAY)[col_y_start:col_y_end, col_x_start:col_x_end]
+                                if np.max(cv2.matchTemplate(final_roi_gray, t5_gray, cv2.TM_CCOEFF_NORMED)) >= 0.75:
                                     bprint("  > 🚨 [긴급 방어] 분해 직전 5레벨 포착! 보호 전환."); fast_clear_tooltip(); continue
                                 
                                 bprint("  > ♻️ [분해] 특성 있는 일반 감염물. 클릭 실행.")
-                                pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
+                                pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             elif is_pure_confirmed:
                                 bprint("  > 💎 [보호] 확정적 순정(Pure) 감염물. (보관)")
                             

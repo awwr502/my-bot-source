@@ -1498,75 +1498,75 @@ def fusion_bot_loop():
                                         fast_clear_tooltip(); continue
                                         
                                     time.sleep(0.05) # 데이터 페치 딜레이 헷지
-                                            
-                                            hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                            label_w = template_label.shape[1]
-                                            col_x_start = lx + label_w
-                                            col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
-                                            col_y_start = max(0, ly - 20)
-                                            col_y_end = min(hover_gray.shape[0], ly + 150)
-                                            roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
+                                    
+                                    hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                    label_w = template_label.shape[1]
+                                    col_x_start = lx + label_w
+                                    col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
+                                    col_y_start = max(0, ly - 20)
+                                    col_y_end = min(hover_gray.shape[0], ly + 150)
+                                    roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
 
-                                            parse_success = False
-                                            points_5 = []
-                                            template_5 = FUSION_CACHE.get('level_5.png')
-                                            if template_5 is not None:
-                                                t5_gray = cv2.cvtColor(template_5, cv2.COLOR_BGR2GRAY)
-                                                res_5 = cv2.matchTemplate(roi_col, t5_gray, cv2.TM_CCOEFF_NORMED)
-                                                loc_5 = np.where(res_5 >= FUSION_CONF.get('level_5.png', 0.75))
-                                                for pt in zip(*loc_5[::-1]):
-                                                    if not any(math.hypot(pt[0]-p[0], pt[1]-p[1]) < 10 for p in points_5):
-                                                        points_5.append(pt)
+                                    parse_success = False
+                                    points_5 = []
+                                    template_5 = FUSION_CACHE.get('level_5.png')
+                                    if template_5 is not None:
+                                        t5_gray = cv2.cvtColor(template_5, cv2.COLOR_BGR2GRAY)
+                                        res_5 = cv2.matchTemplate(roi_col, t5_gray, cv2.TM_CCOEFF_NORMED)
+                                        loc_5 = np.where(res_5 >= FUSION_CONF.get('level_5.png', 0.75))
+                                        for pt in zip(*loc_5[::-1]):
+                                            if not any(math.hypot(pt[0]-p[0], pt[1]-p[1]) < 10 for p in points_5):
+                                                points_5.append(pt)
+                                        
+                                        if len(points_5) == 0:
+                                            bprint("  > ⏭️ [스킵] 5레벨이 없는 감염물입니다.")
+                                            fast_clear_tooltip(); continue
+                                        elif len(points_5) >= 2:
+                                            bprint(f"  > 🛑 [경고] 5/5 감염물입니다! 보호를 위해 스킵합니다.")
+                                            fast_clear_tooltip(); continue
                                             
-                                            if len(points_5) == 0:
-                                                bprint("  > ⏭️ [스킵] 5레벨이 없는 감염물입니다.")
-                                                fast_clear_tooltip(); continue
-                                            elif len(points_5) >= 2:
-                                                bprint(f"  > 🛑 [경고] 5/5 감염물입니다! 보호를 위해 스킵합니다.")
-                                                fast_clear_tooltip(); continue
+                                        max_loc_5 = points_5[0]
+                                        is_ability_5 = max_loc_5[1] < 50
+                                        ability = 5 if is_ability_5 else 0
+                                        activity = 5 if not is_ability_5 else 0
+                                        
+                                        search_y_start = 50 if is_ability_5 else 0
+                                        search_y_end = 105 if is_ability_5 else 50
+                                        roi_other = roi_col[search_y_start:search_y_end, :]
+                                        
+                                        found_other = 0
+                                        t1_img = FUSION_CACHE.get('tier_1.png')
+                                        t1_h = t1_img.shape[0] if t1_img is not None else 24
+                                        
+                                        for t_idx in [4, 3, 2]: 
+                                            t_img = FUSION_CACHE.get(f'tier_{t_idx}.png')
+                                            if t_img is None: continue
+                                            t_img_g = cv2.cvtColor(t_img, cv2.COLOR_BGR2GRAY)
+                                            if roi_other.shape[0] < t_img_g.shape[0] or roi_other.shape[1] < t_img_g.shape[1]: continue
+                                            res_o = cv2.matchTemplate(roi_other, t_img_g, cv2.TM_CCOEFF_NORMED)
+                                            _, max_val_o, _, _ = cv2.minMaxLoc(res_o)
+                                            if max_val_o >= FUSION_CONF.get(f'tier_{t_idx}.png', 0.72):
+                                                found_other = t_idx
+                                                break
                                                 
-                                            max_loc_5 = points_5[0]
-                                            is_ability_5 = max_loc_5[1] < 50
-                                            ability = 5 if is_ability_5 else 0
-                                            activity = 5 if not is_ability_5 else 0
+                                        if found_other == 0 and t1_img is not None:
+                                            t_img_g_1 = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY)
+                                            if roi_other.shape[0] >= t_img_g_1.shape[0] and roi_other.shape[1] >= t_img_g_1.shape[1]:
+                                                res_1 = cv2.matchTemplate(roi_other, t_img_g_1, cv2.TM_CCOEFF_NORMED)
+                                                _, max_val_1, _, max_loc_1 = cv2.minMaxLoc(res_1)
+                                                if max_val_1 >= FUSION_CONF.get('tier_1.png', 0.72):
+                                                    if is_truly_tier_1(roi_other, max_loc_1[0], max_loc_1[1], t1_h):
+                                                        found_other = 1
+                                                        
+                                        if found_other == 0:
+                                            bprint("  > ⚠️ [판독 실패] 나머지 1개의 등급 숫자를 명확히 읽지 못했습니다. 스킵합니다.")
+                                            fast_clear_tooltip(); continue
                                             
-                                            search_y_start = 50 if is_ability_5 else 0
-                                            search_y_end = 105 if is_ability_5 else 50
-                                            roi_other = roi_col[search_y_start:search_y_end, :]
-                                            
-                                            found_other = 0
-                                            t1_img = FUSION_CACHE.get('tier_1.png')
-                                            t1_h = t1_img.shape[0] if t1_img is not None else 24
-                                            
-                                            for t_idx in [4, 3, 2]: 
-                                                t_img = FUSION_CACHE.get(f'tier_{t_idx}.png')
-                                                if t_img is None: continue
-                                                t_img_g = cv2.cvtColor(t_img, cv2.COLOR_BGR2GRAY)
-                                                if roi_other.shape[0] < t_img_g.shape[0] or roi_other.shape[1] < t_img_g.shape[1]: continue
-                                                res_o = cv2.matchTemplate(roi_other, t_img_g, cv2.TM_CCOEFF_NORMED)
-                                                _, max_val_o, _, _ = cv2.minMaxLoc(res_o)
-                                                if max_val_o >= FUSION_CONF.get(f'tier_{t_idx}.png', 0.72):
-                                                    found_other = t_idx
-                                                    break
-                                                    
-                                            if found_other == 0 and t1_img is not None:
-                                                t_img_g_1 = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY)
-                                                if roi_other.shape[0] >= t_img_g_1.shape[0] and roi_other.shape[1] >= t_img_g_1.shape[1]:
-                                                    res_1 = cv2.matchTemplate(roi_other, t_img_g_1, cv2.TM_CCOEFF_NORMED)
-                                                    _, max_val_1, _, max_loc_1 = cv2.minMaxLoc(res_1)
-                                                    if max_val_1 >= FUSION_CONF.get('tier_1.png', 0.72):
-                                                        if is_truly_tier_1(roi_other, max_loc_1[0], max_loc_1[1], t1_h):
-                                                            found_other = 1
-                                                            
-                                            if found_other == 0:
-                                                bprint("  > ⚠️ [판독 실패] 나머지 1개의 등급 숫자를 명확히 읽지 못했습니다. 스킵합니다.")
-                                                fast_clear_tooltip(); continue
-                                                
-                                            if is_ability_5: activity = found_other
-                                            else: ability = found_other
-                                            
-                                            bprint(f"  > 🔍 [판독 완료] 어빌리티 {ability} / 활성 {activity}")
-                                            target_pair = (activity, ability)
+                                        if is_ability_5: activity = found_other
+                                        else: ability = found_other
+                                        
+                                        bprint(f"  > 🔍 [판독 완료] 어빌리티 {ability} / 활성 {activity}")
+                                        target_pair = (activity, ability)
                                     
                                     if target_pair in memory_pool:
                                         match_cx, match_cy = memory_pool[target_pair]
@@ -1727,23 +1727,23 @@ def fusion_bot_loop():
                                         fast_clear_tooltip(); continue
                                         
                                     time.sleep(0.05) # 데이터 페치 딜레이 헷지
-                                            
-                                            hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                            label_w = template_label.shape[1]
-                                            col_x_start = lx + label_w
-                                            col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
-                                            col_y_start = max(0, ly - 20)
-                                            col_y_end = min(hover_gray.shape[0], ly + 150)
-                                            roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
+                                    
+                                    hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                    label_w = template_label.shape[1]
+                                    col_x_start = lx + label_w
+                                    col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
+                                    col_y_start = max(0, ly - 20)
+                                    col_y_end = min(hover_gray.shape[0], ly + 150)
+                                    roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
 
-                                            is_level_5 = False
-                                            template_5 = FUSION_CACHE.get('level_5.png')
-                                            if template_5 is not None:
-                                                t5_gray = cv2.cvtColor(template_5, cv2.COLOR_BGR2GRAY)
-                                                res_5 = cv2.matchTemplate(roi_col, t5_gray, cv2.TM_CCOEFF_NORMED)
-                                                if np.max(res_5) >= FUSION_CONF.get('level_5.png', 0.75):
-                                                    is_level_5 = True
-                                            
+                                    is_level_5 = False
+                                    template_5 = FUSION_CACHE.get('level_5.png')
+                                    if template_5 is not None:
+                                        t5_gray = cv2.cvtColor(template_5, cv2.COLOR_BGR2GRAY)
+                                        res_5 = cv2.matchTemplate(roi_col, t5_gray, cv2.TM_CCOEFF_NORMED)
+                                        if np.max(res_5) >= FUSION_CONF.get('level_5.png', 0.75):
+                                            is_level_5 = True
+                                    
                                     if is_level_5:
                                         bprint(f"  > 🛑 [경고] 5레벨이 포함된 감염물입니다! 보호를 위해 스킵합니다.")
                                         fast_clear_tooltip()
@@ -1751,7 +1751,7 @@ def fusion_bot_loop():
                                         
                                     safe_pts.append((real_x, real_y, cx, cy))
                                     bprint(f"  > 🔍 [탐색] 안전한 감염물({item_name}) {len(safe_pts)}/2 확보")
-                                    fast_clear_tooltip() 
+                                    fast_clear_tooltip()
                                         
                                 if len(safe_pts) >= 2:
                                     # [1단계: 기존 체크 해제 반복] 0/2(select_0_2.png)가 보일 때까지 무한 반복

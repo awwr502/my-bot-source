@@ -1483,21 +1483,21 @@ def fusion_bot_loop():
                                     tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                     
                                     # [모드 4 전용: 라벨 트리거 0.05초 확정 판독 엔진]
-                                            label_found = False
-                                            lx, ly = 0, 0
-                                            wait_start = time.time()
-                                            while time.time() - wait_start < 1.0 and bot_active:
-                                                hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                                res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
-                                                _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                                if mv_l >= 0.90:
-                                                    label_found = True; lx, ly = ml_l[0], ml_l[1]; break
-                                                time.sleep(0.01)
+                                    label_found = False
+                                    lx, ly = 0, 0
+                                    wait_start = time.time()
+                                    while time.time() - wait_start < 1.0 and bot_active:
+                                        hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                        res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
+                                        _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                        if mv_l >= 0.90:
+                                            label_found = True; lx, ly = ml_l[0], ml_l[1]; break
+                                        time.sleep(0.01)
 
-                                            if not label_found:
-                                                fast_clear_tooltip(); continue
-                                                
-                                            time.sleep(0.05) # 데이터 페치 딜레이 헷지
+                                    if not label_found:
+                                        fast_clear_tooltip(); continue
+                                        
+                                    time.sleep(0.05) # 데이터 페치 딜레이 헷지
                                             
                                             hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                             label_w = template_label.shape[1]
@@ -1712,21 +1712,21 @@ def fusion_bot_loop():
                                     tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                     
                                     # [모드 3 전용: 라벨 트리거 0.05초 확정 판독 엔진]
-                                            label_found = False
-                                            lx, ly = 0, 0
-                                            wait_start = time.time()
-                                            while time.time() - wait_start < 1.0 and bot_active:
-                                                hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                                res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
-                                                _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                                if mv_l >= 0.90:
-                                                    label_found = True; lx, ly = ml_l[0], ml_l[1]; break
-                                                time.sleep(0.01)
+                                    label_found = False
+                                    lx, ly = 0, 0
+                                    wait_start = time.time()
+                                    while time.time() - wait_start < 1.0 and bot_active:
+                                        hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                        res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
+                                        _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                        if mv_l >= 0.90:
+                                            label_found = True; lx, ly = ml_l[0], ml_l[1]; break
+                                        time.sleep(0.01)
 
-                                            if not label_found:
-                                                fast_clear_tooltip(); continue
-                                                
-                                            time.sleep(0.05) # 데이터 페치 딜레이 헷지
+                                    if not label_found:
+                                        fast_clear_tooltip(); continue
+                                        
+                                    time.sleep(0.05) # 데이터 페치 딜레이 헷지
                                             
                                             hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                             label_w = template_label.shape[1]

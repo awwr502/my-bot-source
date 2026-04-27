@@ -1706,14 +1706,19 @@ def fishing_bot(max_allowed_seconds):
                 state_start_time = time.time()
                 last_state = state
                 
-            # 2. 동일한 상태(State)에서 180초(3분) 이상 정체 시 "스마트 복구" 진행
-            # [수정] 대기 상태(-1)와 잠수방지 전용 대기 상태(0)는 고장난 것이 아니므로 감시에서 아예 제외합니다.
-            if bot_active and state not in [0, -1] and (time.time() - state_start_time > 180.0):
+            # 2. 마이크로 동적 워치독 (상태별 맞춤형 타임아웃)
+            timeout_limit = 180.0
+            if state == 4: timeout_limit = 90.0
+            elif state == 5: timeout_limit = 30.0
+            
+            if bot_active and state not in [0, -1] and (time.time() - state_start_time > timeout_limit):
                 stats['watchdog_recovery_count'] += 1
-                bprint(f"\n!!! [긴급] 로직 꼬임 감지! (State {state}에서 180초 정체) !!!")
+                bprint(f"\n!!! [긴급] 로직 꼬임 감지! (State {state}에서 {timeout_limit}초 정체) !!!")
                 bprint("  > [스마트 복구] 화면 스캔 및 자가 복구 시도 중...")
                 send_blynk_notification(f"⚠️ 정체 감지. 스마트 복구 작동")
-                dump_blackbox_log(f"워치독_180초정체_State{state}") # [블랙박스 트리거 추가]
+                dump_blackbox_log(f"워치독_상태{state}_{int(timeout_limit)}초초과") # [블랙박스 트리거 추가]
+                
+                recovered = False
                 
                 recovered = False
                 
@@ -2614,9 +2619,13 @@ def fishing_bot(max_allowed_seconds):
                         send_blynk_notification("[완료]인벤토리 비움. 낚시 재개")
                         bprint("  > [완료] 인벤토리 비움. 낚시 재개 전 애니메이션 대기(0.8초)...")
                     time.sleep(0.8)
+                    import gc; gc.collect()
+                    bprint("  > 🧹 [메모리 청소] 잔여 캐시 포맷 완료 (프레임 드랍 방어)")
                     state = 1
                 else:
                     bprint("  > [정상] 특이사항 없음. 다음 낚시를 시작합니다.")
+                    import gc; gc.collect()
+                    bprint("  > 🧹 [메모리 청소] 잔여 캐시 포맷 완료 (프레임 드랍 방어)")
                     state = 1
 
             # --- [State 10] 부캐 릴레이 캐릭터 자동 교체 로직 ---

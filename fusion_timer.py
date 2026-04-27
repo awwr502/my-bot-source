@@ -1480,164 +1480,91 @@ def fusion_bot_loop():
                                     r_height = mon["height"]
                                     tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                     
-                                    # [1단계: 확장 ROI 기능을 가진 check_img를 활용하여 라벨 검색]
-                                    label_found = False
-                                    wait_start = time.time()
-                                    while time.time() - wait_start < 1.5 and bot_active:
-                                        # check_img가 내부적으로 ROI/전체화면 탐색을 수행하여 영점을 잡습니다.
-                                        if check_img('ability_label.png', thread_sct):
-                                            label_found = True
-                                            break
-                                        time.sleep(0.02)
-                                    
-                                    if label_found:
-                                        # 발견된 절대 좌표를 가져와 현재 툴팁 ROI 내의 상대 좌표로 변환합니다.
-                                        label_x_abs, label_y_abs = FUSION_ROI['ability_label.png']['last_pos']
-                                        label_x = label_x_abs - tooltip_roi["left"] - (FUSION_CACHE['ability_label.png'].shape[1]//2)
-                                        label_y = label_y_abs - tooltip_roi["top"] - (FUSION_CACHE['ability_label.png'].shape[0]//2)
-                                    else:
-                                        # 1.5초 내에 못 찾으면 마우스 대피 후 패스
-                                        fast_clear_tooltip()
-                                        continue
-                                        
-                                    # [가변 대기 로직] 최대 1.0초 대기하되, 라벨이 98% 이상 선명해지면 즉시 탈출
-                                    wait_clear = time.time()
-                                    label_found_final = False
-                                    while time.time() - wait_clear < 1.0 and bot_active:
-                                        hover_sct = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2BGR)
-                                        hover_gray = cv2.cvtColor(hover_sct, cv2.COLOR_BGR2GRAY)
-                                        res_l_final = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
-                                        _, max_val_l_final, _, max_loc_l_final = cv2.minMaxLoc(res_l_final)
-                                        
-                                        if max_val_l_final >= 0.95: # 툴팁이 100% 선명하게 뜬 상태
-                                            label_x, label_y = max_loc_l_final[0], max_loc_l_final[1]
-                                            label_found_final = True
-                                            break
-                                        time.sleep(0.01)
+                                    # [모드 4 전용: 라벨 트리거 0.05초 확정 판독 엔진]
+                                            label_found = False
+                                            lx, ly = 0, 0
+                                            wait_start = time.time()
+                                            while time.time() - wait_start < 1.0 and bot_active:
+                                                hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                                res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
+                                                _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                                if mv_l >= 0.90:
+                                                    label_found = True; lx, ly = ml_l[0], ml_l[1]; break
+                                                time.sleep(0.01)
 
-                                    if not label_found_final:
-                                        fast_clear_tooltip()
-                                        continue
-                                    
-                                    # 무조건 대기하지 않고, 실패 시에만 재시도하는 능동형 판독 루프
-                                    parse_success = False
-                                    for parse_attempt in range(2):
-                                        if parse_attempt == 1:
-                                            bprint("  > ⚠️ [판독 재시도] 시스템 메시지 간섭 의심. 0.25초 대기 후 재촬영합니다...")
-                                            time.sleep(0.25)
-                                            hover_sct = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2BGR)
-                                            hover_gray = cv2.cvtColor(hover_sct, cv2.COLOR_BGR2GRAY)
-
-                                        label_w = template_label.shape[1]
-                                        col_x_start = label_x + label_w
-                                        # [너비 최적화] HP 로고를 피하기 위한 황금 비율 260px 고정
-                                        col_x_end = min(hover_gray.shape[1], label_x + label_w + 360)
-                                        col_y_start = max(0, label_y - 20)
-                                        col_y_end = min(hover_gray.shape[0], label_y + 150)
-                                        roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
-                                        
-                                        # [유저 원본 로직 100% 복원] 5레벨(level_5.png) 감지 및 개수 판별 (잡감염물 & 5/5 동시 보호)
-                                        template_5 = FUSION_CACHE.get('level_5.png')
-                                        is_level_5 = False
-                                        points_5 = []
-                                        
-                                        if template_5 is not None:
-                                            t5_gray = cv2.cvtColor(template_5, cv2.COLOR_BGR2GRAY)
-                                            res_5 = cv2.matchTemplate(roi_col, t5_gray, cv2.TM_CCOEFF_NORMED)
+                                            if not label_found:
+                                                fast_clear_tooltip(); continue
+                                                
+                                            time.sleep(0.05) # 데이터 페치 딜레이 헷지
                                             
-                                            loc_5 = np.where(res_5 >= FUSION_CONF.get('level_5.png', 0.75))
-                                            for pt in zip(*loc_5[::-1]):
-                                                if not any(math.hypot(pt[0]-p[0], pt[1]-p[1]) < 10 for p in points_5):
-                                                    points_5.append(pt)
-                                        
-                                        # 1) 5레벨이 아예 없으면 -> 잡감염물이므로 즉시 스킵 (0.25초 재시도 안 함)
-                                        if len(points_5) == 0:
-                                            bprint("  > ⏭️ [스킵] 5레벨이 없는 감염물입니다. 페어링을 건너뜁니다.")
-                                            parse_success = True # 정상적 스킵 판정이므로 에러 처리 안 함
-                                            break
-                                        
-                                        # 2) 5레벨이 2개 이상이면 -> 찐 5/5이므로 즉시 보호 스킵
-                                        elif len(points_5) >= 2:
-                                            bprint(f"  > 🛑 [경고] 5/5 감염물입니다! 보호를 위해 스킵합니다.")
-                                            is_level_5 = True
-                                            parse_success = True
-                                            break
-                                        
-                                        # 3) 5레벨이 정확히 1개인 경우 -> 계속 진행
-                                        max_loc_5 = points_5[0]
-                                        
-                                        is_ability_5 = max_loc_5[1] < 50
-                                        
-                                        ability = 5 if is_ability_5 else 0
-                                        activity = 5 if not is_ability_5 else 0
-                                        
-                                        search_y_start = 50 if is_ability_5 else 0
-                                        search_y_end = 105 if is_ability_5 else 50
-                                        roi_other = roi_col[search_y_start:search_y_end, :]
-                                        
-                                        found_other = 0
-                                        t1_img = FUSION_CACHE.get('tier_1.png')
-                                        t1_h = t1_img.shape[0] if t1_img is not None else 24
-                                        
-                                        # [100% 인식률 핵심 로직] 점수가 제일 높은 것을 고르는 방식(최댓값 비교)을 버립니다!
-                                        # 1번 템플릿(직선)이 3번 기둥을 긁었을 때 나오는 비정상적인 높은 점수(0.9+)가 3번 정상 점수(0.85)를 이겨버리는 문제를 원천 차단합니다.
-                                        for t_idx in [4, 3, 2]: 
-                                            t_img = FUSION_CACHE.get(f'tier_{t_idx}.png')
-                                            if t_img is None: continue
-                                            t_img_g = cv2.cvtColor(t_img, cv2.COLOR_BGR2GRAY)
+                                            hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                            label_w = template_label.shape[1]
+                                            col_x_start = lx + label_w
+                                            col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
+                                            col_y_start = max(0, ly - 20)
+                                            col_y_end = min(hover_gray.shape[0], ly + 150)
+                                            roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
 
-                                            if roi_other.shape[0] < t_img_g.shape[0] or roi_other.shape[1] < t_img_g.shape[1]: continue
-
-                                            res_o = cv2.matchTemplate(roi_other, t_img_g, cv2.TM_CCOEFF_NORMED)
-                                            _, max_val_o, _, max_loc_o = cv2.minMaxLoc(res_o)
-
-                                            if max_val_o >= FUSION_CONF.get(f'tier_{t_idx}.png', 0.72):
-                                                found_other = t_idx
-                                                break
-
-                                        # 4, 3, 2가 없다고 판명되었을 때만 1번을 엄격하게 검증합니다.
-                                        if found_other == 0:
-                                            t_img_1 = FUSION_CACHE.get('tier_1.png')
-                                            if t_img_1 is not None:
-                                                t_img_g_1 = cv2.cvtColor(t_img_1, cv2.COLOR_BGR2GRAY)
+                                            parse_success = False
+                                            points_5 = []
+                                            template_5 = FUSION_CACHE.get('level_5.png')
+                                            if template_5 is not None:
+                                                t5_gray = cv2.cvtColor(template_5, cv2.COLOR_BGR2GRAY)
+                                                res_5 = cv2.matchTemplate(roi_col, t5_gray, cv2.TM_CCOEFF_NORMED)
+                                                loc_5 = np.where(res_5 >= FUSION_CONF.get('level_5.png', 0.75))
+                                                for pt in zip(*loc_5[::-1]):
+                                                    if not any(math.hypot(pt[0]-p[0], pt[1]-p[1]) < 10 for p in points_5):
+                                                        points_5.append(pt)
+                                            
+                                            if len(points_5) == 0:
+                                                bprint("  > ⏭️ [스킵] 5레벨이 없는 감염물입니다.")
+                                                fast_clear_tooltip(); continue
+                                            elif len(points_5) >= 2:
+                                                bprint(f"  > 🛑 [경고] 5/5 감염물입니다! 보호를 위해 스킵합니다.")
+                                                fast_clear_tooltip(); continue
+                                                
+                                            max_loc_5 = points_5[0]
+                                            is_ability_5 = max_loc_5[1] < 50
+                                            ability = 5 if is_ability_5 else 0
+                                            activity = 5 if not is_ability_5 else 0
+                                            
+                                            search_y_start = 50 if is_ability_5 else 0
+                                            search_y_end = 105 if is_ability_5 else 50
+                                            roi_other = roi_col[search_y_start:search_y_end, :]
+                                            
+                                            found_other = 0
+                                            t1_img = FUSION_CACHE.get('tier_1.png')
+                                            t1_h = t1_img.shape[0] if t1_img is not None else 24
+                                            
+                                            for t_idx in [4, 3, 2]: 
+                                                t_img = FUSION_CACHE.get(f'tier_{t_idx}.png')
+                                                if t_img is None: continue
+                                                t_img_g = cv2.cvtColor(t_img, cv2.COLOR_BGR2GRAY)
+                                                if roi_other.shape[0] < t_img_g.shape[0] or roi_other.shape[1] < t_img_g.shape[1]: continue
+                                                res_o = cv2.matchTemplate(roi_other, t_img_g, cv2.TM_CCOEFF_NORMED)
+                                                _, max_val_o, _, _ = cv2.minMaxLoc(res_o)
+                                                if max_val_o >= FUSION_CONF.get(f'tier_{t_idx}.png', 0.72):
+                                                    found_other = t_idx
+                                                    break
+                                                    
+                                            if found_other == 0 and t1_img is not None:
+                                                t_img_g_1 = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY)
                                                 if roi_other.shape[0] >= t_img_g_1.shape[0] and roi_other.shape[1] >= t_img_g_1.shape[1]:
                                                     res_1 = cv2.matchTemplate(roi_other, t_img_g_1, cv2.TM_CCOEFF_NORMED)
                                                     _, max_val_1, _, max_loc_1 = cv2.minMaxLoc(res_1)
                                                     if max_val_1 >= FUSION_CONF.get('tier_1.png', 0.72):
                                                         if is_truly_tier_1(roi_other, max_loc_1[0], max_loc_1[1], t1_h):
                                                             found_other = 1
-                                                
-                                        if found_other != 0:
-                                            parse_success = True
-                                            break # 숫자 모두 찾았으므로 재시도 루프 즉시 탈출
-                                        else:
-                                            if parse_attempt == 1:
+                                                            
+                                            if found_other == 0:
                                                 bprint("  > ⚠️ [판독 실패] 나머지 1개의 등급 숫자를 명확히 읽지 못했습니다. 스킵합니다.")
-                                                try:
-                                                    desktop_path_roi = os.path.join(os.path.expanduser("~"), "Desktop", f"debug_roi_fail_{int(time.time())}.png")
-                                                    debug_img = hover_sct.copy()
-                                                    box_x1 = col_x_start
-                                                    box_y1 = col_y_start + search_y_start
-                                                    box_x2 = col_x_end
-                                                    box_y2 = col_y_start + search_y_end
-                                                    cv2.rectangle(debug_img, (box_x1, box_y1), (box_x2, box_y2), (0, 0, 255), 2)
-                                                    cv2.imwrite(desktop_path_roi, debug_img)
-                                                    bprint(f"  > 🐞 [디버그] 인식 영역(빨간박스)을 저장했습니다: {desktop_path_roi}")
-                                                except: pass
+                                                fast_clear_tooltip(); continue
                                                 
-                                    if not parse_success or len(points_5) != 1:
-                                        fast_clear_tooltip()
-                                        continue
-                                        
-                                    if is_level_5:
-                                        fast_clear_tooltip()
-                                        continue
-                                    
-                                    if is_ability_5: activity = found_other
-                                    else: ability = found_other
-                                    
-                                    bprint(f"  > 🔍 [판독 완료] 어빌리티 {ability} / 활성 {activity}")
-                                    target_pair = (activity, ability)
+                                            if is_ability_5: activity = found_other
+                                            else: ability = found_other
+                                            
+                                            bprint(f"  > 🔍 [판독 완료] 어빌리티 {ability} / 활성 {activity}")
+                                            target_pair = (activity, ability)
                                     
                                     if target_pair in memory_pool:
                                         match_cx, match_cy = memory_pool[target_pair]
@@ -1782,60 +1709,38 @@ def fusion_bot_loop():
                                     r_height = mon["height"]
                                     tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                     
-                                    # [1단계: 확장 ROI 기능을 가진 check_img를 활용하여 라벨 검색]
-                                    label_found = False
-                                    wait_start = time.time()
-                                    while time.time() - wait_start < 1.5 and bot_active:
-                                        # 개조된 check_img가 ROI와 전체화면을 번갈아 보며 영점을 잡습니다.
-                                        if check_img('ability_label.png', thread_sct):
-                                            label_found = True
-                                            break
-                                        time.sleep(0.02)
-                                    
-                                    if label_found:
-                                        # 자가학습된 절대 좌표를 가져와 상대 좌표로 변환
-                                        label_x_abs, label_y_abs = FUSION_ROI['ability_label.png']['last_pos']
-                                        label_x = label_x_abs - tooltip_roi["left"] - (FUSION_CACHE['ability_label.png'].shape[1]//2)
-                                        label_y = label_y_abs - tooltip_roi["top"] - (FUSION_CACHE['ability_label.png'].shape[0]//2)
-                                    else:
-                                        fast_clear_tooltip()
-                                        continue
+                                    # [모드 3 전용: 라벨 트리거 0.05초 확정 판독 엔진]
+                                            label_found = False
+                                            lx, ly = 0, 0
+                                            wait_start = time.time()
+                                            while time.time() - wait_start < 1.0 and bot_active:
+                                                hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                                res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
+                                                _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                                if mv_l >= 0.90:
+                                                    label_found = True; lx, ly = ml_l[0], ml_l[1]; break
+                                                time.sleep(0.01)
 
-                                    # [가변 대기 로직] 최대 1.0초 대기하되, 라벨이 98% 이상 선명해지면 즉시 탈출
-                                    wait_clear = time.time()
-                                    label_found_final = False
-                                    while time.time() - wait_clear < 1.0 and bot_active:
-                                        hover_sct = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2BGR)
-                                        hover_gray = cv2.cvtColor(hover_sct, cv2.COLOR_BGR2GRAY)
-                                        res_l_final = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
-                                        _, max_val_l_final, _, max_loc_l_final = cv2.minMaxLoc(res_l_final)
-                                        
-                                        if max_val_l_final >= 0.95:
-                                            label_x, label_y = max_loc_l_final[0], max_loc_l_final[1]
-                                            label_found_final = True
-                                            break
-                                        time.sleep(0.01)
+                                            if not label_found:
+                                                fast_clear_tooltip(); continue
+                                                
+                                            time.sleep(0.05) # 데이터 페치 딜레이 헷지
+                                            
+                                            hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                            label_w = template_label.shape[1]
+                                            col_x_start = lx + label_w
+                                            col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
+                                            col_y_start = max(0, ly - 20)
+                                            col_y_end = min(hover_gray.shape[0], ly + 150)
+                                            roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
 
-                                    if not label_found_final:
-                                        fast_clear_tooltip()
-                                        continue
-
-                                    label_w = template_label.shape[1]
-                                    col_x_start = label_x + label_w
-                                    col_x_end = min(hover_gray.shape[1], label_x + label_w + 360)
-                                    col_y_start = max(0, label_y - 20)
-                                    col_y_end = min(hover_gray.shape[0], label_y + 150)
-                                    roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
-                                    
-                                    template_5 = FUSION_CACHE.get('level_5.png')
-                                    is_level_5 = False
-                                    if template_5 is not None:
-                                        t5_gray = cv2.cvtColor(template_5, cv2.COLOR_BGR2GRAY)
-                                        res_5 = cv2.matchTemplate(roi_col, t5_gray, cv2.TM_CCOEFF_NORMED)
-                                        _, max_val_5, _, _ = cv2.minMaxLoc(res_5)
-                                        
-                                        if max_val_5 >= FUSION_CONF.get('level_5.png', 0.75):
-                                            is_level_5 = True
+                                            is_level_5 = False
+                                            template_5 = FUSION_CACHE.get('level_5.png')
+                                            if template_5 is not None:
+                                                t5_gray = cv2.cvtColor(template_5, cv2.COLOR_BGR2GRAY)
+                                                res_5 = cv2.matchTemplate(roi_col, t5_gray, cv2.TM_CCOEFF_NORMED)
+                                                if np.max(res_5) >= FUSION_CONF.get('level_5.png', 0.75):
+                                                    is_level_5 = True
                                             
                                     if is_level_5:
                                         bprint(f"  > 🛑 [경고] 5레벨이 포함된 감염물입니다! 보호를 위해 스킵합니다.")

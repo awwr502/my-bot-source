@@ -21,6 +21,12 @@ import math
 import screen_brightness_control as sbc
 import hashlib
 
+# [네트워크 고속화] 매번 새로운 연결을 맺는 requests.post 대신 열려있는 통로(Session)를 사용합니다.
+# 이를 통해 DNS 조회 및 SSL 핸드쉐이크 시간을 0.1초 미만으로 단축합니다.
+HTTP_SESSION = requests.Session()
+# 재시도 로직 및 타임아웃을 위한 기본 어댑터 설정 (필요시)
+HTTP_SESSION.mount('https://', requests.adapters.HTTPAdapter(max_retries=3))
+
 # [밝기 제어 최적화] 낚시 매크로와 동일한 전역 브로드캐스트 방식으로 롤백
 def set_all_monitors_brightness(target_val):
     try:
@@ -79,6 +85,20 @@ def bprint(msg):
     print(f"[{current_time}] {msg}")
     full_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     blackbox_buffer.append(f"[{full_time}] {msg}")
+
+# [V23.11 텔레그램 고속 세션 엔진] 
+    # 발송 속도 때문에 메인 루프(이미지 인식)가 지연되는 것을 막기 위해 비동기 스레드 방식을 채택합니다.
+    if USE_TELEGRAM:
+        def _bg_send(m):
+            try:
+                url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                payload = {"chat_id": CHAT_ID, "text": f"[{BOT_NAME}] {m}"}
+                # timeout을 3초로 제한하여 네트워크 장애 시에도 좀비 스레드 방지
+                HTTP_SESSION.post(url, data=payload, timeout=3)
+            except:
+                pass
+        # 0.001초 만에 스레드를 생성하고 본체는 즉시 다음 로직으로 복귀
+        threading.Thread(target=_bg_send, args=(msg,), daemon=True).start()
 
 def dump_blackbox_log(reason):
     try:
@@ -313,7 +333,7 @@ bprint(">>> [시스템] 클라우드 해시 스캔 및 메모리(RAM) 적재 시
 API_URL = "https://api.github.com/repos/awwr502/my-bot-source/contents/fusion_imgs"
 
 try:
-    res = requests.get(API_URL, timeout=5)
+    res = HTTP_SESSION.get(API_URL, timeout=5)
     if res.status_code == 200:
         github_data = {item['name']: item for item in res.json() if item['type'] == 'file'}
         

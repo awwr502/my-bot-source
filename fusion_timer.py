@@ -735,8 +735,7 @@ def fusion_bot_loop():
 
                             if not label_found: fast_clear_tooltip(); continue
                                 
-                            # [단계 2 & 3 통합]: 초고속 능동형 동적 폴링(Dynamic Polling) 엔진
-                            # 툴팁 렌더링 지연(Fade-in)을 극복하기 위해 최대 0.4초간 즉각적인 갱신 및 스캔을 반복합니다.
+                            # [단계 2 & 3 통합]: 사용자 제안 2-Step 교차 검증 엔진 (오탐 방지 및 속도 최적화)
                             is_level_5 = False
                             has_trait = False
                             
@@ -747,35 +746,31 @@ def fusion_bot_loop():
                             conf_lvl5 = FUSION_CONF.get('level_5.png', 0.72)
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
 
-                            # 5레벨(우측 숫자) 탐색용 ROI
+                            # 1차 판독 영역 (특성은 오탐 방지를 위해 기존의 넓은 hover_gray 전체를 스캔)
                             col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
                             col_y1, col_y2 = max(0, ly - 20), ly + 150
                             
-                            # 특성(좌측 텍스트) 탐색용 정밀 ROI (어빌리티 등급과 X축 동일 정렬, 3줄 아래 배치)
-                            trait_x1, trait_x2 = max(0, lx - 10), lx + 150
-                            trait_y1, trait_y2 = ly + 50, ly + 180
+                            # 1차 캡처 및 판독
+                            hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                            roi_col = hover_gray[col_y1:col_y2, col_x1:col_x2]
 
-                            wait_poll = time.time()
-                            while time.time() - wait_poll < 0.4 and bot_active:
-                                # 매 루프마다 화면을 새로 캡처하여 렌더링이 완료되는 즉시 포착합니다.
-                                hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                            if roi_col.size > 0 and np.max(cv2.matchTemplate(roi_col, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
+                                is_level_5 = True
+                            elif np.max(cv2.matchTemplate(hover_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
+                                has_trait = True
+
+                            # [교차 검증]: 순정으로 의심될 때만 0.1초 대기 후 화면을 '새로 찍어서' 2차 최종 판독
+                            if not is_level_5 and not has_trait:
+                                time.sleep(0.1)
+                                hover_gray_2 = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                roi_col_2 = hover_gray_2[col_y1:col_y2, col_x1:col_x2]
                                 
-                                roi_col = hover_gray[col_y1:col_y2, col_x1:col_x2]
-                                roi_trait = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-
-                                if roi_col.size > 0 and np.max(cv2.matchTemplate(roi_col, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
+                                if roi_col_2.size > 0 and np.max(cv2.matchTemplate(roi_col_2, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
                                     is_level_5 = True
-                                    if time.time() - wait_poll > 0.05:
-                                        bprint(f"  > 🚨 [동적 판독] 지연 렌더링된 5레벨 포착! (소요 시간: {time.time()-wait_poll:.2f}초)")
-                                    break
-                                    
-                                if roi_trait.size > 0 and np.max(cv2.matchTemplate(roi_trait, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
+                                    bprint("  > 🚨 [교차 검증] 지연 렌더링된 5레벨 최종 포착!")
+                                elif np.max(cv2.matchTemplate(hover_gray_2, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
                                     has_trait = True
-                                    if time.time() - wait_poll > 0.05:
-                                        bprint(f"  > 🚨 [동적 판독] 지연 렌더링된 특성 포착! (소요 시간: {time.time()-wait_poll:.2f}초)")
-                                    break
-                                    
-                                time.sleep(0.01)
+                                    bprint("  > 🚨 [교차 검증] UI 정렬 완료 후 특성 최종 포착!")
 
                             # [최종 의사결정]
                             if is_level_5:

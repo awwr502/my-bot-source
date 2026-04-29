@@ -747,14 +747,21 @@ def fusion_bot_loop():
                             conf_lvl5 = FUSION_CONF.get('level_5.png', 0.72)
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
 
+                            # 5레벨(우측 숫자) 탐색용 ROI
                             col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
                             col_y1, col_y2 = max(0, ly - 20), ly + 150
+                            
+                            # 특성(좌측 텍스트) 탐색용 정밀 ROI (어빌리티 등급과 X축 동일 정렬, 3줄 아래 배치)
+                            trait_x1, trait_x2 = max(0, lx - 10), lx + 150
+                            trait_y1, trait_y2 = ly + 50, ly + 180
 
                             wait_poll = time.time()
-                            while time.time() - wait_poll < 0.25 and bot_active:
+                            while time.time() - wait_poll < 0.4 and bot_active:
                                 # 매 루프마다 화면을 새로 캡처하여 렌더링이 완료되는 즉시 포착합니다.
                                 hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                
                                 roi_col = hover_gray[col_y1:col_y2, col_x1:col_x2]
+                                roi_trait = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
 
                                 if roi_col.size > 0 and np.max(cv2.matchTemplate(roi_col, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
                                     is_level_5 = True
@@ -762,7 +769,7 @@ def fusion_bot_loop():
                                         bprint(f"  > 🚨 [동적 판독] 지연 렌더링된 5레벨 포착! (소요 시간: {time.time()-wait_poll:.2f}초)")
                                     break
                                     
-                                if np.max(cv2.matchTemplate(hover_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
+                                if roi_trait.size > 0 and np.max(cv2.matchTemplate(roi_trait, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
                                     has_trait = True
                                     if time.time() - wait_poll > 0.05:
                                         bprint(f"  > 🚨 [동적 판독] 지연 렌더링된 특성 포착! (소요 시간: {time.time()-wait_poll:.2f}초)")

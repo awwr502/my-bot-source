@@ -284,7 +284,7 @@ FUSION_CONF = {
     'popup_main.png': 0.85,
     'popup_char.png': 0.85, 
     'inv_title.png': 0.85,
-    'trait.png': 0.80,
+    'trait.png': 0.75,
     
     'item_A1.png': 0.95, 'item_B1.png': 0.95,
     'item_A2.png': 0.95, 'item_B2.png': 0.95,

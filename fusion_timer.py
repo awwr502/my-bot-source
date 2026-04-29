@@ -749,10 +749,13 @@ def fusion_bot_loop():
                             t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY)
                             t_trait_raw = FUSION_CACHE['trait.png']
                             t_trait_g = cv2.cvtColor(t_trait_raw, cv2.COLOR_BGR2GRAY) if len(t_trait_raw.shape)==3 else t_trait_raw
+                            
+                            conf_lvl5 = FUSION_CONF.get('level_5.png', 0.72)
+                            conf_trait = FUSION_CONF.get('trait.png', 0.70)
 
-                            if np.max(cv2.matchTemplate(roi_col, t5_g, cv2.TM_CCOEFF_NORMED)) >= 0.72:
+                            if np.max(cv2.matchTemplate(roi_col, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
                                 is_level_5 = True
-                            elif np.max(cv2.matchTemplate(hover_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= 0.75:
+                            elif np.max(cv2.matchTemplate(hover_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
                                 has_trait = True
 
                             # [3단계: 비대칭 교차 검증] 순정으로 의심될 때만 0.15초 후 재검사
@@ -761,10 +764,10 @@ def fusion_bot_loop():
                                 hover_gray_2 = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                 roi_col_2 = hover_gray_2[col_y1:col_y2, col_x1:col_x2]
                                 
-                                if np.max(cv2.matchTemplate(roi_col_2, t5_g, cv2.TM_CCOEFF_NORMED)) >= 0.72:
+                                if np.max(cv2.matchTemplate(roi_col_2, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
                                     is_level_5 = True
                                     bprint("  > 🚨 [교차 검증] 지연 렌더링된 5레벨 포착!")
-                                elif np.max(cv2.matchTemplate(hover_gray_2, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= 0.75:
+                                elif np.max(cv2.matchTemplate(hover_gray_2, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
                                     has_trait = True
                                     bprint("  > 🚨 [교차 검증] 지연 렌더링된 특성 포착!")
 

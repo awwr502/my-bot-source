@@ -535,7 +535,6 @@ def _telegram_queue_worker():
     
     while True:
         try:
-            # 큐에서 작업 가져오기 (작업이 들어올 때까지 조용히 대기함)
             msg, screenshot, current_time = telegram_queue.get()
 
             if not USE_TELEGRAM:
@@ -551,13 +550,11 @@ def _telegram_queue_worker():
             )
             data = {"chat_id": CHAT_ID, "caption": caption_text, "parse_mode": "HTML"}
             
-            # [최적화 핵심] 용량이 큰 PNG 대신 JPEG로 압축하여 전송 속도 극대화
             img_byte_arr = io.BytesIO()
             if screenshot.mode != 'RGB':
                 screenshot = screenshot.convert('RGB')
             screenshot.save(img_byte_arr, format='JPEG', quality=85)
 
-            # [안정성 강화] 텔레그램 서버의 수신 거부(429)에 대비하여 최대 5회 스마트 재시도
             for attempt in range(5):
                 try:
                     img_byte_arr.seek(0)
@@ -586,25 +583,20 @@ def _telegram_queue_worker():
         except Exception as e:
             print(f"  > [Telegram] 발송 큐 워커 에러: {e}")
         finally:
-            # 큐의 현재 작업이 완전히 끝났음을 시스템에 보고하여 순차 진행 보장
             telegram_queue.task_done()
 
-# 봇 부팅 시 단일 전송 스레드를 1개만 백그라운드로 영구 가동
 threading.Thread(target=_telegram_queue_worker, daemon=True).start()
 
+# [핵심 복구] 기존 /상태(CCTV) 명령어 등이 에러 없이 작동하도록 이어주는 연결관(Wrapper)
+def _telegram_worker(msg, screenshot, current_time):
+    telegram_queue.put((msg, screenshot, current_time))
 
 def send_blynk_notification(msg):
     """특이사항 발생 시 캡처 후 대기열(Queue)에 넣고 즉시 메인 로직으로 복귀합니다."""
     current_time = time.strftime("%H:%M:%S")
-    
     try:
-        # 1. 화면 캡처만 0.02초 만에 찰칵! 하고 찍습니다 (초고속)
         screenshot = pyautogui.screenshot()
-        
-        # 2. [핵심] 스레드를 매번 무한정 생성하지 않고, 순서가 완벽히 보장되는 큐(Queue)에 
-        # 데이터를 안전하게 밀어 넣고 메인 봇은 즉시 다음 줄(F키 누르기 등)로 넘어갑니다!
         telegram_queue.put((msg, screenshot, current_time))
-        
     except Exception as e:
         print(f"  > [Telegram] 스크린샷 캡처 에러: {e}")
 

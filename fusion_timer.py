@@ -735,7 +735,7 @@ def fusion_bot_loop():
 
                             if not label_found: fast_clear_tooltip(); continue
                                 
-                            # [단계 2 & 3 통합]: 사용자 제안 2-Step 교차 검증 엔진 (오탐 방지 및 속도 최적화)
+                            # [단계 2 & 3 통합]: 사용자 제안 2-Step 교차 검증 + 이진화(Binarization) 엔진
                             is_level_5 = False
                             has_trait = False
                             
@@ -743,32 +743,39 @@ def fusion_bot_loop():
                             t_trait_raw = FUSION_CACHE['trait.png']
                             t_trait_g = cv2.cvtColor(t_trait_raw, cv2.COLOR_BGR2GRAY) if len(t_trait_raw.shape)==3 else t_trait_raw
                             
+                            # [이진화(Thresholding) 적용]: 안티앨리어싱 노이즈를 완벽히 제거하기 위해 흑백을 극단적으로 분리
+                            # 배경(어두운 회색)은 0(검정)으로, 글자/아이콘(밝은 색상)은 255(흰색)로 변환
+                            _, t5_bin = cv2.threshold(t5_g, 120, 255, cv2.THRESH_BINARY)
+                            _, t_trait_bin = cv2.threshold(t_trait_g, 120, 255, cv2.THRESH_BINARY)
+                            
                             conf_lvl5 = FUSION_CONF.get('level_5.png', 0.72)
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
 
-                            # 1차 판독 영역 (특성은 오탐 방지를 위해 기존의 넓은 hover_gray 전체를 스캔)
+                            # 1차 판독 영역 (특성은 오탐 방지를 위해 넓은 hover_gray를 스캔)
                             col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
                             col_y1, col_y2 = max(0, ly - 20), ly + 150
                             
-                            # 1차 캡처 및 판독
+                            # 1차 캡처 및 화면 이진화
                             hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                            roi_col = hover_gray[col_y1:col_y2, col_x1:col_x2]
+                            _, hover_bin = cv2.threshold(hover_gray, 120, 255, cv2.THRESH_BINARY)
+                            roi_col_bin = hover_bin[col_y1:col_y2, col_x1:col_x2]
 
-                            if roi_col.size > 0 and np.max(cv2.matchTemplate(roi_col, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
+                            if roi_col_bin.size > 0 and np.max(cv2.matchTemplate(roi_col_bin, t5_bin, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
                                 is_level_5 = True
-                            elif np.max(cv2.matchTemplate(hover_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
+                            elif np.max(cv2.matchTemplate(hover_bin, t_trait_bin, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
                                 has_trait = True
 
-                            # [교차 검증]: 순정으로 의심될 때만 0.1초 대기 후 화면을 '새로 찍어서' 2차 최종 판독
+                            # [교차 검증]: 순정으로 의심될 때만 0.1초 대기 후 화면을 새로 찍어 이진화 최종 판독
                             if not is_level_5 and not has_trait:
                                 time.sleep(0.1)
                                 hover_gray_2 = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                roi_col_2 = hover_gray_2[col_y1:col_y2, col_x1:col_x2]
+                                _, hover_bin_2 = cv2.threshold(hover_gray_2, 120, 255, cv2.THRESH_BINARY)
+                                roi_col_bin_2 = hover_bin_2[col_y1:col_y2, col_x1:col_x2]
                                 
-                                if roi_col_2.size > 0 and np.max(cv2.matchTemplate(roi_col_2, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
+                                if roi_col_bin_2.size > 0 and np.max(cv2.matchTemplate(roi_col_bin_2, t5_bin, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
                                     is_level_5 = True
                                     bprint("  > 🚨 [교차 검증] 지연 렌더링된 5레벨 최종 포착!")
-                                elif np.max(cv2.matchTemplate(hover_gray_2, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
+                                elif np.max(cv2.matchTemplate(hover_bin_2, t_trait_bin, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
                                     has_trait = True
                                     bprint("  > 🚨 [교차 검증] UI 정렬 완료 후 특성 최종 포착!")
 

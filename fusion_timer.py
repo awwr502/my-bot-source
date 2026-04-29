@@ -494,8 +494,6 @@ def wait_vanish(img_name, thread_sct):
         bprint(f"  > [완료] {img_name} 완벽 소멸 확인!")
 
 def check_popup_main(thread_sct):
-    if not ENABLE_POPUP_MAIN_CHECK:
-        return False
 
     # [ROI 적용 완료] force_full=True를 제거했습니다.
     if check_img('popup_main.png', thread_sct):
@@ -758,7 +756,7 @@ def fusion_bot_loop():
                             
                             # 1차 캡처 및 화면 이진화
                             hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                            _, hover_bin = cv2.threshold(hover_gray, 120, 255, cv2.THRESH_BINARY)
+                            _, hover_bin = cv2.threshold(hover_gray, 80, 255, cv2.THRESH_BINARY)
                             roi_col_bin = hover_bin[col_y1:col_y2, col_x1:col_x2]
 
                             if roi_col_bin.size > 0 and np.max(cv2.matchTemplate(roi_col_bin, t5_bin, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:

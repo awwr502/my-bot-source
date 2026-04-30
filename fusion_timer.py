@@ -734,7 +734,7 @@ def fusion_bot_loop():
 
                             if not label_found: fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 사용자 제안 2-Stage 스마트 캡처 (Early Reject 도입)
+                            # [단계 2]: 궁극의 비전 엔진 (Gaussian Blur + Vertical ROI + Early Reject)
                             time.sleep(0.15)
                             
                             is_level_5 = False
@@ -744,19 +744,31 @@ def fusion_bot_loop():
                             t_trait_raw = FUSION_CACHE['trait.png']
                             t_trait_g = cv2.cvtColor(t_trait_raw, cv2.COLOR_BGR2GRAY) if len(t_trait_raw.shape)==3 else t_trait_raw
                             
+                            # [핵심 1: 가우시안 블러] 폰트 윤곽선의 미세한 픽셀 어긋남(안티앨리어싱)을 부드럽게 뭉개어 100% 일치하는 형태(Blob)로 변환합니다.
+                            t5_blur = cv2.GaussianBlur(t5_g, (3, 3), 0)
+                            t_trait_blur = cv2.GaussianBlur(t_trait_g, (3, 3), 0)
+                            
                             conf_lvl5 = FUSION_CONF.get('level_5.png', 0.72)
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
 
-                            # 판독 영역 설정
+                            # [핵심 2: 버티컬 슬라이스 ROI]
+                            # 5레벨: 앵커 기준 우측 영역
                             col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
                             col_y1, col_y2 = max(0, ly - 20), ly + 150
                             
-                            # 1차 캡처
+                            # 특성: 앵커 기준 좌측 하단 수직 구역 (오탐 및 노이즈 원천 차단)
+                            trait_x1, trait_x2 = max(0, lx - 10), lx + 200
+                            trait_y1, trait_y2 = ly + 30, ly + 300
+                            
+                            # 1차 캡처 및 블러 처리
                             hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                            roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
+                            hover_blur = cv2.GaussianBlur(hover_gray, (3, 3), 0)
+                            
+                            roi_col_blur = hover_blur[col_y1:col_y2, col_x1:col_x2]
+                            roi_trait_blur = hover_blur[trait_y1:trait_y2, trait_x1:trait_x2]
 
-                            lvl5_val = np.max(cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED)) if roi_col_gray.size > 0 else 0
-                            trait_val = np.max(cv2.matchTemplate(hover_gray, t_trait_g, cv2.TM_CCOEFF_NORMED))
+                            lvl5_val = np.max(cv2.matchTemplate(roi_col_blur, t5_blur, cv2.TM_CCOEFF_NORMED)) if roi_col_blur.size > 0 else 0
+                            trait_val = np.max(cv2.matchTemplate(roi_trait_blur, t_trait_blur, cv2.TM_CCOEFF_NORMED)) if roi_trait_blur.size > 0 else 0
 
                             # 1차 즉각 판독
                             if lvl5_val >= conf_lvl5:
@@ -764,18 +776,19 @@ def fusion_bot_loop():
                             elif trait_val >= conf_trait:
                                 has_trait = True
                             else:
-                                # [Early Reject 로직]: 사용자 제안 임계점(25%) 기반 조기 탈출
-                                # 둘 다 일치율이 25% 미만이라면 아예 렌더링될 건덕지도 없는 순정으로 간주하고 대기 없이 즉시 탈출
+                                # [Early Reject 로직]: 노이즈 컷(25%) 기반 조기 탈출
                                 if lvl5_val >= 0.25 or trait_val >= 0.25:
-                                    # 25% 이상이라면 렌더링 중(Fade-in)일 가능성이 있으므로 0.15초 추가 대기 후 2차 최종 캡처
                                     time.sleep(0.15)
                                     hover_gray_2 = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                    roi_col_gray_2 = hover_gray_2[col_y1:col_y2, col_x1:col_x2]
+                                    hover_blur_2 = cv2.GaussianBlur(hover_gray_2, (3, 3), 0)
                                     
-                                    if roi_col_gray_2.size > 0 and np.max(cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
+                                    roi_col_blur_2 = hover_blur_2[col_y1:col_y2, col_x1:col_x2]
+                                    roi_trait_blur_2 = hover_blur_2[trait_y1:trait_y2, trait_x1:trait_x2]
+                                    
+                                    if roi_col_blur_2.size > 0 and np.max(cv2.matchTemplate(roi_col_blur_2, t5_blur, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
                                         is_level_5 = True
                                         bprint("  > 🚨 [2차 검증] 지연 렌더링된 5레벨 최종 포착!")
-                                    elif np.max(cv2.matchTemplate(hover_gray_2, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
+                                    elif roi_trait_blur_2.size > 0 and np.max(cv2.matchTemplate(roi_trait_blur_2, t_trait_blur, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
                                         has_trait = True
                                         bprint("  > 🚨 [2차 검증] UI 정렬 완료 후 특성 최종 포착!")
 

@@ -734,19 +734,16 @@ def fusion_bot_loop():
 
                             if not label_found: fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 유연한 민트색 이중 잠금 엔진 (Adaptive Shape + Mint Color)
+                            # [단계 2]: 색상 기반 5레벨 판독 (Color-Centric Detection) + 특성 컬러 매칭
                             time.sleep(0.15)
                             
                             is_level_5 = False
                             has_trait = False
                             
-                            t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY)
                             t_trait_color = FUSION_CACHE['trait.png']
                             if len(t_trait_color.shape) == 2:
                                 t_trait_color = cv2.cvtColor(t_trait_color, cv2.COLOR_GRAY2BGR)
                             
-                            # 모양 임계값을 0.80로 낮춰 미탐을 방지하고, 필터링은 색상에서 수행
-                            conf_lvl5 = 0.80  
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
 
                             # 판독 영역 설정
@@ -758,40 +755,29 @@ def fusion_bot_loop():
                             
                             # 캡처 및 전처리
                             sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                            hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                             hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
                             
-                            roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
                             roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
                             roi_trait_color = hover_color[trait_y1:trait_y2, trait_x1:trait_x2]
 
-                            # 1단계: 5레벨 형태 매칭 (Gray)
-                            res_5 = cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray.size > 0 else None
-                            if res_5 is not None:
-                                _, max_val_5, _, max_loc_5 = cv2.minMaxLoc(res_5)
+                            # [5레벨 판독]: 이미지를 버리고 민트색 색상 덩어리(Blob)를 직접 탐색
+                            if roi_col_color.size > 0:
+                                hsv_roi = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
+                                # 제공된 사진 기반 민트/시안 색상 범위 (채도와 명도를 여유있게 설정)
+                                lower_mint = np.array([35, 40, 130]) 
+                                upper_mint = np.array([105, 255, 255])
+                                mask = cv2.inRange(hsv_roi, lower_mint, upper_mint)
                                 
-                                if max_val_5 >= conf_lvl5:
-                                    # [핵심] 2단계: 색상 검증 범위 대폭 확장 (흐릿한 민트색 대응)
-                                    h, w = t5_g.shape[:2]
-                                    detected_5_roi = roi_col_color[max_loc_5[1]:max_loc_5[1]+h, max_loc_5[0]:max_loc_5[0]+w]
-                                    hsv_roi = cv2.cvtColor(detected_5_roi, cv2.COLOR_BGR2HSV)
-                                    
-                                    # 채도(S)와 명도(V)의 하한선을 낮추어 흐릿한 발광 효과도 인식하도록 수정
-                                    lower_mint = np.array([35, 40, 100]) 
-                                    upper_mint = np.array([100, 255, 255])
-                                    mask = cv2.inRange(hsv_roi, lower_mint, upper_mint)
-                                    
-                                    # 민트색 픽셀 비율을 10%로 완화하여 숫자 형태의 실선만 잡혀도 인정
-                                    if cv2.countNonZero(mask) > (mask.size * 0.10):
+                                # 색상 덩어리의 외곽선을 찾아 면적 계산
+                                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                for cnt in contours:
+                                    area = cv2.contourArea(cnt)
+                                    # 5레벨 숫자의 대략적인 면적 (약 30~500픽셀 사이) 확인
+                                    if 30 < area < 800: 
                                         is_level_5 = True
-                                    else:
-                                        # [보조 검증] 모양 점수가 0.92 이상으로 압도적이면 색상이 조금 부족해도 인정 (가중치 전략)
-                                        if max_val_5 >= 0.92:
-                                            is_level_5 = True
-                                        else:
-                                            bprint(f"  > 🛡️ [오탐 방어] 형태({max_val_5:.2f})는 닮았으나 민트색 부족으로 무시.")
+                                        break
 
-                            # 특성 판독 (다중 스케일 컬러 매칭)
+                            # [특성 판독]: 사용자 요청에 따라 기존 컬러 다중 스케일 매칭 유지
                             trait_val = 0
                             if not is_level_5 and roi_trait_color.size > 0:
                                 for scale in [0.95, 1.0, 1.05]:

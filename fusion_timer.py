@@ -783,6 +783,7 @@ def fusion_bot_loop():
                             # 1차 즉각 판독
                             if lvl5_val >= conf_lvl5:
                                 is_level_5 = True
+                                bprint(f"🛑 [보호] 5레벨 감염물. (임계값: {lvl5_val:.2f})")
                             elif trait_val >= conf_trait:
                                 has_trait = True
                             else:
@@ -799,6 +800,10 @@ def fusion_bot_loop():
                                     if roi_col_gray_2.size > 0 and np.max(cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
                                         is_level_5 = True
                                         bprint("  > 🚨 [2차 검증] 지연 렌더링된 5레벨 최종 포착!")
+                                    lvl5_val_2 = np.max(cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED)) if roi_col_gray_2.size > 0 else 0
+                                    if lvl5_val_2 >= conf_lvl5:
+                                        is_level_5 = True
+                                        bprint(f"🛑 [보호] 5레벨 감염물. (임계값: {lvl5_val_2:.2f})")
                                     elif roi_trait_color_2.size > 0:
                                         # 2차 검증 시에도 다중 스케일 매칭 수행
                                         trait_val_2 = 0

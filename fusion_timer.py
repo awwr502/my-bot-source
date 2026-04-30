@@ -734,16 +734,20 @@ def fusion_bot_loop():
 
                             if not label_found: fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 픽셀 밀도 점수제 엔진 (Pixel Density Scoring + Expanded HSV)
+                            # [단계 2]: 이미지 인식 엔진 복원 (Level 5 Template Match + Trait Color Match)
                             time.sleep(0.15)
                             
                             is_level_5 = False
                             has_trait = False
                             
+                            # 템플릿 로드 및 전처리
+                            t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY)
                             t_trait_color = FUSION_CACHE['trait.png']
                             if len(t_trait_color.shape) == 2:
                                 t_trait_color = cv2.cvtColor(t_trait_color, cv2.COLOR_GRAY2BGR)
                             
+                            # [임계값 설정] 오인식 방지를 위해 5레벨은 다소 엄격하게(0.80), 특성은 기존 유지(0.70)
+                            conf_lvl5 = 0.85  
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
 
                             # 판독 영역 설정
@@ -753,30 +757,21 @@ def fusion_bot_loop():
                             trait_x1, trait_x2 = max(0, lx - 10), lx + 200
                             trait_y1, trait_y2 = ly + 30, ly + 300
                             
-                            # 캡처 및 전처리 (Color 유지)
+                            # 캡처 및 채널 분리
                             sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                            hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                             hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
                             
-                            roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
+                            roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
                             roi_trait_color = hover_color[trait_y1:trait_y2, trait_x1:trait_x2]
 
-                            # [5레벨 판독]: 픽셀 밀도 점수제 적용 (형태 왜곡에 가장 강함)
-                            if roi_col_color.size > 0:
-                                hsv_roi = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
-                                # 확장형 HSV 범위: 어두운 민트색 잔상 및 흐릿한 빛 번짐까지 모두 흡수
-                                lower_mint = np.array([35, 30, 80]) 
-                                upper_mint = np.array([105, 255, 255])
-                                mask = cv2.inRange(hsv_roi, lower_mint, upper_mint)
-                                
-                                # 픽셀 밀도 계산 (마스크를 통과한 픽셀의 총합)
-                                mint_pixel_count = cv2.countNonZero(mask)
-                                
-                                # 민트색 픽셀이 80개 이상 존재하면 5레벨로 확정 (숫자 '5'의 최소 구성 픽셀 수 기준)
-                                if mint_pixel_count > 80:
+                            # 1) 5레벨 판독: 이미지 템플릿 매칭 복원
+                            if roi_col_gray.size > 0:
+                                res_5 = cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED)
+                                if np.max(res_5) >= conf_lvl5:
                                     is_level_5 = True
-                                    # bprint(f"  > 🟢 [5레벨 확정] 민트색 픽셀 밀도: {mint_pixel_count}px")
 
-                            # [특성 판독]: 컬러 기반 다중 스케일 매칭 유지
+                            # 2) 특성 판독: 컬러 다중 스케일 매칭 유지 (가장 높은 인식률 확인됨)
                             trait_val = 0
                             if not is_level_5 and roi_trait_color.size > 0:
                                 for scale in [0.95, 1.0, 1.05]:

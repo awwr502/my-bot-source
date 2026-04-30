@@ -734,9 +734,8 @@ def fusion_bot_loop():
 
                             if not label_found: fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 사용자 제안 렌더링 딜레이 동기화 + 단일 확정 판독
-                            # 어빌리티 라벨(앵커) 인식 후, UI 애니메이션이 완전히 정렬될 때까지 0.2초 확정 대기
-                            time.sleep(0.2)
+                            # [단계 2]: 사용자 제안 2-Stage 스마트 캡처 (Early Reject 도입)
+                            time.sleep(0.15)
                             
                             is_level_5 = False
                             has_trait = False
@@ -752,14 +751,33 @@ def fusion_bot_loop():
                             col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
                             col_y1, col_y2 = max(0, ly - 20), ly + 150
                             
-                            # 0.2초 대기 후, 픽셀이 100% 선명하게 렌더링된 화면을 단 한 번만 캡처
+                            # 1차 캡처
                             hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                             roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
 
-                            if roi_col_gray.size > 0 and np.max(cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
+                            lvl5_val = np.max(cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED)) if roi_col_gray.size > 0 else 0
+                            trait_val = np.max(cv2.matchTemplate(hover_gray, t_trait_g, cv2.TM_CCOEFF_NORMED))
+
+                            # 1차 즉각 판독
+                            if lvl5_val >= conf_lvl5:
                                 is_level_5 = True
-                            elif np.max(cv2.matchTemplate(hover_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
+                            elif trait_val >= conf_trait:
                                 has_trait = True
+                            else:
+                                # [Early Reject 로직]: 사용자 제안 임계점(25%) 기반 조기 탈출
+                                # 둘 다 일치율이 25% 미만이라면 아예 렌더링될 건덕지도 없는 순정으로 간주하고 대기 없이 즉시 탈출
+                                if lvl5_val >= 0.25 or trait_val >= 0.25:
+                                    # 25% 이상이라면 렌더링 중(Fade-in)일 가능성이 있으므로 0.15초 추가 대기 후 2차 최종 캡처
+                                    time.sleep(0.15)
+                                    hover_gray_2 = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                    roi_col_gray_2 = hover_gray_2[col_y1:col_y2, col_x1:col_x2]
+                                    
+                                    if roi_col_gray_2.size > 0 and np.max(cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
+                                        is_level_5 = True
+                                        bprint("  > 🚨 [2차 검증] 지연 렌더링된 5레벨 최종 포착!")
+                                    elif np.max(cv2.matchTemplate(hover_gray_2, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
+                                        has_trait = True
+                                        bprint("  > 🚨 [2차 검증] UI 정렬 완료 후 특성 최종 포착!")
 
                             # [최종 의사결정]
                             if is_level_5:

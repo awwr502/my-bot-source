@@ -734,7 +734,10 @@ def fusion_bot_loop():
 
                             if not label_found: fast_clear_tooltip(); continue
                                 
-                            # [단계 2 & 3 통합]: 사용자 제안 2-Step 교차 검증 (순수 그레이스케일 롤백 및 딜레이 최적화)
+                            # [단계 2]: 사용자 제안 렌더링 딜레이 동기화 + 단일 확정 판독
+                            # 어빌리티 라벨(앵커) 인식 후, UI 애니메이션이 완전히 정렬될 때까지 0.2초 확정 대기
+                            time.sleep(0.2)
+                            
                             is_level_5 = False
                             has_trait = False
                             
@@ -745,11 +748,11 @@ def fusion_bot_loop():
                             conf_lvl5 = FUSION_CONF.get('level_5.png', 0.72)
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
 
-                            # 1차 판독 영역 (특성은 오탐 방지를 위해 넓은 hover_gray를 스캔)
+                            # 판독 영역 설정
                             col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
                             col_y1, col_y2 = max(0, ly - 20), ly + 150
                             
-                            # 1차 캡처 (이진화 완전 삭제, 부드러운 안티앨리어싱이 보존된 순수 그레이스케일 사용)
+                            # 0.2초 대기 후, 픽셀이 100% 선명하게 렌더링된 화면을 단 한 번만 캡처
                             hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                             roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
 
@@ -757,19 +760,6 @@ def fusion_bot_loop():
                                 is_level_5 = True
                             elif np.max(cv2.matchTemplate(hover_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
                                 has_trait = True
-
-                            # [교차 검증]: 렌더링 딜레이를 완벽히 덮기 위해 대기 시간을 0.1초 -> 0.2초로 소폭 늘려 재캡처
-                            if not is_level_5 and not has_trait:
-                                time.sleep(0.2)
-                                hover_gray_2 = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                roi_col_gray_2 = hover_gray_2[col_y1:col_y2, col_x1:col_x2]
-                                
-                                if roi_col_gray_2.size > 0 and np.max(cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
-                                    is_level_5 = True
-                                    bprint("  > 🚨 [교차 검증] 지연 렌더링된 5레벨 최종 포착!")
-                                elif np.max(cv2.matchTemplate(hover_gray_2, t_trait_g, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
-                                    has_trait = True
-                                    bprint("  > 🚨 [교차 검증] UI 정렬 완료 후 특성 최종 포착!")
 
                             # [최종 의사결정]
                             if is_level_5:

@@ -734,7 +734,7 @@ def fusion_bot_loop():
 
                             if not label_found: fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 민트색 전용 이중 잠금 검증 엔진 (Shape + Mint Color Validation)
+                            # [단계 2]: 유연한 민트색 이중 잠금 엔진 (Adaptive Shape + Mint Color)
                             time.sleep(0.15)
                             
                             is_level_5 = False
@@ -745,8 +745,8 @@ def fusion_bot_loop():
                             if len(t_trait_color.shape) == 2:
                                 t_trait_color = cv2.cvtColor(t_trait_color, cv2.COLOR_GRAY2BGR)
                             
-                            # 오인식 방지를 위해 형태 임계값을 0.85로 상향
-                            conf_lvl5 = 0.85  
+                            # 모양 임계값을 0.80로 낮춰 미탐을 방지하고, 필터링은 색상에서 수행
+                            conf_lvl5 = 0.80  
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
 
                             # 판독 영역 설정
@@ -771,21 +771,25 @@ def fusion_bot_loop():
                                 _, max_val_5, _, max_loc_5 = cv2.minMaxLoc(res_5)
                                 
                                 if max_val_5 >= conf_lvl5:
-                                    # [핵심] 2단계: 민트색 검증 (제공된 사진 기반 HSV 분석)
+                                    # [핵심] 2단계: 색상 검증 범위 대폭 확장 (흐릿한 민트색 대응)
                                     h, w = t5_g.shape[:2]
                                     detected_5_roi = roi_col_color[max_loc_5[1]:max_loc_5[1]+h, max_loc_5[0]:max_loc_5[0]+w]
                                     hsv_roi = cv2.cvtColor(detected_5_roi, cv2.COLOR_BGR2HSV)
                                     
-                                    # 사진 속 밝은 민트/시안 전용 색상 범위
-                                    lower_mint = np.array([40, 50, 150]) 
-                                    upper_mint = np.array([95, 255, 255])
+                                    # 채도(S)와 명도(V)의 하한선을 낮추어 흐릿한 발광 효과도 인식하도록 수정
+                                    lower_mint = np.array([35, 40, 100]) 
+                                    upper_mint = np.array([100, 255, 255])
                                     mask = cv2.inRange(hsv_roi, lower_mint, upper_mint)
                                     
-                                    # 민트색 픽셀이 일정 비율 이상 존재할 때만 진짜 5레벨로 확정
-                                    if cv2.countNonZero(mask) > (mask.size * 0.15):
+                                    # 민트색 픽셀 비율을 10%로 완화하여 숫자 형태의 실선만 잡혀도 인정
+                                    if cv2.countNonZero(mask) > (mask.size * 0.10):
                                         is_level_5 = True
                                     else:
-                                        bprint(f"  > 🛡️ [오탐 방어] 5레벨 형태(점수:{max_val_5:.2f})는 감지되었으나 민트색이 아니므로 무시합니다.")
+                                        # [보조 검증] 모양 점수가 0.92 이상으로 압도적이면 색상이 조금 부족해도 인정 (가중치 전략)
+                                        if max_val_5 >= 0.92:
+                                            is_level_5 = True
+                                        else:
+                                            bprint(f"  > 🛡️ [오탐 방어] 형태({max_val_5:.2f})는 닮았으나 민트색 부족으로 무시.")
 
                             # 특성 판독 (다중 스케일 컬러 매칭)
                             trait_val = 0

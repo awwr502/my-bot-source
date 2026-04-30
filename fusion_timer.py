@@ -748,7 +748,7 @@ def fusion_bot_loop():
                             if len(t_trait_color.shape) == 2:
                                 t_trait_color = cv2.cvtColor(t_trait_color, cv2.COLOR_GRAY2BGR)
                             
-                            conf_lvl5 = FUSION_CONF.get('level_5.png', 0.72)
+                            conf_lvl5 = FUSION_CONF.get('level_5.png', 0.85)
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
 
                             # 판독 영역 설정

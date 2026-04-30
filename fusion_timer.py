@@ -734,7 +734,7 @@ def fusion_bot_loop():
 
                             if not label_found: fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 색상 기반 5레벨 판독 (Color-Centric Detection) + 특성 컬러 매칭
+                            # [단계 2]: 픽셀 밀도 점수제 엔진 (Pixel Density Scoring + Expanded HSV)
                             time.sleep(0.15)
                             
                             is_level_5 = False
@@ -753,31 +753,30 @@ def fusion_bot_loop():
                             trait_x1, trait_x2 = max(0, lx - 10), lx + 200
                             trait_y1, trait_y2 = ly + 30, ly + 300
                             
-                            # 캡처 및 전처리
+                            # 캡처 및 전처리 (Color 유지)
                             sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
                             hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
                             
                             roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
                             roi_trait_color = hover_color[trait_y1:trait_y2, trait_x1:trait_x2]
 
-                            # [5레벨 판독]: 이미지를 버리고 민트색 색상 덩어리(Blob)를 직접 탐색
+                            # [5레벨 판독]: 픽셀 밀도 점수제 적용 (형태 왜곡에 가장 강함)
                             if roi_col_color.size > 0:
                                 hsv_roi = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
-                                # 제공된 사진 기반 민트/시안 색상 범위 (채도와 명도를 여유있게 설정)
-                                lower_mint = np.array([35, 40, 130]) 
+                                # 확장형 HSV 범위: 어두운 민트색 잔상 및 흐릿한 빛 번짐까지 모두 흡수
+                                lower_mint = np.array([35, 30, 80]) 
                                 upper_mint = np.array([105, 255, 255])
                                 mask = cv2.inRange(hsv_roi, lower_mint, upper_mint)
                                 
-                                # 색상 덩어리의 외곽선을 찾아 면적 계산
-                                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                                for cnt in contours:
-                                    area = cv2.contourArea(cnt)
-                                    # 5레벨 숫자의 대략적인 면적 (약 30~500픽셀 사이) 확인
-                                    if 30 < area < 800: 
-                                        is_level_5 = True
-                                        break
+                                # 픽셀 밀도 계산 (마스크를 통과한 픽셀의 총합)
+                                mint_pixel_count = cv2.countNonZero(mask)
+                                
+                                # 민트색 픽셀이 80개 이상 존재하면 5레벨로 확정 (숫자 '5'의 최소 구성 픽셀 수 기준)
+                                if mint_pixel_count > 80:
+                                    is_level_5 = True
+                                    # bprint(f"  > 🟢 [5레벨 확정] 민트색 픽셀 밀도: {mint_pixel_count}px")
 
-                            # [특성 판독]: 사용자 요청에 따라 기존 컬러 다중 스케일 매칭 유지
+                            # [특성 판독]: 컬러 기반 다중 스케일 매칭 유지
                             trait_val = 0
                             if not is_level_5 and roi_trait_color.size > 0:
                                 for scale in [0.95, 1.0, 1.05]:

@@ -734,7 +734,7 @@ def fusion_bot_loop():
 
                             if not label_found: fast_clear_tooltip(); continue
                                 
-                            # [단계 2 & 3 통합]: 사용자 제안 2-Step 교차 검증 + 이진화(Binarization) 엔진
+                            # [단계 2 & 3 통합]: 사용자 제안 2-Step 교차 검증 + 비대칭 비전 엔진 (이진화/그레이스케일 분리)
                             is_level_5 = False
                             has_trait = False
                             
@@ -742,10 +742,8 @@ def fusion_bot_loop():
                             t_trait_raw = FUSION_CACHE['trait.png']
                             t_trait_g = cv2.cvtColor(t_trait_raw, cv2.COLOR_BGR2GRAY) if len(t_trait_raw.shape)==3 else t_trait_raw
                             
-                            # [이진화(Thresholding) 적용]: 안티앨리어싱 노이즈를 완벽히 제거하기 위해 흑백을 극단적으로 분리
-                            # 배경(어두운 회색)은 0(검정)으로, 글자/아이콘(밝은 색상)은 255(흰색)로 변환
-                            _, t5_bin = cv2.threshold(t5_g, 120, 255, cv2.THRESH_BINARY)
-                            _, t_trait_bin = cv2.threshold(t_trait_g, 120, 255, cv2.THRESH_BINARY)
+                            # [비대칭 적용]: 특성(trait)에만 이진화를 적용하고, 5레벨(level_5)은 안티앨리어싱 보존을 위해 원본 그레이스케일 유지
+                            _, t_trait_bin = cv2.threshold(t_trait_g, 80, 255, cv2.THRESH_BINARY)
                             
                             conf_lvl5 = FUSION_CONF.get('level_5.png', 0.72)
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
@@ -754,24 +752,26 @@ def fusion_bot_loop():
                             col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
                             col_y1, col_y2 = max(0, ly - 20), ly + 150
                             
-                            # 1차 캡처 및 화면 이진화
+                            # 1차 캡처 및 화면 분리 (그레이스케일 vs 이진화)
                             hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                             _, hover_bin = cv2.threshold(hover_gray, 80, 255, cv2.THRESH_BINARY)
-                            roi_col_bin = hover_bin[col_y1:col_y2, col_x1:col_x2]
+                            
+                            roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
 
-                            if roi_col_bin.size > 0 and np.max(cv2.matchTemplate(roi_col_bin, t5_bin, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
+                            # 5레벨은 부드러운 원본(roi_col_gray)으로, 특성은 날카로운 이진화(hover_bin)로 판독
+                            if roi_col_gray.size > 0 and np.max(cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
                                 is_level_5 = True
                             elif np.max(cv2.matchTemplate(hover_bin, t_trait_bin, cv2.TM_CCOEFF_NORMED)) >= conf_trait:
                                 has_trait = True
 
-                            # [교차 검증]: 순정으로 의심될 때만 0.1초 대기 후 화면을 새로 찍어 이진화 최종 판독
+                            # [교차 검증]: 순정으로 의심될 때만 0.1초 대기 후 화면을 새로 찍어 비대칭 최종 판독
                             if not is_level_5 and not has_trait:
                                 time.sleep(0.1)
                                 hover_gray_2 = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                _, hover_bin_2 = cv2.threshold(hover_gray_2, 120, 255, cv2.THRESH_BINARY)
-                                roi_col_bin_2 = hover_bin_2[col_y1:col_y2, col_x1:col_x2]
+                                _, hover_bin_2 = cv2.threshold(hover_gray_2, 80, 255, cv2.THRESH_BINARY)
+                                roi_col_gray_2 = hover_gray_2[col_y1:col_y2, col_x1:col_x2]
                                 
-                                if roi_col_bin_2.size > 0 and np.max(cv2.matchTemplate(roi_col_bin_2, t5_bin, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
+                                if roi_col_gray_2.size > 0 and np.max(cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
                                     is_level_5 = True
                                     bprint("  > 🚨 [교차 검증] 지연 렌더링된 5레벨 최종 포착!")
                                 elif np.max(cv2.matchTemplate(hover_bin_2, t_trait_bin, cv2.TM_CCOEFF_NORMED)) >= conf_trait:

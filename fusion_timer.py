@@ -824,7 +824,7 @@ def fusion_bot_loop():
                                     
                                     if remaining_sec <= 0: 
                                         # 2단계: 타이머 종료 직후 '즉시' 비프음 출력
-                                        print(f"\r  > 융합 완료까지 남은 시간: 00분 00초   ", flush=True)
+                                        print(f"\r  > 융합 완료까지 남은 시간: 00분 00초\033[K", flush=True)
                                         print()
                                         bprint("✅ 5분 경과! 멜로디를 재생하며 시각적 검증을 시작합니다.")
                                         play_melody()
@@ -835,7 +835,7 @@ def fusion_bot_loop():
                                     
                                     # 수동 캐릭터 변경 스레드가 작동 중일 때는 화면이 깨지지 않게 \r 동적 출력을 잠시 멈춥니다.
                                     if not char_thread_active:
-                                        print(f"\r  > 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초   ", end="", flush=True)
+                                        print(f"\r  > 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
                                     
                                     original_sleep(1)
 
@@ -846,14 +846,14 @@ def fusion_bot_loop():
                                     # 기계가 시각적으로 여전히 돌아가고 있다면 서버 렉 보정 대기
                                     if check_img('stop_btn.png', thread_sct):
                                         if not char_thread_active:
-                                            print(f"\r  > ⏳ 융합 대기 중... (서버 렉 보정: 기계 가동 중)                                        ", end="", flush=True)
+                                            print(f"\r  > ⏳ 융합 대기 중... (서버 렉 보정: 기계 가동 중)\033[K", end="", flush=True)
                                         time.sleep(1)
                                         continue
                                         
                                     # 게임 화면(chance.png)이 닫혀 있다면 복구될 때까지 대기
                                     if not check_img('chance.png', thread_sct):
                                         if not char_thread_active:
-                                            print(f"\r  > ✅ 게임 화면(chance.png) 복구 대기 중...                                                       ", end="", flush=True)
+                                            print(f"\r  > ✅ 게임 화면(chance.png) 복구 대기 중...\033[K", end="", flush=True)
                                         time.sleep(0.5)
                                         continue
                                         
@@ -1128,7 +1128,7 @@ def fusion_bot_loop():
                                         break
                                     else:
                                         if bot_mode in [3, 4]:
-                                            print("\r  > 14.png 탐색 중... (마우스 이동)   ", end="", flush=True)
+                                            print("\r  > 14.png 탐색 중... (마우스 이동)\033[K", end="", flush=True)
                                             pyautogui.moveTo(CENTER_X, CENTER_Y)
                                             time.sleep(0.01)
                                             send_cmd('M', 400, 0)
@@ -1169,7 +1169,7 @@ def fusion_bot_loop():
                         remaining_sec = int(fusion_end_time - time.time())
                         
                         if remaining_sec <= 0:
-                            print(f"\r  > 융합 완료까지 남은 시간: 00분 00초   ", end="", flush=True)
+                            print(f"\r  > 융합 완료까지 남은 시간: 00분 00초\033[K", end="", flush=True)
                             print() 
                             bprint("✅ 타이머 종료! 모든 융합이 완료되었습니다!")
                             play_melody()
@@ -1189,7 +1189,7 @@ def fusion_bot_loop():
                             
                         mins = remaining_sec // 60
                         secs = remaining_sec % 60
-                        print(f"\r  > '{c_name}' 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초   ", end="", flush=True)
+                        print(f"\r  > '{c_name}' 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
                         original_sleep(1)
 
                 # --- [State 7] 지능형 감염물 세팅 시퀀스 ---
@@ -1221,12 +1221,12 @@ def fusion_bot_loop():
                             
                             # [핵심] stop_btn.png ROI 적용 (force_full 제거)
                             if check_img('stop_btn.png', thread_sct):
-                                print(f"\r  > ⏳ [스마트 대기] 기계 가동 확인. '{c_name}' 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초        ", end="", flush=True)
+                                print(f"\r  > ⏳ [스마트 대기] 기계 가동 확인. '{c_name}' 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
                             # [핵심] chance.png ROI 적용 (force_full 제거)
                             elif not check_img('chance.png', thread_sct):
-                                print(f"\r  > 🙈 [화면 최소화] 백그라운드 융합 남은 시간: {mins:02d}분 {secs:02d}초                                                      ", end="", flush=True)
+                                print(f"\r  > 🙈 [화면 최소화] 백그라운드 융합 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
                             else:
-                                print(f"\r  > ⏳ [서버 렉 방어] 기계 UI 렌더링 동기화 대기 중... 남은 시간: {mins:02d}분 {secs:02d}초        ", end="", flush=True)
+                                print(f"\r  > ⏳ [서버 렉 방어] 기계 UI 렌더링 동기화 대기 중... 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
                             
                             time.sleep(1)
                             continue # 타이머가 끝날 때까지 1.5단계(세팅)로 절대 돌입하지 않음!
@@ -1237,7 +1237,7 @@ def fusion_bot_loop():
                        # [핵심] stop_btn.png ROI 적용 (force_full 제거)
                         if check_img('stop_btn.png', thread_sct):
                             c_name = CHAR_NAMES.get(char_images[char_index], "캐릭")
-                            print(f"\r  > ⏳ '{c_name}' 융합 대기 중... (기계 가동 중)                                        ", end="", flush=True)
+                            print(f"\r  > ⏳ '{c_name}' 융합 대기 중... (기계 가동 중)\033[K", end="", flush=True)
                             check_fusion_afk(thread_sct)
                             time.sleep(1)
                             continue
@@ -1249,7 +1249,7 @@ def fusion_bot_loop():
                                 disp_sec = max(0, remaining_sec)
                                 mins = disp_sec // 60
                                 secs = disp_sec % 60
-                                print(f"\r  > ✅ 게임 화면(chance.png) 복구 대기 중... 남은 시간: {mins:02d}분 {secs:02d}초        ", end="", flush=True)
+                                print(f"\r  > ✅ 게임 화면(chance.png) 복구 대기 중... 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
                             time.sleep(0.5)
                             continue
                             

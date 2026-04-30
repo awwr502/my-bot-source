@@ -1479,8 +1479,7 @@ def fusion_bot_loop():
                                         if is_checked: continue
                                         
                                         roi = screen_bgr[pt[1]:pt[1]+h, pt[0]:pt[0]+w]
-                                        if np.mean(roi) < (template_brightness * 0.75): continue
-                                        if np.max(roi) < 90: continue 
+                                        if np.max(roi) < 120: continue
                                         
                                         if any(math.hypot(real_x-cp[0], real_y-cp[1]) < 80 for cp in all_candidates): continue
                                         all_candidates.append((real_x, real_y, w, h, item_name))

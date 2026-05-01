@@ -748,7 +748,7 @@ def fusion_bot_loop():
                             if len(t_trait_color.shape) == 2:
                                 t_trait_color = cv2.cvtColor(t_trait_color, cv2.COLOR_GRAY2BGR)
                             
-                            conf_lvl5 = FUSION_CONF.get('level_5.png', 0.85)
+                            conf_lvl5 = 0.80
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
 
                             # 판독 영역 설정
@@ -788,7 +788,7 @@ def fusion_bot_loop():
                                 has_trait = True
                             else:
                                 # [Early Reject 로직]: 조기 탈출 기준점
-                                if lvl5_val >= 0.25 or trait_val >= 0.25:
+                                if lvl5_val >= 0.35 or trait_val >= 0.25:
                                     time.sleep(0.15)
                                     sct_frame_2 = np.asarray(thread_sct.grab(tooltip_roi))
                                     hover_gray_2 = cv2.cvtColor(sct_frame_2, cv2.COLOR_BGRA2GRAY)

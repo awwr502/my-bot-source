@@ -759,58 +759,98 @@ def fusion_bot_loop():
                             trait_x1, trait_x2 = max(0, lx - 10), lx + 200
                             trait_y1, trait_y2 = ly + 30, ly + 300
                             
-                            # 1차 캡처: 컬러(BGR) 화면으로 통합 캡처
+                            # 1. 캡처: 흑백(형태 탐색용)과 컬러(무결성 검증용) 동시 준비
                             sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                            hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                             hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
                             
+                            roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
                             roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
-                            roi_trait_color = hover_color[trait_y1:trait_y2, trait_x1:trait_x2]
+                            roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
 
-                            lvl5_val = np.max(cv2.matchTemplate(roi_col_color, t5_color, cv2.TM_CCOEFF_NORMED)) if roi_col_color.size > 0 else 0
-                            
-                            # [핵심 2] 다중 스케일 매칭 (Multi-Scale Matching)
+                            # 2. 5레벨 흑백 탐색 (배경 노이즈 무시)
+                            t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY)
+                            res_5 = cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray.size > 0 else None
+                            lvl5_val = 0
+                            max_loc_5 = (0, 0)
+                            if res_5 is not None:
+                                _, lvl5_val, _, max_loc_5 = cv2.minMaxLoc(res_5)
+
+                            # 3. 특성 다중 스케일 탐색 (형태가 뚜렷하므로 흑백 스캔이 가장 정확함)
+                            t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                             trait_val = 0
-                            if roi_trait_color.size > 0:
-                                # 95%, 100%, 105% 스케일로 각각 비교하여 가장 높은 점수 획득
+                            if roi_trait_gray.size > 0:
                                 for scale in [0.95, 1.0, 1.05]:
-                                    width = int(t_trait_color.shape[1] * scale)
-                                    height = int(t_trait_color.shape[0] * scale)
-                                    if width > 0 and height > 0 and width <= roi_trait_color.shape[1] and height <= roi_trait_color.shape[0]:
-                                        resized_t = cv2.resize(t_trait_color, (width, height))
-                                        res = cv2.matchTemplate(roi_trait_color, resized_t, cv2.TM_CCOEFF_NORMED)
-                                        trait_val = max(trait_val, np.max(res))
+                                    width = int(t_trait_g.shape[1] * scale)
+                                    height = int(t_trait_g.shape[0] * scale)
+                                    if width > 0 and height > 0 and width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                        resized_t = cv2.resize(t_trait_g, (width, height))
+                                        res_t = cv2.matchTemplate(roi_trait_gray, resized_t, cv2.TM_CCOEFF_NORMED)
+                                        trait_val = max(trait_val, np.max(res_t))
 
-                            # 1차 즉각 판독
+                            # 4. [궁극 엔진] 5레벨 컬러 무결성 핀셋 검증
+                            is_level_5 = False
                             final_lvl5_val = 0.0
+                            
                             if lvl5_val >= conf_lvl5:
-                                is_level_5 = True
-                                final_lvl5_val = lvl5_val
+                                h, w = t5_g.shape[:2]
+                                found_box = roi_col_color[max_loc_5[1]:max_loc_5[1]+h, max_loc_5[0]:max_loc_5[0]+w]
+                                
+                                # '5' 글자(밝은 픽셀)만 걸러내는 수학적 마스크 생성
+                                _, mask = cv2.threshold(t5_g, 150, 255, cv2.THRESH_BINARY)
+                                
+                                if np.sum(mask) > 0:
+                                    # 글자 부분만의 평균 BGR 색상 도출
+                                    mean_b, mean_g, mean_r, _ = cv2.mean(found_box, mask=mask)
+                                    # 흰색 폰트는 R,G,B가 비슷함. 노란색(진짜 5레벨)은 Blue값이 현저히 낮음.
+                                    if mean_r > mean_b + 20 and mean_g > mean_b + 20:
+                                        is_level_5 = True
+                                        final_lvl5_val = lvl5_val
+                                    else:
+                                        lvl5_val = 0 # 가짜 5레벨(흰색 일반 텍스트)이면 점수 리셋! 특성 판별로 넘김.
+
+                            # 1차 판독 확정
+                            has_trait = False
+                            if is_level_5:
+                                pass
                             elif trait_val >= conf_trait:
                                 has_trait = True
                             else:
-                                # [Early Reject 로직]: 조기 탈출 기준점
+                                # [Early Reject 로직]: 조기 탈출 (2차 검증)
                                 if lvl5_val >= 0.35 or trait_val >= 0.25:
                                     time.sleep(0.15)
                                     sct_frame_2 = np.asarray(thread_sct.grab(tooltip_roi))
+                                    hover_gray_2 = cv2.cvtColor(sct_frame_2, cv2.COLOR_BGRA2GRAY)
                                     hover_color_2 = cv2.cvtColor(sct_frame_2, cv2.COLOR_BGRA2BGR)
                                     
+                                    roi_col_gray_2 = hover_gray_2[col_y1:col_y2, col_x1:col_x2]
                                     roi_col_color_2 = hover_color_2[col_y1:col_y2, col_x1:col_x2]
-                                    roi_trait_color_2 = hover_color_2[trait_y1:trait_y2, trait_x1:trait_x2]
+                                    roi_trait_gray_2 = hover_gray_2[trait_y1:trait_y2, trait_x1:trait_x2]
                                     
-                                    lvl5_val_2 = np.max(cv2.matchTemplate(roi_col_color_2, t5_color, cv2.TM_CCOEFF_NORMED)) if roi_col_color_2.size > 0 else 0
-                                    
+                                    res_5_2 = cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray_2.size > 0 else None
+                                    lvl5_val_2 = 0
+                                    if res_5_2 is not None:
+                                        _, lvl5_val_2, _, max_loc_5_2 = cv2.minMaxLoc(res_5_2)
+                                        
                                     if lvl5_val_2 >= conf_lvl5:
-                                        is_level_5 = True
-                                        final_lvl5_val = lvl5_val_2
-                                    elif roi_trait_color_2.size > 0:
+                                        h, w = t5_g.shape[:2]
+                                        found_box = roi_col_color_2[max_loc_5_2[1]:max_loc_5_2[1]+h, max_loc_5_2[0]:max_loc_5_2[0]+w]
+                                        _, mask = cv2.threshold(t5_g, 150, 255, cv2.THRESH_BINARY)
+                                        if np.sum(mask) > 0:
+                                            mean_b, mean_g, mean_r, _ = cv2.mean(found_box, mask=mask)
+                                            if mean_r > mean_b + 20 and mean_g > mean_b + 20:
+                                                is_level_5 = True
+                                                final_lvl5_val = lvl5_val_2
+                                    
+                                    if not is_level_5 and roi_trait_gray_2.size > 0:
                                         trait_val_2 = 0
                                         for scale in [0.95, 1.0, 1.05]:
-                                            width = int(t_trait_color.shape[1] * scale)
-                                            height = int(t_trait_color.shape[0] * scale)
-                                            if width > 0 and height > 0 and width <= roi_trait_color_2.shape[1] and height <= roi_trait_color_2.shape[0]:
-                                                resized_t = cv2.resize(t_trait_color, (width, height))
-                                                res = cv2.matchTemplate(roi_trait_color_2, resized_t, cv2.TM_CCOEFF_NORMED)
-                                                trait_val_2 = max(trait_val_2, np.max(res))
+                                            width = int(t_trait_g.shape[1] * scale)
+                                            height = int(t_trait_g.shape[0] * scale)
+                                            if width > 0 and height > 0 and width <= roi_trait_gray_2.shape[1] and height <= roi_trait_gray_2.shape[0]:
+                                                resized_t = cv2.resize(t_trait_g, (width, height))
+                                                res_t = cv2.matchTemplate(roi_trait_gray_2, resized_t, cv2.TM_CCOEFF_NORMED)
+                                                trait_val_2 = max(trait_val_2, np.max(res_t))
                                         
                                         if trait_val_2 >= conf_trait:
                                             has_trait = True

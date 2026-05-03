@@ -802,8 +802,9 @@ def fusion_bot_loop():
                                 if np.sum(mask) > 0:
                                     # 글자 부분만의 평균 BGR 색상 도출
                                     mean_b, mean_g, mean_r, _ = cv2.mean(found_box, mask=mask)
-                                    # 흰색 폰트는 R,G,B가 비슷함. 노란색(진짜 5레벨)은 Blue값이 현저히 낮음.
-                                    if mean_r > mean_b + 20 and mean_g > mean_b + 20:
+                                    # [수정] 흰색(일반 폰트)은 R,G,B가 비슷함. 민트/청록색(5레벨)은 Green과 Blue가 Red보다 높음!
+                                    # 엄청 널널한 범위: Green이나 Blue가 Red보다 10 이상 높기만 하면 무조건 통과 (흰색은 0~5 내외)
+                                    if mean_g > mean_r + 10 or mean_b > mean_r + 10:
                                         is_level_5 = True
                                         final_lvl5_val = lvl5_val
                                     else:
@@ -838,7 +839,7 @@ def fusion_bot_loop():
                                         _, mask = cv2.threshold(t5_g, 150, 255, cv2.THRESH_BINARY)
                                         if np.sum(mask) > 0:
                                             mean_b, mean_g, mean_r, _ = cv2.mean(found_box, mask=mask)
-                                            if mean_r > mean_b + 20 and mean_g > mean_b + 20:
+                                            if mean_g > mean_r + 10 or mean_b > mean_r + 10:
                                                 is_level_5 = True
                                                 final_lvl5_val = lvl5_val_2
                                     

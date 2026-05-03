@@ -748,9 +748,11 @@ def fusion_bot_loop():
                             has_trait = False
                             final_lvl5_val = 0.0
 
-                            # [진단용] 최고 인식률 기록
+                            # [진단용] 최고 인식률 기록 및 티어 추출
                             max_seen_5 = 0.0
                             max_seen_trait = 0.0
+                            found_tier_idx = 0
+                            found_tier_val = 0.0
                             
                             # 템플릿 사전 준비 (반복문 내부 연산 최소화)
                             t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['level_5.png'].shape) == 3 else FUSION_CACHE['level_5.png']
@@ -826,9 +828,13 @@ def fusion_bot_loop():
                                                 if t_idx == 1:
                                                     if is_truly_tier_1(roi_col_gray, max_loc_tier[0], max_loc_tier[1], t_tier_g.shape[0]):
                                                         tier_found = True
+                                                        found_tier_idx = t_idx
+                                                        found_tier_val = max_val_tier
                                                         break
                                                 else:
                                                     tier_found = True
+                                                    found_tier_idx = t_idx
+                                                    found_tier_val = max_val_tier
                                                     break
                                     
                                     if tier_found:
@@ -840,7 +846,11 @@ def fusion_bot_loop():
                             if is_level_5:
                                 bprint(f"  > 🛑 [보호] 5레벨 감염물. (임계값: {final_lvl5_val:.2f})")
                             elif has_trait:
-                                bprint("  > ♻️ [분해] 특성 포착."); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                if found_tier_idx > 0:
+                                    bprint(f"  > ♻️ [분해] 특성 포착 (최고 인식률 - {found_tier_idx}레벨:{found_tier_val:.2f})"); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                else:
+                                    # 0.3초가 지났지만 티어는 인식하지 못하고 특성만 인식한 경우의 예비용 출력
+                                    bprint(f"  > ♻️ [분해] 특성 포착 (최고 인식률 - 특성:{max_seen_trait:.2f})"); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:
                                 bprint(f"  > 💎 [보관] 확정적 순정. (최고 인식률 - 5레벨:{max_seen_5:.2f} / 특성:{max_seen_trait:.2f})")
                             

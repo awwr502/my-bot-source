@@ -724,16 +724,21 @@ def fusion_bot_loop():
                             label_found = False
                             lx, ly = 0, 0
                             wait_l = time.time()
+                            max_label_score = 0.0 # 진단용 최고 점수 추적
+                            
                             while time.time() - wait_l < 0.8 and bot_active:
                                 hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                 res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                 _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                if mv_l >= 0.90: 
+                                
+                                max_label_score = max(max_label_score, mv_l) # 매 프레임 최고 점수 갱신
+                                
+                                if mv_l >= 0.80: # 임계값 0.90 -> 0.80 하향 조정
                                     label_found = True; lx, ly = ml_l[0], ml_l[1]; break
                                 time.sleep(0.01)
 
                             if not label_found: 
-                                bprint("  > ⚠️ [타임아웃] 0.8초 내에 '어빌리티 라벨'을 인식하지 못해 조기 스킵합니다.")
+                                bprint(f"  > ⚠️ [타임아웃] 0.8초 내에 '어빌리티 라벨' 미인식 (최고점: {max_label_score:.2f}). 조기 스킵합니다.")
                                 fast_clear_tooltip(); continue
                                 
                             # [단계 2]: 0.3초 초고속 연속 스캔 엔진 (사용자 제안 방식)

@@ -711,7 +711,7 @@ def fusion_bot_loop():
                         for pt_data in all_candidates:
                             if not bot_active or bot_mode != 5: break
                             
-                            # [핵심] 모든 판단 변수 초기화 (UnboundLocalError 원천 차단)
+                            # [핵심] 여기서 모든 판단 변수를 초기화해야 아래에서 에러가 안 납니다.
                             is_level_5 = False
                             has_trait = False
                             is_confirmed_not_5 = False
@@ -729,30 +729,26 @@ def fusion_bot_loop():
                             r_width, r_height = min(500, mon["left"] + mon["width"] - r_left), mon["height"]
                             tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
 
-                            # 1단계: 라벨 기반 동기화 (이벤트 트리거)
+                            # 1단계: 라벨 기반 동기화
                             label_found = False
                             lx, ly = 0, 0
                             wait_l = time.time()
                             max_label_score = 0.0
-                            
                             while time.time() - wait_l < 0.8 and bot_active:
                                 hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                 res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                 _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
                                 max_label_score = max(max_label_score, mv_l)
-                                
                                 if mv_l >= 0.80: 
                                     label_found = True; lx, ly = ml_l[0], ml_l[1]; break
                                 time.sleep(0.01)
 
                             if not label_found: 
-                                bprint(f"  > ⚠️ [타임아웃] 0.8초 내에 '어빌리티 라벨' 미인식 (최고점: {max_label_score:.2f}). 조기 스킵합니다.")
+                                bprint(f"  > ⚠️ [타임아웃] 라벨 미인식 (최고점: {max_label_score:.2f}). 스킵.")
                                 fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 상호 배타적 쾌속 엔진 (Single-Thread Sequential Scan)
+                            # 2단계: 상호 배타적 쾌속 엔진 (Single-Thread)
                             scan_start = time.time()
-                            
-                            # 템플릿 및 숫자 리스트 사전 준비
                             t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['level_5.png'].shape) == 3 else FUSION_CACHE['level_5.png']
                             t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                             tier_keys = ['tier_1.png', 'tier_2.png', 'tier_3.png', 'tier_4.png']
@@ -761,7 +757,6 @@ def fusion_bot_loop():
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
                             EXCLUSION_CONF = 0.90 
 
-                            # 판독 영역 좌표 설정
                             col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
                             col_y1, col_y2 = max(0, ly - 20), ly + 150
                             trait_x1, trait_x2 = max(0, lx - 10), lx + 200
@@ -771,9 +766,7 @@ def fusion_bot_loop():
                                 sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
                                 h_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                                 h_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
-                                
                                 r_col_gray = h_gray[col_y1:col_y2, col_x1:col_x2]
-                                r_col_color = h_color[col_y1:col_y2, col_x1:col_x2]
                                 r_trait_gray = h_gray[trait_y1:trait_y2, trait_x1:trait_x2]
 
                                 # 1. 5레벨 최우선 스캔
@@ -782,50 +775,40 @@ def fusion_bot_loop():
                                     _, l5_v, _, m5_l = cv2.minMaxLoc(res_5)
                                     max_seen_5 = max(max_seen_5, l5_v)
                                     if l5_v >= conf_lvl5:
-                                        h5, w5 = t5_g.shape[:2]
-                                        f_box = r_col_color[m5_l[1]:m5_l[1]+h5, m5_l[0]:m5_l[0]+w5]
+                                        f_box = h_color[col_y1+m5_l[1]:col_y1+m5_l[1]+t5_g.shape[0], col_x1+m5_l[0]:col_x1+m5_l[0]+t5_g.shape[1]]
                                         _, msk = cv2.threshold(t5_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                        if np.sum(msk) > 0:
+                                        if np.sum(msk) > 0 and f_box.size > 0:
                                             mb, mg, mr, _ = cv2.mean(f_box, mask=msk)
                                             if mg > mr + 10 or mb > mr + 10:
-                                                is_level_5 = True
-                                                final_lvl5_val = l5_v
-                                                break 
+                                                is_level_5 = True; final_lvl5_val = l5_v; break 
 
-                                # 2. 상호 배타적 확정 스캔
+                                # 2. 상호 배타적 확정 스캔 (1~4레벨 확인 시 즉시 종료)
                                 if not is_level_5 and r_col_gray.size > 0:
                                     for tk in tier_keys:
                                         t_tmp = FUSION_CACHE.get(tk)
                                         if t_tmp is None: continue
                                         t_tmp_g = cv2.cvtColor(t_tmp, cv2.COLOR_BGR2GRAY) if len(t_tmp.shape) == 3 else t_tmp
                                         if cv2.minMaxLoc(cv2.matchTemplate(r_col_gray, t_tmp_g, cv2.TM_CCOEFF_NORMED))[1] >= EXCLUSION_CONF:
-                                            is_confirmed_not_5 = True
-                                            break
-                                    if is_confirmed_not_5: 
-                                        bprint(f"  > ⚡ [쾌속 확정] {tk.split('.')[0]} 포착. 조기 탈출.")
-                                        break
+                                            is_confirmed_not_5 = True; break
+                                    if is_confirmed_not_5: break
 
-                                # 3. 특성 백그라운드 스캔
+                                # 3. 특성 누적 스캔
                                 if not has_trait and r_trait_gray.size > 0:
                                     for scale in [0.95, 1.0, 1.05]:
                                         tw, th = int(t_trait_g.shape[1] * scale), int(t_trait_g.shape[0] * scale)
-                                        if tw > 0 and th > 0 and tw <= r_trait_gray.shape[1] and th <= r_trait_gray.shape[0]:
+                                        if tw <= r_trait_gray.shape[1] and th <= r_trait_gray.shape[0]:
                                             rsz_t = cv2.resize(t_trait_g, (tw, th))
                                             cur_t_v = np.max(cv2.matchTemplate(r_trait_gray, rsz_t, cv2.TM_CCOEFF_NORMED))
                                             max_seen_trait = max(max_seen_trait, cur_t_v)
-                                            if cur_t_v >= conf_trait:
-                                                has_trait = True
-                                                break
+                                            if cur_t_v >= conf_trait: has_trait = True; break
                                 time.sleep(0.01)
 
-                            # [최종 의사결정]
                             if is_level_5:
                                 bprint(f"  > 🛑 [보호] 5레벨 감염물. (임계값: {final_lvl5_val:.2f})")
                             elif has_trait:
                                 bprint("  > ♻️ [분해] 특성 포착."); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:
-                                bprint(f"  > 💎 [보관] 확정적 순정. (최고 인식률 - 5레벨:{max_seen_5:.2f} / 특성:{max_seen_trait:.2f})")
-                            
+                                bprint(f"  > 💎 [보관] 순정. (최고점 5레벨:{max_seen_5:.2f} / 특성:{max_seen_trait:.2f})")
                             fast_clear_tooltip()
                         
                         bprint("  > 🛑 [종료] 감염물 분별 처리 완료."); toggle_stop(); continue

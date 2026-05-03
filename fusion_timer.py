@@ -747,27 +747,17 @@ def fusion_bot_loop():
                             is_level_5 = False
                             has_trait = False
                             final_lvl5_val = 0.0
-
-                            # [진단용] 최고 인식률 기록 및 티어 추출
+                            
+                            # [진단용] 0.3초 동안 스쳐간 최고 인식률 기록
                             max_seen_5 = 0.0
                             max_seen_trait = 0.0
-                            found_tier_idx = 0
-                            found_tier_val = 0.0
                             
                             # 템플릿 사전 준비 (반복문 내부 연산 최소화)
                             t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['level_5.png'].shape) == 3 else FUSION_CACHE['level_5.png']
                             t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                             
-                            # 티어 1~4 템플릿 사전 준비 (Fast-Exit 용도)
-                            t_tiers_g = {}
-                            for i in range(1, 5):
-                                img = FUSION_CACHE.get(f'tier_{i}.png')
-                                if img is not None:
-                                    t_tiers_g[i] = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
-                            
                             conf_lvl5 = 0.80
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
-                            conf_tier = 0.85 # 사용자 요청 티어 임계값
                             
                             # 판독 영역 좌표 설정
                             col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
@@ -785,11 +775,11 @@ def fusion_bot_loop():
                                 roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
                                 roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
                                 
-                                # 1. 5레벨 스캔 (발견 즉시 보관 Fast-Exit)
+                                # 1. 5레벨 스캔 (발견 즉시 루프 폭파)
                                 res_5 = cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray.size > 0 else None
                                 if res_5 is not None:
                                     _, lvl5_val, _, max_loc_5 = cv2.minMaxLoc(res_5)
-                                    max_seen_5 = max(max_seen_5, lvl5_val)
+                                    max_seen_5 = max(max_seen_5, lvl5_val) # 최고 점수 기록
                                     if lvl5_val >= conf_lvl5:
                                         h, w = t5_g.shape[:2]
                                         found_box = roi_col_color[max_loc_5[1]:max_loc_5[1]+h, max_loc_5[0]:max_loc_5[0]+w]
@@ -799,9 +789,9 @@ def fusion_bot_loop():
                                             if mean_g > mean_r + 10 or mean_b > mean_r + 10:
                                                 is_level_5 = True
                                                 final_lvl5_val = lvl5_val
-                                                break # 5레벨 탈출
+                                                break # 5레벨 확인 즉시 0.3초 대기 캔슬하고 탈출 (스킵 최우선)
                                                 
-                                # 2. 특성 스캔
+                                # 2. 특성 스캔 (5레벨이 안 나왔을 때만 백그라운드로 누적 기록)
                                 if not has_trait and roi_trait_gray.size > 0:
                                     for scale in [0.95, 1.0, 1.05]:
                                         width = int(t_trait_g.shape[1] * scale)
@@ -810,35 +800,10 @@ def fusion_bot_loop():
                                             resized_t = cv2.resize(t_trait_g, (width, height))
                                             res_t = cv2.matchTemplate(roi_trait_gray, resized_t, cv2.TM_CCOEFF_NORMED)
                                             current_t_val = np.max(res_t)
-                                            max_seen_trait = max(max_seen_trait, current_t_val)
+                                            max_seen_trait = max(max_seen_trait, current_t_val) # 최고 점수 기록
                                             if current_t_val >= conf_trait:
                                                 has_trait = True
-                                                break
-                                
-                                # 3. [사용자 핵심 로직] 특성이 확인되었고, 1~4티어 숫자가 명확히 보인다면 즉시 분해 Fast-Exit!
-                                if has_trait and roi_col_gray.size > 0:
-                                    tier_found = False
-                                    for t_idx, t_tier_g in t_tiers_g.items():
-                                        if roi_col_gray.shape[0] >= t_tier_g.shape[0] and roi_col_gray.shape[1] >= t_tier_g.shape[1]:
-                                            res_tier = cv2.matchTemplate(roi_col_gray, t_tier_g, cv2.TM_CCOEFF_NORMED)
-                                            _, max_val_tier, _, max_loc_tier = cv2.minMaxLoc(res_tier)
-                                            
-                                            if max_val_tier >= conf_tier:
-                                                # 1티어인 경우 오탐 방지용 is_truly_tier_1 검증 적용
-                                                if t_idx == 1:
-                                                    if is_truly_tier_1(roi_col_gray, max_loc_tier[0], max_loc_tier[1], t_tier_g.shape[0]):
-                                                        tier_found = True
-                                                        found_tier_idx = t_idx
-                                                        found_tier_val = max_val_tier
-                                                        break
-                                                else:
-                                                    tier_found = True
-                                                    found_tier_idx = t_idx
-                                                    found_tier_val = max_val_tier
-                                                    break
-                                    
-                                    if tier_found:
-                                        break # 5레벨이 아니면서(위에서 걸러짐) 1~4티어 + 특성이 확정되었으므로 즉시 탈출
+                                                break # 현재 프레임에서 특성을 찾았으면 스케일 루프 탈출
                                 
                                 time.sleep(0.01) # 프레임 과부하 방지
 
@@ -846,11 +811,7 @@ def fusion_bot_loop():
                             if is_level_5:
                                 bprint(f"  > 🛑 [보호] 5레벨 감염물. (임계값: {final_lvl5_val:.2f})")
                             elif has_trait:
-                                if found_tier_idx > 0:
-                                    bprint(f"  > ♻️ [분해] 특성 포착 (최고 인식률 - {found_tier_idx}레벨:{found_tier_val:.2f})"); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
-                                else:
-                                    # 0.3초가 지났지만 티어는 인식하지 못하고 특성만 인식한 경우의 예비용 출력
-                                    bprint(f"  > ♻️ [분해] 특성 포착 (최고 인식률 - 특성:{max_seen_trait:.2f})"); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                bprint("  > ♻️ [분해] 특성 포착."); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:
                                 bprint(f"  > 💎 [보관] 확정적 순정. (최고 인식률 - 5레벨:{max_seen_5:.2f} / 특성:{max_seen_trait:.2f})")
                             

@@ -734,89 +734,64 @@ def fusion_bot_loop():
 
                             if not label_found: fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 궁극의 비전 엔진 (Multi-Scale + Color Space + Early Reject)
-                            time.sleep(0.15)
-                            
+                            # [단계 2]: 0.3초 초고속 연속 스캔 엔진 (사용자 제안 방식)
+                            # 라벨 포착 직후 최대 0.3초간 프레임을 연속으로 뽑아내며 5레벨과 특성을 동시 추적합니다.
+                            scan_start = time.time()
                             is_level_5 = False
                             has_trait = False
+                            final_lvl5_val = 0.0
                             
-                            # 5레벨은 기존 그레이스케일 유지 (단순 형태라 흑백이 더 빠름)
-                            t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY)
-                            
-                            # [핵심 1] 특성은 흑백 변환을 버리고 순정 컬러(BGR) 정보를 유지
-                            t_trait_color = FUSION_CACHE['trait.png']
-                            if len(t_trait_color.shape) == 2:
-                                t_trait_color = cv2.cvtColor(t_trait_color, cv2.COLOR_GRAY2BGR)
+                            # 템플릿 사전 준비 (반복문 내부 연산 최소화)
+                            t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['level_5.png'].shape) == 3 else FUSION_CACHE['level_5.png']
+                            t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                             
                             conf_lvl5 = 0.80
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
-
-                            # 판독 영역 설정
+                            
+                            # 판독 영역 좌표 설정
                             col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
                             col_y1, col_y2 = max(0, ly - 20), ly + 150
                             
                             trait_x1, trait_x2 = max(0, lx - 10), lx + 200
                             trait_y1, trait_y2 = ly + 30, ly + 300
                             
-                            # 1차 캡처: 5레벨용 흑백 화면과 특성용 컬러 화면 분리
-                            sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                            hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
-                            hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
-                            
-                            roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
-                            roi_trait_color = hover_color[trait_y1:trait_y2, trait_x1:trait_x2]
-
-                            lvl5_val = np.max(cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED)) if roi_col_gray.size > 0 else 0
-                            
-                            # [핵심 2] 다중 스케일 매칭 (Multi-Scale Matching)
-                            trait_val = 0
-                            if roi_trait_color.size > 0:
-                                # 95%, 100%, 105% 스케일로 각각 비교하여 가장 높은 점수 획득
-                                for scale in [0.95, 1.0, 1.05]:
-                                    width = int(t_trait_color.shape[1] * scale)
-                                    height = int(t_trait_color.shape[0] * scale)
-                                    if width > 0 and height > 0 and width <= roi_trait_color.shape[1] and height <= roi_trait_color.shape[0]:
-                                        resized_t = cv2.resize(t_trait_color, (width, height))
-                                        res = cv2.matchTemplate(roi_trait_color, resized_t, cv2.TM_CCOEFF_NORMED)
-                                        trait_val = max(trait_val, np.max(res))
-
-                            # 1차 즉각 판독
-                            final_lvl5_val = 0.0
-                            if lvl5_val >= conf_lvl5:
-                                is_level_5 = True
-                                final_lvl5_val = lvl5_val
-                            elif trait_val >= conf_trait:
-                                has_trait = True
-                            else:
-                                # [Early Reject 로직]: 조기 탈출 기준점
-                                if lvl5_val >= 0.35 or trait_val >= 0.25:
-                                    time.sleep(0.15)
-                                    sct_frame_2 = np.asarray(thread_sct.grab(tooltip_roi))
-                                    hover_gray_2 = cv2.cvtColor(sct_frame_2, cv2.COLOR_BGRA2GRAY)
-                                    hover_color_2 = cv2.cvtColor(sct_frame_2, cv2.COLOR_BGRA2BGR)
-                                    
-                                    roi_col_gray_2 = hover_gray_2[col_y1:col_y2, col_x1:col_x2]
-                                    roi_trait_color_2 = hover_color_2[trait_y1:trait_y2, trait_x1:trait_x2]
-                                    
-                                    lvl5_val_2 = np.max(cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED)) if roi_col_gray_2.size > 0 else 0
-                                    if lvl5_val_2 >= conf_lvl5:
-                                        is_level_5 = True
-                                        final_lvl5_val = lvl5_val_2
-                                        bprint("  > 🚨 [2차 검증] 지연 렌더링된 5레벨 최종 포착!")
-                                    elif roi_trait_color_2.size > 0:
-                                        # 2차 검증 시에도 다중 스케일 매칭 수행
-                                        trait_val_2 = 0
-                                        for scale in [0.95, 1.0, 1.05]:
-                                            width = int(t_trait_color.shape[1] * scale)
-                                            height = int(t_trait_color.shape[0] * scale)
-                                            if width > 0 and height > 0 and width <= roi_trait_color_2.shape[1] and height <= roi_trait_color_2.shape[0]:
-                                                resized_t = cv2.resize(t_trait_color, (width, height))
-                                                res = cv2.matchTemplate(roi_trait_color_2, resized_t, cv2.TM_CCOEFF_NORMED)
-                                                trait_val_2 = max(trait_val_2, np.max(res))
-                                        
-                                        if trait_val_2 >= conf_trait:
-                                            has_trait = True
-                                            bprint("  > 🚨 [2차 검증] UI 정렬 완료 후 특성 최종 포착!")
+                            while time.time() - scan_start < 0.30 and bot_active:
+                                sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
+                                
+                                roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
+                                roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
+                                roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                
+                                # 1. 5레벨 스캔 (발견 즉시 루프 폭파)
+                                res_5 = cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray.size > 0 else None
+                                if res_5 is not None:
+                                    _, lvl5_val, _, max_loc_5 = cv2.minMaxLoc(res_5)
+                                    if lvl5_val >= conf_lvl5:
+                                        h, w = t5_g.shape[:2]
+                                        found_box = roi_col_color[max_loc_5[1]:max_loc_5[1]+h, max_loc_5[0]:max_loc_5[0]+w]
+                                        _, mask = cv2.threshold(t5_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                                        if np.sum(mask) > 0:
+                                            mean_b, mean_g, mean_r, _ = cv2.mean(found_box, mask=mask)
+                                            if mean_g > mean_r + 10 or mean_b > mean_r + 10:
+                                                is_level_5 = True
+                                                final_lvl5_val = lvl5_val
+                                                break # 5레벨 확인 즉시 0.3초 대기 캔슬하고 탈출 (스킵 최우선)
+                                                
+                                # 2. 특성 스캔 (5레벨이 안 나왔을 때만 백그라운드로 누적 기록)
+                                if not has_trait and roi_trait_gray.size > 0:
+                                    for scale in [0.95, 1.0, 1.05]:
+                                        width = int(t_trait_g.shape[1] * scale)
+                                        height = int(t_trait_g.shape[0] * scale)
+                                        if width > 0 and height > 0 and width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                            resized_t = cv2.resize(t_trait_g, (width, height))
+                                            res_t = cv2.matchTemplate(roi_trait_gray, resized_t, cv2.TM_CCOEFF_NORMED)
+                                            if np.max(res_t) >= conf_trait:
+                                                has_trait = True
+                                                break # 현재 프레임에서 특성을 찾았으면 스케일 루프 탈출
+                                
+                                time.sleep(0.01) # 프레임 과부하 방지
 
                             # [최종 의사결정]
                             if is_level_5:

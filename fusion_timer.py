@@ -740,10 +740,11 @@ def fusion_bot_loop():
                             is_level_5 = False
                             has_trait = False
                             
-                            # 5레벨은 기존 그레이스케일 유지 (단순 형태라 흑백이 더 빠름)
-                            t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY)
-                            
-                            # [핵심 1] 특성은 흑백 변환을 버리고 순정 컬러(BGR) 정보를 유지
+                            # [컬러 비전 엔진 전환] 5레벨과 특성 모두 순정 컬러(BGR) 정보를 유지하여 오탐 원천 차단
+                            t5_color = FUSION_CACHE['level_5.png']
+                            if len(t5_color.shape) == 2:
+                                t5_color = cv2.cvtColor(t5_color, cv2.COLOR_GRAY2BGR)
+                                
                             t_trait_color = FUSION_CACHE['trait.png']
                             if len(t_trait_color.shape) == 2:
                                 t_trait_color = cv2.cvtColor(t_trait_color, cv2.COLOR_GRAY2BGR)
@@ -758,15 +759,14 @@ def fusion_bot_loop():
                             trait_x1, trait_x2 = max(0, lx - 10), lx + 200
                             trait_y1, trait_y2 = ly + 30, ly + 300
                             
-                            # 1차 캡처: 5레벨용 흑백 화면과 특성용 컬러 화면 분리
+                            # 1차 캡처: 컬러(BGR) 화면으로 통합 캡처
                             sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                            hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                             hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
                             
-                            roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
+                            roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
                             roi_trait_color = hover_color[trait_y1:trait_y2, trait_x1:trait_x2]
 
-                            lvl5_val = np.max(cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED)) if roi_col_gray.size > 0 else 0
+                            lvl5_val = np.max(cv2.matchTemplate(roi_col_color, t5_color, cv2.TM_CCOEFF_NORMED)) if roi_col_color.size > 0 else 0
                             
                             # [핵심 2] 다중 스케일 매칭 (Multi-Scale Matching)
                             trait_val = 0
@@ -792,19 +792,17 @@ def fusion_bot_loop():
                                 if lvl5_val >= 0.35 or trait_val >= 0.25:
                                     time.sleep(0.15)
                                     sct_frame_2 = np.asarray(thread_sct.grab(tooltip_roi))
-                                    hover_gray_2 = cv2.cvtColor(sct_frame_2, cv2.COLOR_BGRA2GRAY)
                                     hover_color_2 = cv2.cvtColor(sct_frame_2, cv2.COLOR_BGRA2BGR)
                                     
-                                    roi_col_gray_2 = hover_gray_2[col_y1:col_y2, col_x1:col_x2]
+                                    roi_col_color_2 = hover_color_2[col_y1:col_y2, col_x1:col_x2]
                                     roi_trait_color_2 = hover_color_2[trait_y1:trait_y2, trait_x1:trait_x2]
                                     
-                                    lvl5_val_2 = np.max(cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED)) if roi_col_gray_2.size > 0 else 0
+                                    lvl5_val_2 = np.max(cv2.matchTemplate(roi_col_color_2, t5_color, cv2.TM_CCOEFF_NORMED)) if roi_col_color_2.size > 0 else 0
+                                    
                                     if lvl5_val_2 >= conf_lvl5:
                                         is_level_5 = True
                                         final_lvl5_val = lvl5_val_2
-                                        bprint("  > 🚨 [2차 검증] 지연 렌더링된 5레벨 최종 포착!")
                                     elif roi_trait_color_2.size > 0:
-                                        # 2차 검증 시에도 다중 스케일 매칭 수행
                                         trait_val_2 = 0
                                         for scale in [0.95, 1.0, 1.05]:
                                             width = int(t_trait_color.shape[1] * scale)
@@ -816,7 +814,6 @@ def fusion_bot_loop():
                                         
                                         if trait_val_2 >= conf_trait:
                                             has_trait = True
-                                            bprint("  > 🚨 [2차 검증] UI 정렬 완료 후 특성 최종 포착!")
 
                             # [최종 의사결정]
                             if is_level_5:

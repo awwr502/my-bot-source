@@ -768,9 +768,8 @@ def fusion_bot_loop():
                             roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
                             roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
 
-                            # 2. 5레벨 흑백 탐색 (배경 노이즈 무시)
-                            t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY)
-                            res_5 = cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray.size > 0 else None
+                            # 2. 5레벨 컬러 탐색
+                            res_5 = cv2.matchTemplate(roi_col_color, t5_color, cv2.TM_CCOEFF_NORMED) if roi_col_color.size > 0 else None
                             lvl5_val = 0
                             max_loc_5 = (0, 0)
                             if res_5 is not None:
@@ -793,22 +792,8 @@ def fusion_bot_loop():
                             final_lvl5_val = 0.0
                             
                             if lvl5_val >= conf_lvl5:
-                                h, w = t5_g.shape[:2]
-                                found_box = roi_col_color[max_loc_5[1]:max_loc_5[1]+h, max_loc_5[0]:max_loc_5[0]+w]
-                                
-                                # '5' 글자(밝은 픽셀)만 걸러내는 수학적 마스크 생성
-                                _, mask = cv2.threshold(t5_g, 150, 255, cv2.THRESH_BINARY)
-                                
-                                if np.sum(mask) > 0:
-                                    # 글자 부분만의 평균 BGR 색상 도출
-                                    mean_b, mean_g, mean_r, _ = cv2.mean(found_box, mask=mask)
-                                    # [수정] 흰색(일반 폰트)은 R,G,B가 비슷함. 민트/청록색(5레벨)은 Green과 Blue가 Red보다 높음!
-                                    # 엄청 널널한 범위: Green이나 Blue가 Red보다 10 이상 높기만 하면 무조건 통과 (흰색은 0~5 내외)
-                                    if mean_g > mean_r + 10 or mean_b > mean_r + 10:
-                                        is_level_5 = True
-                                        final_lvl5_val = lvl5_val
-                                    else:
-                                        lvl5_val = 0 # 가짜 5레벨(흰색 일반 텍스트)이면 점수 리셋! 특성 판별로 넘김.
+                                is_level_5 = True
+                                final_lvl5_val = lvl5_val
 
                             # 1차 판독 확정
                             has_trait = False
@@ -828,20 +813,14 @@ def fusion_bot_loop():
                                     roi_col_color_2 = hover_color_2[col_y1:col_y2, col_x1:col_x2]
                                     roi_trait_gray_2 = hover_gray_2[trait_y1:trait_y2, trait_x1:trait_x2]
                                     
-                                    res_5_2 = cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray_2.size > 0 else None
+                                    res_5_2 = cv2.matchTemplate(roi_col_color_2, t5_color, cv2.TM_CCOEFF_NORMED) if roi_col_color_2.size > 0 else None
                                     lvl5_val_2 = 0
                                     if res_5_2 is not None:
                                         _, lvl5_val_2, _, max_loc_5_2 = cv2.minMaxLoc(res_5_2)
                                         
                                     if lvl5_val_2 >= conf_lvl5:
-                                        h, w = t5_g.shape[:2]
-                                        found_box = roi_col_color_2[max_loc_5_2[1]:max_loc_5_2[1]+h, max_loc_5_2[0]:max_loc_5_2[0]+w]
-                                        _, mask = cv2.threshold(t5_g, 150, 255, cv2.THRESH_BINARY)
-                                        if np.sum(mask) > 0:
-                                            mean_b, mean_g, mean_r, _ = cv2.mean(found_box, mask=mask)
-                                            if mean_g > mean_r + 10 or mean_b > mean_r + 10:
-                                                is_level_5 = True
-                                                final_lvl5_val = lvl5_val_2
+                                        is_level_5 = True
+                                        final_lvl5_val = lvl5_val_2
                                     
                                     if not is_level_5 and roi_trait_gray_2.size > 0:
                                         trait_val_2 = 0

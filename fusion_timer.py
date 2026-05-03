@@ -741,45 +741,11 @@ def fusion_bot_loop():
                                 bprint(f"  > ⚠️ [타임아웃] 0.8초 내에 '어빌리티 라벨' 미인식 (최고점: {max_label_score:.2f}). 조기 스킵합니다.")
                                 fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 0.3초 초고속 연속 스캔 엔진 (사용자 제안 방식)
-                            # 라벨 포착 직후 최대 0.3초간 프레임을 연속으로 뽑아내며 5레벨과 특성을 동시 추적합니다.
-                            scan_start = time.time()
-                            is_level_5 = False
-                            has_trait = False
-                            final_lvl5_val = 0.0
-                            
-                            # [진단용] 0.3초 동안 스쳐간 최고 인식률 기록
-                            max_seen_5 = 0.0
-                            max_seen_trait = 0.0
-                            
-                            # 템플릿 사전 준비 (반복문 내부 연산 최소화)
-                            t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['level_5.png'].shape) == 3 else FUSION_CACHE['level_5.png']
-                            t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
-                            
-                            conf_lvl5 = 0.80
-                            conf_trait = FUSION_CONF.get('trait.png', 0.70)
-                            
-                            # 판독 영역 좌표 설정
-                            col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
-                            col_y1, col_y2 = max(0, ly - 20), ly + 150
-                            
-                            trait_x1, trait_x2 = max(0, lx - 10), lx + 200
-                            trait_y1, trait_y2 = ly + 30, ly + 300
-                            
-                            while time.time() - scan_start < 0.30 and bot_active:
-                                sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                                hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
-                                hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
-                                
-                                roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
-                                roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
-                                roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                
-                                # 1. 5레벨 스캔 (발견 즉시 루프 폭파)
+                            # 1. 5레벨 최우선 스캔 (발견 시 즉시 보호 및 종료)
                                 res_5 = cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray.size > 0 else None
                                 if res_5 is not None:
                                     _, lvl5_val, _, max_loc_5 = cv2.minMaxLoc(res_5)
-                                    max_seen_5 = max(max_seen_5, lvl5_val) # 최고 점수 기록
+                                    max_seen_5 = max(max_seen_5, lvl5_val)
                                     if lvl5_val >= conf_lvl5:
                                         h, w = t5_g.shape[:2]
                                         found_box = roi_col_color[max_loc_5[1]:max_loc_5[1]+h, max_loc_5[0]:max_loc_5[0]+w]
@@ -789,9 +755,24 @@ def fusion_bot_loop():
                                             if mean_g > mean_r + 10 or mean_b > mean_r + 10:
                                                 is_level_5 = True
                                                 final_lvl5_val = lvl5_val
-                                                break # 5레벨 확인 즉시 0.3초 대기 캔슬하고 탈출 (스킵 최우선)
-                                                
-                                # 2. 특성 스캔 (5레벨이 안 나왔을 때만 백그라운드로 누적 기록)
+                                                break # 5레벨 확인 즉시 루프 종료
+
+                                # 2. 상호 배타적 확정 스캔 (1~4레벨 중 하나라도 선명하면 5레벨 아님 확정)
+                                if not is_level_5 and roi_col_gray.size > 0:
+                                    for tk in tier_keys:
+                                        t_template = FUSION_CACHE.get(tk)
+                                        if t_template is None: continue
+                                        # 흑백으로 변환된 템플릿 사용
+                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                        res_ex = cv2.matchTemplate(roi_col_gray, t_template_g, cv2.TM_CCOEFF_NORMED)
+                                        if cv2.minMaxLoc(res_ex)[1] >= EXCLUSION_CONF:
+                                            is_confirmed_not_5 = True
+                                            break
+                                    if is_confirmed_not_5: 
+                                        bprint(f"  > ⚡ [쾌속 확정] {tk.split('.')[0]} 포착. 5레벨 아님을 확정하고 조기 탈출합니다.")
+                                        break
+
+                                # 3. 특성 백그라운드 누적 스캔
                                 if not has_trait and roi_trait_gray.size > 0:
                                     for scale in [0.95, 1.0, 1.05]:
                                         width = int(t_trait_g.shape[1] * scale)
@@ -800,11 +781,11 @@ def fusion_bot_loop():
                                             resized_t = cv2.resize(t_trait_g, (width, height))
                                             res_t = cv2.matchTemplate(roi_trait_gray, resized_t, cv2.TM_CCOEFF_NORMED)
                                             current_t_val = np.max(res_t)
-                                            max_seen_trait = max(max_seen_trait, current_t_val) # 최고 점수 기록
+                                            max_seen_trait = max(max_seen_trait, current_t_val)
                                             if current_t_val >= conf_trait:
                                                 has_trait = True
-                                                break # 현재 프레임에서 특성을 찾았으면 스케일 루프 탈출
-                                
+                                                break
+
                                 time.sleep(0.01) # 프레임 과부하 방지
 
                             # [최종 의사결정]

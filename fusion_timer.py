@@ -768,12 +768,22 @@ def fusion_bot_loop():
                             roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
                             roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
 
-                            # 2. 5레벨 흑백 탐색 (형태 인식의 안정성을 위해 복구)
-                            t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['level_5.png'].shape) == 3 else FUSION_CACHE['level_5.png']
-                            res_5 = cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray.size > 0 else None
+                            # 2. 5레벨 HSV 색상 필터링 탐색 (배경 및 안티앨리어싱 노이즈 원천 차단)
                             lvl5_val = 0
                             max_loc_5 = (0, 0)
-                            if res_5 is not None:
+                            t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['level_5.png'].shape) == 3 else FUSION_CACHE['level_5.png']
+                            _, t5_mask = cv2.threshold(t5_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                            
+                            # 5레벨 고유의 네온 민트색 파장(Hue) 범위 고정
+                            lower_mint = np.array([45, 40, 90])
+                            upper_mint = np.array([110, 255, 255])
+                            
+                            if roi_col_color.size > 0:
+                                roi_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
+                                roi_mask = cv2.inRange(roi_hsv, lower_mint, upper_mint)
+                                
+                                # 화면의 민트색 픽셀 형태(roi_mask)와 숫자 5의 형태(t5_mask)를 매칭
+                                res_5 = cv2.matchTemplate(roi_mask, t5_mask, cv2.TM_CCOEFF_NORMED)
                                 _, lvl5_val, _, max_loc_5 = cv2.minMaxLoc(res_5)
 
                             # 3. 특성 다중 스케일 탐색 (형태가 뚜렷하므로 흑백 스캔이 가장 정확함)
@@ -792,20 +802,10 @@ def fusion_bot_loop():
                             is_level_5 = False
                             final_lvl5_val = 0.0
                             
+                            # HSV 매칭이 색상(민트색)과 형태(숫자 5)를 동시에 100% 검증했으므로 2차 검증을 생략합니다.
                             if lvl5_val >= conf_lvl5:
-                                h, w = t5_g.shape[:2]
-                                found_box = roi_col_color[max_loc_5[1]:max_loc_5[1]+h, max_loc_5[0]:max_loc_5[0]+w]
-                                
-                                # 고정 임계값 150을 버리고 Otsu 알고리즘 적용하여 동적 마스크 생성
-                                _, mask = cv2.threshold(t5_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                
-                                if np.sum(mask) > 0:
-                                    mean_b, mean_g, mean_r, _ = cv2.mean(found_box, mask=mask)
-                                    if mean_g > mean_r + 10 or mean_b > mean_r + 10:
-                                        is_level_5 = True
-                                        final_lvl5_val = lvl5_val
-                                    else:
-                                        lvl5_val = 0
+                                is_level_5 = True
+                                final_lvl5_val = lvl5_val
 
                             # 1차 판독 확정
                             has_trait = False
@@ -825,21 +825,17 @@ def fusion_bot_loop():
                                     roi_col_color_2 = hover_color_2[col_y1:col_y2, col_x1:col_x2]
                                     roi_trait_gray_2 = hover_gray_2[trait_y1:trait_y2, trait_x1:trait_x2]
                                     
-                                    res_5_2 = cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray_2.size > 0 else None
                                     lvl5_val_2 = 0
-                                    if res_5_2 is not None:
-                                        _, lvl5_val_2, _, max_loc_5_2 = cv2.minMaxLoc(res_5_2)
+                                    if roi_col_color_2.size > 0:
+                                        roi_hsv_2 = cv2.cvtColor(roi_col_color_2, cv2.COLOR_BGR2HSV)
+                                        roi_mask_2 = cv2.inRange(roi_hsv_2, lower_mint, upper_mint)
+                                        
+                                        res_5_2 = cv2.matchTemplate(roi_mask_2, t5_mask, cv2.TM_CCOEFF_NORMED)
+                                        _, lvl5_val_2, _, _ = cv2.minMaxLoc(res_5_2)
                                         
                                     if lvl5_val_2 >= conf_lvl5:
-                                        h, w = t5_g.shape[:2]
-                                        found_box = roi_col_color_2[max_loc_5_2[1]:max_loc_5_2[1]+h, max_loc_5_2[0]:max_loc_5_2[0]+w]
-                                        _, mask = cv2.threshold(t5_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                        
-                                        if np.sum(mask) > 0:
-                                            mean_b, mean_g, mean_r, _ = cv2.mean(found_box, mask=mask)
-                                            if mean_g > mean_r + 10 or mean_b > mean_r + 10:
-                                                is_level_5 = True
-                                                final_lvl5_val = lvl5_val_2
+                                        is_level_5 = True
+                                        final_lvl5_val = lvl5_val_2
                                     
                                     if not is_level_5 and roi_trait_gray_2.size > 0:
                                         trait_val_2 = 0

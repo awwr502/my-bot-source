@@ -732,7 +732,9 @@ def fusion_bot_loop():
                                     label_found = True; lx, ly = ml_l[0], ml_l[1]; break
                                 time.sleep(0.01)
 
-                            if not label_found: fast_clear_tooltip(); continue
+                            if not label_found: 
+                                bprint("  > ⚠️ [타임아웃] 0.8초 내에 '어빌리티 라벨'을 인식하지 못해 조기 스킵합니다.")
+                                fast_clear_tooltip(); continue
                                 
                             # [단계 2]: 0.3초 초고속 연속 스캔 엔진 (사용자 제안 방식)
                             # 라벨 포착 직후 최대 0.3초간 프레임을 연속으로 뽑아내며 5레벨과 특성을 동시 추적합니다.
@@ -740,6 +742,10 @@ def fusion_bot_loop():
                             is_level_5 = False
                             has_trait = False
                             final_lvl5_val = 0.0
+                            
+                            # [진단용] 0.3초 동안 스쳐간 최고 인식률 기록
+                            max_seen_5 = 0.0
+                            max_seen_trait = 0.0
                             
                             # 템플릿 사전 준비 (반복문 내부 연산 최소화)
                             t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['level_5.png'].shape) == 3 else FUSION_CACHE['level_5.png']
@@ -768,6 +774,7 @@ def fusion_bot_loop():
                                 res_5 = cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray.size > 0 else None
                                 if res_5 is not None:
                                     _, lvl5_val, _, max_loc_5 = cv2.minMaxLoc(res_5)
+                                    max_seen_5 = max(max_seen_5, lvl5_val) # 최고 점수 기록
                                     if lvl5_val >= conf_lvl5:
                                         h, w = t5_g.shape[:2]
                                         found_box = roi_col_color[max_loc_5[1]:max_loc_5[1]+h, max_loc_5[0]:max_loc_5[0]+w]
@@ -787,7 +794,9 @@ def fusion_bot_loop():
                                         if width > 0 and height > 0 and width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
                                             resized_t = cv2.resize(t_trait_g, (width, height))
                                             res_t = cv2.matchTemplate(roi_trait_gray, resized_t, cv2.TM_CCOEFF_NORMED)
-                                            if np.max(res_t) >= conf_trait:
+                                            current_t_val = np.max(res_t)
+                                            max_seen_trait = max(max_seen_trait, current_t_val) # 최고 점수 기록
+                                            if current_t_val >= conf_trait:
                                                 has_trait = True
                                                 break # 현재 프레임에서 특성을 찾았으면 스케일 루프 탈출
                                 
@@ -799,7 +808,7 @@ def fusion_bot_loop():
                             elif has_trait:
                                 bprint("  > ♻️ [분해] 특성 포착."); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:
-                                bprint("  > 💎 [보관] 확정적 순정.")
+                                bprint(f"  > 💎 [보관] 확정적 순정. (최고 인식률 - 5레벨:{max_seen_5:.2f} / 특성:{max_seen_trait:.2f})")
                             
                             fast_clear_tooltip()
                         

@@ -711,7 +711,7 @@ def fusion_bot_loop():
                         for pt_data in all_candidates:
                             if not bot_active or bot_mode != 5: break
                             
-                            # [핵심] 여기서 모든 판단 변수를 초기화해야 아래에서 에러가 안 납니다.
+                            # [핵심] 변수 생명주기 에러 방지를 위한 최상단 강제 초기화
                             is_level_5 = False
                             has_trait = False
                             is_confirmed_not_5 = False
@@ -729,7 +729,7 @@ def fusion_bot_loop():
                             r_width, r_height = min(500, mon["left"] + mon["width"] - r_left), mon["height"]
                             tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
 
-                            # 1단계: 라벨 기반 동기화
+                            # 1단계: 라벨 기반 동기화 (임계값 0.80 하향)
                             label_found = False
                             lx, ly = 0, 0
                             wait_l = time.time()
@@ -747,7 +747,7 @@ def fusion_bot_loop():
                                 bprint(f"  > ⚠️ [타임아웃] 라벨 미인식 (최고점: {max_label_score:.2f}). 스킵.")
                                 fast_clear_tooltip(); continue
                                 
-                            # 2단계: 상호 배타적 쾌속 엔진 (Single-Thread)
+                            # 2단계: 상호 배타적 쾌속 엔진 (Single-Thread Sequential)
                             scan_start = time.time()
                             t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['level_5.png'].shape) == 3 else FUSION_CACHE['level_5.png']
                             t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
@@ -769,7 +769,7 @@ def fusion_bot_loop():
                                 r_col_gray = h_gray[col_y1:col_y2, col_x1:col_x2]
                                 r_trait_gray = h_gray[trait_y1:trait_y2, trait_x1:trait_x2]
 
-                                # 1. 5레벨 최우선 스캔
+                                # [검증 1] 5레벨 최우선 스캔
                                 res_5 = cv2.matchTemplate(r_col_gray, t5_g, cv2.TM_CCOEFF_NORMED) if r_col_gray.size > 0 else None
                                 if res_5 is not None:
                                     _, l5_v, _, m5_l = cv2.minMaxLoc(res_5)
@@ -782,7 +782,7 @@ def fusion_bot_loop():
                                             if mg > mr + 10 or mb > mr + 10:
                                                 is_level_5 = True; final_lvl5_val = l5_v; break 
 
-                                # 2. 상호 배타적 확정 스캔 (1~4레벨 확인 시 즉시 종료)
+                                # [검증 2] 상호 배타적 확정 스캔 (1~4레벨 확인 시 즉시 종료)
                                 if not is_level_5 and r_col_gray.size > 0:
                                     for tk in tier_keys:
                                         t_tmp = FUSION_CACHE.get(tk)
@@ -792,7 +792,7 @@ def fusion_bot_loop():
                                             is_confirmed_not_5 = True; break
                                     if is_confirmed_not_5: break
 
-                                # 3. 특성 누적 스캔
+                                # [검증 3] 특성 백그라운드 스캔
                                 if not has_trait and r_trait_gray.size > 0:
                                     for scale in [0.95, 1.0, 1.05]:
                                         tw, th = int(t_trait_g.shape[1] * scale), int(t_trait_g.shape[0] * scale)
@@ -803,6 +803,7 @@ def fusion_bot_loop():
                                             if cur_t_v >= conf_trait: has_trait = True; break
                                 time.sleep(0.01)
 
+                            # 최종 판정 로그 출력부
                             if is_level_5:
                                 bprint(f"  > 🛑 [보호] 5레벨 감염물. (임계값: {final_lvl5_val:.2f})")
                             elif has_trait:

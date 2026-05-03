@@ -781,9 +781,10 @@ def fusion_bot_loop():
                                         trait_val = max(trait_val, np.max(res))
 
                             # 1차 즉각 판독
+                            final_lvl5_val = 0.0
                             if lvl5_val >= conf_lvl5:
                                 is_level_5 = True
-                                bprint(f"🛑 [보호] 5레벨 감염물. (임계값: {lvl5_val:.2f})")
+                                final_lvl5_val = lvl5_val
                             elif trait_val >= conf_trait:
                                 has_trait = True
                             else:
@@ -797,13 +798,11 @@ def fusion_bot_loop():
                                     roi_col_gray_2 = hover_gray_2[col_y1:col_y2, col_x1:col_x2]
                                     roi_trait_color_2 = hover_color_2[trait_y1:trait_y2, trait_x1:trait_x2]
                                     
-                                    if roi_col_gray_2.size > 0 and np.max(cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED)) >= conf_lvl5:
-                                        is_level_5 = True
-                                        bprint("  > 🚨 [2차 검증] 지연 렌더링된 5레벨 최종 포착!")
                                     lvl5_val_2 = np.max(cv2.matchTemplate(roi_col_gray_2, t5_g, cv2.TM_CCOEFF_NORMED)) if roi_col_gray_2.size > 0 else 0
                                     if lvl5_val_2 >= conf_lvl5:
                                         is_level_5 = True
-                                        bprint(f"🛑 [보호] 5레벨 감염물. (임계값: {lvl5_val_2:.2f})")
+                                        final_lvl5_val = lvl5_val_2
+                                        bprint("  > 🚨 [2차 검증] 지연 렌더링된 5레벨 최종 포착!")
                                     elif roi_trait_color_2.size > 0:
                                         # 2차 검증 시에도 다중 스케일 매칭 수행
                                         trait_val_2 = 0
@@ -814,14 +813,14 @@ def fusion_bot_loop():
                                                 resized_t = cv2.resize(t_trait_color, (width, height))
                                                 res = cv2.matchTemplate(roi_trait_color_2, resized_t, cv2.TM_CCOEFF_NORMED)
                                                 trait_val_2 = max(trait_val_2, np.max(res))
-                                                
+                                        
                                         if trait_val_2 >= conf_trait:
                                             has_trait = True
                                             bprint("  > 🚨 [2차 검증] UI 정렬 완료 후 특성 최종 포착!")
 
                             # [최종 의사결정]
                             if is_level_5:
-                                bprint("  > 🛑 [보호] 5레벨 감염물.")
+                                bprint(f"  > 🛑 [보호] 5레벨 감염물. (임계값: {final_lvl5_val:.2f})")
                             elif has_trait:
                                 bprint("  > ♻️ [분해] 특성 포착."); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:

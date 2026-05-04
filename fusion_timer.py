@@ -1291,15 +1291,14 @@ def fusion_bot_loop():
                         # 4) 기계 가동이 끝났으므로 보상(get_reward.png) 유무 확인 및 완료 애니메이션(2~3초) 동적 대기
                         if check_popup_char(thread_sct): continue 
                         
-                        # [핵심] 융합 완료 직후 2~3초의 애니메이션 시간 동안에는 아무 버튼도 없으므로 능동 대기합니다.
+                        # [핵심] 융합 완료 직후 서버 렉을 고려하여 자동 팝업 애니메이션을 넉넉히 기다립니다.
+                        # 뒷배경이 찰나에 렌더링되더라도 절대 조기 탈출하지 않고 우직하게 능동 대기합니다.
+                        bprint("  > [동적 대기] 융합 완료 보상 자동 팝업 대기 중 (최대 4초)...")
                         reward_found = False
                         wait_anim = time.time()
-                        while time.time() - wait_anim < 2.5 and bot_active:
+                        while time.time() - wait_anim < 4.0 and bot_active:
                             if check_img('get_reward.png', thread_sct, force_full=True):
                                 reward_found = True
-                                break
-                            # 만약 시작 버튼이나 빈 기계 텍스트가 보인다면, 확실히 기계가 멈춘 상태(세팅 대기)이므로 즉시 탈출하여 속도를 높입니다!
-                            if check_img('fusion_start.png', thread_sct) or check_img('fusion_material.png', thread_sct, force_full=True):
                                 break
                             time.sleep(0.05)
                         
@@ -2068,6 +2067,13 @@ def fusion_bot_loop():
                             bprint("  > [꼬임 방지] select_2_2.png가 남아있습니다! F를 재입력하여 닫기를 시도합니다.")
                             send_cmd('F'); time.sleep(0.05); send_cmd('R')
                             wait_vanish('select_2_2.png', thread_sct)
+                        elif check_img('get_reward.png', thread_sct, force_full=True):
+                            print()
+                            bprint("  > 🚨 [원인 규명] 화면을 가리고 있는 '감염물 획득' 창(get_reward.png) 감지!")
+                            bprint("  > 시작 버튼 탐색 실패의 원인이었습니다. F를 눌러 강제 수령 후 루프를 복구합니다.")
+                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                            wait_vanish('get_reward.png', thread_sct)
+                            time.sleep(0.5)
                         else:
                             bprint("  > [확인] select_2_2.png는 정상 소멸 상태입니다. 융합 시작 버튼을 다시 탐색합니다.")
                         

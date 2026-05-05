@@ -753,10 +753,20 @@ def fusion_bot_loop():
                             max_seen_trait = 0.0
                             
                             # 템플릿 사전 준비 (반복문 내부 연산 최소화)
-                            t5_g = cv2.cvtColor(FUSION_CACHE['level_5.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['level_5.png'].shape) == 3 else FUSION_CACHE['level_5.png']
+                            t5_color = FUSION_CACHE.get('level_5.png')
+                            if t5_color is not None and len(t5_color.shape) == 3:
+                                t5_hsv = cv2.cvtColor(t5_color, cv2.COLOR_BGR2HSV)
+                                # [B방식 적용] 네온 민트/시안 색상만 하얗게 투과시키는 HSV 마스크 생성 (Hue 45~105)
+                                lower_neon = np.array([45, 50, 80])
+                                upper_neon = np.array([105, 255, 255])
+                                t5_mask = cv2.inRange(t5_hsv, lower_neon, upper_neon)
+                            else:
+                                t5_mask = None
+                                
                             t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                             
-                            conf_lvl5 = 0.80
+                            # [B방식 임계값 하향] 배경 노이즈가 제거된 완벽한 흑백 실루엣이므로 임계값을 0.65로 하향하여 미탐 차단
+                            conf_lvl5 = 0.65
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
                             
                             # 판독 영역 좌표 설정
@@ -771,25 +781,23 @@ def fusion_bot_loop():
                                 hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                                 hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
                                 
-                                roi_col_gray = hover_gray[col_y1:col_y2, col_x1:col_x2]
                                 roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
                                 roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
                                 
-                                # 1. 5레벨 스캔 (발견 즉시 루프 폭파)
-                                res_5 = cv2.matchTemplate(roi_col_gray, t5_g, cv2.TM_CCOEFF_NORMED) if roi_col_gray.size > 0 else None
+                                # 1. 5레벨 스캔 (HSV 이진화 투과 엔진)
+                                res_5 = None
+                                if t5_mask is not None and roi_col_color.size > 0:
+                                    roi_col_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
+                                    roi_col_mask = cv2.inRange(roi_col_hsv, lower_neon, upper_neon)
+                                    res_5 = cv2.matchTemplate(roi_col_mask, t5_mask, cv2.TM_CCOEFF_NORMED)
+                                    
                                 if res_5 is not None:
-                                    _, lvl5_val, _, max_loc_5 = cv2.minMaxLoc(res_5)
+                                    _, lvl5_val, _, _ = cv2.minMaxLoc(res_5)
                                     max_seen_5 = max(max_seen_5, lvl5_val) # 최고 점수 기록
                                     if lvl5_val >= conf_lvl5:
-                                        h, w = t5_g.shape[:2]
-                                        found_box = roi_col_color[max_loc_5[1]:max_loc_5[1]+h, max_loc_5[0]:max_loc_5[0]+w]
-                                        _, mask = cv2.threshold(t5_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                        if np.sum(mask) > 0:
-                                            mean_b, mean_g, mean_r, _ = cv2.mean(found_box, mask=mask)
-                                            if mean_g > mean_r + 10 or mean_b > mean_r + 10:
-                                                is_level_5 = True
-                                                final_lvl5_val = lvl5_val
-                                                break # 5레벨 확인 즉시 0.3초 대기 캔슬하고 탈출 (스킵 최우선)
+                                        is_level_5 = True
+                                        final_lvl5_val = lvl5_val
+                                        break # 5레벨 확정 즉시 0.3초 대기 캔슬하고 탈출 (별도 컬러 계산 불필요)
                                                 
                                 # 2. 특성 스캔 (5레벨이 안 나왔을 때만 백그라운드로 누적 기록)
                                 if not has_trait and roi_trait_gray.size > 0:

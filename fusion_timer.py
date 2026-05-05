@@ -1564,26 +1564,41 @@ def fusion_bot_loop():
                                         
                                     time.sleep(0.05) # 데이터 페치 딜레이 헷지
                                     
-                                    hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                    sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                    hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                    hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
+                                    
                                     label_w = template_label.shape[1]
                                     col_x_start = lx + label_w
                                     col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
                                     col_y_start = max(0, ly - 20)
                                     col_y_end = min(hover_gray.shape[0], ly + 150)
+                                    
                                     roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
+                                    roi_col_color = hover_color[col_y_start:col_y_end, col_x_start:col_x_end]
 
                                     parse_success = False
                                     points_5 = []
                                     template_5 = FUSION_CACHE.get('level_5.png')
-                                    if template_5 is not None:
-                                        t5_gray = cv2.cvtColor(template_5, cv2.COLOR_BGR2GRAY)
-                                        res_5 = cv2.matchTemplate(roi_col, t5_gray, cv2.TM_CCOEFF_NORMED)
-                                        loc_5 = np.where(res_5 >= FUSION_CONF.get('level_5.png', 0.75))
-                                        for pt in zip(*loc_5[::-1]):
-                                            if not any(math.hypot(pt[0]-p[0], pt[1]-p[1]) < 10 for p in points_5):
-                                                points_5.append(pt)
+                                    
+                                    if template_5 is not None and len(template_5.shape) == 3:
+                                        t5_hsv = cv2.cvtColor(template_5, cv2.COLOR_BGR2HSV)
+                                        lower_neon = np.array([45, 50, 80])
+                                        upper_neon = np.array([105, 255, 255])
+                                        t5_mask = cv2.inRange(t5_hsv, lower_neon, upper_neon)
                                         
-                                        if len(points_5) == 0:
+                                        if roi_col_color.size > 0:
+                                            roi_col_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
+                                            roi_col_mask = cv2.inRange(roi_col_hsv, lower_neon, upper_neon)
+                                            
+                                            # [B방식] HSV 이진화 마스크 적용 및 임계값 0.65 하향
+                                            res_5 = cv2.matchTemplate(roi_col_mask, t5_mask, cv2.TM_CCOEFF_NORMED)
+                                            loc_5 = np.where(res_5 >= 0.65)
+                                            for pt in zip(*loc_5[::-1]):
+                                                if not any(math.hypot(pt[0]-p[0], pt[1]-p[1]) < 10 for p in points_5):
+                                                    points_5.append(pt)
+                                    
+                                    if len(points_5) == 0:
                                             bprint("  > ⏭️ [스킵] 5레벨이 없는 감염물입니다.")
                                             fast_clear_tooltip(); continue
                                         elif len(points_5) >= 2:
@@ -1793,21 +1808,36 @@ def fusion_bot_loop():
                                         
                                     time.sleep(0.05) # 데이터 페치 딜레이 헷지
                                     
-                                    hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                    sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                    hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                    hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
+                                    
                                     label_w = template_label.shape[1]
                                     col_x_start = lx + label_w
                                     col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
                                     col_y_start = max(0, ly - 20)
                                     col_y_end = min(hover_gray.shape[0], ly + 150)
+                                    
                                     roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
+                                    roi_col_color = hover_color[col_y_start:col_y_end, col_x_start:col_x_end]
 
                                     is_level_5 = False
                                     template_5 = FUSION_CACHE.get('level_5.png')
-                                    if template_5 is not None:
-                                        t5_gray = cv2.cvtColor(template_5, cv2.COLOR_BGR2GRAY)
-                                        res_5 = cv2.matchTemplate(roi_col, t5_gray, cv2.TM_CCOEFF_NORMED)
-                                        if np.max(res_5) >= FUSION_CONF.get('level_5.png', 0.75):
-                                            is_level_5 = True
+                                    
+                                    if template_5 is not None and len(template_5.shape) == 3:
+                                        t5_hsv = cv2.cvtColor(template_5, cv2.COLOR_BGR2HSV)
+                                        lower_neon = np.array([45, 50, 80])
+                                        upper_neon = np.array([105, 255, 255])
+                                        t5_mask = cv2.inRange(t5_hsv, lower_neon, upper_neon)
+                                        
+                                        if roi_col_color.size > 0:
+                                            roi_col_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
+                                            roi_col_mask = cv2.inRange(roi_col_hsv, lower_neon, upper_neon)
+                                            
+                                            # [B방식] HSV 이진화 마스크 적용 및 임계값 0.65 하향
+                                            res_5 = cv2.matchTemplate(roi_col_mask, t5_mask, cv2.TM_CCOEFF_NORMED)
+                                            if np.max(res_5) >= 0.65:
+                                                is_level_5 = True
                                     
                                     if is_level_5:
                                         bprint(f"  > 🛑 [경고] 5레벨이 포함된 감염물입니다! 보호를 위해 스킵합니다.")

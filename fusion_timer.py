@@ -741,8 +741,9 @@ def fusion_bot_loop():
                                 bprint(f"  > ⚠️ [타임아웃] 0.8초 내에 '어빌리티 라벨' 미인식 (최고점: {max_label_score:.2f}). 조기 스킵합니다.")
                                 fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 0.3초 초고속 연속 스캔 엔진 (사용자 제안 방식)
+                            # [단계 2]: 고도화된 단일 프레임 병렬 스캔 엔진 (Concurrent Frame Scan)
                             # 라벨 포착 직후 최대 0.3초간 프레임을 연속으로 뽑아내며 5레벨과 특성을 동시 추적합니다.
+                            # 단일 프레임 내에서 두 조건을 동시에 평가하여 둘 중 하나라도 임계값을 넘으면 즉시 대기를 파기하고 탈출합니다.
                             scan_start = time.time()
                             is_level_5 = False
                             has_trait = False
@@ -784,23 +785,19 @@ def fusion_bot_loop():
                                 roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
                                 roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
                                 
-                                # 1. 5레벨 스캔 (HSV 이진화 투과 엔진)
-                                res_5 = None
+                                # 1. 단일 프레임 내 5레벨 평가 (HSV 이진화 투과 엔진)
+                                current_lvl5_val = 0.0
                                 if t5_mask is not None and roi_col_color.size > 0:
                                     roi_col_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
                                     roi_col_mask = cv2.inRange(roi_col_hsv, lower_neon, upper_neon)
                                     res_5 = cv2.matchTemplate(roi_col_mask, t5_mask, cv2.TM_CCOEFF_NORMED)
-                                    
-                                if res_5 is not None:
-                                    _, lvl5_val, _, _ = cv2.minMaxLoc(res_5)
-                                    max_seen_5 = max(max_seen_5, lvl5_val) # 최고 점수 기록
-                                    if lvl5_val >= conf_lvl5:
-                                        is_level_5 = True
-                                        final_lvl5_val = lvl5_val
-                                        break # 5레벨 확정 즉시 0.3초 대기 캔슬하고 탈출 (별도 컬러 계산 불필요)
+                                    if res_5 is not None:
+                                        _, current_lvl5_val, _, _ = cv2.minMaxLoc(res_5)
+                                        max_seen_5 = max(max_seen_5, current_lvl5_val)
                                                 
-                                # 2. 특성 스캔 (5레벨이 안 나왔을 때만 백그라운드로 누적 기록)
-                                if not has_trait and roi_trait_gray.size > 0:
+                                # 2. 단일 프레임 내 특성 평가
+                                current_trait_val = 0.0
+                                if roi_trait_gray.size > 0:
                                     for scale in [0.95, 1.0, 1.05]:
                                         width = int(t_trait_g.shape[1] * scale)
                                         height = int(t_trait_g.shape[0] * scale)
@@ -808,10 +805,17 @@ def fusion_bot_loop():
                                             resized_t = cv2.resize(t_trait_g, (width, height))
                                             res_t = cv2.matchTemplate(roi_trait_gray, resized_t, cv2.TM_CCOEFF_NORMED)
                                             current_t_val = np.max(res_t)
-                                            max_seen_trait = max(max_seen_trait, current_t_val) # 최고 점수 기록
-                                            if current_t_val >= conf_trait:
-                                                has_trait = True
-                                                break # 현재 프레임에서 특성을 찾았으면 스케일 루프 탈출
+                                            current_trait_val = max(current_trait_val, current_t_val)
+                                    max_seen_trait = max(max_seen_trait, current_trait_val)
+                                
+                                # 3. 동시 판정 및 즉각 탈출 (병렬 스캔 핵심 로직)
+                                if current_lvl5_val >= conf_lvl5 or current_trait_val >= conf_trait:
+                                    if current_lvl5_val >= conf_lvl5:
+                                        is_level_5 = True
+                                        final_lvl5_val = current_lvl5_val
+                                    if current_trait_val >= conf_trait:
+                                        has_trait = True
+                                    break # 둘 중 하나라도 임계값을 넘기면 0.3초 대기를 즉시 파기하고 탈출합니다.
                                 
                                 time.sleep(0.01) # 프레임 과부하 방지
 

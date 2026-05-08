@@ -887,9 +887,9 @@ def fusion_bot_loop():
                                 bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
                                 pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:
-                                bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})"
-                            
-                            fast_clear_tooltip()
+                                        bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})")
+                                    
+                                    fast_clear_tooltip()
                         
                         bprint("  > 🛑 [종료] 감염물 분별 처리 완료."); toggle_stop(); continue
                 

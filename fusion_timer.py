@@ -741,59 +741,55 @@ def fusion_bot_loop():
                                 bprint(f"  > ⚠️ [타임아웃] 0.8초 내에 '어빌리티 라벨' 미인식 (최고점: {max_label_score:.2f}). 조기 스킵합니다.")
                                 fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 적응형 시간 학습(Adaptive Time-Learning) 병렬 스캔 엔진
-                            # 1. 영구 저장소(JSON) 및 메모리 로드
+                            # [단계 2]: 이중 보정 적응형 시간 학습(Dual-Adaptive Learning) 엔진
+                            # 1. 영구 저장소 로드 (level_5 및 trait 각각 관리)
                             if not hasattr(fusion_bot_loop, 'render_times'):
-                                fusion_bot_loop.render_file = os.path.join(base_dir, "fusion_timing.json")
-                                fusion_bot_loop.render_times = deque(maxlen=10)
+                                fusion_bot_loop.render_file = os.path.join(base_dir, "fusion_timing_v2.json")
+                                fusion_bot_loop.l5_times = deque(maxlen=10)
+                                fusion_bot_loop.tr_times = deque(maxlen=10)
                                 try:
                                     if os.path.exists(fusion_bot_loop.render_file):
                                         with open(fusion_bot_loop.render_file, "r", encoding="utf-8") as f:
                                             data = json.load(f)
-                                            for t in data.get('times', []):
-                                                fusion_bot_loop.render_times.append(t)
+                                            for t in data.get('l5', []): fusion_bot_loop.l5_times.append(t)
+                                            for t in data.get('tr', []): fusion_bot_loop.tr_times.append(t)
                                 except: pass
 
-                            # 2. 동적 임계 시간(Dynamic Timeout) 계산
-                            if len(fusion_bot_loop.render_times) < 10:
-                                dynamic_timeout = 0.25
-                                time_mode_str = "고정"
-                            else:
-                                avg_time = sum(fusion_bot_loop.render_times) / 10.0
-                                dynamic_timeout = min(0.25, avg_time + 0.05)
-                                time_mode_str = "동적"
+                            # 2. 동적 임계 시간 계산
+                            def get_dynamic_limit(d_queue):
+                                if len(d_queue) < 10: return 0.25
+                                return min(0.25, (sum(d_queue) / 10.0) + 0.05)
+
+                            l5_limit = get_dynamic_limit(fusion_bot_loop.l5_times)
+                            tr_limit = get_dynamic_limit(fusion_bot_loop.tr_times)
+                            # 둘 중 더 늦게 뜨는 요소를 기준으로 최종 대기 시간 결정
+                            max_wait_limit = max(l5_limit, tr_limit)
+                            time_mode_str = "동적" if len(fusion_bot_loop.l5_times) >= 10 else "고정"
 
                             scan_start = time.time()
                             is_level_5 = False
                             has_trait = False
                             final_lvl5_val = 0.0
                             lvl5_render_time = 0.0
+                            trait_render_time = 0.0
                             
-                            # [진단용] 최고 점수 기록
                             max_seen_5 = 0.0
                             max_seen_trait = 0.0
                             
-                            # 템플릿 사전 준비 (기존 99% 정확도의 형태 매칭 방식으로 완벽 롤백)
                             t5_color = FUSION_CACHE.get('level_5.png')
                             if t5_color is not None and len(t5_color.shape) == 3:
                                 t5_hsv = cv2.cvtColor(t5_color, cv2.COLOR_BGR2HSV)
-                                lower_neon = np.array([45, 50, 80]) # 원래 수치로 복구하여 노이즈 원천 차단
+                                lower_neon = np.array([45, 50, 80])
                                 upper_neon = np.array([105, 255, 255])
                                 t5_mask = cv2.inRange(t5_hsv, lower_neon, upper_neon)
-                            else:
-                                t5_mask = None
+                            else: t5_mask = None
                                 
                             t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                             conf_lvl5 = 0.65
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
                             
-                            # 판독 영역 좌표 설정
-                            col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
-                            col_y1, col_y2 = max(0, ly - 20), ly + 150
-                            trait_x1, trait_x2 = max(0, lx - 10), lx + 200
-                            trait_y1, trait_y2 = ly + 30, ly + 300
-                            
                             while time.time() - scan_start < 0.25 and bot_active:
+                                elapsed = time.time() - scan_start
                                 sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
                                 hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                                 hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
@@ -801,60 +797,55 @@ def fusion_bot_loop():
                                 roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
                                 roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
                                 
-                                # 1. 5레벨 평가 (HSV 마스크 + 형태 매칭)
-                                current_lvl5_val = 0.0
-                                if t5_mask is not None and roi_col_color.size > 0:
+                                # 1. 5레벨 평가 및 학습
+                                if not is_level_5 and t5_mask is not None and roi_col_color.size > 0:
                                     roi_col_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
                                     roi_col_mask = cv2.inRange(roi_col_hsv, lower_neon, upper_neon)
                                     res_5 = cv2.matchTemplate(roi_col_mask, t5_mask, cv2.TM_CCOEFF_NORMED)
-                                    if res_5 is not None:
-                                        _, current_lvl5_val, _, _ = cv2.minMaxLoc(res_5)
-                                        max_seen_5 = max(max_seen_5, current_lvl5_val)
+                                    _, cur_l5, _, _ = cv2.minMaxLoc(res_5)
+                                    max_seen_5 = max(max_seen_5, cur_l5)
+                                    if cur_l5 >= conf_lvl5:
+                                        is_level_5 = True
+                                        lvl5_render_time = elapsed
+                                        fusion_bot_loop.l5_times.append(elapsed)
+                                        break # 5레벨은 발견 즉시 보존 확정 후 탈출
                                                 
-                                # 2. 특성 평가
-                                current_trait_val = 0.0
-                                if roi_trait_gray.size > 0:
+                                # 2. 특성 평가 및 학습
+                                if not has_trait and roi_trait_gray.size > 0:
                                     for scale in [0.95, 1.0, 1.05]:
-                                        width = int(t_trait_g.shape[1] * scale)
-                                        height = int(t_trait_g.shape[0] * scale)
-                                        if width > 0 and height > 0 and width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
-                                            resized_t = cv2.resize(t_trait_g, (width, height))
-                                            res_t = cv2.matchTemplate(roi_trait_gray, resized_t, cv2.TM_CCOEFF_NORMED)
-                                            current_trait_val = max(current_trait_val, np.max(res_t))
-                                    max_seen_trait = max(max_seen_trait, current_trait_val)
+                                        width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                        if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                            res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                            cur_tr = np.max(res_t)
+                                            max_seen_trait = max(max_seen_trait, cur_tr)
+                                            if cur_tr >= conf_trait:
+                                                has_trait = True
+                                                trait_render_time = elapsed
+                                                fusion_bot_loop.tr_times.append(elapsed)
+                                                break
+
+                                # 3. 논리적 탈출 조건
+                                # 5레벨 학습 시간(l5_limit)이 지났는데 특성(has_trait)만 발견된 경우 -> 분해 확정 탈출
+                                if has_trait and elapsed > l5_limit: break
                                 
-                                # 3. 논리적 조기 탈출 및 학습 로직
+                                # 둘 다 없는 '순정' 상태에서 최장 학습 시간(max_wait_limit)이 지난 경우 -> 순정 확정 탈출
+                                if not is_level_5 and not has_trait and elapsed > max_wait_limit: break
                                 
-                                # [조건 A] 5레벨 발견 (즉시 탈출 및 시간 학습)
-                                if current_lvl5_val >= conf_lvl5:
-                                    is_level_5 = True
-                                    final_lvl5_val = current_lvl5_val
-                                    lvl5_render_time = time.time() - scan_start # 렌더링 소요 시간 기록
-                                    
-                                    # 시간 데이터 하드디스크 영구 저장 (Rolling 10)
-                                    fusion_bot_loop.render_times.append(lvl5_render_time)
-                                    try:
-                                        with open(fusion_bot_loop.render_file, "w", encoding="utf-8") as f:
-                                            json.dump({"times": list(fusion_bot_loop.render_times)}, f)
-                                    except: pass
-                                    break 
-                                
-                                if current_trait_val >= conf_trait:
-                                    has_trait = True
-                                    
-                                # [조건 B] 적응형 시간 초과 시 특성 분해 확정 (동적 탈출)
-                                if has_trait and (time.time() - scan_start > dynamic_timeout):
-                                    break
-                                
-                                time.sleep(0.01) # 프레임 과부하 방지
+                                time.sleep(0.01)
+
+                            # 학습 데이터 영구 저장
+                            try:
+                                with open(fusion_bot_loop.render_file, "w", encoding="utf-8") as f:
+                                    json.dump({"l5": list(fusion_bot_loop.l5_times), "tr": list(fusion_bot_loop.tr_times)}, f)
+                            except: pass
 
                             # [최종 의사결정]
                             if is_level_5:
-                                bprint(f"  > 🛑 [보호] 5레벨 감염물. (임계값: {final_lvl5_val:.2f} / 시간: {lvl5_render_time:.2f}초 / 대기모드: {time_mode_str})")
+                                bprint(f"  > 🛑 [보호] 5레벨 감염물. (인식률: {max_seen_5:.2f} / 시간: {lvl5_render_time:.2f}초 / 모드: {time_mode_str})")
                             elif has_trait:
-                                bprint(f"  > ♻️ [분해] 특성 포착. (적용 대기시간: {dynamic_timeout:.2f}초)"); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                bprint(f"  > ♻️ [분해] 특성 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)"); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:
-                                bprint(f"  > 💎 [보관] 확정적 순정. (최고 인식률 - 5레벨:{max_seen_5:.2f} / 특성:{max_seen_trait:.2f})")
+                                bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})")
                             
                             fast_clear_tooltip()
                         

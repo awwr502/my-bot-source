@@ -755,7 +755,7 @@ def fusion_bot_loop():
                                             for t in data.get('tr', []): fusion_bot_loop.tr_times.append(t)
                                 except: pass
 
-                            # 2. 동적 임계 시간 계산 함수
+                            # 2. 동적 임계 시간 계산 함수 정의
                             def get_dynamic_limit(d_queue):
                                 if len(d_queue) < 10: return 0.25
                                 return min(0.25, (sum(d_queue) / 10.0) + 0.05)
@@ -765,7 +765,7 @@ def fusion_bot_loop():
                             max_wait_limit = max(l5_limit, tr_limit)
                             time_mode_str = "동적" if len(fusion_bot_loop.l5_times) >= 10 else "고정"
 
-                            # [중요: 좌표 선언 누락 복구] 판독 영역 좌표 설정
+                            # [좌표 변수 선언] 라벨 위치(lx, ly) 기반으로 숫자 판독 영역 설정
                             col_x1 = lx + template_label.shape[1]
                             col_x2 = col_x1 + 360
                             col_y1 = max(0, ly - 20)

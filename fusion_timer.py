@@ -698,11 +698,11 @@ def fusion_bot_loop():
                             template = FUSION_CACHE.get(item_name)
                             if template is None: continue
                             res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
-                            loc = np.where(res >= 0.85)
+                            loc = np.where(res >= 0.80)
                             h, w = template.shape[:2]
                             for pt in zip(*loc[::-1]):
                                 real_x, real_y = pt[0] + X_OFFSET, pt[1]
-                                if any(math.hypot(real_x-cp[0], real_y-cp[1]) < 80 for cp in all_candidates): continue
+                                if any(math.hypot(real_x-cp[0], real_y-cp[1]) < 50 for cp in all_candidates): continue
                                 all_candidates.append((real_x, real_y, w, h, item_name))
                         
                         all_candidates.sort(key=lambda c: (-int(c[0] / 80), c[1]))

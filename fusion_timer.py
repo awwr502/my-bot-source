@@ -904,7 +904,7 @@ def fusion_bot_loop():
                                     pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                                 else:
                                     # 사진이 등록되어 이름을 인식한 특성은 클릭 코드를 없애 무조건 보호(스킵)
-                                    bprint(f"  > 👑 [보호] 등록된 특성 '{identified_trait_name}' 발견! 클릭하지 않고 스킵합니다.")
+                                    bprint(f"  > 👑 [보호] 등록된 특성 '{identified_trait_name}' 발견!")
                             else:
                                 bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})")
                             

@@ -790,22 +790,22 @@ def fusion_bot_loop():
                             time_mode_str = "동적" if len(fusion_bot_loop.l5_times) >= 10 else "고정"
 
                             # [좌표 변수 선언] 라벨 위치(lx, ly) 기반으로 숫자 판독 영역 설정
-                            col_x1 = lx + template_label.shape[1]
-                            col_x2 = col_x1 + 360
-                            col_y1 = max(0, ly - 20)
-                            col_y2 = ly + 150
-                            
-                            # 1. 공통 아이콘(trait.png) 탐색용 좁은 ROI (기존 유지)
-                            trait_x1 = max(0, lx - 10)
-                            trait_x2 = lx + 200
-                            trait_y1 = ly + 30
-                            trait_y2 = ly + 300
+                            col_x1 = lx + template_label.shape[1]
+                            col_x2 = col_x1 + 360
+                            col_y1 = max(0, ly - 20)
+                            col_y2 = ly + 150
+                            
+                            # 1. 공통 아이콘(trait.png) 탐색용 좁은 ROI (기존 유지)
+                            trait_x1 = max(0, lx - 10)
+                            trait_x2 = lx + 200
+                            trait_y1 = ly + 30
+                            trait_y2 = ly + 300
 
-                            # 2. [신설] 상세 특성 이름(Text) 판독 전용 넓은 ROI
-                            trait_name_x1 = max(0, lx - 10)
-                            trait_name_x2 = lx + 360
-                            trait_name_y1 = ly + 30
-                            trait_name_y2 = ly + 300
+                            # 2. [신설] 상세 특성 이름(Text) 판독 전용 넓은 ROI
+                            trait_name_x1 = max(0, lx - 10)
+                            trait_name_x2 = lx + 360
+                            trait_name_y1 = ly + 30
+                            trait_name_y2 = ly + 300
 
                             scan_start = time.time()
                             is_level_5 = False
@@ -836,8 +836,8 @@ def fusion_bot_loop():
                                 hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
                                 
                                 roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
-                                roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2] # 신설 영역 추출
+                                roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2] # 신설 영역 추출
                                 
                                 # 1. 5레벨 평가 및 학습
                                 if not is_level_5 and t5_mask is not None and roi_col_color.size > 0:
@@ -882,32 +882,32 @@ def fusion_bot_loop():
                             if is_level_5:
                                 bprint(f"  > 🛑 [보호] 5레벨 감염물. (인식률: {max_seen_5:.2f} / 시간: {lvl5_render_time:.2f}초)")
                             elif has_trait:
-                                identified_trait_name = "미등록 특성"
-                                active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
-                                
-                                best_match_score = 0.0 # 진단용 최고 점수 기록
-                                
-                                for t_file in active_trait_files:
-                                    t_template = FUSION_CACHE[t_file]
-                                    # 기존 공통 ROI가 아닌, 넓게 신설된 이름 전용 ROI(roi_trait_name_gray) 사용!
-                                    res_st = cv2.matchTemplate(roi_trait_name_gray, t_template, cv2.TM_CCOEFF_NORMED)
-                                    current_score = np.max(res_st)
-                                    best_match_score = max(best_match_score, current_score)
-                                    
-                                    # 타이트하게 잘랐다면 0.85 임계값으로도 오탐 없이 훌륭하게 작동합니다.
-                                    if current_score >= 0.85:
-                                        identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
-                                        break
-                                
-                                if identified_trait_name == "미등록 특성":
-                                    bprint(f"  > ⚠️ [진단] 등록된 사진과 대조했으나 일치율 미달 (최고 점수: {best_match_score:.2f} / 기준: 0.85)")
-                                
-                                bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
-                                pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
-                            else:
-                                bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})")
-                            
-                            fast_clear_tooltip()
+                                identified_trait_name = "미등록 특성"
+                                active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
+                                
+                                best_match_score = 0.0 # 진단용 최고 점수 기록
+                                
+                                for t_file in active_trait_files:
+                                    t_template = FUSION_CACHE[t_file]
+                                    # 기존 공통 ROI가 아닌, 넓게 신설된 이름 전용 ROI(roi_trait_name_gray) 사용!
+                                    res_st = cv2.matchTemplate(roi_trait_name_gray, t_template, cv2.TM_CCOEFF_NORMED)
+                                    current_score = np.max(res_st)
+                                    best_match_score = max(best_match_score, current_score)
+                                    
+                                    # 타이트하게 잘랐다면 0.85 임계값으로도 오탐 없이 훌륭하게 작동합니다.
+                                    if current_score >= 0.85:
+                                        identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
+                                        break
+                                
+                                if identified_trait_name == "미등록 특성":
+                                    bprint(f"  > ⚠️ [진단] 등록된 사진과 대조했으나 일치율 미달 (최고 점수: {best_match_score:.2f} / 기준: 0.85)")
+                                
+                                bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
+                                pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                            else:
+                                bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})")
+                            
+                            fast_clear_tooltip()
                         
                         bprint("  > 🛑 [종료] 감염물 분별 처리 완료."); toggle_stop(); continue
                 

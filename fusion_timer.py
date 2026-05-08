@@ -380,7 +380,7 @@ dynamic_traits = [f for f in os.listdir(base_dir) if f.startswith('trait_') and 
 target_images.extend(dynamic_traits)
 GRAY_IMAGES.extend(dynamic_traits)
 for img in dynamic_traits:
-    FUSION_CONF[img] = 0.92
+    FUSION_CONF[img] = 0.92
 
 # 2. 패치가 완료된 로컬 폴더에서 RAM으로 일괄 적재 (캐릭터 사진 포함)
 for img_name in target_images:
@@ -874,18 +874,18 @@ def fusion_bot_loop():
                             if is_level_5:
                                 bprint(f"  > 🛑 [보호] 5레벨 감염물. (인식률: {max_seen_5:.2f} / 시간: {lvl5_render_time:.2f}초)")
                             elif has_trait:
-                                identified_trait_name = "미등록 특성"
-                                active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
-                                
-                                for t_file in active_trait_files:
-                                    t_template = FUSION_CACHE[t_file]
-                                    res_st = cv2.matchTemplate(roi_trait_gray, t_template, cv2.TM_CCOEFF_NORMED)
-                                    if np.max(res_st) >= 0.92:
-                                        identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
-                                        break
-                                
-                                bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
-                                pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                identified_trait_name = "미등록 특성"
+                                active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
+                                
+                                for t_file in active_trait_files:
+                                    t_template = FUSION_CACHE[t_file]
+                                    res_st = cv2.matchTemplate(roi_trait_gray, t_template, cv2.TM_CCOEFF_NORMED)
+                                    if np.max(res_st) >= 0.92:
+                                        identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
+                                        break
+                                
+                                bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
+                                pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:
                                 bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})"
                             

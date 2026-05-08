@@ -888,19 +888,33 @@ def fusion_bot_loop():
                                 best_score = 0.0
                                 for t_file in active_trait_files:
                                     t_template = FUSION_CACHE[t_file]
+                                    # 넓은 시야(roi_trait_name_gray) 참조
                                     res_st = cv2.matchTemplate(roi_trait_name_gray, t_template, cv2.TM_CCOEFF_NORMED)
                                     current_score = np.max(res_st)
                                     best_score = max(best_score, current_score)
                                     
+                                    # 낮은 임계값 적용
                                     if current_score >= 0.78:
                                         identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
                                         break
                                 
                                 if identified_trait_name == "미등록 특성":
-                                    bprint(f"  > ⚠️ [진단] 일치율 미달 (최고 점수: {best_score:.2f} / 기준: 0.78). 사진을 다시 찍어야 합니다.")
-                                
-                                bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
-                                pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                    bprint(f"  > ⚠️ [진단] 일치율 미달 (최고 점수: {best_score:.2f} / 기준: 0.78). 사진 재촬영 권장.")
+                                    # 미등록 특성은 보호 명단에 없으므로 무조건 분해(클릭)
+                                    bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
+                                    pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                    
+                                else:
+                                    # [핵심 로직] config.json에 KEEP_TRAITS(보관 명단)에 있는지 확인
+                                    is_keep_target = any(keep_name in identified_trait_name for keep_name in KEEP_TRAITS)
+                                    
+                                    if is_keep_target:
+                                        # 명단에 있다면 5레벨처럼 보호(스킵) 처리 -> 클릭(C) 절대 안 함!
+                                        bprint(f"  > 👑 [보호] 보관용 특성 '{identified_trait_name}' 발견! 클릭하지 않고 스킵합니다.")
+                                    else:
+                                        # 명단에 없다면 (쓰레기 특성이면) 분해(클릭) 처리
+                                        bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
+                                        pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:
                                 bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})")
                             

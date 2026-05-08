@@ -741,87 +741,78 @@ def fusion_bot_loop():
                                 bprint(f"  > ⚠️ [타임아웃] 0.8초 내에 '어빌리티 라벨' 미인식 (최고점: {max_label_score:.2f}). 조기 스킵합니다.")
                                 fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 고도화된 단일 프레임 병렬 스캔 엔진 (Asymmetric Early Exit 적용)
-                            # 라벨 포착 직후 최대 0.35초간 프레임을 연속으로 뽑아내며 5레벨과 특성을 동시 추적합니다.
-                            scan_start = time.time()
-                            is_level_5 = False
-                            has_trait = False
-                            final_lvl5_val = 0.0
-                            
-                            # [진단용] 최고 인식률 기록
-                            max_seen_5 = 0.0
-                            max_seen_trait = 0.0
-                            
-                            # 템플릿 사전 준비 (반복문 내부 연산 최소화)
-                            t5_color = FUSION_CACHE.get('level_5.png')
-                            if t5_color is not None and len(t5_color.shape) == 3:
-                                t5_hsv = cv2.cvtColor(t5_color, cv2.COLOR_BGR2HSV)
-                                # [B방식 적용] 네온 민트/시안 색상만 하얗게 투과시키는 HSV 마스크 생성 (Hue 45~105)
-                                lower_neon = np.array([45, 50, 80])
-                                upper_neon = np.array([105, 255, 255])
-                                t5_mask = cv2.inRange(t5_hsv, lower_neon, upper_neon)
-                            else:
-                                t5_mask = None
-                                
-                            t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
-                            
-                            conf_lvl5 = 0.65
-                            conf_trait = FUSION_CONF.get('trait.png', 0.70)
-                            
-                            # 판독 영역 좌표 설정
-                            col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
-                            col_y1, col_y2 = max(0, ly - 20), ly + 150
-                            
-                            trait_x1, trait_x2 = max(0, lx - 10), lx + 200
-                            trait_y1, trait_y2 = ly + 30, ly + 300
-                            
-                            while time.time() - scan_start < 0.35 and bot_active:
-                                sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                                hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
-                                hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
-                                
-                                roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
-                                roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                
-                                # 1. 단일 프레임 내 5레벨 평가 (HSV 이진화 투과 엔진)
-                                current_lvl5_val = 0.0
-                                if t5_mask is not None and roi_col_color.size > 0:
-                                    roi_col_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
-                                    roi_col_mask = cv2.inRange(roi_col_hsv, lower_neon, upper_neon)
-                                    res_5 = cv2.matchTemplate(roi_col_mask, t5_mask, cv2.TM_CCOEFF_NORMED)
-                                    if res_5 is not None:
-                                        _, current_lvl5_val, _, _ = cv2.minMaxLoc(res_5)
-                                        max_seen_5 = max(max_seen_5, current_lvl5_val)
-                                                
-                                # 2. 단일 프레임 내 특성 평가
-                                current_trait_val = 0.0
-                                if roi_trait_gray.size > 0:
-                                    for scale in [0.95, 1.0, 1.05]:
-                                        width = int(t_trait_g.shape[1] * scale)
-                                        height = int(t_trait_g.shape[0] * scale)
-                                        if width > 0 and height > 0 and width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
-                                            resized_t = cv2.resize(t_trait_g, (width, height))
-                                            res_t = cv2.matchTemplate(roi_trait_gray, resized_t, cv2.TM_CCOEFF_NORMED)
-                                            current_t_val = np.max(res_t)
-                                            current_trait_val = max(current_trait_val, current_t_val)
-                                    max_seen_trait = max(max_seen_trait, current_trait_val)
-                                
-                                # 3. [핵심] 비대칭(Asymmetric) 조기 탈출 로직
-                                # 5레벨은 1순위 위험 요소이므로 발견 즉시 파기하고 탈출합니다.
-                                if current_lvl5_val >= conf_lvl5:
-                                    is_level_5 = True
-                                    final_lvl5_val = current_lvl5_val
-                                    break 
-                                
-                                # 특성을 찾았더라도 5레벨이 늦게 뜰 수 있으므로 마킹만 해두고 대기를 유지합니다.
-                                if current_trait_val >= conf_trait:
-                                    has_trait = True
+                            # [단계 2]: 픽셀 밀도 카운팅 & 완전 논리 증명(Logical Proof) 엔진
+                                    scan_start = time.time()
+                                    is_level_5 = False
+                                    has_trait = False
+                                    final_lvl5_val = 0.0
                                     
-                                # 특성이 발견된 상태에서 최소 0.25초가 보장되었다면, 5레벨이 없는 것으로 최종 확정하고 조기 탈출합니다.
-                                if has_trait and (time.time() - scan_start > 0.1):
-                                    break
-                                
-                                time.sleep(0.01) # 프레임 과부하 방지
+                                    # [진단용] 최고 점수 기록 (이제 5레벨은 픽셀 개수를 기록합니다)
+                                    max_seen_5 = 0.0
+                                    max_seen_trait = 0.0
+                                    
+                                    # 특성 템플릿 준비 (특성은 기존 형태 매칭 유지)
+                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                    conf_trait = FUSION_CONF.get('trait.png', 0.70)
+                                    
+                                    # 판독 영역 좌표 설정
+                                    col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
+                                    col_y1, col_y2 = max(0, ly - 20), ly + 150
+                                    
+                                    trait_x1, trait_x2 = max(0, lx - 10), lx + 200
+                                    trait_y1, trait_y2 = ly + 30, ly + 300
+                                    
+                                    while time.time() - scan_start < 0.25 and bot_active:
+                                        sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                        hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                        hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
+                                        
+                                        roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
+                                        roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                        
+                                        # 1. 단일 프레임 내 5레벨 평가 (형태 매칭 폐기 -> 색상 픽셀 밀도 카운팅)
+                                        mint_pixel_count = 0
+                                        if roi_col_color.size > 0:
+                                            roi_col_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
+                                            # 페이드인 초기(매우 어두운 상태)를 즉시 잡아내기 위해 Value(명도) 하한선을 40으로 대폭 낮춤
+                                            lower_neon = np.array([45, 50, 40])
+                                            upper_neon = np.array([105, 255, 255])
+                                            roi_col_mask = cv2.inRange(roi_col_hsv, lower_neon, upper_neon)
+                                            
+                                            # 픽셀 개수를 셉니다 (템플릿 매칭보다 수십 배 빠르고 정확함)
+                                            mint_pixel_count = cv2.countNonZero(roi_col_mask)
+                                            max_seen_5 = max(max_seen_5, mint_pixel_count)
+                                                        
+                                        # 2. 단일 프레임 내 특성 평가
+                                        current_trait_val = 0.0
+                                        if roi_trait_gray.size > 0:
+                                            for scale in [0.95, 1.0, 1.05]:
+                                                width = int(t_trait_g.shape[1] * scale)
+                                                height = int(t_trait_g.shape[0] * scale)
+                                                if width > 0 and height > 0 and width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                    resized_t = cv2.resize(t_trait_g, (width, height))
+                                                    res_t = cv2.matchTemplate(roi_trait_gray, resized_t, cv2.TM_CCOEFF_NORMED)
+                                                    current_trait_val = max(current_trait_val, np.max(res_t))
+                                            max_seen_trait = max(max_seen_trait, current_trait_val)
+                                        
+                                        # 3. [핵심] 논리적 완벽 증명 (Logical Proof) 조기 탈출
+                                        
+                                        # [조건 A] 5레벨 확실 (민트 픽셀 15개 이상 감지) -> 0초 탈출
+                                        if mint_pixel_count > 15:
+                                            is_level_5 = True
+                                            final_lvl5_val = mint_pixel_count # 로그 출력을 위해 픽셀 수 전달
+                                            break 
+                                        
+                                        if current_trait_val >= conf_trait:
+                                            has_trait = True
+                                            
+                                        # [조건 B - 사용자님 요청 해결 구간] 
+                                        # 특성은 발견되었는데, 5레벨은 확실히 없음 (민트 픽셀이 5개 미만) -> 0초 탈출!
+                                        # (어빌리티 라벨이 떴는데 민트 픽셀이 없다는 것은 하얀색(1~4)으로 칠해지고 있다는 명백한 증거)
+                                        if has_trait and mint_pixel_count < 5:
+                                            break
+                                        
+                                        time.sleep(0.01) # 프레임 과부하 방지
 
                             # [최종 의사결정]
                             if is_level_5:

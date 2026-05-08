@@ -907,16 +907,17 @@ def fusion_bot_loop():
                                     pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                                     
                                 else:
-                                    # [핵심 로직] config.json에 KEEP_TRAITS(보관 명단)에 있는지 확인
-                                    is_keep_target = any(keep_name in identified_trait_name for keep_name in KEEP_TRAITS)
-                                    
-                                    if is_keep_target:
-                                        # 명단에 있다면 5레벨처럼 보호(스킵) 처리 -> 클릭(C) 절대 안 함!
-                                        bprint(f"  > 👑 [보호] 보관용 특성 '{identified_trait_name}' 발견! 클릭하지 않고 스킵합니다.")
-                                    else:
-                                        # 명단에 없다면 (쓰레기 특성이면) 분해(클릭) 처리
-                                        bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
-                                        pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                    # [NameError 절대 방어] 전역 변수가 모종의 이유로 증발해도 에러가 나지 않도록 globals().get()으로 안전하게 우회 호출
+                                    safe_keep_traits = globals().get('KEEP_TRAITS', [])
+                                    is_keep_target = any(keep_name in identified_trait_name for keep_name in safe_keep_traits)
+                                    
+                                    if is_keep_target:
+                                        # 명단에 있다면 5레벨처럼 보호(스킵) 처리 -> 클릭(C) 절대 안 함!
+                                        bprint(f"  > 👑 [보호] 보관용 특성 '{identified_trait_name}' 발견! 클릭하지 않고 스킵합니다.")
+                                    else:
+                                        # 명단에 없다면 (쓰레기 특성이면) 분해(클릭) 처리
+                                        bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
+                                        pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:
                                 bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})")
                             

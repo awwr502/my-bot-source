@@ -741,24 +741,55 @@ def fusion_bot_loop():
                                 bprint(f"  > ⚠️ [타임아웃] 0.8초 내에 '어빌리티 라벨' 미인식 (최고점: {max_label_score:.2f}). 조기 스킵합니다.")
                                 fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 픽셀 밀도 카운팅 & 완전 논리 증명(Logical Proof) 엔진
+                            # [단계 2]: 적응형 시간 학습(Adaptive Time-Learning) 병렬 스캔 엔진
+                            # 1. 영구 저장소(JSON) 및 메모리 로드
+                            if not hasattr(fusion_bot_loop, 'render_times'):
+                                fusion_bot_loop.render_file = os.path.join(base_dir, "fusion_timing.json")
+                                fusion_bot_loop.render_times = deque(maxlen=10)
+                                try:
+                                    if os.path.exists(fusion_bot_loop.render_file):
+                                        with open(fusion_bot_loop.render_file, "r", encoding="utf-8") as f:
+                                            data = json.load(f)
+                                            for t in data.get('times', []):
+                                                fusion_bot_loop.render_times.append(t)
+                                except: pass
+
+                            # 2. 동적 임계 시간(Dynamic Timeout) 계산
+                            if len(fusion_bot_loop.render_times) < 10:
+                                dynamic_timeout = 0.25
+                                time_mode_str = "고정"
+                            else:
+                                avg_time = sum(fusion_bot_loop.render_times) / 10.0
+                                dynamic_timeout = min(0.25, avg_time + 0.05)
+                                time_mode_str = "동적"
+
                             scan_start = time.time()
                             is_level_5 = False
                             has_trait = False
                             final_lvl5_val = 0.0
+                            lvl5_render_time = 0.0
                             
-                            # [진단용] 최고 점수 기록 (이제 5레벨은 픽셀 개수를 기록합니다)
+                            # [진단용] 최고 점수 기록
                             max_seen_5 = 0.0
                             max_seen_trait = 0.0
                             
-                            # 특성 템플릿 준비 (특성은 기존 형태 매칭 유지)
+                            # 템플릿 사전 준비 (기존 99% 정확도의 형태 매칭 방식으로 완벽 롤백)
+                            t5_color = FUSION_CACHE.get('level_5.png')
+                            if t5_color is not None and len(t5_color.shape) == 3:
+                                t5_hsv = cv2.cvtColor(t5_color, cv2.COLOR_BGR2HSV)
+                                lower_neon = np.array([45, 50, 80]) # 원래 수치로 복구하여 노이즈 원천 차단
+                                upper_neon = np.array([105, 255, 255])
+                                t5_mask = cv2.inRange(t5_hsv, lower_neon, upper_neon)
+                            else:
+                                t5_mask = None
+                                
                             t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                            conf_lvl5 = 0.65
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
                             
                             # 판독 영역 좌표 설정
                             col_x1, col_x2 = lx + template_label.shape[1], lx + template_label.shape[1] + 360
                             col_y1, col_y2 = max(0, ly - 20), ly + 150
-                            
                             trait_x1, trait_x2 = max(0, lx - 10), lx + 200
                             trait_y1, trait_y2 = ly + 30, ly + 300
                             
@@ -770,20 +801,17 @@ def fusion_bot_loop():
                                 roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
                                 roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
                                 
-                                # 1. 단일 프레임 내 5레벨 평가 (형태 매칭 폐기 -> 색상 픽셀 밀도 카운팅)
-                                mint_pixel_count = 0
-                                if roi_col_color.size > 0:
+                                # 1. 5레벨 평가 (HSV 마스크 + 형태 매칭)
+                                current_lvl5_val = 0.0
+                                if t5_mask is not None and roi_col_color.size > 0:
                                     roi_col_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
-                                    # 페이드인 초기(매우 어두운 상태)를 즉시 잡아내기 위해 Value(명도) 하한선을 40으로 대폭 낮춤
-                                    lower_neon = np.array([45, 50, 40])
-                                    upper_neon = np.array([105, 255, 255])
                                     roi_col_mask = cv2.inRange(roi_col_hsv, lower_neon, upper_neon)
-                                    
-                                    # 픽셀 개수를 셉니다 (템플릿 매칭보다 수십 배 빠르고 정확함)
-                                    mint_pixel_count = cv2.countNonZero(roi_col_mask)
-                                    max_seen_5 = max(max_seen_5, mint_pixel_count)
+                                    res_5 = cv2.matchTemplate(roi_col_mask, t5_mask, cv2.TM_CCOEFF_NORMED)
+                                    if res_5 is not None:
+                                        _, current_lvl5_val, _, _ = cv2.minMaxLoc(res_5)
+                                        max_seen_5 = max(max_seen_5, current_lvl5_val)
                                                 
-                                # 2. 단일 프레임 내 특성 평가
+                                # 2. 특성 평가
                                 current_trait_val = 0.0
                                 if roi_trait_gray.size > 0:
                                     for scale in [0.95, 1.0, 1.05]:
@@ -795,30 +823,36 @@ def fusion_bot_loop():
                                             current_trait_val = max(current_trait_val, np.max(res_t))
                                     max_seen_trait = max(max_seen_trait, current_trait_val)
                                 
-                                # 3. [핵심] 논리적 완벽 증명 (Logical Proof) 조기 탈출
+                                # 3. 논리적 조기 탈출 및 학습 로직
                                 
-                                # [조건 A] 5레벨 확실 (민트 픽셀 15개 이상 감지) -> 0초 탈출
-                                if mint_pixel_count > 15:
+                                # [조건 A] 5레벨 발견 (즉시 탈출 및 시간 학습)
+                                if current_lvl5_val >= conf_lvl5:
                                     is_level_5 = True
-                                    final_lvl5_val = mint_pixel_count # 로그 출력을 위해 픽셀 수 전달
+                                    final_lvl5_val = current_lvl5_val
+                                    lvl5_render_time = time.time() - scan_start # 렌더링 소요 시간 기록
+                                    
+                                    # 시간 데이터 하드디스크 영구 저장 (Rolling 10)
+                                    fusion_bot_loop.render_times.append(lvl5_render_time)
+                                    try:
+                                        with open(fusion_bot_loop.render_file, "w", encoding="utf-8") as f:
+                                            json.dump({"times": list(fusion_bot_loop.render_times)}, f)
+                                    except: pass
                                     break 
                                 
                                 if current_trait_val >= conf_trait:
                                     has_trait = True
                                     
-                                # [조건 B - 사용자님 요청 해결 구간] 
-                                # 특성은 발견되었는데, 5레벨은 확실히 없음 (민트 픽셀이 5개 미만) -> 0초 탈출!
-                                # (어빌리티 라벨이 떴는데 민트 픽셀이 없다는 것은 하얀색(1~4)으로 칠해지고 있다는 명백한 증거)
-                                if has_trait and mint_pixel_count < 5:
+                                # [조건 B] 적응형 시간 초과 시 특성 분해 확정 (동적 탈출)
+                                if has_trait and (time.time() - scan_start > dynamic_timeout):
                                     break
                                 
                                 time.sleep(0.01) # 프레임 과부하 방지
 
                             # [최종 의사결정]
                             if is_level_5:
-                                bprint(f"  > 🛑 [보호] 5레벨 감염물. (임계값: {final_lvl5_val:.2f})")
+                                bprint(f"  > 🛑 [보호] 5레벨 감염물. (임계값: {final_lvl5_val:.2f} / 시간: {lvl5_render_time:.2f}초 / 대기모드: {time_mode_str})")
                             elif has_trait:
-                                bprint("  > ♻️ [분해] 특성 포착."); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                bprint(f"  > ♻️ [분해] 특성 포착. (적용 대기시간: {dynamic_timeout:.2f}초)"); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:
                                 bprint(f"  > 💎 [보관] 확정적 순정. (최고 인식률 - 5레벨:{max_seen_5:.2f} / 특성:{max_seen_trait:.2f})")
                             

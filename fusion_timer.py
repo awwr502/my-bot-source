@@ -66,17 +66,34 @@ BOT_NAME = "베릭(융합)"
 CMD_PREFIX = "/2"
 USE_TELEGRAM = False
 
-try:
-    with open(config_path, "r", encoding="utf-8") as f:
-        config_data = json.load(f)
-        TELEGRAM_TOKEN = config_data.get("TELEGRAM_TOKEN", "")
-        CHAT_ID = config_data.get("CHAT_ID", "")
-        BOT_NAME = config_data.get("BOT_NAME", "베릭(융합)") 
-        CMD_PREFIX = config_data.get("CMD_PREFIX", "/2") 
-        if TELEGRAM_TOKEN.strip() and CHAT_ID.strip():
-            USE_TELEGRAM = True
-except:
-    pass
+def load_local_config():
+    global TELEGRAM_TOKEN, CHAT_ID, BOT_NAME, CMD_PREFIX, USE_TELEGRAM
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                TELEGRAM_TOKEN = config_data.get("TELEGRAM_TOKEN", "")
+                CHAT_ID = config_data.get("CHAT_ID", "")
+                BOT_NAME = config_data.get("BOT_NAME", "베릭(융합)") 
+                CMD_PREFIX = config_data.get("CMD_PREFIX", "/2") 
+                if TELEGRAM_TOKEN.strip() and CHAT_ID.strip():
+                    USE_TELEGRAM = True
+    except: pass
+
+load_local_config()
+
+TRAIT_NAMES = {}
+trait_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fusion_imgs", "trait_names.json")
+
+def load_trait_names():
+    global TRAIT_NAMES
+    try:
+        if os.path.exists(trait_config_path):
+            with open(trait_config_path, "r", encoding="utf-8") as f:
+                TRAIT_NAMES = json.load(f)
+    except: pass
+
+load_trait_names()
 
 blackbox_buffer = deque(maxlen=20)
 
@@ -340,23 +357,30 @@ try:
         
         # 1. 깃허브에 있는 파일 목록을 돌며 내 컴퓨터와 해시(SHA) 대조
         for img_name, item_data in github_data.items():
-            if not img_name.endswith('.png'): continue
+            if not img_name.endswith('.png') and img_name != 'trait_names.json': continue
             full_path = os.path.join(base_dir, img_name)
             
             remote_sha = item_data['sha']
             local_sha = get_git_sha(full_path)
             
-            # 해시값이 서로 다르거나 내 컴퓨터에 아예 없으면 깃허브에서 다운로드하여 '덮어쓰기'
             if local_sha != remote_sha:
                 bprint(f"  > ☁️ [클라우드 패치] '{img_name}' 최신화 다운로드 중...")
                 dl_res = requests.get(item_data['download_url'], timeout=5)
                 dl_res.raise_for_status()
                 with open(full_path, 'wb') as f:
                     f.write(dl_res.content)
+                if img_name == 'trait_names.json':
+                    load_trait_names()
 except Exception as e:
     bprint(f"  > ⚠️ 클라우드 연결 실패. 기존 로컬 환경으로 부팅합니다: {e}")
 
 CHAR_IMG_NAMES = [c["img"] for c in MY_CHARACTERS]
+
+dynamic_traits = [f for f in os.listdir(base_dir) if f.startswith('trait_') and f.endswith('.png')]
+target_images.extend(dynamic_traits)
+GRAY_IMAGES.extend(dynamic_traits)
+for img in dynamic_traits:
+    FUSION_CONF[img] = 0.92
 
 # 2. 패치가 완료된 로컬 폴더에서 RAM으로 일괄 적재 (캐릭터 사진 포함)
 for img_name in target_images:
@@ -848,11 +872,22 @@ def fusion_bot_loop():
 
                             # [최종 의사결정]
                             if is_level_5:
-                                bprint(f"  > 🛑 [보호] 5레벨 감염물. (인식률: {max_seen_5:.2f} / 시간: {lvl5_render_time:.2f}초 / 모드: {time_mode_str})")
+                                bprint(f"  > 🛑 [보호] 5레벨 감염물. (인식률: {max_seen_5:.2f} / 시간: {lvl5_render_time:.2f}초)")
                             elif has_trait:
-                                bprint(f"  > ♻️ [분해] 특성 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)"); pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                identified_trait_name = "미등록 특성"
+                                active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
+                                
+                                for t_file in active_trait_files:
+                                    t_template = FUSION_CACHE[t_file]
+                                    res_st = cv2.matchTemplate(roi_trait_gray, t_template, cv2.TM_CCOEFF_NORMED)
+                                    if np.max(res_st) >= 0.92:
+                                        identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
+                                        break
+                                
+                                bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
+                                pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                             else:
-                                bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})")
+                                bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})"
                             
                             fast_clear_tooltip()
                         

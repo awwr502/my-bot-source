@@ -755,16 +755,26 @@ def fusion_bot_loop():
                                             for t in data.get('tr', []): fusion_bot_loop.tr_times.append(t)
                                 except: pass
 
-                            # 2. 동적 임계 시간 계산
+                            # 2. 동적 임계 시간 계산 함수
                             def get_dynamic_limit(d_queue):
                                 if len(d_queue) < 10: return 0.25
                                 return min(0.25, (sum(d_queue) / 10.0) + 0.05)
 
                             l5_limit = get_dynamic_limit(fusion_bot_loop.l5_times)
                             tr_limit = get_dynamic_limit(fusion_bot_loop.tr_times)
-                            # 둘 중 더 늦게 뜨는 요소를 기준으로 최종 대기 시간 결정
                             max_wait_limit = max(l5_limit, tr_limit)
                             time_mode_str = "동적" if len(fusion_bot_loop.l5_times) >= 10 else "고정"
+
+                            # [중요: 좌표 선언 누락 복구] 판독 영역 좌표 설정
+                            col_x1 = lx + template_label.shape[1]
+                            col_x2 = col_x1 + 360
+                            col_y1 = max(0, ly - 20)
+                            col_y2 = ly + 150
+                            
+                            trait_x1 = max(0, lx - 10)
+                            trait_x2 = lx + 200
+                            trait_y1 = ly + 30
+                            trait_y2 = ly + 300
 
                             scan_start = time.time()
                             is_level_5 = False
@@ -808,7 +818,7 @@ def fusion_bot_loop():
                                         is_level_5 = True
                                         lvl5_render_time = elapsed
                                         fusion_bot_loop.l5_times.append(elapsed)
-                                        break # 5레벨은 발견 즉시 보존 확정 후 탈출
+                                        break 
                                                 
                                 # 2. 특성 평가 및 학습
                                 if not has_trait and roi_trait_gray.size > 0:
@@ -825,10 +835,7 @@ def fusion_bot_loop():
                                                 break
 
                                 # 3. 논리적 탈출 조건
-                                # 5레벨 학습 시간(l5_limit)이 지났는데 특성(has_trait)만 발견된 경우 -> 분해 확정 탈출
                                 if has_trait and elapsed > l5_limit: break
-                                
-                                # 둘 다 없는 '순정' 상태에서 최장 학습 시간(max_wait_limit)이 지난 경우 -> 순정 확정 탈출
                                 if not is_level_5 and not has_trait and elapsed > max_wait_limit: break
                                 
                                 time.sleep(0.01)

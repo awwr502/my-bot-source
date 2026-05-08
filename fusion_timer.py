@@ -741,15 +741,14 @@ def fusion_bot_loop():
                                 bprint(f"  > ⚠️ [타임아웃] 0.8초 내에 '어빌리티 라벨' 미인식 (최고점: {max_label_score:.2f}). 조기 스킵합니다.")
                                 fast_clear_tooltip(); continue
                                 
-                            # [단계 2]: 고도화된 단일 프레임 병렬 스캔 엔진 (Concurrent Frame Scan)
-                            # 라벨 포착 직후 최대 0.3초간 프레임을 연속으로 뽑아내며 5레벨과 특성을 동시 추적합니다.
-                            # 단일 프레임 내에서 두 조건을 동시에 평가하여 둘 중 하나라도 임계값을 넘으면 즉시 대기를 파기하고 탈출합니다.
+                            # [단계 2]: 고도화된 단일 프레임 병렬 스캔 엔진 (Asymmetric Early Exit 적용)
+                            # 라벨 포착 직후 최대 0.35초간 프레임을 연속으로 뽑아내며 5레벨과 특성을 동시 추적합니다.
                             scan_start = time.time()
                             is_level_5 = False
                             has_trait = False
                             final_lvl5_val = 0.0
                             
-                            # [진단용] 0.3초 동안 스쳐간 최고 인식률 기록
+                            # [진단용] 최고 인식률 기록
                             max_seen_5 = 0.0
                             max_seen_trait = 0.0
                             
@@ -766,7 +765,6 @@ def fusion_bot_loop():
                                 
                             t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                             
-                            # [B방식 임계값 하향] 배경 노이즈가 제거된 완벽한 흑백 실루엣이므로 임계값을 0.65로 하향하여 미탐 차단
                             conf_lvl5 = 0.65
                             conf_trait = FUSION_CONF.get('trait.png', 0.70)
                             
@@ -777,7 +775,7 @@ def fusion_bot_loop():
                             trait_x1, trait_x2 = max(0, lx - 10), lx + 200
                             trait_y1, trait_y2 = ly + 30, ly + 300
                             
-                            while time.time() - scan_start < 0.30 and bot_active:
+                            while time.time() - scan_start < 0.35 and bot_active:
                                 sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
                                 hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                                 hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
@@ -808,14 +806,20 @@ def fusion_bot_loop():
                                             current_trait_val = max(current_trait_val, current_t_val)
                                     max_seen_trait = max(max_seen_trait, current_trait_val)
                                 
-                                # 3. 동시 판정 및 즉각 탈출 (병렬 스캔 핵심 로직)
-                                if current_lvl5_val >= conf_lvl5 or current_trait_val >= conf_trait:
-                                    if current_lvl5_val >= conf_lvl5:
-                                        is_level_5 = True
-                                        final_lvl5_val = current_lvl5_val
-                                    if current_trait_val >= conf_trait:
-                                        has_trait = True
-                                    break # 둘 중 하나라도 임계값을 넘기면 0.3초 대기를 즉시 파기하고 탈출합니다.
+                                # 3. [핵심] 비대칭(Asymmetric) 조기 탈출 로직
+                                # 5레벨은 1순위 위험 요소이므로 발견 즉시 파기하고 탈출합니다.
+                                if current_lvl5_val >= conf_lvl5:
+                                    is_level_5 = True
+                                    final_lvl5_val = current_lvl5_val
+                                    break 
+                                
+                                # 특성을 찾았더라도 5레벨이 늦게 뜰 수 있으므로 마킹만 해두고 대기를 유지합니다.
+                                if current_trait_val >= conf_trait:
+                                    has_trait = True
+                                    
+                                # 특성이 발견된 상태에서 최소 0.25초가 보장되었다면, 5레벨이 없는 것으로 최종 확정하고 조기 탈출합니다.
+                                if has_trait and (time.time() - scan_start > 0.25):
+                                    break
                                 
                                 time.sleep(0.01) # 프레임 과부하 방지
 

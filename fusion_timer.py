@@ -884,36 +884,28 @@ def fusion_bot_loop():
                             if is_level_5:
                                 bprint(f"  > 🛑 [보호] 5레벨 감염물. (인식률: {max_seen_5:.2f} / 시간: {lvl5_render_time:.2f}초)")
                             elif has_trait:
-                                identified_trait_name = "미등록 특성"
-                                active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
-                                
-                                best_score = 0.0
-                                for t_file in active_trait_files:
-                                    t_template = FUSION_CACHE[t_file]
-                                    # 넓은 시야(roi_trait_name_gray) 참조
-                                    res_st = cv2.matchTemplate(roi_trait_name_gray, t_template, cv2.TM_CCOEFF_NORMED)
-                                    current_score = np.max(res_st)
-                                    best_score = max(best_score, current_score)
-                                    
-                                    # 낮은 임계값 적용
-                                    if current_score >= 0.78:
-                                        identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
-                                        break
-                                
-                                if identified_trait_name == "미등록 특성":
-                                    bprint(f"  > ⚠️ [진단] 일치율 미달 (최고 점수: {best_score:.2f} / 기준: 0.78). 사진 재촬영 권장.")
-                                    # 미등록 특성은 보호 명단에 없으므로 무조건 분해(클릭)
-                                    bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
-                                    pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
-                                    
-                                else:
-                                    # [NameError 절대 방어] 전역 변수가 모종의 이유로 증발해도 에러가 나지 않도록 globals().get()으로 안전하게 우회 호출
-                                    safe_keep_traits = globals().get('KEEP_TRAITS', [])
-                                    is_keep_target = any(keep_name in identified_trait_name for keep_name in safe_keep_traits)
-                                    
-                                    if is_keep_target:
-                                        # 명단에 있다면 5레벨처럼 보호(스킵) 처리 -> 클릭(C) 절대 안 함!
-                                        bprint(f"  > 👑 [보호] 보관용 특성 '{identified_trait_name}' 발견! 클릭하지 않고 스킵합니다.")
+                                identified_trait_name = "미등록 특성"
+                                active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
+                                
+                                best_score = 0.0
+                                for t_file in active_trait_files:
+                                    t_template = FUSION_CACHE[t_file]
+                                    res_st = cv2.matchTemplate(roi_trait_name_gray, t_template, cv2.TM_CCOEFF_NORMED)
+                                    current_score = np.max(res_st)
+                                    best_score = max(best_score, current_score)
+                                    
+                                    if current_score >= 0.78:
+                                        identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
+                                        break
+                                
+                                if identified_trait_name == "미등록 특성":
+                                    bprint(f"  > ⚠️ [진단] 일치율 미달 (최고 점수: {best_score:.2f} / 기준: 0.78). 사진 재촬영 권장.")
+                                    # 내가 사진을 등록하지 않은 '쓰레기 특성'이므로 가차 없이 클릭(분해)
+                                    bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
+                                    pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                else:
+                                    # 내가 사진을 등록한 '유효 특성'이므로 5레벨이나 순정처럼 클릭을 배제하고 무조건 보호(스킵)
+                                    bprint(f"  > 👑 [보호] 등록된 특성 '{identified_trait_name}' 발견! 클릭하지 않고 스킵합니다.")
                                     else:
                                         # 명단에 없다면 (쓰레기 특성이면) 분해(클릭) 처리
                                         bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")

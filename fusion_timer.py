@@ -818,7 +818,7 @@ def fusion_bot_loop():
                                     has_trait = True
                                     
                                 # 특성이 발견된 상태에서 최소 0.25초가 보장되었다면, 5레벨이 없는 것으로 최종 확정하고 조기 탈출합니다.
-                                if has_trait and (time.time() - scan_start > 0.25):
+                                if has_trait and (time.time() - scan_start > 0.1):
                                     break
                                 
                                 time.sleep(0.01) # 프레임 과부하 방지

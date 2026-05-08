@@ -65,9 +65,10 @@ CHAT_ID = ""
 BOT_NAME = "베릭(융합)"
 CMD_PREFIX = "/2"
 USE_TELEGRAM = False
+KEEP_TRAITS = []
 
 def load_local_config():
-    global TELEGRAM_TOKEN, CHAT_ID, BOT_NAME, CMD_PREFIX, USE_TELEGRAM
+    global TELEGRAM_TOKEN, CHAT_ID, BOT_NAME, CMD_PREFIX, USE_TELEGRAM, KEEP_TRAITS
     try:
         if os.path.exists(config_path):
             with open(config_path, "r", encoding="utf-8") as f:
@@ -76,6 +77,7 @@ def load_local_config():
                 CHAT_ID = config_data.get("CHAT_ID", "")
                 BOT_NAME = config_data.get("BOT_NAME", "베릭(융합)") 
                 CMD_PREFIX = config_data.get("CMD_PREFIX", "/2") 
+                KEEP_TRAITS = config_data.get("KEEP_TRAITS", [])
                 if TELEGRAM_TOKEN.strip() and CHAT_ID.strip():
                     USE_TELEGRAM = True
     except: pass

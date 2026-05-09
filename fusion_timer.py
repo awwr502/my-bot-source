@@ -899,7 +899,6 @@ def fusion_bot_loop():
                                         break
                                 
                                 if identified_trait_name == "미등록 특성":
-                                    bprint(f"  > ⚠️ [진단] 일치율 미달 (최고 점수: {best_score:.2f} / 기준: 0.78). 사진 재촬영 권장.")
                                     bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
                                     pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                                 else:

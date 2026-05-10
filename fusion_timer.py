@@ -142,6 +142,7 @@ is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 char_thread_active = False # 수동 캐릭터 변경 스레드 제어 플래그
 char_inventory_memory = {} # 캐릭터별 인벤토리 탐색 위치 기억용 딕셔너리
 ENABLE_POPUP_MAIN_CHECK = True # 자정 팝업 감지 기능 활성화 상태 변수
+current_logged_in_char = "5.png" # 현재 접속 중인 캐릭터 추적 변수 (초기값)
 
 # [밝기 제어 최적화] 낚시 매크로와 동일한 전역 브로드캐스트 방식으로 롤백
 def restore_monitors_brightness(bright_data):
@@ -550,57 +551,128 @@ def check_popup_char(thread_sct):
     return False
 
 def check_fusion_afk(thread_sct):
-    """융합기 대기 전용 잠수 방지 해제 로직"""
-    if check_img('exit_notice.png', thread_sct, force_full=True):
-        bprint("  > [긴급] 융합 중 잠수 방지 알림 감지! 전용 해제 시퀀스 진입")
-        
-        # 1. F 입력하여 알림창 닫기 (완전히 사라질 때까지 검증)
-        while check_img('exit_notice.png', thread_sct, force_full=True):
-            send_cmd('F'); time.sleep(0.1); send_cmd('R')
-            for _ in range(20):
-                time.sleep(0.1)
-                if not check_img('exit_notice.png', thread_sct, force_full=True):
-                    break
-        
-        bprint("  > [1단계] 알림창 소멸 확인. ESC 1회 입력")
-        send_cmd('E'); time.sleep(0.1); send_cmd('R')
-        
-        # 2. 7.png 최대 3초 능동 대기
-        bprint("  > [2단계] 7.png 탐색 중 (최대 3초)...")
-        wait_7_start = time.time()
-        found_7 = False
-        while time.time() - wait_7_start < 3.0 and bot_active:
-            if check_img('7.png', thread_sct, force_full=True):
-                found_7 = True
-                bprint("  > [성공] 7.png 포착 완료")
-                break
-            time.sleep(0.05)
-            
-        if not found_7:
-            bprint("  > [실패] 3초 내 7.png 미발견. ESC 추가 1회 입력")
-            send_cmd('E'); time.sleep(0.1); send_cmd('R')
-            
-        # 3. 위치 보정 (S 0.8초 -> W 0.8초)
-        bprint("  > [3단계] 위치 보정: S(후진) 0.8초 -> W(전진) 0.8초")
-        time.sleep(0.5)
-        send_cmd('S'); time.sleep(0.8); send_cmd('R')
-        time.sleep(0.2)
-        send_cmd('W'); time.sleep(0.8); send_cmd('R')
-        time.sleep(0.5)
-        
-        # 4. 14.png 탐색 (마우스 회전) 및 F 입력
-        bprint("  > [4단계] 14.png 융합기 탐색 시작 (마우스 회전)")
-        while bot_active:
-            if check_img('14.png', thread_sct, force_full=True):
-                bprint("  > [완료] 14.png 발견! F 입력 후 융합 대기로 복귀합니다.")
-                send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                break
-            else:
-                send_cmd('M', 60, 0); time.sleep(0.15)
-        
-        time.sleep(1.0)
-        return True
-    return False
+    """융합기 대기 전용 잠수 방지 해제 로직 (완전 초기화: 로그아웃 -> 재접속 방식)"""
+    global current_logged_in_char
+    if check_img('exit_notice.png', thread_sct, force_full=True):
+        bprint("  > [긴급] 융합 중 잠수 방지 알림 감지! 꼬임 방지를 위해 로그아웃 및 재접속 시퀀스 진입")
+        
+        # 1. F 입력하여 알림창 닫기
+        while check_img('exit_notice.png', thread_sct, force_full=True):
+            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+            for _ in range(20):
+                time.sleep(0.1)
+                if not check_img('exit_notice.png', thread_sct, force_full=True):
+                    break
+        
+        bprint("  > [1단계] 알림창 소멸 확인. ESC를 입력하여 융합기에서 이탈합니다.")
+        send_cmd('E'); time.sleep(0.15); send_cmd('R')
+        
+        # 7.png 확인 (메인 화면)
+        wait_7 = time.time()
+        while time.time() - wait_7 < 3.0 and bot_active:
+            if check_img('7.png', thread_sct, force_full=True): break
+            time.sleep(0.1)
+            
+        bprint("  > [2단계] 메인 화면 확인. 로그아웃을 진행합니다.")
+        send_cmd('E'); time.sleep(0.15); send_cmd('R')
+        
+        # 1.png 대기 및 클릭
+        found_1 = False
+        wait_1 = time.time()
+        while time.time() - wait_1 < 2.0 and bot_active:
+            check_popup_main(thread_sct)
+            if check_img('1.png', thread_sct):
+                found_1 = True; break
+            time.sleep(0.05)
+            
+        if found_1:
+            cx, cy = FUSION_ROI['1.png']['last_pos']
+            pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
+        else:
+            bprint("  > [오류] 1.png 미발견. ESC를 재입력하여 복구를 시도합니다.")
+            send_cmd('E'); time.sleep(0.15); send_cmd('R')
+            return False
+            
+        # 2.png -> N -> 3.png
+        wait_2 = time.time()
+        while time.time() - wait_2 < 5.0 and bot_active:
+            if check_img('2.png', thread_sct): break
+            time.sleep(0.05)
+            
+        bprint("  > [3단계] 서버 선택창 진입. 동일한 캐릭터로 다시 접속합니다.")
+        send_cmd('N'); time.sleep(0.1); send_cmd('R')
+        
+        wait_3 = time.time()
+        found_3 = False
+        while time.time() - wait_3 < 30.0 and bot_active:
+            check_popup_main(thread_sct)
+            if check_img('3.png', thread_sct, force_full=True):
+                found_3 = True; break
+            send_cmd('C'); time.sleep(0.1)
+            
+        if not found_3: return False
+        
+        c_name = CHAR_NAMES.get(current_logged_in_char, current_logged_in_char)
+        bprint(f"  > [4단계] 캐릭터 목록 갱신 완료. '{c_name}' 선택 및 게임 진입")
+        send_cmd('G'); time.sleep(0.1); send_cmd('R')
+        wait_g = time.time()
+        found_char = False
+        while time.time() - wait_g < 1.5 and bot_active:
+            if check_img(current_logged_in_char, thread_sct, force_full=True):
+                found_char = True; break
+            time.sleep(0.1)
+            
+        if found_char:
+            cx, cy = FUSION_ROI[current_logged_in_char]['last_pos']
+            pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
+            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+        else:
+            bprint("  > [오류] 캐릭터를 찾지 못했습니다. 루프를 종료합니다.")
+            return False
+            
+        bprint("  > [5단계] 로딩 대기 중 (6.png -> 7.png)...")
+        wait_6 = time.time()
+        while time.time() - wait_6 < 5.0 and bot_active:
+            if check_img('6.png', thread_sct): break
+            time.sleep(0.05)
+        wait_vanish('6.png', thread_sct)
+        
+        # 7.png 확인 후 융합기 재진입
+        while bot_active:
+            if check_popup_char(thread_sct): continue
+            if check_img('7.png', thread_sct):
+                bprint("  > [6단계] 게임 재진입 성공! 융합기를 다시 엽니다.")
+                send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                
+                wait_chance = time.time()
+                entered = False
+                while time.time() - wait_chance < 1.5 and bot_active:
+                    if check_popup_char(thread_sct): wait_chance = time.time(); continue
+                    # [요청 반영] 융합이 끝나 보상(get_reward.png)이 떠 있는 경우도 성공으로 처리합니다.
+                    if check_img('chance.png', thread_sct) or check_img('get_reward.png', thread_sct, force_full=True):
+                        entered = True; break
+                    time.sleep(0.05)
+                    
+                if entered:
+                    bprint("  > ✅ [복구 완료] 융합기 내부로 안전하게 복귀했습니다!")
+                    return True
+                    
+                bprint("  > 융합기 즉시 개방 실패. 14.png 탐색(마우스 회전) 시도...")
+                while bot_active:
+                    if check_popup_char(thread_sct): continue
+                    if check_img('chance.png', thread_sct) or check_img('get_reward.png', thread_sct, force_full=True):
+                        bprint("  > ✅ [복구 완료] 융합기 내부로 안전하게 복귀했습니다!")
+                        return True
+                    if check_img('14.png', thread_sct, force_full=True):
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        time.sleep(2.0)
+                        if not check_img('14.png', thread_sct, force_full=True):
+                            bprint("  > ✅ [복구 완료] 융합기 내부로 안전하게 복귀했습니다!")
+                            return True
+                    else:
+                        send_cmd('M', 60, 0); time.sleep(0.15)
+        return True
+    return False
 
 def toggle_stop():
     global bot_active, original_brightness, is_dimmed, char_thread_active
@@ -663,7 +735,7 @@ def toggle_start(mode=1):
 
 # === [메인 융합 봇 루프] ===
 def fusion_bot_loop():
-    global bot_active, bot_mode
+    global bot_active, bot_mode, current_logged_in_char
     state = 0
     fusion_end_time = 0.0
     char_index = 0
@@ -1170,10 +1242,11 @@ def fusion_bot_loop():
                             time.sleep(0.05)
                             
                         if found_6:
-                            wait_vanish('6.png', thread_sct)
-                            bprint("  > [성공] 6.png 소멸 완료. 5단계 이동.")
-                            state = 5
-                            break
+                            wait_vanish('6.png', thread_sct)
+                            bprint("  > [성공] 6.png 소멸 완료. 5단계 이동.")
+                            current_logged_in_char = char_images[char_index]
+                            state = 5
+                            break
                         else:
                             bprint("  > [재시도] 화면 전환(6.png) 미감지. F키를 다시 입력합니다...")
                             send_cmd('F'); time.sleep(0.1); send_cmd('R')
@@ -2344,8 +2417,8 @@ def fusion_bot_loop():
                 continue
 
 def force_change_character(char_key):
-    """F6~F11 단축키를 통해 즉시 실행되는 수동 캐릭터 변경 전용 로직"""
-    global bot_active, char_thread_active, bot_mode
+    """F6~F11 단축키를 통해 즉시 실행되는 수동 캐릭터 변경 전용 로직"""
+    global bot_active, char_thread_active, bot_mode, current_logged_in_char
     
     # [전역 락 방어벽] 봇이 실행 중일 때는 모드와 상관없이 수동 조작을 완벽히 차단합니다.
     if bot_active:
@@ -2494,10 +2567,11 @@ def force_change_character(char_key):
                     if not char_thread_active: break
                         
                     if found_6:
-                        wait_vanish('6.png', thread_sct)
-                        if not char_thread_active: break
-                        bprint(f"  > ✅ [성공] 6.png 소멸 완료. '{c_name}' 캐릭터 변경 완료!\n")
-                        break # 완전히 종료
+                        wait_vanish('6.png', thread_sct)
+                        if not char_thread_active: break
+                        bprint(f"  > ✅ [성공] 6.png 소멸 완료. '{c_name}' 캐릭터 변경 완료!\n")
+                        current_logged_in_char = char_key
+                        break # 완전히 종료
                     else:
                             bprint("  > [재시도] 화면 전환(6.png) 미감지. F키를 다시 입력합니다...")
                             send_cmd('F'); time.sleep(0.1); send_cmd('R')

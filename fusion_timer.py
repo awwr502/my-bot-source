@@ -620,10 +620,10 @@ def toggle_stop():
 
 def toggle_start(mode=1):
     global bot_active, bot_mode, original_brightness, enable_dimming, is_dimmed
-    # [꼬임 방지] 이미 봇이 실행 중이면 다른 시작 단축키 입력을 완벽히 차단합니다.
-    if bot_active:
-        bprint(f"⚠️ [입력 무시] 현재 매크로가 이미 실행 중입니다. 정지 단축키([)를 누른 후 다시 실행해주세요.")
-        return
+    # [전역 락 방어벽] 이미 봇이 실행 중이거나 수동 캐릭터 변경 중이면 다른 단축키 입력을 완벽히 차단합니다.
+    if bot_active or char_thread_active:
+        bprint(f"⚠️ [입력 무시] 현재 매크로가 이미 실행 중입니다. 정지 단축키([)를 누른 후 다시 실행해주세요.")
+        return
         
     print()
     bot_mode = mode
@@ -2343,28 +2343,20 @@ def force_change_character(char_key):
     """F6~F11 단축키를 통해 즉시 실행되는 수동 캐릭터 변경 전용 로직"""
     global bot_active, char_thread_active, bot_mode
     
-    # 이미 수동 캐릭터 변경이 진행 중이면 중복 실행을 완벽히 차단합니다.
-    if char_thread_active:
-        bprint("\n⚠️ [경고] 이미 캐릭터 수동 변경이 진행 중입니다. 무시됩니다.")
-        return
-    
-    was_active = bot_active
-    
-    # [핵심 수정] 모드 1(단일 타이머)이 가동 중일 때는 봇을 끄지 않고 백그라운드 타이머를 유지합니다!
-    # 그 외의 모드(모드 2~4 멀티 교체 등)가 동작 중일 때만 마우스 충돌 방지를 위해 봇을 자동 정지시킵니다.
-    if was_active and bot_mode != 1:
-        toggle_stop()
-        
-    char_thread_active = True
+    # [전역 락 방어벽] 봇이 실행 중일 때는 모드와 상관없이 수동 조작을 완벽히 차단합니다.
+    if bot_active:
+        bprint("\n⚠️ [입력 무시] 현재 매크로가 이미 실행 중입니다. 정지 단축키([)를 누른 후 다시 실행해주세요.")
+        return
 
-    if was_active:
-        if bot_mode != 1:
-            time.sleep(0.5)
-        else:
-            print() # 동적 타이머( \r )와 로그 텍스트가 겹쳐서 깨지는 현상을 방지하기 위해 강제 줄바꿈
+    # 이미 수동 캐릭터 변경이 진행 중이면 중복 실행을 완벽히 차단합니다.
+    if char_thread_active:
+        bprint("\n⚠️ [경고] 이미 캐릭터 수동 변경이 진행 중입니다. 무시됩니다.")
+        return
+    
+    char_thread_active = True
 
-    c_name = CHAR_NAMES.get(char_key, char_key)
-    bprint(f"\n🚀 [수동 캐릭터 변경] '{c_name}' 접속 시퀀스 시작!")
+    c_name = CHAR_NAMES.get(char_key, char_key)
+    bprint(f"\n🚀 [수동 캐릭터 변경] '{c_name}' 접속 시퀀스 시작!")
 
     with mss.mss() as thread_sct:
         state = 1

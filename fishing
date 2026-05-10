@@ -756,7 +756,7 @@ class Box:
         self.height = height
 
 def load_roi_cache():
-    """저장된 ROI 기억(json) 및 학습 고정 상태를 불러옵니다."""
+    """저장된 ROI 기억(json) 및 학습 고정 상태, 진행도를 모두 불러옵니다."""
     global ROI_SAMPLER
     if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
     try:
@@ -764,44 +764,53 @@ def load_roi_cache():
             with open(ROI_CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 for k, v in data.items():
-                    # 1. 물리적 좌표(ROI) 복구
                     ROI_SAMPLER[k] = {
                         'samples': deque(v.get('samples', []), maxlen=10),
                         'master_box': v.get('master_box')
                     }
                     
-                    # 2. 스마트 락(Lock) 및 임계값 상태 완벽 복구
-                    if v.get('is_locked'):
-                        locked_val = v.get('locked_conf', 0.6)
-                        safe_find_image.session[k] = {
-                            'max_val': 0.0, 'found': False, 'last_time': 0, 'reported_fail': False, 
-                            'target_conf': locked_val, 'search_count': 0, 
-                            'history': deque([locked_val] * 30, maxlen=30), # 30회 성공 상태로 덱을 꽉 채워 복구
-                            'active_conf': locked_val,
-                            'is_locked': True, 'locked_conf': locked_val
-                        }
+                    # [핵심] 진행 중인 1/30 ~ 29/30 데이터까지 하드디스크에서 완벽 복구
+                    is_locked = v.get('is_locked', False)
+                    locked_conf = v.get('locked_conf', 0.6)
+                    saved_history = v.get('history', [])
+                    
+                    if is_locked:
+                        history_q = deque([locked_conf] * 30, maxlen=30)
+                    else:
+                        history_q = deque(saved_history, maxlen=30)
+                        
+                    safe_find_image.session[k] = {
+                        'max_val': 0.0, 'found': False, 'last_time': 0, 'reported_fail': False, 
+                        'target_conf': locked_conf if is_locked else 0.6, 
+                        'search_count': 0, 
+                        'history': history_q,
+                        'active_conf': locked_conf if is_locked else 0.6,
+                        'is_locked': is_locked, 'locked_conf': locked_conf
+                    }
     except Exception as e:
-        print(f"  > [경고] ROI 캐시 불러오기 실패: {e}")
+        pass
 
 def save_roi_cache():
-    """현재까지 학습된 ROI 좌표와 고정(Lock) 상태를 json 파일로 영구 저장합니다."""
+    """현재까지 학습된 ROI 좌표와 고정(Lock) 상태, 진행도(History)를 json 파일로 영구 저장합니다."""
     global ROI_SAMPLER
     try:
         save_data = {}
         for k, v in ROI_SAMPLER.items():
             is_locked = False
             locked_conf = 0.6
+            history_list = []
             
-            # RAM에 저장된 세션에서 고정 상태와 컷오프 수치 추출
             if hasattr(safe_find_image, 'session') and k in safe_find_image.session:
                 is_locked = safe_find_image.session[k].get('is_locked', False)
                 locked_conf = safe_find_image.session[k].get('locked_conf', 0.6)
+                history_list = list(safe_find_image.session[k].get('history', []))
                 
             save_data[k] = {
-                'samples': list(v['samples']), # deque는 json 저장이 안 되므로 순수 리스트로 변환
+                'samples': list(v['samples']),
                 'master_box': v['master_box'],
                 'is_locked': is_locked,
-                'locked_conf': locked_conf
+                'locked_conf': locked_conf,
+                'history': history_list # 학습 진행도 영구 저장 추가
             }
         with open(ROI_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(save_data, f, indent=4, ensure_ascii=False)
@@ -950,19 +959,20 @@ def safe_find_image(img_path, conf=0.6, region=None):
 
         # 5. 최종 판정 및 학습 상태 업데이트
         if max_val >= active_conf:
-            if not ctx['is_locked']:
-                ctx['history'].append(max_val)
-                
-                # 순수 성공 데이터가 30개 모이면 과적합 방지를 위해 현재 상태 영구 고정
-                if len(ctx['history']) == 30:
-                    ctx['is_locked'] = True
-                    calculated_conf = min(ctx['history']) - 0.02
-                    lower_limit = conf - 0.05
-                    upper_limit = conf + 0.15
-                    ctx['locked_conf'] = max(lower_limit, min(upper_limit, calculated_conf))
-                    print(f"  > 🔒 [학습 완료] '{img_path}' 누적 30회 인식 성공! ROI 및 임계값({ctx['locked_conf']:.3f})을 최적 수치로 영구 고정합니다.")
-
             if not ctx['found']:
+                # 사진이 화면에 등장할 때 딱 1번만 학습 기록을 누적합니다 (도배 방지)
+                if not ctx['is_locked']:
+                    ctx['history'].append(max_val)
+                    
+                    # 순수 성공 데이터가 30개 모이면 과적합 방지를 위해 현재 상태 영구 고정
+                    if len(ctx['history']) == 30:
+                        ctx['is_locked'] = True
+                        calculated_conf = min(ctx['history']) - 0.02
+                        lower_limit = conf - 0.05
+                        upper_limit = conf + 0.15
+                        ctx['locked_conf'] = max(lower_limit, min(upper_limit, calculated_conf))
+                        print(f"  > 🔒 [학습 완료] '{img_path}' 누적 30회 인식 성공! ROI 및 임계값({ctx['locked_conf']:.3f})을 최적 수치로 영구 고정합니다.")
+
                 mode_str = "🔒고정" if ctx['is_locked'] else f"⚙️학습({len(ctx['history'])}/30)"
                 recheck_str = " (♻️재검증통과)" if is_rechecked else ""
                 print(f"  > 🟢 [인식 완료] {img_path} | 일치율: {max_val:.3f} / 컷오프({mode_str}): {active_conf:.3f}{recheck_str}")

@@ -756,30 +756,52 @@ class Box:
         self.height = height
 
 def load_roi_cache():
-    """저장된 ROI 기억(json)을 불러옵니다."""
+    """저장된 ROI 기억(json) 및 학습 고정 상태를 불러옵니다."""
     global ROI_SAMPLER
+    if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
     try:
         if os.path.exists(ROI_CACHE_FILE):
             with open(ROI_CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 for k, v in data.items():
-                    # json에 저장된 리스트를 다시 양방향 큐(deque)로 변환하여 두뇌에 적재
+                    # 1. 물리적 좌표(ROI) 복구
                     ROI_SAMPLER[k] = {
                         'samples': deque(v.get('samples', []), maxlen=10),
                         'master_box': v.get('master_box')
                     }
+                    
+                    # 2. 스마트 락(Lock) 및 임계값 상태 완벽 복구
+                    if v.get('is_locked'):
+                        locked_val = v.get('locked_conf', 0.6)
+                        safe_find_image.session[k] = {
+                            'max_val': 0.0, 'found': False, 'last_time': 0, 'reported_fail': False, 
+                            'target_conf': locked_val, 'search_count': 0, 
+                            'history': deque([locked_val] * 30, maxlen=30), # 30회 성공 상태로 덱을 꽉 채워 복구
+                            'active_conf': locked_val,
+                            'is_locked': True, 'locked_conf': locked_val
+                        }
     except Exception as e:
         print(f"  > [경고] ROI 캐시 불러오기 실패: {e}")
 
 def save_roi_cache():
-    """현재까지 학습된 ROI 기억을 json 파일로 영구 저장합니다."""
+    """현재까지 학습된 ROI 좌표와 고정(Lock) 상태를 json 파일로 영구 저장합니다."""
     global ROI_SAMPLER
     try:
         save_data = {}
         for k, v in ROI_SAMPLER.items():
+            is_locked = False
+            locked_conf = 0.6
+            
+            # RAM에 저장된 세션에서 고정 상태와 컷오프 수치 추출
+            if hasattr(safe_find_image, 'session') and k in safe_find_image.session:
+                is_locked = safe_find_image.session[k].get('is_locked', False)
+                locked_conf = safe_find_image.session[k].get('locked_conf', 0.6)
+                
             save_data[k] = {
                 'samples': list(v['samples']), # deque는 json 저장이 안 되므로 순수 리스트로 변환
-                'master_box': v['master_box']
+                'master_box': v['master_box'],
+                'is_locked': is_locked,
+                'locked_conf': locked_conf
             }
         with open(ROI_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(save_data, f, indent=4, ensure_ascii=False)

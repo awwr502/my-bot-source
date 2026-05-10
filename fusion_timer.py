@@ -1336,25 +1336,25 @@ def fusion_bot_loop():
                                 current_anchor += 1
                                 
                         if char_index == current_anchor and remaining_sec > 0:
-                            disp_sec = max(0, remaining_sec)
-                            mins = disp_sec // 60
-                            secs = disp_sec % 60
-                            
-                            # [추가된 핵심 방어] 단일 캐릭터 생존 시 5분 대기 구간 잠수(AFK) 및 팝업 간섭 방어
-                            if not char_thread_active:
-                                check_fusion_afk(thread_sct)
-                                check_popup_char(thread_sct)
-                                
-                            # [핵심] stop_btn.png ROI 적용 (force_full 제거)
-                            if check_img('stop_btn.png', thread_sct):
-                                print(f"\r  > ⏳ [스마트 대기] 기계 가동 확인. '{c_name}' 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
-                            elif not check_img('chance.png', thread_sct):
-                                print(f"\r  > 🙈 [화면 최소화] 백그라운드 융합 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
-                            else:
-                                print(f"\r  > ⏳ [서버 렉 방어] 기계 UI 렌더링 동기화 대기 중... 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
-                            
-                            time.sleep(1)
-                            continue # 타이머가 끝날 때까지 1.5단계(세팅)로 절대 돌입하지 않음!
+                            disp_sec = max(0, remaining_sec)
+                            mins = disp_sec // 60
+                            secs = disp_sec % 60
+                            
+                            # [추가된 핵심 방어] 단일 캐릭터 생존 시 5분 대기 구간 잠수(AFK) 및 팝업 간섭 방어
+                            if not char_thread_active:
+                                check_fusion_afk(thread_sct)
+                                check_popup_char(thread_sct)
+                                
+                            # [핵심] stop_btn.png ROI 적용 (force_full 제거)
+                            if check_img('stop_btn.png', thread_sct):
+                                print(f"\r  > ⏳ [스마트 대기] 기계 가동 확인. '{c_name}' 융합 완료까지 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
+                            elif not check_img('chance.png', thread_sct):
+                                print(f"\r  > 🙈 [화면 최소화] 백그라운드 융합 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
+                            else:
+                                print(f"\r  > ⏳ [서버 렉 방어] 기계 UI 렌더링 동기화 대기 중... 남은 시간: {mins:02d}분 {secs:02d}초\033[K", end="", flush=True)
+                            
+                            time.sleep(1)
+                            continue # 타이머가 끝날 때까지 1.5단계(세팅)로 절대 돌입하지 않음!
                             
                         # === 타이머가 0이 되었거나, 캐릭터(진입 즉시 세팅)일 때의 확인 로직 ===
                         

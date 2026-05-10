@@ -2505,11 +2505,7 @@ def force_change_character(char_key):
             # [핵심 수정] 스레드가 정상 종료되든 오류가 나든 무조건 플래그를 False로 복구하여 타이머 화면 출력을 재개합니다.
             char_thread_active = False
 
-        if bot_active and bot_mode == 1:
-            print()
-            bprint(f"✅ '{c_name}' 수동 변경 완료. 백그라운드 타이머 화면 출력을 재개합니다.")
-        else:
-            bprint(f"🛑 '{c_name}' 수동 변경 시퀀스가 정지 명령에 의해 중단되었거나 완료되었습니다.\n")
+        bprint(f"✅ '{c_name}' 수동 캐릭터 변경 시퀀스가 종료되었습니다.\n")
 
 # === [시작점 및 단축키 설정] ===
 def main_bot():

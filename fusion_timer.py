@@ -1047,6 +1047,9 @@ def fusion_bot_loop():
                         time.sleep(0.2)
                         send_cmd('F'); time.sleep(0.2); send_cmd('R')
                         time.sleep(0.2)
+                        send_cmd('E'); time.sleep(0.2); send_cmd('R')
+                        time.sleep(0.2)
+                        send_cmd('E'); time.sleep(0.2); send_cmd('R')
 
                         bprint("  > 🛑 [종료] 감염물 분별 처리 완료."); toggle_stop(); continue
                 

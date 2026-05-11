@@ -989,9 +989,9 @@ def fusion_bot_loop():
                         bprint(f"  > 🎯 [초점 확보] 안전 여백 절대 좌표({target_x}, {target_y}) 클릭 완료.")
                         
                         time.sleep(0.2)
-                        bprint("  > [스크롤 이동] 화면 아래로 스크롤(15회) 진행...")
-                        for _ in range(15): pyautogui.scroll(-120); time.sleep(0.02)
-                        time.sleep(0.3) # 15회 내린다음 0.1초 딜레이
+                        bprint("  > [스크롤 이동] 화면 아래로 스크롤(17회) 진행...")
+                        for _ in range(17): pyautogui.scroll(-120); time.sleep(0.02)
+                        time.sleep(0.3) # 17회 내린다음 0.1초 딜레이
 
                         bprint("  > [보정 대기] 감염물이 40개가 맞는지 체크합니다.")
                         max_scroll_attempts = 20 
@@ -1028,12 +1028,25 @@ def fusion_bot_loop():
                         run_discrimination_scan("2차")
                         if not bot_active: continue
                         
+                        bprint("  > [초점 확보] 2차 판별 후 F키(버리기) 입력 및 절대좌표 클릭 진행...")
+                        time.sleep(0.2)
+                        send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        time.sleep(0.2)
+                        
+                        target_x, target_y = 488, 570
+                        pyautogui.moveTo(target_x, target_y); time.sleep(0.1); send_cmd('C')
+                        bprint(f"  > 🎯 [초점 확보] 안전 여백 절대 좌표({target_x}, {target_y}) 클릭 완료.")
+                        
+                        time.sleep(0.2)
                         bprint("  > [스크롤 이동] 화면 아래로 스크롤(7회) 진행...")
                         for _ in range(7): pyautogui.scroll(-120); time.sleep(0.02)
                         time.sleep(0.1) # 7회 내린다음 0.1초 딜레이
                         
                         # 3차 판별 실행 (개수 체크 X)
                         run_discrimination_scan("3차")
+                        time.sleep(0.2)
+                        send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        time.sleep(0.2)
 
                         bprint("  > 🛑 [종료] 감염물 분별 처리 완료."); toggle_stop(); continue
                 

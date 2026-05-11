@@ -1044,12 +1044,21 @@ def fusion_bot_loop():
                         
                         # 3차 판별 실행 (개수 체크 X)
                         run_discrimination_scan("3차")
+                        # 3차 판별 후 최종 정리 및 창 닫기
                         time.sleep(0.2)
                         send_cmd('F'); time.sleep(0.2); send_cmd('R')
                         time.sleep(0.2)
+                        
+                        bprint("  > [포커스 복구]")
+                        target_x, target_y = 488, 570
+                        pyautogui.moveTo(target_x, target_y); time.sleep(0.1); send_cmd('C')
+                        time.sleep(0.1)
+                        
+                        bprint("  > [초기화] ESC 2회 입력하여 모든 창을 닫고 안전하게 복귀합니다.")
                         send_cmd('E'); time.sleep(0.2); send_cmd('R')
                         time.sleep(0.2)
                         send_cmd('E'); time.sleep(0.2); send_cmd('R')
+                        time.sleep(0.2)
 
                         bprint("  > 🛑 [종료] 감염물 분별 처리 완료."); toggle_stop(); continue
                 

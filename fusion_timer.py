@@ -977,19 +977,20 @@ def fusion_bot_loop():
                         bprint("  > [초점 확보] F 입력 후 인벤토리 빈 공간 탐색 및 클릭 진행...")
                         send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1) 
                         
-                        # 빨간 박스(좌측 인벤토리) 내 빈 공간(어두운 픽셀 영역) 탐색
+                        # [좌표 하향 조정] '감염물' 텍스트 영역을 건너뛰도록 top을 300으로 낮춤
                         empty_slot_found = False
-                        inv_area = {"left": 40, "top": 230, "width": 900, "height": 500}
+                        inv_area = {"left": 50, "top": 300, "width": 850, "height": 450}
                         sct_inv = cv2.cvtColor(np.asarray(thread_sct.grab(inv_area)), cv2.COLOR_BGRA2GRAY)
                         
-                        for y in range(10, 450, 50):
-                            for x in range(10, 850, 50):
+                        # 슬롯 크기를 고려해 탐색 보폭을 60픽셀로 조정
+                        for y in range(10, 400, 60):
+                            for x in range(10, 800, 60):
                                 # 30x30 픽셀 영역이 모두 어두우면(최대 밝기 60 미만) 빈 공간으로 간주
                                 if np.max(sct_inv[y:y+30, x:x+30]) < 60:
                                     target_x = inv_area["left"] + x + 15
                                     target_y = inv_area["top"] + y + 15
                                     pyautogui.moveTo(target_x, target_y); time.sleep(0.05); send_cmd('C')
-                                    bprint(f"  > 🎯 [초점 확보] 빈 공간({target_x}, {target_y}) 클릭 완료.")
+                                    bprint(f"  > 🎯 [초점 확보] 실제 슬롯 내 빈 공간({target_x}, {target_y}) 클릭 완료.")
                                     empty_slot_found = True
                                     break
                             if empty_slot_found: break

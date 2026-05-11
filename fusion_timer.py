@@ -984,7 +984,7 @@ def fusion_bot_loop():
                         # [핵심 수정 2] 오류가 잦은 픽셀 탐색을 폐기하고, 빨간 박스 하단 여백의 가장 안전한 '절대 좌표'를 강제 클릭합니다.
                         # (1920x1080 기준 좌측 인벤토리 하단 빈 공간: x=450, y=780 부근)
                         # 만약 사용자님의 해상도나 UI 비율에 따라 안 맞으면 이 좌표만 수정하시면 됩니다.
-                        target_x, target_y = 450, 780
+                        target_x, target_y = 488, 570
                         pyautogui.moveTo(target_x, target_y); time.sleep(0.1); send_cmd('C')
                         bprint(f"  > 🎯 [초점 확보] 안전 여백 절대 좌표({target_x}, {target_y}) 클릭 완료.")
                         

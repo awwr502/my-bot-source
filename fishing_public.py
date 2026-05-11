@@ -720,30 +720,61 @@ class Box:
         self.height = height
 
 def load_roi_cache():
-    """저장된 ROI 기억(json)을 불러옵니다."""
+    """저장된 ROI 기억(json) 및 학습 고정 상태, 진행도를 모두 불러옵니다."""
     global ROI_SAMPLER
+    if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
     try:
         if os.path.exists(ROI_CACHE_FILE):
             with open(ROI_CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 for k, v in data.items():
-                    # json에 저장된 리스트를 다시 양방향 큐(deque)로 변환하여 두뇌에 적재
                     ROI_SAMPLER[k] = {
                         'samples': deque(v.get('samples', []), maxlen=10),
                         'master_box': v.get('master_box')
                     }
+                    
+                    # [핵심] 진행 중인 1/30 ~ 29/30 데이터까지 하드디스크에서 완벽 복구
+                    is_locked = v.get('is_locked', False)
+                    locked_conf = v.get('locked_conf', 0.6)
+                    saved_history = v.get('history', [])
+                    
+                    if is_locked:
+                        history_q = deque([locked_conf] * 30, maxlen=30)
+                    else:
+                        history_q = deque(saved_history, maxlen=30)
+                        
+                    safe_find_image.session[k] = {
+                        'max_val': 0.0, 'found': False, 'last_time': 0, 'reported_fail': False, 
+                        'target_conf': locked_conf if is_locked else 0.6, 
+                        'search_count': 0, 
+                        'history': history_q,
+                        'active_conf': locked_conf if is_locked else 0.6,
+                        'is_locked': is_locked, 'locked_conf': locked_conf
+                    }
     except Exception as e:
-        print(f"  > [경고] ROI 캐시 불러오기 실패: {e}")
+        pass
 
 def save_roi_cache():
-    """현재까지 학습된 ROI 기억을 json 파일로 영구 저장합니다."""
+    """현재까지 학습된 ROI 좌표와 고정(Lock) 상태, 진행도(History)를 json 파일로 영구 저장합니다."""
     global ROI_SAMPLER
     try:
         save_data = {}
         for k, v in ROI_SAMPLER.items():
+            is_locked = False
+            locked_conf = 0.6
+            history_list = []
+            
+            if hasattr(safe_find_image, 'session') and k in safe_find_image.session:
+                is_locked = safe_find_image.session[k].get('is_locked', False)
+                locked_conf = safe_find_image.session[k].get('locked_conf', 0.6)
+                history_list = list(safe_find_image.session[k].get('history', []))
+                
             save_data[k] = {
-                'samples': list(v['samples']), # deque는 json 저장이 안 되므로 순수 리스트로 변환
-                'master_box': v['master_box']
+                'samples': list(v['samples']),
+                'master_box': v['master_box'],
+                'is_locked': is_locked,
+                'locked_conf': locked_conf,
+                'history': history_list # 학습 진행도 영구 저장 추가
             }
         with open(ROI_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(save_data, f, indent=4, ensure_ascii=False)
@@ -802,149 +833,132 @@ def preload_all_images():
     bprint(f">>> [시스템] 총 {count}개의 낚시 이미지 RAM 캐싱 완료! (탐색 준비 끝) <<<\n")
 
 def safe_find_image(img_path, conf=0.6, region=None):
-    """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진"""
-    global IMAGE_CACHE
-    global ROI_SAMPLER
+    """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진 (유저 논리 100% 반영)"""
+    global IMAGE_CACHE, ROI_SAMPLER
     template = IMAGE_CACHE.get(img_path)
     
     try:
-        if template is None:
-            # 이미 부팅(preload) 시점에 전부 RAM에 올렸으므로, 여기서 못 찾은 파일은 아예 없는 파일입니다.
-            return None
+        if template is None: return None
 
-        # 딕셔너리 및 deque 초기화 (최초 1회)
         if img_path not in ROI_SAMPLER:
             ROI_SAMPLER[img_path] = {'samples': deque(maxlen=10), 'master_box': None}
             
         cache_data = ROI_SAMPLER[img_path]
+        is_fallback_scan = (region == "FULL_SCREEN") # 명시적 폴백 명령인지 확인
         target_monitor = None
-        is_using_master = False
 
-        # [핵심] 탐색 구역(Monitor) 결정 로직
-        if region == "FULL_SCREEN":
+        if is_fallback_scan:
             target_monitor = sct.monitors[1]
             region = None 
         elif region:
             target_monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
         elif cache_data['master_box']:
             target_monitor = cache_data['master_box']
-            is_using_master = True
         else:
             target_monitor = sct.monitors[1]
+            # [원흉 제거] 과거에 이곳에서 is_fallback_scan = True 로 덮어씌워버려서 봇이 첫 학습을 영원히 포기했었습니다.
 
-        # 캡처 및 매칭 연산
         sct_img = sct.grab(target_monitor)
-        screen_np = np.array(sct_img)
-        screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
+        screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
         res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-        # [세션 및 동적 임계값 관리 엔진]
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
-        now = time.time()
-        
-        # 1. 종료된 검색 타임아웃 감지 및 보고
-        for path, ctx in safe_find_image.session.items():
-            if now - ctx['last_time'] > 1.2:
-                if not ctx['found'] and not ctx['reported_fail'] and ctx['max_val'] > 0 and ctx['search_count'] >= 3:
-                    print(f"  > 🔴 [인식 타임아웃] {path} | 최고 인식률: {ctx['max_val']:.3f} / 현재 컷오프: {ctx['active_conf']:.3f}")
-                    ctx['reported_fail'] = True
-        
-        # 2. 현재 이미지 세션 로드 (history 덱 및 재검증 플래그 관리)
         ctx = safe_find_image.session.setdefault(img_path, {
-            'max_val': 0.0, 'found': False, 'last_time': now, 'reported_fail': False, 
-            'target_conf': conf, 'search_count': 0, 'history': deque(maxlen=10), 'active_conf': conf
+            'history': deque(maxlen=30), 'is_locked': False, 'locked_conf': conf, 'found': False
         })
-        
-        if now - ctx['last_time'] > 1.2:
-            ctx['max_val'] = 0.0
-            ctx['found'] = False
-            ctx['reported_fail'] = False
-            ctx['search_count'] = 0
-            
-        ctx['last_time'] = now
-        ctx['target_conf'] = conf
-        ctx['search_count'] += 1
 
-        # 3. 동적 임계값(Adaptive Threshold) 계산
-        active_conf = conf 
-        if len(ctx['history']) == 10:
-            calculated_conf = min(ctx['history']) - 0.02
-            lower_limit = conf - 0.05
-            upper_limit = conf + 0.15
-            active_conf = max(lower_limit, min(upper_limit, calculated_conf))
-        
-        ctx['active_conf'] = active_conf
+        active_conf = ctx['locked_conf'] if ctx['is_locked'] else conf
 
-        # 4. [재검증 로직] 근소한 차이로 미달 시 "한 번 더 찰칵!"
         is_rechecked = False
-        # 기준치보다는 낮지만, 오차 범위(0.04) 내에 들어왔을 때 실행
         if active_conf > max_val >= (active_conf - 0.04):
-            time.sleep(0.05) # 0.05초 렌더링 대기
-            # 재촬영 및 재매칭
+            time.sleep(0.05)
             sct_re = sct.grab(target_monitor)
-            screen_re = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2GRAY)
-            res_re = cv2.matchTemplate(screen_re, template, cv2.TM_CCOEFF_NORMED)
+            res_re = cv2.matchTemplate(cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2GRAY), template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res_re)
             is_rechecked = True
 
-        if max_val > ctx['max_val']: ctx['max_val'] = max_val
-
-        # 5. 최종 판정 및 로그 출력
         if max_val >= active_conf:
-            ctx['history'].append(max_val)
-            if not ctx['found']:
-                mode_str = "🧠동적" if len(ctx['history']) == 10 else "⚙️고정"
-                recheck_str = " (♻️재검증통과)" if is_rechecked else ""
+            # --- [사용자 논리 완벽 반영] 자가 치유 엔진 ---
+            # 전체화면(FULL_SCREEN) 폴백 탐색 명령을 받아 성공했는데, 기존에 등록된 ROI가 있었다면? = ROI 좌표가 틀렸다는 뜻!
+            if is_fallback_scan and cache_data['master_box'] is not None:
+                print(f"  > 💊 [자가 치유] '{img_path}' 전체화면 폴백 탐색 성공! 오염된 ROI 및 컷오프를 강제 초기화합니다.")
+                cache_data['master_box'] = None
+                cache_data['samples'].clear()
+                ctx['history'].clear()
+                ctx['is_locked'] = False
+                ctx['locked_conf'] = conf
+                active_conf = conf
+
+            # --- 성공 데이터 누적 (폴백 탐색이 아닌 일반/ROI 탐색 시에만) ---
+            if not is_fallback_scan:
+                if not ctx['is_locked']:
+                    ctx['history'].append(max_val)
+                    if len(ctx['history']) == 30:
+                        ctx['is_locked'] = True
+                        calculated_conf = min(ctx['history']) - 0.02
+                        lower_limit = conf - 0.05
+                        upper_limit = conf + 0.15
+                        ctx['locked_conf'] = max(lower_limit, min(upper_limit, calculated_conf))
+                        print(f"  > 🔒 [학습 완료] '{img_path}' 누적 30회 인식 성공! ROI 및 임계값({ctx['locked_conf']:.3f}) 영구 고정.")
+
+        if not ctx['found']:
+            mode_str = "🔒고정" if ctx['is_locked'] else f"⚙️학습({len(ctx['history'])}/30)"
+            recheck_str = " (♻️재검증통과)" if is_rechecked else ""
+            if max_val >= active_conf:
                 print(f"  > 🟢 [인식 완료] {img_path} | 일치율: {max_val:.3f} / 컷오프({mode_str}): {active_conf:.3f}{recheck_str}")
                 ctx['found'] = True
-        
-        # 신뢰도를 넘었을 경우
-        if max_val >= conf:
+            
+        if max_val >= active_conf:
             h, w = template.shape
             real_x = max_loc[0] + target_monitor["left"]
             real_y = max_loc[1] + target_monitor["top"]
 
-            # [점진적 확장 로직] 하드코딩된 region이 아닐 때 무조건 좌표를 큐에 밀어넣음
-            if not region:
-                cache_data['samples'].append((real_x, real_y, w, h))
+            if not region and not is_fallback_scan and not ctx['is_locked']:
+                if max_val >= min(1.0, conf + 0.05):
+                    cache_data['samples'].append((real_x, real_y, w, h))
                 
-                # 단 1개의 데이터만 있어도 즉시 상자를 갱신 (점진적 팽창 및 축소)
-                pad = 30
-                min_x = min(s[0] for s in cache_data['samples']) - pad
-                min_y = min(s[1] for s in cache_data['samples']) - pad
-                max_x = max(s[0] + s[2] for s in cache_data['samples']) + pad
-                max_y = max(s[1] + s[3] for s in cache_data['samples']) + pad
-                
-                cache_data['master_box'] = {
-                    "left": int(max(0, min_x)),
-                    "top": int(max(0, min_y)),
-                    "width": int(max_x - min_x),
-                    "height": int(max_y - min_y)
-                }
+                valid_samples = list(cache_data['samples'])
+                if len(valid_samples) > 0:
+                    x_coords = sorted([s[0] for s in valid_samples])
+                    y_coords = sorted([s[1] for s in valid_samples])
+                    if len(valid_samples) >= 3:
+                        x_coords = x_coords[1:-1]
+                        y_coords = y_coords[1:-1]
+                    
+                    core_min_x = x_coords[0]
+                    core_min_y = y_coords[0]
+                    core_max_x = x_coords[-1] + w
+                    core_max_y = y_coords[-1] + h
+                    
+                    x_variance = x_coords[-1] - x_coords[0]
+                    y_variance = y_coords[-1] - y_coords[0]
+                    
+                    pad_x = min(20, max(5, int(x_variance * 0.5)))
+                    pad_y = min(20, max(5, int(y_variance * 0.5)))
 
-                # 상자 크기가 늘어나거나 줄어들며 갱신될 때마다 즉시 세이브 파일 덮어쓰기
-                save_roi_cache()
+                    p_mon = sct.monitors[1]
+                    l_limit, t_limit = p_mon["left"], p_mon["top"]
+                    r_limit, b_limit = l_limit + p_mon["width"], t_limit + p_mon["height"]
+                    
+                    raw_left = max(l_limit, int(core_min_x - pad_x))
+                    raw_top = max(t_limit, int(core_min_y - pad_y))
+                    raw_right = min(r_limit, int(core_max_x + pad_x))
+                    raw_bottom = min(b_limit, int(core_max_y + pad_y))
+
+                    cache_data['master_box'] = {
+                        "left": raw_left,
+                        "top": raw_top,
+                        "width": max(10, raw_right - raw_left),
+                        "height": max(10, raw_bottom - raw_top)
+                    }
+                    save_roi_cache()
 
             return Box(real_x, real_y, w, h)
-            
         else:
-            # [스마트 폴백 안전망] 상자를 벗어났거나 아예 화면에 없을 때
-            if is_using_master:
-                # [파이팅 게이지 렉 해결] 전체화면 스캔 도배 방지 (1초 쿨다운)
-                last_fallback = FALLBACK_COOLDOWN.get(img_path, 0)
-                if time.time() - last_fallback > 1.0: # 1초에 단 1번만 전체화면 스캔 허용
-                    # [치명적 버그 수정] 재귀 호출 시 강제로 전체 화면을 보게끔 플래그("FULL_SCREEN") 전달!
-                    res_fallback = safe_find_image(img_path, conf, region="FULL_SCREEN")
-                    if res_fallback is None:
-                        # 전체 화면에서도 못 찾음 = 화면에 진짜 없는 상태 -> 1초 쿨다운 부여
-                        FALLBACK_COOLDOWN[img_path] = time.time()
-                    return res_fallback
-                else:
-                    # 쿨다운 중이므로 무거운 전체화면 스캔을 생략하고 즉시 포기 (렉 방지)
-                    return None
-
-        return None
+            ctx['found'] = False
+            return None
+            
     except Exception as e:
         return None
 
@@ -2561,11 +2575,15 @@ def fishing_bot(max_allowed_seconds):
                     
                     if bot_active:
                         send_blynk_notification("[완료]인벤토리 비움. 낚시 재개")
-                        bprint("  > [완료] 인벤토리 비움. 낚시 재개 전 애니메이션 대기(0.8초)...")
-                    time.sleep(0.8)
+                        bprint("  > [완료] 인벤토리 비움. 낚시 재개 전 애니메이션 대기(0.5초)...")
+                    time.sleep(0.5)
+                    import gc; gc.collect()
+                    bprint("  > 🧹 [메모리 청소] 잔여 캐시 포맷 완료 (프레임 드랍 방어)")
                     state = 1
                 else:
                     bprint("  > [정상] 특이사항 없음. 다음 낚시를 시작합니다.")
+                    import gc; gc.collect()
+                    bprint("  > 🧹 [메모리 청소] 잔여 캐시 포맷 완료 (프레임 드랍 방어)")
                     state = 1
 
             # --- [State 10] 부캐 릴레이 캐릭터 자동 교체 로직 ---

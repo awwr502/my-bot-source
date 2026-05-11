@@ -780,11 +780,11 @@ def fusion_bot_loop():
                     # 리스트를 뒤져 앵커(is_anchor=True)의 번호를 자동으로 찾아냅니다.
                     anchor_idx = next((i for i, c in enumerate(MY_CHARACTERS) if c["is_anchor"]), 0)
                     
-                # --- [신설: Mode 5 감염물 자동 분별 및 분해 모드] ---
                 if bot_mode == 5:
                     if state == 0:
                         def run_discrimination_scan(scan_name):
                             bprint(f"  > 🔍 [모드 5] {scan_name} 감염물 일괄 탐색 시작...")
+                            
                             inv_roi = {"left": 0, "top": 0, "width": 960, "height": 1080}
                             screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
                             X_OFFSET = 0 
@@ -822,16 +822,16 @@ def fusion_bot_loop():
                                 label_found = False
                                 lx, ly = 0, 0
                                 wait_l = time.time()
-                                max_label_score = 0.0 # 진단용 최고 점수 추적
+                                max_label_score = 0.0
                                 
                                 while time.time() - wait_l < 0.8 and bot_active:
                                     hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                     res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                     _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
                                     
-                                    max_label_score = max(max_label_score, mv_l) # 매 프레임 최고 점수 갱신
+                                    max_label_score = max(max_label_score, mv_l)
                                     
-                                    if mv_l >= 0.80: # 임계값 0.90 -> 0.80 하향 조정
+                                    if mv_l >= 0.80:
                                         label_found = True; lx, ly = ml_l[0], ml_l[1]; break
                                     time.sleep(0.01)
 
@@ -840,7 +840,6 @@ def fusion_bot_loop():
                                     fast_clear_tooltip(); continue
                                     
                                 # [단계 2]: 이중 보정 적응형 시간 학습(Dual-Adaptive Learning) 엔진
-                                # 1. 영구 저장소 로드 (level_5 및 trait 각각 관리)
                                 if not hasattr(fusion_bot_loop, 'render_times'):
                                     fusion_bot_loop.render_file = os.path.join(base_dir, "fusion_timing_v2.json")
                                     fusion_bot_loop.l5_times = deque(maxlen=10)
@@ -853,7 +852,6 @@ def fusion_bot_loop():
                                                 for t in data.get('tr', []): fusion_bot_loop.tr_times.append(t)
                                     except: pass
 
-                                # 2. 동적 임계 시간 계산 함수 정의
                                 def get_dynamic_limit(d_queue):
                                     if len(d_queue) < 10: return 0.25
                                     return min(0.25, (sum(d_queue) / 10.0) + 0.05)
@@ -863,19 +861,16 @@ def fusion_bot_loop():
                                 max_wait_limit = max(l5_limit, tr_limit)
                                 time_mode_str = "동적" if len(fusion_bot_loop.l5_times) >= 10 else "고정"
 
-                                # [좌표 변수 선언] 라벨 위치(lx, ly) 기반으로 숫자 판독 영역 설정
                                 col_x1 = lx + template_label.shape[1]
                                 col_x2 = col_x1 + 360
                                 col_y1 = max(0, ly - 20)
                                 col_y2 = ly + 150
                                 
-                                # 1. 공통 특성 아이콘(trait.png) 탐색용 좁은 ROI (기존 유지)
                                 trait_x1 = max(0, lx - 10)
                                 trait_x2 = lx + 200
                                 trait_y1 = ly + 30
                                 trait_y2 = ly + 300
 
-                                # 2. [신설] 상세 특성 이름(Text) 판독 전용 넓은 ROI (우측으로 크게 확장)
                                 trait_name_x1 = max(0, lx - 10)
                                 trait_name_x2 = lx + 360
                                 trait_name_y1 = ly + 30
@@ -913,7 +908,6 @@ def fusion_bot_loop():
                                     roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
                                     roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
                                     
-                                    # 1. 5레벨 평가 및 학습
                                     if not is_level_5 and t5_mask is not None and roi_col_color.size > 0:
                                         roi_col_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
                                         roi_col_mask = cv2.inRange(roi_col_hsv, lower_neon, upper_neon)
@@ -926,7 +920,6 @@ def fusion_bot_loop():
                                             fusion_bot_loop.l5_times.append(elapsed)
                                             break 
                                                     
-                                    # 2. 특성 평가 및 학습
                                     if not has_trait and roi_trait_gray.size > 0:
                                         for scale in [0.95, 1.0, 1.05]:
                                             width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
@@ -940,19 +933,16 @@ def fusion_bot_loop():
                                                     fusion_bot_loop.tr_times.append(elapsed)
                                                     break
 
-                                    # 3. 논리적 탈출 조건
                                     if has_trait and elapsed > l5_limit: break
                                     if not is_level_5 and not has_trait and elapsed > max_wait_limit: break
                                     
                                     time.sleep(0.01)
 
-                                # 학습 데이터 영구 저장
                                 try:
                                     with open(fusion_bot_loop.render_file, "w", encoding="utf-8") as f:
                                         json.dump({"l5": list(fusion_bot_loop.l5_times), "tr": list(fusion_bot_loop.tr_times)}, f)
                                 except: pass
 
-                                # [최종 의사결정]
                                 if is_level_5:
                                     bprint(f"  > 🛑 [보호] 5레벨 감염물. (인식률: {max_seen_5:.2f} / 시간: {lvl5_render_time:.2f}초 / 모드: {time_mode_str})")
                                 elif has_trait:
@@ -974,7 +964,6 @@ def fusion_bot_loop():
                                         bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
                                         pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                                     else:
-                                        # 사진이 등록되어 이름을 인식한 특성은 클릭 코드를 없애 무조건 보호(스킵)
                                         bprint(f"  > 👑 [보호] 등록된 특성 '{identified_trait_name}' 발견!")
                                 else:
                                     bprint(f"  > 💎 [보관] 순정 확정. (학습 대기 완료: {max_wait_limit:.2f}초 / 모드: {time_mode_str})")
@@ -985,13 +974,37 @@ def fusion_bot_loop():
                         run_discrimination_scan("1차")
                         if not bot_active: continue
                         
-                        bprint("  > [스크롤 이동] F 입력 및 화면 아래로 스크롤(15회) 진행...")
-                        send_cmd('F'); time.sleep(0.2)
-                        for _ in range(15): pyautogui.scroll(-120); time.sleep(0.02)
+                        bprint("  > [초점 확보] F 입력 후 인벤토리 빈 공간 탐색 및 클릭 진행...")
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1) 
+                        
+                        # 빨간 박스(좌측 인벤토리) 내 빈 공간(어두운 픽셀 영역) 탐색
+                        empty_slot_found = False
+                        inv_area = {"left": 40, "top": 230, "width": 900, "height": 500}
+                        sct_inv = cv2.cvtColor(np.asarray(thread_sct.grab(inv_area)), cv2.COLOR_BGRA2GRAY)
+                        
+                        for y in range(10, 450, 50):
+                            for x in range(10, 850, 50):
+                                # 30x30 픽셀 영역이 모두 어두우면(최대 밝기 60 미만) 빈 공간으로 간주
+                                if np.max(sct_inv[y:y+30, x:x+30]) < 60:
+                                    target_x = inv_area["left"] + x + 15
+                                    target_y = inv_area["top"] + y + 15
+                                    pyautogui.moveTo(target_x, target_y); time.sleep(0.05); send_cmd('C')
+                                    bprint(f"  > 🎯 [초점 확보] 빈 공간({target_x}, {target_y}) 클릭 완료.")
+                                    empty_slot_found = True
+                                    break
+                            if empty_slot_found: break
+                            
+                        if not empty_slot_found:
+                            bprint("  > ⚠️ 빈 공간이 없어 인벤토리 기본 안전 좌표를 클릭합니다.")
+                            pyautogui.moveTo(400, 500); time.sleep(0.05); send_cmd('C')
+                            
                         time.sleep(0.1)
+                        bprint("  > [스크롤 이동] 화면 아래로 스크롤(15회) 진행...")
+                        for _ in range(15): pyautogui.scroll(-120); time.sleep(0.02)
+                        time.sleep(0.1) # 15회 내린다음 0.1초 딜레이
 
-                        bprint("  > [보정 대기] 감염물이 40개가 될 때까지 보정 스크롤을 시작합니다.")
-                        max_scroll_attempts = 20 # [안전장치] 무한 루프 차단
+                        bprint("  > [보정 대기] 감염물이 40개가 맞는지 체크합니다.")
+                        max_scroll_attempts = 20 
                         scroll_count = 0
                         while bot_active and scroll_count < max_scroll_attempts:
                             inv_roi = {"left": 0, "top": 0, "width": 960, "height": 1080}
@@ -1007,17 +1020,19 @@ def fusion_bot_loop():
                                     if any(math.hypot(real_x-cp[0], real_y-cp[1]) < 50 for cp in temp_candidates): continue
                                     temp_candidates.append((real_x, real_y))
                             
+                            # 40개가 맞는지 체크
                             if len(temp_candidates) >= 40:
                                 bprint(f"  > ✅ [보정 완료] {len(temp_candidates)}개의 감염물 인식 성공.")
-                                time.sleep(0.1)
+                                time.sleep(0.1) # 40개가 체크됐으면 0.1초 딜레이
                                 break
                             
+                            # 40개가 아닐 때 휠(아래로) 1회 추가
                             pyautogui.scroll(-120)
                             time.sleep(0.1)
                             scroll_count += 1
                         
                         if scroll_count >= max_scroll_attempts:
-                            bprint("  > ⚠️ [안전장치 발동] 인벤토리 감염물 부족 또는 인식 한계로 판별을 강제 속행합니다.")
+                            bprint("  > ⚠️ [안전장치 발동] 40개 도달 실패. 인벤토리 부족으로 간주하여 속행합니다.")
                         
                         # 2차 판별 실행
                         run_discrimination_scan("2차")
@@ -1025,9 +1040,9 @@ def fusion_bot_loop():
                         
                         bprint("  > [스크롤 이동] 화면 아래로 스크롤(7회) 진행...")
                         for _ in range(7): pyautogui.scroll(-120); time.sleep(0.02)
-                        time.sleep(0.1)
+                        time.sleep(0.1) # 7회 내린다음 0.1초 딜레이
                         
-                        # 3차 판별 실행
+                        # 3차 판별 실행 (개수 체크 X)
                         run_discrimination_scan("3차")
 
                         bprint("  > 🛑 [종료] 감염물 분별 처리 완료."); toggle_stop(); continue

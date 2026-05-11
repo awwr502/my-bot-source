@@ -977,9 +977,9 @@ def fusion_bot_loop():
                         bprint("  > [초점 확보] F키(버리기) 입력 및 절대좌표 클릭 진행...")
                         
                         # [핵심 수정 1] 판별 완료 직후 클라이언트 렉을 0.3초간 기다린 뒤, F키를 0.2초간 길고 확실하게 누릅니다.
-                        time.sleep(0.1)
+                        time.sleep(0.2)
                         send_cmd('F'); time.sleep(0.2); send_cmd('R')
-                        time.sleep(0.1)
+                        time.sleep(0.2)
                         
                         # [핵심 수정 2] 오류가 잦은 픽셀 탐색을 폐기하고, 빨간 박스 하단 여백의 가장 안전한 '절대 좌표'를 강제 클릭합니다.
                         # (1920x1080 기준 좌측 인벤토리 하단 빈 공간: x=450, y=780 부근)
@@ -991,7 +991,7 @@ def fusion_bot_loop():
                         time.sleep(0.2)
                         bprint("  > [스크롤 이동] 화면 아래로 스크롤(15회) 진행...")
                         for _ in range(15): pyautogui.scroll(-120); time.sleep(0.02)
-                        time.sleep(0.1) # 15회 내린다음 0.1초 딜레이
+                        time.sleep(0.3) # 15회 내린다음 0.1초 딜레이
 
                         bprint("  > [보정 대기] 감염물이 40개가 맞는지 체크합니다.")
                         max_scroll_attempts = 20 

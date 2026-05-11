@@ -974,32 +974,21 @@ def fusion_bot_loop():
                         run_discrimination_scan("1차")
                         if not bot_active: continue
                         
-                        bprint("  > [초점 확보] F 입력 후 인벤토리 빈 공간 탐색 및 클릭 진행...")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1) 
+                        bprint("  > [초점 확보] F키(버리기) 입력 및 절대좌표 클릭 진행...")
                         
-                        # [좌표 하향 조정] '감염물' 텍스트 영역을 건너뛰도록 top을 300으로 낮춤
-                        empty_slot_found = False
-                        inv_area = {"left": 50, "top": 300, "width": 850, "height": 450}
-                        sct_inv = cv2.cvtColor(np.asarray(thread_sct.grab(inv_area)), cv2.COLOR_BGRA2GRAY)
-                        
-                        # 슬롯 크기를 고려해 탐색 보폭을 60픽셀로 조정
-                        for y in range(10, 400, 60):
-                            for x in range(10, 800, 60):
-                                # 30x30 픽셀 영역이 모두 어두우면(최대 밝기 60 미만) 빈 공간으로 간주
-                                if np.max(sct_inv[y:y+30, x:x+30]) < 60:
-                                    target_x = inv_area["left"] + x + 15
-                                    target_y = inv_area["top"] + y + 15
-                                    pyautogui.moveTo(target_x, target_y); time.sleep(0.05); send_cmd('C')
-                                    bprint(f"  > 🎯 [초점 확보] 실제 슬롯 내 빈 공간({target_x}, {target_y}) 클릭 완료.")
-                                    empty_slot_found = True
-                                    break
-                            if empty_slot_found: break
-                            
-                        if not empty_slot_found:
-                            bprint("  > ⚠️ 빈 공간이 없어 인벤토리 기본 안전 좌표를 클릭합니다.")
-                            pyautogui.moveTo(400, 500); time.sleep(0.05); send_cmd('C')
-                            
+                        # [핵심 수정 1] 판별 완료 직후 클라이언트 렉을 0.3초간 기다린 뒤, F키를 0.2초간 길고 확실하게 누릅니다.
                         time.sleep(0.1)
+                        send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        time.sleep(0.1)
+                        
+                        # [핵심 수정 2] 오류가 잦은 픽셀 탐색을 폐기하고, 빨간 박스 하단 여백의 가장 안전한 '절대 좌표'를 강제 클릭합니다.
+                        # (1920x1080 기준 좌측 인벤토리 하단 빈 공간: x=450, y=780 부근)
+                        # 만약 사용자님의 해상도나 UI 비율에 따라 안 맞으면 이 좌표만 수정하시면 됩니다.
+                        target_x, target_y = 450, 780
+                        pyautogui.moveTo(target_x, target_y); time.sleep(0.1); send_cmd('C')
+                        bprint(f"  > 🎯 [초점 확보] 안전 여백 절대 좌표({target_x}, {target_y}) 클릭 완료.")
+                        
+                        time.sleep(0.2)
                         bprint("  > [스크롤 이동] 화면 아래로 스크롤(15회) 진행...")
                         for _ in range(15): pyautogui.scroll(-120); time.sleep(0.02)
                         time.sleep(0.1) # 15회 내린다음 0.1초 딜레이

@@ -1039,8 +1039,8 @@ def fusion_bot_loop():
                         
                         time.sleep(0.2)
                         bprint("  > [스크롤 이동] 화면 아래로 스크롤(7회) 진행...")
-                        for _ in range(7): pyautogui.scroll(-120); time.sleep(0.02)
-                        time.sleep(0.1) # 7회 내린다음 0.1초 딜레이
+                        for _ in range(10): pyautogui.scroll(-120); time.sleep(0.02)
+                        time.sleep(0.1) # 10회 내린다음 0.1초 딜레이
                         
                         # 3차 판별 실행 (개수 체크 X)
                         run_discrimination_scan("3차")

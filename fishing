@@ -22,6 +22,7 @@ import atexit # 프로그램 비정상 종료 시 화면 밝기 자동 복구용
 import winsound # 비프음 출력 모듈 추가
 import hashlib
 import queue
+import csv
 
 # mss 객체는 딱 한 번만 생성해두고 계속 재사용합니다 (메모리 최적화)
 sct = mss.mss()
@@ -868,8 +869,30 @@ def preload_all_images():
                 
     bprint(f">>> [시스템] 총 {count}개의 낚시 이미지 RAM 캐싱 완료! (탐색 준비 끝) <<<\n")
 
+# [신규] 로깅 폴더 및 파일 설정
+LOG_DIR = os.path.join(BASE_IMG_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOCKED_ROI_DIR = os.path.join(BASE_IMG_DIR, "locked_rois")
+os.makedirs(LOCKED_ROI_DIR, exist_ok=True)
+CSV_LOG_PATH = os.path.join(LOG_DIR, "confidence_log.csv")
+
+# CSV 헤더 초기화 (파일이 없을 때만)
+if not os.path.exists(CSV_LOG_PATH):
+    with open(CSV_LOG_PATH, mode='w', newline='', encoding='utf-8-sig') as f:
+        writer = csv.writer(f)
+        writer.writerow(["시간", "구분", "이미지명", "기준_임계값", "인식된_임계값(최대/실제)", "최저_임계값", "최대_임계값", "비고"])
+
+def log_confidence_to_csv(log_type, img_path, target_conf, actual_conf, min_c=None, max_c=None, note=""):
+    try:
+        time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(CSV_LOG_PATH, mode='a', newline='', encoding='utf-8-sig') as f:
+            writer = csv.writer(f)
+            writer.writerow([time_str, log_type, img_path, f"{target_conf:.3f}", f"{actual_conf:.3f}", 
+                             f"{min_c:.3f}" if min_c else "-", f"{max_c:.3f}" if max_c else "-", note])
+    except: pass
+
 def safe_find_image(img_path, conf=0.6, region=None):
-    """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진 (유저 논리 100% 반영)"""
+    """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진 (동적 임계값 폐기 & CSV 로깅)"""
     global IMAGE_CACHE, ROI_SAMPLER
     template = IMAGE_CACHE.get(img_path)
     
@@ -880,7 +903,7 @@ def safe_find_image(img_path, conf=0.6, region=None):
             ROI_SAMPLER[img_path] = {'samples': deque(maxlen=10), 'master_box': None}
             
         cache_data = ROI_SAMPLER[img_path]
-        is_fallback_scan = (region == "FULL_SCREEN") # 명시적 폴백 명령인지 확인
+        is_fallback_scan = (region == "FULL_SCREEN")
         target_monitor = None
 
         if is_fallback_scan:
@@ -892,7 +915,6 @@ def safe_find_image(img_path, conf=0.6, region=None):
             target_monitor = cache_data['master_box']
         else:
             target_monitor = sct.monitors[1]
-            # [원흉 제거] 과거에 이곳에서 is_fallback_scan = True 로 덮어씌워버려서 봇이 첫 학습을 영원히 포기했었습니다.
 
         sct_img = sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
@@ -901,10 +923,10 @@ def safe_find_image(img_path, conf=0.6, region=None):
 
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
         ctx = safe_find_image.session.setdefault(img_path, {
-            'history': deque(maxlen=30), 'is_locked': False, 'locked_conf': conf, 'found': False
+            'history': deque(maxlen=30), 'is_locked': False, 'found': False, 'last_fail_time': 0
         })
 
-        active_conf = ctx['locked_conf'] if ctx['is_locked'] else conf
+        active_conf = conf
 
         is_rechecked = False
         if active_conf > max_val >= (active_conf - 0.04):
@@ -919,8 +941,6 @@ def safe_find_image(img_path, conf=0.6, region=None):
             real_x = max_loc[0] + target_monitor["left"]
             real_y = max_loc[1] + target_monitor["top"]
 
-            # --- [자가 치유 엔진 맹점 완벽 해결] ---
-            # 전체화면 폴백에서 찾았더라도, 그 위치가 기존 ROI 구역 내부라면 "단순히 늦게 뜬 것"이므로 폭파 금지!
             if is_fallback_scan and cache_data['master_box'] is not None:
                 mb = cache_data['master_box']
                 cx, cy = real_x + w//2, real_y + h//2
@@ -932,73 +952,82 @@ def safe_find_image(img_path, conf=0.6, region=None):
                     cache_data['samples'].clear()
                     ctx['history'].clear()
                     ctx['is_locked'] = False
-                    ctx['locked_conf'] = conf
-                    active_conf = conf
 
-            # --- 성공 데이터 누적 (폴백 탐색이 아닌 일반/ROI 탐색 시에만) ---
             if not is_fallback_scan:
                 if not ctx['is_locked']:
                     ctx['history'].append(max_val)
                     if len(ctx['history']) == 30:
                         ctx['is_locked'] = True
-                        calculated_conf = min(ctx['history']) - 0.02
-                        lower_limit = conf - 0.05
-                        upper_limit = conf + 0.15
-                        ctx['locked_conf'] = max(lower_limit, min(upper_limit, calculated_conf))
-                        print(f"  > 🔒 [학습 완료] '{img_path}' 누적 30회 인식 성공! 임계값({ctx['locked_conf']:.3f}) 영구 고정.")
+                        min_c = min(ctx['history'])
+                        max_c = max(ctx['history'])
+                        print(f"  > 🔒 [학습 완료] '{img_path}' 누적 30회 인식 성공! (최저: {min_c:.3f} / 최고: {max_c:.3f})")
+                        
+                        log_confidence_to_csv("학습완료", img_path, conf, max_val, min_c, max_c, "30회 누적 고정완료")
+                        try:
+                            if cache_data['master_box']:
+                                mb = cache_data['master_box']
+                                roi_img = np.array(sct.grab(mb))
+                                save_path = os.path.join(LOCKED_ROI_DIR, f"locked_{img_path}")
+                                cv2.imwrite(save_path, cv2.cvtColor(roi_img, cv2.COLOR_BGRA2BGR))
+                                print(f"  > 📸 [ROI 캡처] '{img_path}' 고정 범위가 '{save_path}'에 저장되었습니다.")
+                        except Exception as e:
+                            print(f"  > ⚠️ ROI 이미지 저장 실패: {e}")
 
-            if not ctx['found']:
-                mode_str = "🔒고정" if ctx['is_locked'] else f"⚙️학습({len(ctx['history'])}/30)"
-                recheck_str = " (♻️재검증통과)" if is_rechecked else ""
-                print(f"  > 🟢 [인식 완료] {img_path} | 일치율: {max_val:.3f} / 컷오프({mode_str}): {active_conf:.3f}{recheck_str}")
-                ctx['found'] = True
+        if not ctx['found'] and max_val >= active_conf:
+            mode_str = "🔒고정" if ctx['is_locked'] else f"⚙️학습({len(ctx['history'])}/30)"
+            recheck_str = " (♻️재검증통과)" if is_rechecked else ""
+            print(f"  > 🟢 [인식 완료] {img_path} | 일치율: {max_val:.3f} / 컷오프({mode_str}): {active_conf:.3f}{recheck_str}")
+            ctx['found'] = True
 
-            # [ROI 학습 엄격도 완화] conf + 0.05 -> conf + 0.02로 낮춰 학습 실패(영원한 전체화면) 방지
-            if not region and not is_fallback_scan and not ctx['is_locked']:
-                if max_val >= min(1.0, conf + 0.02):
-                    cache_data['samples'].append((real_x, real_y, w, h))
-                
-                valid_samples = list(cache_data['samples'])
-                if len(valid_samples) > 0:
-                    x_coords = sorted([s[0] for s in valid_samples])
-                    y_coords = sorted([s[1] for s in valid_samples])
-                    if len(valid_samples) >= 3:
-                        x_coords = x_coords[1:-1]
-                        y_coords = y_coords[1:-1]
-                    
-                    core_min_x = x_coords[0]
-                    core_min_y = y_coords[0]
-                    core_max_x = x_coords[-1] + w
-                    core_max_y = y_coords[-1] + h
-                    
-                    x_variance = x_coords[-1] - x_coords[0]
-                    y_variance = y_coords[-1] - y_coords[0]
-                    
-                    pad_x = min(20, max(5, int(x_variance * 0.5)))
-                    pad_y = min(20, max(5, int(y_variance * 0.5)))
-
-                    p_mon = sct.monitors[1]
-                    l_limit, t_limit = p_mon["left"], p_mon["top"]
-                    r_limit, b_limit = l_limit + p_mon["width"], t_limit + p_mon["height"]
-                    
-                    raw_left = max(l_limit, int(core_min_x - pad_x))
-                    raw_top = max(t_limit, int(core_min_y - pad_y))
-                    raw_right = min(r_limit, int(core_max_x + pad_x))
-                    raw_bottom = min(b_limit, int(core_max_y + pad_y))
-
-                    cache_data['master_box'] = {
-                        "left": raw_left,
-                        "top": raw_top,
-                        "width": max(10, raw_right - raw_left),
-                        "height": max(10, raw_bottom - raw_top)
-                    }
-                    save_roi_cache()
-
-            return Box(real_x, real_y, w, h)
-        else:
+        if max_val < active_conf:
             ctx['found'] = False
+            if time.time() - ctx['last_fail_time'] > 1.0:
+                log_confidence_to_csv("인식실패", img_path, active_conf, max_val, None, None, "임계값 미달")
+                ctx['last_fail_time'] = time.time()
             return None
+
+        if not region and not is_fallback_scan and not ctx['is_locked']:
+            if max_val >= active_conf:
+                cache_data['samples'].append((real_x, real_y, w, h))
             
+            valid_samples = list(cache_data['samples'])
+            if len(valid_samples) > 0:
+                x_coords = sorted([s[0] for s in valid_samples])
+                y_coords = sorted([s[1] for s in valid_samples])
+                if len(valid_samples) >= 3:
+                    x_coords = x_coords[1:-1]
+                    y_coords = y_coords[1:-1]
+                
+                core_min_x = x_coords[0]
+                core_min_y = y_coords[0]
+                core_max_x = x_coords[-1] + w
+                core_max_y = y_coords[-1] + h
+                
+                x_variance = x_coords[-1] - x_coords[0]
+                y_variance = y_coords[-1] - y_coords[0]
+                
+                pad_x = min(20, max(5, int(x_variance * 0.5)))
+                pad_y = min(20, max(5, int(y_variance * 0.5)))
+
+                p_mon = sct.monitors[1]
+                l_limit, t_limit = p_mon["left"], p_mon["top"]
+                r_limit, b_limit = l_limit + p_mon["width"], t_limit + p_mon["height"]
+                
+                raw_left = max(l_limit, int(core_min_x - pad_x))
+                raw_top = max(t_limit, int(core_min_y - pad_y))
+                raw_right = min(r_limit, int(core_max_x + pad_x))
+                raw_bottom = min(b_limit, int(core_max_y + pad_y))
+
+                cache_data['master_box'] = {
+                    "left": raw_left,
+                    "top": raw_top,
+                    "width": max(10, raw_right - raw_left),
+                    "height": max(10, raw_bottom - raw_top)
+                }
+                save_roi_cache()
+
+        return Box(real_x, real_y, w, h)
+        
     except Exception as e:
         return None
 
@@ -2300,11 +2329,28 @@ def fishing_bot(max_allowed_seconds):
                 
                 # 1. 진입 초기 UI 안착 대기
                 wait_ui_start = time.time()
+                found_fishing_mode = False
+                
                 while time.time() - wait_ui_start < 2.0 and bot_active:
-                    if safe_find_image('fishing_mode.png', 0.6): break
+                    if safe_find_image('fishing_mode.png', 0.6):
+                        found_fishing_mode = True
+                        break
                     time.sleep(0.1)
 
+                # [폴백 추가] 2초간 못 찾았으면 전체화면으로 1회 강제 스캔하여 ROI 자가 치유 유도
+                if not found_fishing_mode and bot_active:
+                    bprint("  > [폴백] 2초 내 파이팅 UI 탐색 실패. 전체화면 정밀 스캔을 1회 시도합니다.")
+                    if safe_find_image('fishing_mode.png', 0.6, region="FULL_SCREEN"):
+                        found_fishing_mode = True
+
                 if not bot_active: raise BotStopException()
+
+                # 전체화면 스캔으로도 실패했다면 중앙 고정으로 꼬이는 것을 방지하기 위해 낚시 취소
+                if not found_fishing_mode:
+                    bprint("  > [에러] UI 인식 최종 실패. 블라인드 파이팅을 방지하기 위해 낚시를 취소하고 초기화합니다.")
+                    send_cmd('E'); time.sleep(0.5); send_cmd('R')
+                    state = 1
+                    continue
 
                 time.sleep(0.2)
                 missing_ui_count = 0 
@@ -2319,7 +2365,9 @@ def fishing_bot(max_allowed_seconds):
                     y1 = max(0, cy - 47)
                     gauge_roi = (int(x1), int(y1), 95, 95)
                 else:
-                    gauge_roi = (CENTER_X - 47, CENTER_Y - 47, 95, 95)
+                    bprint("  > [에러] UI 좌표 획득 실패. 낚시를 취소합니다.")
+                    state = 1
+                    continue
                 
                 # 스레드 통신용 플래그
                 fight_status = "KEEP"

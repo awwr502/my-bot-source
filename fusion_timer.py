@@ -947,16 +947,14 @@ def fusion_bot_loop():
                                     bprint(f"  > 🛑 [보호] 5레벨 감염물. (인식률: {max_seen_5:.2f} / 시간: {lvl5_render_time:.2f}초 / 모드: {time_mode_str})")
                                 elif has_trait:
                                     identified_trait_name = "미등록 특성"
-                                    active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
-                                    
                                     best_score = 0.0
+                                    debug_scores = {} # [신규] 모든 특성의 점수를 기록할 메모리
                                     
                                     for t_file in active_trait_files:
                                         t_template = FUSION_CACHE[t_file]
                                         t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
                                         
-                                        # [초고속 정밀 탐색] 뼈대(trait.png)가 확인된 완벽한 툴팁 상태에서, 개별 특성의 미세한 렌더링 오차만 다중 스케일로 잡아냅니다.
-                                        target_conf = FUSION_CONF.get(t_file, 0.85) # 오탐 방지를 위한 안전 커트라인 0.85
+                                        target_conf = FUSION_CONF.get(t_file, 0.85) 
                                         file_best_score = 0.0
                                         
                                         for scale in [0.95, 1.0, 1.05]:
@@ -966,12 +964,28 @@ def fusion_bot_loop():
                                                 file_best_score = max(file_best_score, np.max(res_st))
                                                 
                                         best_score = max(best_score, file_best_score)
+                                        # [기록] 현재 판독한 특성의 최고 점수를 딕셔너리에 저장
+                                        trait_clean_name = TRAIT_NAMES.get(t_file, t_file)
+                                        debug_scores[trait_clean_name] = file_best_score
                                         
                                         if file_best_score >= target_conf:
-                                            identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
+                                            identified_trait_name = trait_clean_name
                                             break
-                                    
+                                            
                                     if identified_trait_name == "미등록 특성":
+                                        # [디버깅 엔진 가동] 미탐 발생 시 원인 분석 로그 및 블랙박스 사진 저장
+                                        sorted_scores = sorted(debug_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+                                        debug_msg = " / ".join([f"{name}: {score:.3f}" for name, score in sorted_scores])
+                                        bprint(f"  > 🚨 [미탐 분석] 최고 일치율 TOP 3 -> {debug_msg}")
+                                        
+                                        try:
+                                            # fusion_imgs 폴더 안에 debug_eyes 폴더를 만들어 봇의 시야를 저장합니다.
+                                            debug_dir = os.path.join(base_dir, "debug_eyes")
+                                            os.makedirs(debug_dir, exist_ok=True)
+                                            dbg_filename = os.path.join(debug_dir, f"fail_{datetime.now().strftime('%H%M%S')}.png")
+                                            cv2.imwrite(dbg_filename, roi_trait_name_gray)
+                                            bprint(f"  > 📸 [블랙박스] 봇의 시야 사진이 저장되었습니다: {dbg_filename}")
+                                        except: pass
                                         bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
                                         pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                                     else:

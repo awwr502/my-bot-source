@@ -950,20 +950,13 @@ def fusion_bot_loop():
                                     active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
                                     
                                     best_score = 0.0
-                                    
                                     for t_file in active_trait_files:
                                         t_template = FUSION_CACHE[t_file]
-                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                        
-                                        res_st = cv2.matchTemplate(roi_trait_name_gray, t_template_g, cv2.TM_CCOEFF_NORMED)
+                                        res_st = cv2.matchTemplate(roi_trait_name_gray, t_template, cv2.TM_CCOEFF_NORMED)
                                         current_score = np.max(res_st)
                                         best_score = max(best_score, current_score)
                                         
-                                        # [핵심 수정] 이진화를 폐기하고 커트라인을 0.88로 대폭 상향합니다.
-                                        # FUSION_CONF에 개별 값이 설정되어 있으면 그 값을 따르고, 없으면 0.88을 기본 커트라인으로 사용합니다.
-                                        target_conf = FUSION_CONF.get(t_file, 0.88)
-                                        
-                                        if current_score >= target_conf:
+                                        if current_score >= 0.78:
                                             identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
                                             break
                                     

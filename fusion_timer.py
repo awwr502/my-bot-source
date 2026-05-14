@@ -950,15 +950,13 @@ def fusion_bot_loop():
                                     active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
                                     
                                     best_score = 0.0
-                                    debug_scores = {} # [신규] 모든 특성의 점수를 기록할 메모리
+                                    temp_scores = [] # 점수 계산을 위한 임시 리스트
                                     
                                     for t_file in active_trait_files:
                                         t_template = FUSION_CACHE[t_file]
                                         t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
                                         
-                                        target_conf = FUSION_CONF.get(t_file, 0.85) 
                                         file_best_score = 0.0
-                                        
                                         for scale in [0.95, 1.0, 1.05]:
                                             width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
                                             if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_name_gray.shape[0]:
@@ -966,36 +964,24 @@ def fusion_bot_loop():
                                                 file_best_score = max(file_best_score, np.max(res_st))
                                                 
                                         best_score = max(best_score, file_best_score)
-                                        # [기록] 현재 판독한 특성의 최고 점수를 딕셔너리에 저장
-                                        trait_clean_name = TRAIT_NAMES.get(t_file, t_file)
-                                        debug_scores[trait_clean_name] = file_best_score
+                                        temp_scores.append((t_file, file_best_score))
                                         
-                                        # [핵심 수정 1] 상단에서 0.92로 강제 고정된 값을 무시하고, 특성 판독용 합격선을 0.82로 재조정합니다.
-                                        target_conf = 0.82 
+                                    # [격차 분석 엔진] 1등과 2등의 점수 차이를 계산하여 투명도 억까 버그를 회피합니다.
+                                    sorted_scores = sorted(temp_scores, key=lambda x: x[1], reverse=True)
+                                    
+                                    if len(sorted_scores) >= 1:
+                                        top1_file, top1_score = sorted_scores[0]
+                                        top2_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
                                         
-                                        if file_best_score >= target_conf:
-                                            identified_trait_name = trait_clean_name
-                                            break
+                                        target_conf = FUSION_CONF.get(top1_file, 0.85)
+                                        
+                                        # [조건 1] 원래 커트라인(0.85)을 안전하게 넘었거나
+                                        # [조건 2] 최소 0.74점 이상이면서, 2등 후보와의 격차가 0.06(6%) 이상 나면 합격!
+                                        if top1_score >= target_conf or (top1_score >= 0.74 and (top1_score - top2_score) >= 0.06):
+                                            identified_trait_name = TRAIT_NAMES.get(top1_file, top1_file)
                                             
                                     if identified_trait_name == "미등록 특성":
-                                        # [디버깅 엔진 가동] 미탐 발생 시 원인 분석 로그 및 블랙박스 사진 저장
-                                        sorted_scores = sorted(debug_scores.items(), key=lambda x: x[1], reverse=True)[:3]
-                                        debug_msg = " / ".join([f"{name}: {score:.3f}" for name, score in sorted_scores])
-                                        bprint(f"  > 🚨 [미탐 분석] 최고 일치율 TOP 3 -> {debug_msg}")
-                                        
-                                        try:
-                                            debug_dir = os.path.join(base_dir, "debug_eyes")
-                                            os.makedirs(debug_dir, exist_ok=True)
-                                            dbg_filename = os.path.join(debug_dir, f"fail_{datetime.now().strftime('%H%M%S')}.png")
-                                            
-                                            # [핵심 수정 2] 경로에 한글이 포함되어 있어도 사진을 강제로 우회 저장하는 로직
-                                            is_success, im_buf_arr = cv2.imencode(".png", roi_trait_name_gray)
-                                            if is_success:
-                                                im_buf_arr.tofile(dbg_filename)
-                                                bprint(f"  > 📸 [블랙박스] 봇의 시야 사진이 저장되었습니다: {dbg_filename}")
-                                        except: pass
-                                        
-                                        bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
+                                        bprint(f"  > ♻️ [분해] 미등록 특성 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
                                         pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                                     else:
                                         bprint(f"  > 👑 [보호] 등록된 특성 '{identified_trait_name}' 발견!")

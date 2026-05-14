@@ -1183,74 +1183,130 @@ def restore_brightness_on_exit():
 atexit.register(restore_brightness_on_exit)
 
 # --- [공통 로직] 잠수 방지 알림 제거 함수 ---
-def check_exit_notification(skip_esc=False):
-    """잠수 방지 알림이 뜨면 F를 눌러 즉시 제거합니다."""
-    # 알림창이 화면을 가리고 있으므로 신뢰도를 높여 정확히 탐지합니다.
-    if safe_find_image('exit_notice.png', 0.80):
-        stats['afk_bypass_count'] += 1
-        bprint("  > [긴급] 잠수 방지 알림 감지! 해제 시퀀스 진입")
-        send_blynk_notification("⚠️ 잠수 방지 감지")
-        dump_blackbox_log("잠수방지_알림_감지") # [블랙박스 트리거 추가]
-        
-        # 알림창 이미지가 화면에서 완전히 사라질 때까지 검증하며 F키 반복
-        while safe_find_image('exit_notice.png', 0.85):
-            send_cmd('F'); time.sleep(0.1); send_cmd('R')
-            # [능동 추적] 고정 0.8초 대기 삭제, 알림창이 사라지는 즉시 딜레이 종료
-            for _ in range(20):
-                time.sleep(0.1)
-                if not safe_find_image('exit_notice.png', 0.85):
-                    break
-            
-            if safe_find_image('exit_notice.png', 0.80):
-                bprint("  > [재시도] 알림창 잔존 확인. F키 재입력...")
-        
-        # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
-        found_fishing = safe_find_image('fishing.png', 0.65)
-        time.sleep(0.5) # 0.5초 딜레이
-        found_specific_b = safe_find_image('specific_B.png', 0.7)
-        time.sleep(0.5)
-        found_catch = safe_find_image('catch_F.png', 0.70) # 수거 창 잔존 여부 확인
-        
-        # 셋 중 하나라도 발견되면 완전히 사라질 때까지 알맞은 키 반복
-        if found_fishing or found_specific_b or found_catch:
-            bprint("  > 잔존 UI(낚시/보관/수거) 확인 -> 알맞은 키(F 또는 ESC)로 강제 회수 루프 진입")
-            while True:
-                # 1. 수거 창이 발견되면 F 입력
-                if safe_find_image('catch_F.png', 0.70):
-                    send_cmd('F'); time.sleep(0.2); send_cmd('R')
-                # 2. 낚시나 보관함 창이 발견되면 ESC(E) 입력
-                elif safe_find_image('fishing.png', 0.65) or safe_find_image('specific_B.png', 0.7):
-                    send_cmd('E'); time.sleep(0.2); send_cmd('R')
-                # 3. 모두 사라졌으면 루프 탈출
-                else:
-                    break
-                time.sleep(0.5) # UI 갱신을 위한 대기
-            bprint("  > [성공] UI 회수 완료.")
-        
-        # UI 회수 여부와 무관하게 공통적으로 위치 보정 수행
-        bprint("  > [대기] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)...")
-        wait_idle_start = time.time()
-        while time.time() - wait_idle_start < 6.0:
-            # 기본 대기 상태 아이콘(던지기 버튼)이 뜨면 모션이 끝난 것으로 간주
-            if safe_find_image('bait_change.png', 0.80):
-                break
-            time.sleep(0.1)
+is_afk_processing = False
 
-        bprint("  > [보정] 잠수 방지 후 위치 보정: S(후진) 0.8초 -> W(전진) 0.8초")
-        time.sleep(0.5) # 모션 완전 종료 후 안전한 조작을 위한 0.5초 최소 딜레이
-        send_cmd('S'); time.sleep(0.8); send_cmd('R')
-        time.sleep(0.2) # 키 입력 간 짧은 안정화
-        send_cmd('W'); time.sleep(0.8); send_cmd('R')
-        
-        # skip_esc가 False일 때만 초기화 명령(R)을 보냄
-        if not skip_esc:
-            send_cmd('R')
-            
-        bprint("  > [완료] 잠수 방지 시퀀스 종료. 0.5초 대기 후 복귀합니다.")
-        send_blynk_notification("[완료]잠수 방지 해제")
-        time.sleep(1.2) # 최종 0.5초 딜레이 후 복귀
-        return True
+def check_exit_notification(skip_esc=False):
+    """
+    [v15 전역 감시망 연동] 비동기 스레드가 잠수방지를 처리 중일 때, 
+    메인 봇(인벤토리 정리, 파이팅 등)이 키보드/마우스를 뺏지 못하도록 동작을 일시 정지(동결)시킵니다.
+    처리가 끝나면 True를 반환해 기존 코드의 (state = 1; break) 탈출 로직을 자연스럽게 타게 만듭니다.
+    """
+    global is_afk_processing
+    if is_afk_processing:
+        bprint("  > ⏸️ [메인 봇 동결] 잠수방지 해제 작업이 끝날 때까지 메인 로직을 일시 정지합니다.")
+        # 비동기 스레드의 작업이 끝날 때까지 메인 스레드는 여기서 무한 대기
+        while is_afk_processing:
+            time.sleep(0.1)
+        return True # 비동기 처리가 끝난 후 메인 루프를 1단계로 안전하게 돌려보냄
     return False
+
+def afk_monitor_loop():
+    global bot_active, state, is_afk_processing, stats
+    import mss
+    import cv2
+    import numpy as np
+    
+    with mss.mss() as afk_sct:
+        while True:
+            if not bot_active:
+                time.sleep(0.5)
+                continue
+                
+            try:
+                template = IMAGE_CACHE.get('exit_notice.png')
+                if template is not None:
+                    sct_img = afk_sct.grab(afk_sct.monitors[1])
+                    screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                    res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, _ = cv2.minMaxLoc(res)
+                    
+                    if max_val >= 0.80 and not is_afk_processing:
+                        is_afk_processing = True
+                        stats['afk_bypass_count'] += 1
+                        bprint("\n=============================================")
+                        bprint("  > 🚨 [전역 감시망] 잠수 방지 알림 포착! 비동기 해제 시퀀스 진입")
+                        bprint("=============================================")
+                        send_blynk_notification("⚠️ 잠수 방지 감지 (비동기)")
+                        dump_blackbox_log("잠수방지_비동기_감지")
+                        
+                        # [사용자 요청 사항 엄격 반영] 파이팅(State 4) 상태일 때만 ESC를 1회 입력하여 줄을 강제로 끊음
+                        if state == 4:
+                            bprint("  > [대응] 파이팅 중 발생 감지. ESC를 1회 입력하여 줄을 끊습니다.")
+                            send_cmd('E'); time.sleep(0.2); send_cmd('R')
+                            time.sleep(1.0) # 끊어지는 애니메이션 대기
+                        else:
+                            bprint(f"  > [대응] 파이팅이 아니므로(State {state}) ESC 입력 없이 알림창 해제만 진행합니다.")
+
+                        # 알림창 이미지가 화면에서 완전히 사라질 때까지 F키 반복 (나머지는 절대 ESC 입력 안 함)
+                        while True:
+                            sct_img_check = afk_sct.grab(afk_sct.monitors[1])
+                            screen_gray_check = cv2.cvtColor(np.array(sct_img_check), cv2.COLOR_BGRA2GRAY)
+                            if cv2.minMaxLoc(cv2.matchTemplate(screen_gray_check, template, cv2.TM_CCOEFF_NORMED))[1] < 0.85:
+                                break
+                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                            time.sleep(0.5)
+                        
+                        # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
+                        def check_ui(img_name, conf):
+                            temp = IMAGE_CACHE.get(img_name)
+                            if temp is None: return False
+                            sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
+                            screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
+                            return cv2.minMaxLoc(cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED))[1] >= conf
+
+                        found_fishing = check_ui('fishing.png', 0.65)
+                        time.sleep(0.5) # 0.5초 딜레이
+                        found_specific_b = check_ui('specific_B.png', 0.7)
+                        time.sleep(0.5)
+                        found_catch = check_ui('catch_F.png', 0.70) # 수거 창 잔존 여부 확인
+                        
+                        # 셋 중 하나라도 발견되면 완전히 사라질 때까지 알맞은 키 반복
+                        if found_fishing or found_specific_b or found_catch:
+                            bprint("  > 잔존 UI(낚시/보관/수거) 확인 -> 알맞은 키(F 또는 ESC)로 강제 회수 루프 진입")
+                            while True:
+                                # 1. 수거 창이 발견되면 F 입력
+                                if check_ui('catch_F.png', 0.70):
+                                    send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                                # 2. 낚시나 보관함 창이 발견되면 ESC(E) 입력
+                                elif check_ui('fishing.png', 0.65) or check_ui('specific_B.png', 0.7):
+                                    send_cmd('E'); time.sleep(0.2); send_cmd('R')
+                                # 3. 모두 사라졌으면 루프 탈출
+                                else:
+                                    break
+                                time.sleep(0.5) # UI 갱신을 위한 대기
+                            bprint("  > [성공] UI 회수 완료.")
+                        
+                        # [누락 복구] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)
+                        bprint("  > [대기] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)...")
+                        wait_idle_start = time.time()
+                        while time.time() - wait_idle_start < 6.0:
+                            sct_img_idle = afk_sct.grab(afk_sct.monitors[1])
+                            screen_idle = cv2.cvtColor(np.array(sct_img_idle), cv2.COLOR_BGRA2GRAY)
+                            temp_idle = IMAGE_CACHE.get('bait_change.png')
+                            if temp_idle is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_idle, temp_idle, cv2.TM_CCOEFF_NORMED))[1] >= 0.80:
+                                break
+                            time.sleep(0.1)
+
+                        # 위치 보정 (S 0.8초 -> W 0.8초)
+                        bprint("  > [보정] 해제 완료. 위치 보정(S->W) 수행...")
+                        time.sleep(0.5) # [누락 복구] 모션 완전 종료 후 안전한 조작을 위한 0.5초 최소 딜레이
+                        send_cmd('S'); time.sleep(0.8); send_cmd('R')
+                        time.sleep(0.2)
+                        send_cmd('W'); time.sleep(0.8); send_cmd('R')
+                        
+                        bprint("  > [완료] 잠수 방지 시퀀스 종료. 0.7초 대기 후 복귀합니다.")
+                        send_blynk_notification("[완료]잠수 방지 해제") 
+                        time.sleep(0.7) # [누락 복구] 메인 봇 복귀 전 0.7초 안정화 딜레이
+                        
+                        state = 1 # 메인 루프가 사각지대(대기 중)에 갇혀있더라도 1단계부터 깔끔하게 다시 시작하도록 오버라이드
+                        is_afk_processing = False
+            except Exception as e:
+                pass
+            
+            time.sleep(0.1) # 0.1초 간격 무한 감시 (CPU 부하 최소화)
+
+# 시스템 부팅 시 전역 감시망 스레드 자동 출격
+threading.Thread(target=afk_monitor_loop, daemon=True).start()
 
 def victory_coin_bot_loop():
     global victory_active

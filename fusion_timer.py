@@ -950,9 +950,16 @@ def fusion_bot_loop():
                                     active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
                                     
                                     best_score = 0.0
+                                    
+                                    # [이진화] 화면에 뜬 특성 이름 영역을 이진화(순백/순흑) 처리합니다.
+                                    _, roi_trait_name_bin = cv2.threshold(roi_trait_name_gray, 150, 255, cv2.THRESH_BINARY)
+                                    
                                     for t_file in active_trait_files:
                                         t_template = FUSION_CACHE[t_file]
-                                        res_st = cv2.matchTemplate(roi_trait_name_gray, t_template, cv2.TM_CCOEFF_NORMED)
+                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                        _, t_template_bin = cv2.threshold(t_template_g, 150, 255, cv2.THRESH_BINARY) # [이진화] 개별 특성 사진 뼈대 추출
+                                        
+                                        res_st = cv2.matchTemplate(roi_trait_name_bin, t_template_bin, cv2.TM_CCOEFF_NORMED)
                                         current_score = np.max(res_st)
                                         best_score = max(best_score, current_score)
                                         

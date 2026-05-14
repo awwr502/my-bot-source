@@ -973,11 +973,11 @@ def fusion_bot_loop():
                                         top1_file, top1_score = sorted_scores[0]
                                         top2_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
                                         
-                                        target_conf = FUSION_CONF.get(top1_file, 0.85)
+                                        target_conf = FUSION_CONF.get(top1_file, 0.82)
                                         
                                         # [조건 1] 원래 커트라인(0.85)을 안전하게 넘었거나
                                         # [조건 2] 최소 0.74점 이상이면서, 2등 후보와의 격차가 0.06(6%) 이상 나면 합격!
-                                        if top1_score >= target_conf or (top1_score >= 0.74 and (top1_score - top2_score) >= 0.06):
+                                        if top1_score >= target_conf or (top1_score >= 0.82 and (top1_score - top2_score) >= 0.06):
                                             identified_trait_name = TRAIT_NAMES.get(top1_file, top1_file)
                                             
                                     if identified_trait_name == "미등록 특성":

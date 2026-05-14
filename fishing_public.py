@@ -879,16 +879,24 @@ def safe_find_image(img_path, conf=0.6, region=None):
             is_rechecked = True
 
         if max_val >= active_conf:
+            h, w = template.shape
+            real_x = max_loc[0] + target_monitor["left"]
+            real_y = max_loc[1] + target_monitor["top"]
+
             # --- [사용자 논리 완벽 반영] 자가 치유 엔진 ---
-            # 전체화면(FULL_SCREEN) 폴백 탐색 명령을 받아 성공했는데, 기존에 등록된 ROI가 있었다면? = ROI 좌표가 틀렸다는 뜻!
             if is_fallback_scan and cache_data['master_box'] is not None:
-                print(f"  > 💊 [자가 치유] '{img_path}' 전체화면 폴백 탐색 성공! 오염된 ROI 및 컷오프를 강제 초기화합니다.")
-                cache_data['master_box'] = None
-                cache_data['samples'].clear()
-                ctx['history'].clear()
-                ctx['is_locked'] = False
-                ctx['locked_conf'] = conf
-                active_conf = conf
+                mb = cache_data['master_box']
+                cx, cy = real_x + w//2, real_y + h//2
+                is_inside_roi = (mb['left'] - 10 <= cx <= mb['left'] + mb['width'] + 10) and (mb['top'] - 10 <= cy <= mb['top'] + mb['height'] + 10)
+                
+                if not is_inside_roi:
+                    print(f"  > 💊 [자가 치유] '{img_path}' 실제 위치 변경 감지! 오염된 ROI 및 컷오프를 강제 초기화합니다.")
+                    cache_data['master_box'] = None
+                    cache_data['samples'].clear()
+                    ctx['history'].clear()
+                    ctx['is_locked'] = False
+                    ctx['locked_conf'] = conf
+                    active_conf = conf
 
             # --- 성공 데이터 누적 (폴백 탐색이 아닌 일반/ROI 탐색 시에만) ---
             if not is_fallback_scan:
@@ -910,10 +918,6 @@ def safe_find_image(img_path, conf=0.6, region=None):
                 ctx['found'] = True
             
         if max_val >= active_conf:
-            h, w = template.shape
-            real_x = max_loc[0] + target_monitor["left"]
-            real_y = max_loc[1] + target_monitor["top"]
-
             if not region and not is_fallback_scan and not ctx['is_locked']:
                 if max_val >= min(1.0, conf + 0.05):
                     cache_data['samples'].append((real_x, real_y, w, h))
@@ -934,8 +938,8 @@ def safe_find_image(img_path, conf=0.6, region=None):
                     x_variance = x_coords[-1] - x_coords[0]
                     y_variance = y_coords[-1] - y_coords[0]
                     
-                    pad_x = min(20, max(5, int(x_variance * 0.5)))
-                    pad_y = min(20, max(5, int(y_variance * 0.5)))
+                    pad_x = min(30, max(5, int(x_variance * 0.8)))
+                    pad_y = min(30, max(5, int(y_variance * 0.8)))
 
                     p_mon = sct.monitors[1]
                     l_limit, t_limit = p_mon["left"], p_mon["top"]
@@ -2082,24 +2086,37 @@ def fishing_bot(max_allowed_seconds):
                     with result_lock:
                         frame_results.append({"type": species_type, "name": name, "score": max_val})
 
-                # 판독 루프 (최대 2초간 시도)
-                start_analysis = time.time()
-                
-                # [EV>0 반응형 6분할 ROI 스나이퍼 렌즈] 
-                # 화면을 3x2(6등분)로 분할 후 5번(하단 중앙) 영역만 정밀 스캔하여 연산량 83.3% 삭감
+                # [EV>0 반응형 6분할 스마트 패딩 ROI]
+                # 5번(하단 중앙) 영역을 기준으로 상하좌우 10% 마진을 추가하여 짤림 오탐 방지
                 grid_w = SCREEN_W // 3
                 grid_h = SCREEN_H // 2
                 
+                margin_x = int(grid_w * 0.1)
+                margin_y = int(grid_h * 0.1)
+                
+                left_bound = max(0, grid_w - margin_x)
+                top_bound = max(0, grid_h - margin_y)
+                
                 fish_roi = {
-                    "left": int(grid_w),       # 2열 시작점 (0, 1, 2 중 중앙)
-                    "top": int(grid_h),        # 2행 시작점 (0, 1 중 하단)
-                    "width": int(grid_w),
-                    "height": int(grid_h)
+                    "left": int(left_bound),
+                    "top": int(top_bound),
+                    "width": int(min(SCREEN_W - left_bound, grid_w + (margin_x * 2))),
+                    "height": int(min(SCREEN_H - top_bound, grid_h + (margin_y * 2)))
                 }
                 
+                fallback_triggered = False # 1회성 전체화면 폴백 실행 여부
+                
                 while time.time() - start_analysis < 2.0 and bot_active:
-                    # 1. 카메라 충돌 방지를 위해 메인에서 '딱 한 번'만 캡처 (5번 그리드만 캡처)
-                    sct_img = sct.grab(fish_roi)
+                    elapsed_time = time.time() - start_analysis
+                    
+                    # 1. 카메라 캡처 (1.5초 임계점 돌파 시 단 1회 전체화면 폴백 스캔)
+                    if elapsed_time > 1.5 and not fallback_triggered:
+                        bprint("  > [스마트 폴백] 1.5초 경과. 예외 방어를 위해 단 1회 전체화면 정밀 스캔을 수행합니다.")
+                        sct_img = sct.grab(sct.monitors[1])
+                        fallback_triggered = True
+                    else:
+                        sct_img = sct.grab(fish_roi)
+                        
                     screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                     
                     frame_results.clear() # 매 프레임마다 점수표 초기화
@@ -2177,26 +2194,37 @@ def fishing_bot(max_allowed_seconds):
                 
                 # 1. 진입 초기 UI 안착 대기
                 wait_ui_start = time.time()
+                ui_pos = None # [신규] 좌표를 한 번에 저장할 변수
+                
                 while time.time() - wait_ui_start < 2.0 and bot_active:
-                    if safe_find_image('fishing_mode.png', 0.6): break
+                    ui_pos = safe_find_image('fishing_mode.png', 0.70) # 유저가 원하는 임계값으로 수정 가능
+                    if ui_pos:
+                        break
                     time.sleep(0.1)
+
+                # [폴백 추가] 2초간 못 찾았으면 전체화면으로 1회 강제 스캔하여 ROI 자가 치유 유도
+                if not ui_pos and bot_active:
+                    bprint("  > [폴백] 2초 내 파이팅 UI 탐색 실패. 전체화면 정밀 스캔을 1회 시도합니다.")
+                    ui_pos = safe_find_image('fishing_mode.png', 0.70, region="FULL_SCREEN")
 
                 if not bot_active: raise BotStopException()
 
-                time.sleep(0.2)
+                # 전체화면 스캔으로도 실패했다면 낚시 취소
+                if not ui_pos:
+                    bprint("  > [에러] UI 인식 최종 실패. 블라인드 파이팅을 방지하기 위해 낚시를 취소하고 초기화합니다.")
+                    send_cmd('E'); time.sleep(0.5); send_cmd('R')
+                    state = 1
+                    continue
+
+                time.sleep(0.2) # UI 애니메이션 안정화 대기 (스캔은 다시 하지 않음)
                 missing_ui_count = 0 
                 
-                # [핵심 1] 렌즈 고정 (95x95)
-                gauge_roi = None
-                ui_pos = safe_find_image('fishing_mode.png', 0.6)
-                if ui_pos:
-                    cx = ui_pos.left + ui_pos.width // 2
-                    cy = ui_pos.top + ui_pos.height // 2
-                    x1 = max(0, cx - 47)
-                    y1 = max(0, cy - 47)
-                    gauge_roi = (int(x1), int(y1), 95, 95)
-                else:
-                    gauge_roi = (CENTER_X - 47, CENTER_Y - 47, 95, 95)
+                # [핵심 1] 렌즈 고정 (110x110) - 이미 찾아둔 ui_pos 좌표를 그대로 재활용
+                cx = ui_pos.left + ui_pos.width // 2
+                cy = ui_pos.top + ui_pos.height // 2
+                x1 = max(0, cx - 55)
+                y1 = max(0, cy - 55)
+                gauge_roi = (int(x1), int(y1), 110, 110)
                 
                 # 스레드 통신용 플래그
                 fight_status = "KEEP"
@@ -2207,8 +2235,6 @@ def fishing_bot(max_allowed_seconds):
                 def check_status_cctv():
                     nonlocal missing_ui_count, is_qte_active, fight_status, fighting_active
                     
-                    # 🛠️ [핵심 수술] 메인 스레드와의 카메라/메모리 충돌 방지!
-                    # 분신 전용 독립 카메라(cctv_sct)와 간소화된 스레드 세이프 탐색 함수를 생성합니다.
                     import mss
                     with mss.mss() as cctv_sct:
                         def thread_safe_find(img_name, conf):
@@ -2216,37 +2242,50 @@ def fishing_bot(max_allowed_seconds):
                                 template = IMAGE_CACHE.get(img_name)
                                 if template is None: return False
                                 
-                                # 🎯 [핵심] 무식한 전체화면 스캔 폐기! 기존에 학습된 개별 이미지의 좌표를 불러옵니다.
                                 monitor = cctv_sct.monitors[1] # 기본값: 전체 화면
                                 is_using_master = False
                                 
-                                # 봇이 이전에 해당 사진을 한 번이라도 찾아서 위치를 기억(roi_cache.json)해뒀다면 그 좁은 구역만 봅니다.
-                                if img_name in ROI_SAMPLER and ROI_SAMPLER[img_name].get('master_box'):
-                                    monitor = ROI_SAMPLER[img_name]['master_box']
-                                    is_using_master = True
+                                # [QTE 전용 ROI 적용] A, D 키 이미지에 대해서만 기억된 좌표 사용
+                                if img_name in ['press_A.png', 'press_D.png'] and img_name in ROI_SAMPLER:
+                                    if ROI_SAMPLER[img_name].get('master_box'):
+                                        monitor = ROI_SAMPLER[img_name]['master_box']
+                                        is_using_master = True
 
-                                # 1. 좁은 구역(또는 전체화면) 스캔
                                 sct_img = cctv_sct.grab(monitor)
                                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                                 res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-                                max_val = cv2.minMaxLoc(res)[1]
+                                _, max_val, _, max_loc = cv2.minMaxLoc(res)
                                 
                                 if max_val >= conf:
+                                    # [QTE 위치 학습] A, D 키 발견 시 좌표를 ROI_SAMPLER에 기록
+                                    if img_name in ['press_A.png', 'press_D.png']:
+                                        h, w = template.shape
+                                        real_x = max_loc[0] + monitor["left"]
+                                        real_y = max_loc[1] + monitor["top"]
+                                        
+                                        if img_name not in ROI_SAMPLER:
+                                            ROI_SAMPLER[img_name] = {'samples': deque(maxlen=10), 'master_box': None}
+                                        
+                                        roi_data = ROI_SAMPLER[img_name]
+                                        roi_data['samples'].append((real_x, real_y, w, h))
+                                        
+                                        # 샘플 3개 이상 모이면 타이트하게 구역 확정
+                                        if len(roi_data['samples']) >= 3:
+                                            pad = 20
+                                            min_x = min(s[0] for s in roi_data['samples']) - pad
+                                            min_y = min(s[1] for s in roi_data['samples']) - pad
+                                            max_x = max(s[0] + s[2] for s in roi_data['samples']) + pad
+                                            max_y = max(s[1] + s[3] for s in roi_data['samples']) + pad
+                                            roi_data['master_box'] = {
+                                                "left": int(max(0, min_x)), "top": int(max(0, min_y)),
+                                                "width": int(max_x - min_x), "height": int(max_y - min_y)
+                                            }
                                     return True
-                                    
-                                # 2. [스마트 폴백] 좁은 구역에서 못 찾았을 때만 가끔씩(1초 쿨다운) 전체화면을 둘러봅니다.
+                                # ROI 구역에서 실패 시 1회 전체화면 폴백
                                 elif is_using_master:
-                                    last_fallback = FALLBACK_COOLDOWN.get(img_name, 0)
-                                    if time.time() - last_fallback > 0.3:
-                                        sct_img_full = cctv_sct.grab(cctv_sct.monitors[1])
-                                        screen_gray_full = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
-                                        res_full = cv2.matchTemplate(screen_gray_full, template, cv2.TM_CCOEFF_NORMED)
-                                        if cv2.minMaxLoc(res_full)[1] >= conf:
-                                            return True
-                                        else:
-                                            FALLBACK_COOLDOWN[img_name] = time.time()
-                                    return False
-                                
+                                    sct_full = cctv_sct.grab(cctv_sct.monitors[1])
+                                    res_f = cv2.matchTemplate(cv2.cvtColor(np.array(sct_full), cv2.COLOR_BGRA2GRAY), template, cv2.TM_CCOEFF_NORMED)
+                                    if cv2.minMaxLoc(res_f)[1] >= conf: return True
                                 return False
                             except:
                                 return False

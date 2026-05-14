@@ -947,6 +947,7 @@ def fusion_bot_loop():
                                     bprint(f"  > 🛑 [보호] 5레벨 감염물. (인식률: {max_seen_5:.2f} / 시간: {lvl5_render_time:.2f}초 / 모드: {time_mode_str})")
                                 elif has_trait:
                                     identified_trait_name = "미등록 특성"
+                                    active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
                                     best_score = 0.0
                                     debug_scores = {} # [신규] 모든 특성의 점수를 기록할 메모리
                                     

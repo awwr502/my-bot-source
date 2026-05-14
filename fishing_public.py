@@ -2302,12 +2302,12 @@ def fishing_bot(max_allowed_seconds):
                             # 2. QTE 탐지
                             qte_found = False
                             for img, key in [('press_A.png', 'A'), ('press_D.png', 'D')]:
-                                if thread_safe_find(img, 0.80):
+                                if thread_safe_find(img, 0.70):
                                     missing_ui_count = 0 
                                     is_qte_active = True # 본체에게 당기기 멈추라고 신호
                                     send_cmd('U') 
                                     bprint(f"  ! [QTE] {key} 대응 시작")
-                                    while thread_safe_find(img, 0.80) and bot_active:
+                                    while thread_safe_find(img, 0.70) and bot_active:
                                         send_cmd(key); time.sleep(0.05)
                                     send_cmd('R')
                                     is_qte_active = False # 끝났으니 텐션 재개 신호

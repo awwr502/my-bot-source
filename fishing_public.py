@@ -2086,6 +2086,9 @@ def fishing_bot(max_allowed_seconds):
                     with result_lock:
                         frame_results.append({"type": species_type, "name": name, "score": max_val})
 
+                # 판독 루프 (최대 2초간 시도) 타이머 변수 복구
+                start_analysis = time.time()
+
                 # [EV>0 반응형 6분할 스마트 패딩 ROI]
                 # 5번(하단 중앙) 영역을 기준으로 상하좌우 10% 마진을 추가하여 짤림 오탐 방지
                 grid_w = SCREEN_W // 3

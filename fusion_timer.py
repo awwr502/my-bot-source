@@ -948,6 +948,7 @@ def fusion_bot_loop():
                                 elif has_trait:
                                     identified_trait_name = "미등록 특성"
                                     active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
+                                    
                                     best_score = 0.0
                                     debug_scores = {} # [신규] 모든 특성의 점수를 기록할 메모리
                                     
@@ -987,6 +988,7 @@ def fusion_bot_loop():
                                             cv2.imwrite(dbg_filename, roi_trait_name_gray)
                                             bprint(f"  > 📸 [블랙박스] 봇의 시야 사진이 저장되었습니다: {dbg_filename}")
                                         except: pass
+                                        
                                         bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")
                                         pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
                                     else:

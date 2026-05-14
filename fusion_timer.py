@@ -973,12 +973,19 @@ def fusion_bot_loop():
                                         top1_file, top1_score = sorted_scores[0]
                                         top2_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
                                         
-                                        target_conf = FUSION_CONF.get(top1_file, 0.82)
+                                        target_conf = FUSION_CONF.get(top1_file, 0.88)
+                                        top1_name = TRAIT_NAMES.get(top1_file, top1_file)
                                         
-                                        # [조건 1] 원래 커트라인(0.85)을 안전하게 넘었거나
-                                        # [조건 2] 최소 0.74점 이상이면서, 2등 후보와의 격차가 0.06(6%) 이상 나면 합격!
-                                        if top1_score >= target_conf or (top1_score >= 0.82 and (top1_score - top2_score) >= 0.06):
-                                            identified_trait_name = TRAIT_NAMES.get(top1_file, top1_file)
+                                        # [스마트 듀얼 하한선 엔진] 
+                                        # "낙관적인 천성 5"처럼 이름에 숫자가 포함된 특성은 2와 5를 엄격히 구분하기 위해 하한선을 0.82으로 철벽 방어하고,
+                                        # "고혹적인 매력"처럼 숫자가 없는 순수 글자 특성은 투명도 배경 버그를 무시하기 위해 0.77로 유연하게 구제합니다.
+                                        has_number = any(char.isdigit() for char in top1_name)
+                                        smart_floor = 0.82 if has_number else 0.77
+                                        
+                                        # [조건 1] 원래 커트라인을 안전하게 넘었거나
+                                        # [조건 2] 특성별 맞춤형 스마트 하한선을 넘고, 2등과의 격차가 0.06 이상 나면 합격!
+                                        if top1_score >= target_conf or (top1_score >= smart_floor and (top1_score - top2_score) >= 0.06):
+                                            identified_trait_name = top1_name
                                             
                                     if identified_trait_name == "미등록 특성":
                                         bprint(f"  > ♻️ [분해] 미등록 특성 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")

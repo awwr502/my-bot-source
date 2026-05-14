@@ -970,6 +970,9 @@ def fusion_bot_loop():
                                         trait_clean_name = TRAIT_NAMES.get(t_file, t_file)
                                         debug_scores[trait_clean_name] = file_best_score
                                         
+                                        # [핵심 수정 1] 상단에서 0.92로 강제 고정된 값을 무시하고, 특성 판독용 합격선을 0.82로 재조정합니다.
+                                        target_conf = 0.82 
+                                        
                                         if file_best_score >= target_conf:
                                             identified_trait_name = trait_clean_name
                                             break
@@ -981,12 +984,15 @@ def fusion_bot_loop():
                                         bprint(f"  > 🚨 [미탐 분석] 최고 일치율 TOP 3 -> {debug_msg}")
                                         
                                         try:
-                                            # fusion_imgs 폴더 안에 debug_eyes 폴더를 만들어 봇의 시야를 저장합니다.
                                             debug_dir = os.path.join(base_dir, "debug_eyes")
                                             os.makedirs(debug_dir, exist_ok=True)
                                             dbg_filename = os.path.join(debug_dir, f"fail_{datetime.now().strftime('%H%M%S')}.png")
-                                            cv2.imwrite(dbg_filename, roi_trait_name_gray)
-                                            bprint(f"  > 📸 [블랙박스] 봇의 시야 사진이 저장되었습니다: {dbg_filename}")
+                                            
+                                            # [핵심 수정 2] 경로에 한글이 포함되어 있어도 사진을 강제로 우회 저장하는 로직
+                                            is_success, im_buf_arr = cv2.imencode(".png", roi_trait_name_gray)
+                                            if is_success:
+                                                im_buf_arr.tofile(dbg_filename)
+                                                bprint(f"  > 📸 [블랙박스] 봇의 시야 사진이 저장되었습니다: {dbg_filename}")
                                         except: pass
                                         
                                         bprint(f"  > ♻️ [분해] {identified_trait_name} 포착. (시간: {trait_render_time:.2f}초 / 대기: {l5_limit:.2f}초)")

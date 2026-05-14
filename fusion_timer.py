@@ -950,13 +950,24 @@ def fusion_bot_loop():
                                     active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
                                     
                                     best_score = 0.0
+                                    
                                     for t_file in active_trait_files:
                                         t_template = FUSION_CACHE[t_file]
-                                        res_st = cv2.matchTemplate(roi_trait_name_gray, t_template, cv2.TM_CCOEFF_NORMED)
-                                        current_score = np.max(res_st)
-                                        best_score = max(best_score, current_score)
+                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
                                         
-                                        if current_score >= 0.78:
+                                        # [초고속 정밀 탐색] 뼈대(trait.png)가 확인된 완벽한 툴팁 상태에서, 개별 특성의 미세한 렌더링 오차만 다중 스케일로 잡아냅니다.
+                                        target_conf = FUSION_CONF.get(t_file, 0.85) # 오탐 방지를 위한 안전 커트라인 0.85
+                                        file_best_score = 0.0
+                                        
+                                        for scale in [0.95, 1.0, 1.05]:
+                                            width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
+                                            if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_name_gray.shape[0]:
+                                                res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                file_best_score = max(file_best_score, np.max(res_st))
+                                                
+                                        best_score = max(best_score, file_best_score)
+                                        
+                                        if file_best_score >= target_conf:
                                             identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
                                             break
                                     

@@ -596,7 +596,12 @@ def send_blynk_notification(msg):
     """특이사항 발생 시 캡처 후 대기열(Queue)에 넣고 즉시 메인 로직으로 복귀합니다."""
     current_time = time.strftime("%H:%M:%S")
     try:
-        screenshot = pyautogui.screenshot()
+        # [v16 스레드 충돌 방지] 전역 카메라 객체를 동시에 사용 시 '_thread._local' 오류가 발생하므로 일회용 독립 카메라 생성
+        import mss
+        from PIL import Image
+        with mss.mss() as temp_sct:
+            sct_img = temp_sct.grab(temp_sct.monitors[1])
+            screenshot = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
         telegram_queue.put((msg, screenshot, current_time))
     except Exception as e:
         print(f"  > [Telegram] 스크린샷 캡처 에러: {e}")
@@ -1303,7 +1308,10 @@ def afk_monitor_loop():
             except Exception as e:
                 pass
             
-            time.sleep(0.1) # 0.1초 간격 무한 감시 (CPU 부하 최소화)
+            try:
+                time.sleep(0.1) # 0.1초 간격 무한 감시 (CPU 부하 최소화)
+            except BotStopException:
+                pass # 사용자가 봇 강제 정지([) 시 발생하는 예외를 안전하게 무시하고 대기 상태 유지
 
 # 시스템 부팅 시 전역 감시망 스레드 자동 출격
 threading.Thread(target=afk_monitor_loop, daemon=True).start()

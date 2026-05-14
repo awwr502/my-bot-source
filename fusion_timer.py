@@ -951,19 +951,19 @@ def fusion_bot_loop():
                                     
                                     best_score = 0.0
                                     
-                                    # [이진화] 화면에 뜬 특성 이름 영역을 이진화(순백/순흑) 처리합니다.
-                                    _, roi_trait_name_bin = cv2.threshold(roi_trait_name_gray, 150, 255, cv2.THRESH_BINARY)
-                                    
                                     for t_file in active_trait_files:
                                         t_template = FUSION_CACHE[t_file]
                                         t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                        _, t_template_bin = cv2.threshold(t_template_g, 150, 255, cv2.THRESH_BINARY) # [이진화] 개별 특성 사진 뼈대 추출
                                         
-                                        res_st = cv2.matchTemplate(roi_trait_name_bin, t_template_bin, cv2.TM_CCOEFF_NORMED)
+                                        res_st = cv2.matchTemplate(roi_trait_name_gray, t_template_g, cv2.TM_CCOEFF_NORMED)
                                         current_score = np.max(res_st)
                                         best_score = max(best_score, current_score)
                                         
-                                        if current_score >= 0.78:
+                                        # [핵심 수정] 이진화를 폐기하고 커트라인을 0.88로 대폭 상향합니다.
+                                        # FUSION_CONF에 개별 값이 설정되어 있으면 그 값을 따르고, 없으면 0.88을 기본 커트라인으로 사용합니다.
+                                        target_conf = FUSION_CONF.get(t_file, 0.88)
+                                        
+                                        if current_score >= target_conf:
                                             identified_trait_name = TRAIT_NAMES.get(t_file, t_file)
                                             break
                                     

@@ -2194,11 +2194,11 @@ def fishing_bot(max_allowed_seconds):
                 bprint("  > [내구도 검사] 챔질 후 애니메이션 안정화 및 낚싯대(fishing.png) 확인 중...")
                 rod_found = False
                 
-                # 챔질 직후 카메라 흔들림, 줌인, UI 깜빡임으로 인해 일시적으로 안 보일 수 있으므로
-                # 탐색 시간을 최대 1.5초로 늘리고, 흔들림 오차를 보정하기 위해 인식률을 0.65로 완화합니다.
+                # [다중 UI 맹점 해결] fishing.png가 화면에 두 군데 뜰 때 발생하는 ROI 시야 협착(오탐)을 방지하기 위해,
+                # 이 구간에 한해 강제로 전체 화면(FULL_SCREEN) 스캔을 지시합니다. 대기 시간은 원래 속도인 1.0초로 복구합니다.
                 check_start = time.time()
-                while time.time() - check_start < 1.0 and bot_active:
-                    if safe_find_image('fishing.png', 0.65):
+                while time.time() - check_start < 2.5 and bot_active:
+                    if safe_find_image('fishing.png', 0.65, region="FULL_SCREEN"):
                         rod_found = True
                         break
                     time.sleep(0.05)
@@ -2524,8 +2524,15 @@ def fishing_bot(max_allowed_seconds):
                                     is_qte_active = True
                                     send_cmd('U') 
                                     bprint(f"  ! [QTE] {key} 대응 시작")
+                                    qte_start_time = time.time()
+                                    
                                     # [EV>0 맹점 해결] QTE 연타 중 게임이 멈추면 루프에 갇히는 현상 방지
                                     while thread_safe_find(img, 0.60) and bot_active:
+                                        # [신규 핵심 로직] 5초 하드 타임아웃 방어벽 (오탐지로 인한 무한 동결 차단)
+                                        if time.time() - qte_start_time > 8.0:
+                                            bprint(f"  > [경고] QTE({key}) 8초 초과! 오탐지로 간주하고 연타 루프 강제 탈출.")
+                                            break
+                                            
                                         # QTE 연타 도중 잠수방지 알림이 뜨면 즉시 루프를 부수고 파이팅 강제 종료
                                         if thread_safe_find('exit_notice.png', 0.85):
                                             bprint("  > [긴급] QTE 연타 중 잠수방지 알림 포착! 파이팅 강제 취소")

@@ -1873,7 +1873,8 @@ def fishing_bot(max_allowed_seconds):
                 
             # 2. 마이크로 동적 워치독 (상태별 맞춤형 타임아웃)
             timeout_limit = 180.0
-            if state == 4: timeout_limit = 90.0
+            if state == 2: timeout_limit = 300.0
+            elif state == 4: timeout_limit = 90.0
             elif state == 5: timeout_limit = 30.0
             
             if bot_active and state not in [0, -1] and (time.time() - state_start_time > timeout_limit):

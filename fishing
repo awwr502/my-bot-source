@@ -612,6 +612,7 @@ pyautogui.raisePyAutoGUIImageNotFoundException = False
 is_manual_stop = True
 bot_active = False
 remote_task = None # [핵심] 텔레그램 스레드와 메인 봇을 연결하는 지시용 우체통 변수
+is_rod_casted = False # [신규] 낚싯대 물리적 투척 여부 상태 추적용 깃발 변수
 
 def toggle_stop():
     global bot_active, victory_active, animal_active, run_start_time, original_brightness, is_dimmed, char_start_time, char_pure_run_time
@@ -1206,7 +1207,7 @@ def check_exit_notification(skip_esc=False):
     return False
 
 def afk_monitor_loop():
-    global bot_active, state, is_afk_processing, stats
+    global bot_active, state, is_afk_processing, stats, is_rod_casted
     import mss
     import cv2
     import numpy as np
@@ -1234,13 +1235,13 @@ def afk_monitor_loop():
                         send_blynk_notification("⚠️ 잠수 방지 감지")
                         dump_blackbox_log("잠수방지_비동기_감지")
                         
-                        # [사용자 요청 사항 엄격 반영] 파이팅(State 4) 상태일 때만 ESC를 1회 입력하여 줄을 강제로 끊음
-                        if state == 4:
-                            bprint("  > [대응] 파이팅 중 발생 감지. ESC를 1회 입력하여 줄을 끊습니다.")
+                        # [오폭 방지 적용] State 2, 3, 4이거나, State 1이면서 낚싯대를 던진 상태(is_rod_casted == True)일 때만 ESC를 입력합니다.
+                        if state in [2, 3, 4] or (state == 1 and is_rod_casted):
+                            bprint(f"  > [대응] 낚시 진행 중(State {state}) 발생 감지. ESC를 1회 입력하여 낚싯대를 회수합니다.")
                             send_cmd('E'); time.sleep(0.2); send_cmd('R')
-                            time.sleep(1.0) # 끊어지는 애니메이션 대기
+                            time.sleep(1.0) # 끊어지는/회수되는 애니메이션 대기
                         else:
-                            bprint(f"  > [대응] 파이팅이 아니므로(State {state}) ESC 입력 없이 알림창 해제만 진행합니다.")
+                            bprint(f"  > [대응] 캐스팅 대기 또는 이동 중이므로(State {state}) ESC 입력 없이 알림창 해제만 진행합니다.")
 
                         # 알림창 이미지가 화면에서 완전히 사라질 때까지 F키 반복 (나머지는 절대 ESC 입력 안 함)
                         while True:
@@ -1756,7 +1757,7 @@ def animal_bot_loop():
 
 def fishing_bot(max_allowed_seconds):
     # 함수 내부에서도 전역 변수를 쓰겠다고 선언해야 오류가 나지 않습니다.
-    global bot_active, run_start_time, bot_mode, char_index, char_start_time, char_pure_run_time, state
+    global bot_active, run_start_time, bot_mode, char_index, char_start_time, char_pure_run_time, state, is_rod_casted
     
     # 서브 봇 백그라운드 스레드 가동
     threading.Thread(target=victory_coin_bot_loop, daemon=True).start()
@@ -1968,6 +1969,7 @@ def fishing_bot(max_allowed_seconds):
             # --- [State 1] 캐스팅 (좌클릭 홀딩 보강) ---
             if state == 1:
                 if not bot_active: raise BotStopException() # [문제 2 해결] 즉각 폭파
+                is_rod_casted = False # [핵심] 캐스팅 준비 시작. 아직 찌를 던지지 않았으므로 False로 초기화
                 bprint(f"\n[State 1] 캐스팅 시퀀스 시작")
 
                 # 캐스팅 전 시점 복구 (시각적 닻 정렬)
@@ -2119,6 +2121,7 @@ def fishing_bot(max_allowed_seconds):
                     send_cmd('U')
                     bprint("  > [타임아웃] 게이지 미포착 -> 강제 해제")
                 
+                is_rod_casted = True # [핵심] 마우스를 떼는 순간 물리적인 투척이 완료되었으므로 True로 전환 (잠수방지 ESC 허용)
                 if not bot_active: raise BotStopException() # 즉각 폭파
 
                 # 3. fishing.png 확인 시 즉시 2단계로 (동적 대기)

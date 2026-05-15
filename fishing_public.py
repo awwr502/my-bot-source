@@ -1274,16 +1274,12 @@ def afk_monitor_loop():
                                             break
                                         time.sleep(0.1)
                                 # 2. 낚시나 보관함 창이 발견되면 ESC(E) 입력
-                                elif check_ui('fishing.png', 0.7) or check_ui('specific_B.png', 0.7):
+                                elif check_ui('fishing.png', 0.65) or check_ui('specific_B.png', 0.7):
                                     send_cmd('E'); time.sleep(0.1); send_cmd('R')
                                     wait_start = time.time()
                                     while time.time() - wait_start < 1.5:
-                                        if not check_ui('fishing.png', 0.7) and not check_ui('specific_B.png', 0.7):
+                                        if not check_ui('fishing.png', 0.65) and not check_ui('specific_B.png', 0.7):
                                             break
-                                        time.sleep(0.1)
-                                # 3. 모두 사라졌으면 루프 탈출
-                                else:
-                                    break
                                         time.sleep(0.1)
                                 # 3. 모두 사라졌으면 루프 탈출
                                 else:

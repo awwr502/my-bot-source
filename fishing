@@ -1799,6 +1799,7 @@ def fishing_bot(max_allowed_seconds):
     # [워치독] 상태 추적용 변수 초기화
     last_state = state
     state_start_time = time.time()
+    force_watchdog_reason = None # [신규] 명시적 워치독 트리거 사유
 
     while True:
         try:
@@ -1877,14 +1878,14 @@ def fishing_bot(max_allowed_seconds):
             elif state == 4: timeout_limit = 90.0
             elif state == 5: timeout_limit = 30.0
             
-            if bot_active and state not in [0, -1] and (time.time() - state_start_time > timeout_limit):
+            if bot_active and state not in [0, -1] and ((time.time() - state_start_time > timeout_limit) or force_watchdog_reason):
                 stats['watchdog_recovery_count'] += 1
-                bprint(f"\n!!! [긴급] 로직 꼬임 감지! (State {state}에서 {timeout_limit}초 정체) !!!")
+                reason_str = force_watchdog_reason if force_watchdog_reason else f"{int(timeout_limit)}초 정체"
+                bprint(f"\n!!! [긴급] 로직 꼬임 감지! (State {state} - {reason_str}) !!!")
                 bprint("  > [스마트 복구] 화면 스캔 및 자가 복구 시도 중...")
-                send_blynk_notification(f"⚠️ 정체 감지. 스마트 복구 작동")
-                dump_blackbox_log(f"워치독_상태{state}_{int(timeout_limit)}초초과") # [블랙박스 트리거 추가]
-                
-                recovered = False
+                send_blynk_notification(f"⚠️ 복구 작동: {reason_str}")
+                dump_blackbox_log(f"워치독_상태{state}_{reason_str}") # [블랙박스 트리거 추가]
+                force_watchdog_reason = None # 사유 초기화
                 
                 recovered = False
                 
@@ -2021,7 +2022,7 @@ def fishing_bot(max_allowed_seconds):
                         swap_attempts += 1
                         if swap_attempts > 10:
                             bprint("  > ❌ [장착 실패] 예비 낚싯대가 모두 소진되었거나 꼬였습니다. 스마트 복구를 호출합니다.")
-                            state_start_time = time.time() - 200.0
+                            force_watchdog_reason = "장착 10회 연속 실패(예비 소진)"
                             break
 
                         # 0) 이미 완벽하게 장착된 상태인지 최우선 확인
@@ -2168,8 +2169,7 @@ def fishing_bot(max_allowed_seconds):
                              # 연속 5회 실패 시 미끼 부족/위치 꼬임으로 판단하고 스마트 복구 강제 실행
                              if cast_fail_count >= 5:
                                  bprint("\n!!! [긴급] 캐스팅 연속 5회 실패! 스마트 복구 대기 !!!")
-                                 # [문제 3 해결] 텔레그램 중복 발송을 막기 위해 알림 발송 코드는 제거하고 워치독 타이머만 조작
-                                 state_start_time = time.time() - 200.0 # 스마트 복구 조건(180초 정체) 강제 달성
+                                 force_watchdog_reason = "캐스팅 5회 연속 실패"
                                  cast_fail_count = 0
                                  continue
                                  
@@ -2217,7 +2217,7 @@ def fishing_bot(max_allowed_seconds):
                         swap_attempts += 1
                         if swap_attempts > 10:
                             bprint("  > ❌ [장착 실패] 예비 낚싯대가 모두 소진되었거나 꼬였습니다. 스마트 복구를 호출합니다.")
-                            state_start_time = time.time() - 200.0
+                            force_watchdog_reason = "장착 10회 연속 실패(예비 소진)"
                             break
 
                         # 0) 이미 완벽하게 장착된 상태인지 최우선 확인

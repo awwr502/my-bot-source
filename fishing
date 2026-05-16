@@ -2470,8 +2470,8 @@ def fishing_bot(max_allowed_seconds):
                                 monitor = cctv_sct.monitors[1]
                                 is_using_master = False
                                 
-                                # [QTE 전용 ROI 적용] A, D 키 이미지에 대해서만 기억된 좌표 사용
-                                if img_name in ['press_A.png', 'press_D.png'] and img_name in ROI_SAMPLER:
+                                # [범용 ROI 적용] 모든 이미지에 대해 학습된 마스터 박스가 있다면 즉시 사용
+                                if img_name in ROI_SAMPLER:
                                     if ROI_SAMPLER[img_name].get('master_box'):
                                         monitor = ROI_SAMPLER[img_name]['master_box']
                                         is_using_master = True
@@ -2482,29 +2482,28 @@ def fishing_bot(max_allowed_seconds):
                                 _, max_val, _, max_loc = cv2.minMaxLoc(res)
                                 
                                 if max_val >= conf:
-                                    # [QTE 위치 학습] A, D 키 발견 시 좌표를 ROI_SAMPLER에 기록
-                                    if img_name in ['press_A.png', 'press_D.png']:
-                                        h, w = template.shape
-                                        real_x = max_loc[0] + monitor["left"]
-                                        real_y = max_loc[1] + monitor["top"]
-                                        
-                                        if img_name not in ROI_SAMPLER:
-                                            ROI_SAMPLER[img_name] = {'samples': deque(maxlen=10), 'master_box': None}
-                                        
-                                        roi_data = ROI_SAMPLER[img_name]
-                                        roi_data['samples'].append((real_x, real_y, w, h))
-                                        
-                                        # 샘플 3개 이상 모이면 타이트하게 구역 확정
-                                        if len(roi_data['samples']) >= 3:
-                                            pad = 20
-                                            min_x = min(s[0] for s in roi_data['samples']) - pad
-                                            min_y = min(s[1] for s in roi_data['samples']) - pad
-                                            max_x = max(s[0] + s[2] for s in roi_data['samples']) + pad
-                                            max_y = max(s[1] + s[3] for s in roi_data['samples']) + pad
-                                            roi_data['master_box'] = {
-                                                "left": int(max(0, min_x)), "top": int(max(0, min_y)),
-                                                "width": int(max_x - min_x), "height": int(max_y - min_y)
-                                            }
+                                    # [범용 위치 학습] 발견된 모든 이미지의 좌표를 ROI_SAMPLER에 기록하여 스스로 학습
+                                    h, w = template.shape
+                                    real_x = max_loc[0] + monitor["left"]
+                                    real_y = max_loc[1] + monitor["top"]
+                                    
+                                    if img_name not in ROI_SAMPLER:
+                                        ROI_SAMPLER[img_name] = {'samples': deque(maxlen=10), 'master_box': None}
+                                    
+                                    roi_data = ROI_SAMPLER[img_name]
+                                    roi_data['samples'].append((real_x, real_y, w, h))
+                                    
+                                    # 샘플 3개 이상 모이면 타이트하게 구역 확정
+                                    if len(roi_data['samples']) >= 3:
+                                        pad = 20
+                                        min_x = min(s[0] for s in roi_data['samples']) - pad
+                                        min_y = min(s[1] for s in roi_data['samples']) - pad
+                                        max_x = max(s[0] + s[2] for s in roi_data['samples']) + pad
+                                        max_y = max(s[1] + s[3] for s in roi_data['samples']) + pad
+                                        roi_data['master_box'] = {
+                                            "left": int(max(0, min_x)), "top": int(max(0, min_y)),
+                                            "width": int(max_x - min_x), "height": int(max_y - min_y)
+                                        }
                                     return True
                                 # ROI 구역에서 실패 시 1회 전체화면 폴백
                                 elif is_using_master:

@@ -23,6 +23,7 @@ import winsound # 비프음 출력 모듈 추가
 import hashlib
 import queue
 import csv
+import concurrent.futures # [추가] 스레드 풀 재사용을 위한 모듈
 
 # mss 객체는 딱 한 번만 생성해두고 계속 재사용합니다 (메모리 최적화)
 sct = mss.mss()
@@ -2309,6 +2310,9 @@ def fishing_bot(max_allowed_seconds):
                     with result_lock:
                         frame_results.append({"type": species_type, "name": name, "score": max_val})
 
+                # [추가] 정규직 스레드 5명을 미리 고용 (루프 진입 전 1회만 생성하여 생성 부하 제로화)
+                species_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+
                 # 판독 루프 (최대 2초간 시도)
                 start_analysis = time.time()
                 
@@ -2347,12 +2351,17 @@ def fishing_bot(max_allowed_seconds):
                     
                     frame_results.clear() # 매 프레임마다 점수표 초기화
 
-                    # 2. 단일 캡처본에 대해 5개의 어종 템플릿을 순차 비교 (무한 스레드 생성 부하 완전 제거)
-                    species_scanner(screen_gray, IMAGE_CACHE.get('jellyfish.png'), "TARGET", "해파리")
-                    species_scanner(screen_gray, IMAGE_CACHE.get('eel.png'), "TARGET", "전기뱀장어")
-                    species_scanner(screen_gray, IMAGE_CACHE.get('none1.png'), "TRASH", "잡어1")
-                    species_scanner(screen_gray, IMAGE_CACHE.get('none2.png'), "TRASH", "잡어2")
-                    species_scanner(screen_gray, IMAGE_CACHE.get('none3.png'), "TRASH", "잡어3")
+                    # 2. 정규직 스레드 풀에 5개의 작업을 동시에 투입 (스레드 생성 부하 없이 기존의 압도적인 병렬 속도 복구)
+                    futures = [
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('jellyfish.png'), "TARGET", "해파리"),
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('eel.png'), "TARGET", "전기뱀장어"),
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none1.png'), "TRASH", "잡어1"),
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none2.png'), "TRASH", "잡어2"),
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none3.png'), "TRASH", "잡어3")
+                    ]
+                    
+                    # 5명의 연산이 모두 끝날 때까지 대기 (가장 오래 걸리는 1개 연산 시간만 소모됨)
+                    concurrent.futures.wait(futures)
 
                     # 3. 결과 확인 (최고 점수 판별 및 애니메이션 왜곡 방어)
                     if frame_results:
@@ -2407,6 +2416,9 @@ def fishing_bot(max_allowed_seconds):
                             time.sleep(1.0); state = 1; break
                         else:
                             bprint("  > [실패] UI 잔존. 재시도...")
+
+            # 루프가 끝나면 스레드 풀을 깔끔하게 해제
+                species_executor.shutdown(wait=False)
 
             # --- [State 4] 파이팅 (투트랙 멀티스레딩 최적화) ---
             elif state == 4:

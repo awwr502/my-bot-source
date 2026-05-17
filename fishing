@@ -1236,8 +1236,6 @@ def afk_monitor_loop():
                         dump_blackbox_log("잠수방지_비동기_감지")
                         
                         # [근본 해결] 전역 깃발(is_rod_casted)이나 State 조건에 의존한 맹목적인 사전 ESC 입력을 전면 폐지합니다.
-                        # 대신 알림창을 먼저 F로 지운 뒤, 남은 UI를 시각적으로 직접 확인하여 처리합니다.
-
                         # 알림창 이미지가 화면에서 완전히 사라질 때까지 F키 반복 (ESC 절대 입력 안 함)
                         while True:
                             sct_img_check = afk_sct.grab(afk_sct.monitors[1])
@@ -1247,8 +1245,9 @@ def afk_monitor_loop():
                                 break
                             send_cmd('F'); time.sleep(0.1); send_cmd('R')
                             time.sleep(0.5)
-                        
-                        # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
+
+                        # [대안 B 적용] '절대 기준점(bait_change.png)' 기반 역발상 복구 로직
+                        bprint("  > [복구] 절대 기준점(미끼 아이콘) 탐색 및 상태 강제 초기화 루프 진입")
                         def check_ui(img_name, conf):
                             temp = IMAGE_CACHE.get(img_name)
                             if temp is None: return False
@@ -1256,47 +1255,33 @@ def afk_monitor_loop():
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
                             return cv2.minMaxLoc(cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED))[1] >= conf
 
-                        found_fishing = check_ui('fishing.png', 0.65)
-                        time.sleep(0.5) # 0.5초 딜레이
-                        found_specific_b = check_ui('specific_B.png', 0.7)
-                        time.sleep(0.5)
-                        found_catch = check_ui('catch_F.png', 0.70) # 수거 창 잔존 여부 확인
-                        
-                        # 셋 중 하나라도 발견되면 완전히 사라질 때까지 알맞은 키 반복
-                        if found_fishing or found_specific_b or found_catch:
-                            bprint("  > 잔존 UI(낚시/보관/수거) 확인 -> 알맞은 키(F 또는 ESC)로 강제 회수 루프 진입")
-                            while True:
-                                # 1. 수거 창이 발견되면 F 입력
-                                if check_ui('catch_F.png', 0.70):
-                                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                    wait_start = time.time()
-                                    while time.time() - wait_start < 0.5:
-                                        if not check_ui('catch_F.png', 0.70):
-                                            break
-                                        time.sleep(0.1)
-                                # 2. 낚시나 보관함 창이 발견되면 ESC(E) 입력
-                                elif check_ui('fishing.png', 0.65) or check_ui('specific_B.png', 0.7):
-                                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                                    wait_start = time.time()
-                                    while time.time() - wait_start < 1.5:
-                                        if not check_ui('fishing.png', 0.65) and not check_ui('specific_B.png', 0.7):
-                                            break
-                                        time.sleep(0.1)
-                                # 3. 모두 사라졌으면 루프 탈출
-                                else:
-                                    break
-                            bprint("  > [성공] UI 회수 완료.")
-                        
-                        # [누락 복구] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)
-                        bprint("  > [대기] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)...")
-                        wait_idle_start = time.time()
-                        while time.time() - wait_idle_start < 6.0:
-                            sct_img_idle = afk_sct.grab(afk_sct.monitors[1])
-                            screen_idle = cv2.cvtColor(np.array(sct_img_idle), cv2.COLOR_BGRA2GRAY)
-                            temp_idle = IMAGE_CACHE.get('bait_change.png')
-                            if temp_idle is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_idle, temp_idle, cv2.TM_CCOEFF_NORMED))[1] >= 0.80:
+                        # 최대 15번(약 15초) 시도하는 안전망 타이머
+                        recovery_attempts = 0
+                        while recovery_attempts < 15:
+                            # 1순위: 절대 기준점(낚시 대기 상태)이 확인되면 즉시 복구 완료
+                            if check_ui('bait_change.png', 0.80):
+                                bprint("  > [성공] 낚시 준비 상태(bait_change.png) 확인 완료.")
                                 break
-                            time.sleep(0.8)
+                            
+                            # 2순위: 수거 창이 떠있으면 F키로 아이템 획득
+                            elif check_ui('catch_F.png', 0.70):
+                                bprint("  > [조치] 수거 창(catch_F.png) 발견 -> F 입력")
+                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                time.sleep(1.0) # 수거 애니메이션 대기
+                                
+                            # 3순위: 둘 다 없으면 낚시 중이거나 보관함 등 알 수 없는 창이 떠있는 것이므로 ESC로 강제 취소
+                            else:
+                                bprint("  > [조치] 목표 미발견 -> 화면 강제 초기화(ESC) 시도")
+                                send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                                
+                                # ESC 타격 후 낚싯대를 거두거나 창이 닫히는 모션 대기 (스팸 방지를 위해 최대 3초 능동 대기)
+                                wait_esc = time.time()
+                                while time.time() - wait_esc < 3.0:
+                                    if check_ui('bait_change.png', 0.80):
+                                        break
+                                    time.sleep(0.5)
+                            
+                            recovery_attempts += 1
 
                         # 위치 보정 (S 0.8초 -> W 0.8초)
                         bprint("  > [보정] 해제 완료. 위치 보정(S->W) 수행...")

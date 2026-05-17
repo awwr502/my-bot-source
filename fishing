@@ -2467,59 +2467,64 @@ def fishing_bot(max_allowed_seconds):
                 def check_status_cctv():
                     nonlocal missing_ui_count, is_qte_active, fight_status, fighting_active
                     import mss
+                    import cv2
+                    import numpy as np
+
                     with mss.mss() as cctv_sct:
-                        def thread_safe_find(img_name, conf):
-                            try:
-                                template = IMAGE_CACHE.get(img_name)
-                                if template is None: return False
-                                
-                                monitor = cctv_sct.monitors[1]
-                                is_using_master = False
-                                
-                                if img_name in ROI_SAMPLER:
-                                    if ROI_SAMPLER[img_name].get('master_box'):
-                                        monitor = ROI_SAMPLER[img_name]['master_box']
-                                        is_using_master = True
-
-                                sct_img = cctv_sct.grab(monitor)
-                                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                                res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-                                _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                
-                                if max_val >= conf:
-                                    h, w = template.shape
-                                    real_x = max_loc[0] + monitor["left"]
-                                    real_y = max_loc[1] + monitor["top"]
-                                    
-                                    if img_name not in ROI_SAMPLER:
-                                        ROI_SAMPLER[img_name] = {'samples': deque(maxlen=10), 'master_box': None}
-                                    
-                                    roi_data = ROI_SAMPLER[img_name]
-                                    roi_data['samples'].append((real_x, real_y, w, h))
-                                    
-                                    if len(roi_data['samples']) >= 3:
-                                        # [핵심 1] 고정 20px 패딩 폐기! 이미지 크기에 비례하는 '숨쉬는 동적 패딩(25%)' 적용 (UI 흔들림 완벽 커버)
-                                        pad_x = max(30, int(w * 0.25))
-                                        pad_y = max(30, int(h * 0.25))
-                                        min_x = min(s[0] for s in roi_data['samples']) - pad_x
-                                        min_y = min(s[1] for s in roi_data['samples']) - pad_y
-                                        max_x = max(s[0] + s[2] for s in roi_data['samples']) + pad_x
-                                        max_y = max(s[1] + s[3] for s in roi_data['samples']) + pad_y
-                                        roi_data['master_box'] = {
-                                            "left": int(max(0, min_x)), "top": int(max(0, min_y)),
-                                            "width": int(max_x - min_x), "height": int(max_y - min_y)
-                                        }
-                                    return True
-                                elif is_using_master:
-                                    sct_full = cctv_sct.grab(cctv_sct.monitors[1])
-                                    res_f = cv2.matchTemplate(cv2.cvtColor(np.array(sct_full), cv2.COLOR_BGRA2GRAY), template, cv2.TM_CCOEFF_NORMED)
-                                    if cv2.minMaxLoc(res_f)[1] >= conf: return True
-                                return False
-                            except: return False
-
-                        catch_f_frames = 0 # 수거 버튼 다중 프레임 검증 카운터
-                        
                         while fighting_active and bot_active:
+                            # [핵심 최적화] 5번씩 찍던 캡처를 딱 1번의 전체화면 캡처로 통합! (캡처 병목 원천 차단)
+                            sct_full = cctv_sct.grab(cctv_sct.monitors[1])
+                            screen_full_gray = cv2.cvtColor(np.array(sct_full), cv2.COLOR_BGRA2GRAY)
+
+                            def thread_safe_find(img_name, conf):
+                                try:
+                                    template = IMAGE_CACHE.get(img_name)
+                                    if template is None: return False
+                                    
+                                    # 캡처를 새로 하지 않고, 1장 찍어둔 전체화면에서 ROI 구역만 수학적으로 잘라냄 (속도 극대화)
+                                    if img_name in ROI_SAMPLER and ROI_SAMPLER[img_name].get('master_box'):
+                                        mb = ROI_SAMPLER[img_name]['master_box']
+                                        x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
+                                        roi_gray = screen_full_gray[y:y+h, x:x+w]
+                                        res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
+                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                        
+                                        if max_val >= conf:
+                                            # 좌표 보정 및 동적 패딩 갱신
+                                            real_x, real_y = max_loc[0] + x, max_loc[1] + y
+                                            th, tw = template.shape
+                                            roi_data = ROI_SAMPLER[img_name]
+                                            roi_data['samples'].append((real_x, real_y, tw, th))
+                                            
+                                            if len(roi_data['samples']) >= 3:
+                                                pad_x = max(30, int(tw * 0.25))
+                                                pad_y = max(30, int(th * 0.25))
+                                                min_x = min(s[0] for s in roi_data['samples']) - pad_x
+                                                min_y = min(s[1] for s in roi_data['samples']) - pad_y
+                                                max_x = max(s[0] + s[2] for s in roi_data['samples']) + pad_x
+                                                max_y = max(s[1] + s[3] for s in roi_data['samples']) + pad_y
+                                                roi_data['master_box'] = {
+                                                    "left": int(max(0, min_x)), "top": int(max(0, min_y)),
+                                                    "width": int(max_x - min_x), "height": int(max_y - min_y)
+                                                }
+                                            return True
+                                        return False
+                                    else:
+                                        # ROI가 없을 땐 전체화면 배열 그대로 매칭
+                                        res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
+                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                        
+                                        if max_val >= conf:
+                                            real_x, real_y = max_loc[0], max_loc[1]
+                                            th, tw = template.shape
+                                            if img_name not in ROI_SAMPLER:
+                                                ROI_SAMPLER[img_name] = {'samples': deque(maxlen=10), 'master_box': None}
+                                            ROI_SAMPLER[img_name]['samples'].append((real_x, real_y, tw, th))
+                                            return True
+                                        return False
+                                except: return False
+
+                            # 1장의 사진으로 5가지 UI를 병목 없이 순식간에 검사
                             if thread_safe_find('exit_notice.png', 0.80): 
                                 bprint("  > [CCTV 긴급] 잠수방지 알림 포착. 파이팅 강제 초기화")
                                 fight_status = "RESET"; break
@@ -2536,15 +2541,17 @@ def fishing_bot(max_allowed_seconds):
                                     while thread_safe_find(img, 0.60) and bot_active:
                                         if time.time() - qte_start_time > 8.0:
                                             bprint(f"  > [경고] QTE({key}) 8초 초과! 오염된 ROI를 파기하고 파이팅을 재시작합니다.")
-                                            if img in ROI_SAMPLER:
-                                                del ROI_SAMPLER[img]
+                                            if img in ROI_SAMPLER: del ROI_SAMPLER[img]
                                             fight_status = "RESTART"
                                             break
                                         if thread_safe_find('exit_notice.png', 0.85):
-                                            bprint("  > [CCTV 긴급] QTE 도중 잠수방지 포착. 파이팅 초기화")
                                             fight_status = "RESET"
                                             break
                                         send_cmd(key); time.sleep(0.05)
+                                        # 갱신된 화면을 위해 QTE 중에는 캡처를 한 번씩 해줌
+                                        sct_full = cctv_sct.grab(cctv_sct.monitors[1])
+                                        screen_full_gray = cv2.cvtColor(np.array(sct_full), cv2.COLOR_BGRA2GRAY)
+                                        
                                     send_cmd('R')
                                     is_qte_active = False 
                                     qte_found = True
@@ -2553,28 +2560,25 @@ def fishing_bot(max_allowed_seconds):
                             if fight_status in ["RESET", "RESTART"]: break
                             if qte_found: continue
 
-                            # [핵심 2] 3중 방어막 적용 (다중 프레임 + 논리 교차 검증)
+                            # [논리 교차 검증]
                             if thread_safe_find('catch_F.png', 0.70):
                                 catch_f_frames += 1
                                 if catch_f_frames >= 3:
-                                    # 논리 검증: 파이팅 UI가 확실히 없는지 한 번 더 묻기
                                     if not thread_safe_find('fishing_mode.png', 0.70):
                                         fight_status = "FINISH"; break
                                     else:
-                                        catch_f_frames = 0 # 모순 발생 시 카운터 리셋
+                                        catch_f_frames = 0 
                             else:
                                 catch_f_frames = 0
 
                             if not thread_safe_find('fishing_mode.png', 0.70): 
                                 missing_ui_count += 1
-                                # [수정] 0.1초 간격에 맞춰 1.5초 대기를 위해 50회 -> 30회로 컷오프 조정
-                                if missing_ui_count >= 30: 
-                                    bprint("  > [CCTV] 파이팅 UI 15회(3.0초) 미발견. 낚싯줄 끊어짐으로 간주하여 캐스팅으로 복귀합니다.")
+                                if missing_ui_count >= 15: 
+                                    bprint("  > [CCTV] 파이팅 UI 15회(1.5초) 미발견. 낚싯줄 끊어짐으로 간주하여 캐스팅으로 복귀합니다.")
                                     fight_status = "RESET"; break
                             else:
                                 missing_ui_count = 0 
                             
-                            # [핵심 최적화] CCTV 스레드 대기 시간을 0.03초 -> 0.1초로 늘려 메인 스레드 텐션 감지 렉 원천 차단
                             time.sleep(0.1)
 
                 # 분신(CCTV 스레드) 백그라운드 출격

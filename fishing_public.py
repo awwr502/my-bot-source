@@ -2036,19 +2036,19 @@ def fishing_bot(max_allowed_seconds):
                             
                             while time.time() - wait_throw < 1.5 and bot_active:
                                 if check_exit_notification(): break
-                                if safe_find_image('broken_rod.png', 0.85):
+                                if safe_find_image('broken_rod.png', 0.80):
                                     current_rod_state = "UNFOLDED"
                                     break
-                                elif safe_find_image('throw_btn.png', 0.85):
+                                elif safe_find_image('throw_btn.png', 0.80):
                                     current_rod_state = "HELD"
                                     break
                                 time.sleep(0.05)
 
                             # 타임아웃 시 전체화면 1회 폴백 스캔
                             if not current_rod_state and bot_active:
-                                if safe_find_image('broken_rod.png', 0.85, region="FULL_SCREEN"):
+                                if safe_find_image('broken_rod.png', 0.80, region="FULL_SCREEN"):
                                     current_rod_state = "UNFOLDED"
-                                elif safe_find_image('throw_btn.png', 0.85, region="FULL_SCREEN"):
+                                elif safe_find_image('throw_btn.png', 0.80, region="FULL_SCREEN"):
                                     current_rod_state = "HELD"
 
                             # 1.5초 동안 둘 다 못 찾았으면 0번 입력 후 루프 재시작

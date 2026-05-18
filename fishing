@@ -1210,85 +1210,95 @@ def check_exit_notification(skip_esc=False):
 
 def afk_monitor_loop():
     global bot_active, state, is_afk_processing, stats
+    import time
+    import mss
+    import cv2
+    import numpy as np
     
-    while True:
-        if not bot_active:
-            time.sleep(0.5)
-            continue
-            
-        try:
-            # 원시 cv2 연산 및 독립 카메라(afk_sct) 대신 통합 엔진(safe_find_image) 사용
-            if safe_find_image('exit_notice.png', 0.80) and not is_afk_processing:
-                is_afk_processing = True
-                stats['afk_bypass_count'] += 1
-                bprint("\n=============================================")
-                bprint("  > 🚨 [전역 감시망] 잠수 방지 알림 포착! 비동기 해제 시퀀스 진입")
-                bprint("=============================================")
-                send_blynk_notification("⚠️ 잠수 방지 감지")
-                dump_blackbox_log("잠수방지_비동기_감지")
+    # [근본 해결] 전역 카메라 충돌을 방지하기 위해 잠수방지 전용 독립 카메라 할당
+    with mss.mss() as afk_sct:
+        # 가벼운 스레드 전용 탐색 헬퍼 함수
+        def check_afk_img(img_name, conf=0.75):
+            try:
+                template = IMAGE_CACHE.get(img_name)
+                if template is None: return False
+                sct_img = afk_sct.grab(afk_sct.monitors[1])
+                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+                return cv2.minMaxLoc(res)[1] >= conf
+            except:
+                return False
+
+        while True:
+            if not bot_active:
+                time.sleep(0.5)
+                continue
                 
-                # [근본 해결] 전역 깃발(is_rod_casted)이나 State 조건에 의존한 맹목적인 사전 ESC 입력을 전면 폐지합니다.
-                # 알림창 이미지가 화면에서 완전히 사라질 때까지 F키 반복 (ESC 절대 입력 안 함)
-                while True:
-                    # cv2 연산 대신 safe_find_image가 이미지를 못 찾을 때(None 반환) 루프 탈출
-                    if not safe_find_image('exit_notice.png', 0.75):
-                        break
-                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                    time.sleep(0.5)
-
-                # [대안 B 적용] '절대 기준점(bait_change.png)' 기반 역발상 복구 로직
-                bprint("  > [복구] 절대 기준점(미끼 아이콘) 탐색 및 상태 강제 초기화 루프 진입")
-
-                # 최대 15번(약 15초) 시도하는 안전망 타이머
-                recovery_attempts = 0
-                while recovery_attempts < 15:
-                    # 1순위: 절대 기준점(낚시 대기 상태)이 확인되면 즉시 복구 완료
-                    if safe_find_image('bait_change.png', 0.75):
-                        bprint("  > [성공] 낚시 준비 상태(bait_change.png) 확인 완료.")
-                        break
+            try:
+                # 전역 엔진 대신 스레드 전용 무충돌 헬퍼 함수 사용
+                if check_afk_img('exit_notice.png', 0.80) and not is_afk_processing:
+                    is_afk_processing = True
+                    stats['afk_bypass_count'] += 1
+                    bprint("\n=============================================")
+                    bprint("  > 🚨 [전역 감시망] 잠수 방지 알림 포착! 비동기 해제 시퀀스 진입")
+                    bprint("=============================================")
+                    send_blynk_notification("⚠️ 잠수 방지 감지")
+                    dump_blackbox_log("잠수방지_비동기_감지")
                     
-                    # 2순위: 수거 창이 떠있으면 F키로 아이템 획득
-                    elif safe_find_image('catch_F.png', 0.70):
-                        bprint("  > [조치] 수거 창(catch_F.png) 발견 -> F 입력")
+                    # 알림창 이미지가 화면에서 완전히 사라질 때까지 F키 반복
+                    while True:
+                        if not check_afk_img('exit_notice.png', 0.75):
+                            break
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        time.sleep(1.0) # 수거 애니메이션 대기
-                        
-                    # 3순위: 둘 다 없으면 낚시 중이거나 보관함 등 알 수 없는 창이 떠있는 것이므로 ESC로 강제 취소
-                    else:
-                        bprint("  > [조치] 목표 미발견 -> 화면 강제 초기화(ESC) 시도")
-                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                        
-                        # ESC 타격 후 낚싯대를 거두거나 창이 닫히는 모션 대기 (스팸 방지를 위해 최대 3초 능동 대기)
-                        wait_esc = time.time()
-                        while time.time() - wait_esc < 3.0:
-                            if safe_find_image('bait_change.png', 0.75):
-                                break
-                            time.sleep(0.5)
-                    
-                    recovery_attempts += 1
+                        time.sleep(0.5)
 
-                # 위치 보정 (S 0.8초 -> W 0.8초)
-                bprint("  > [보정] 해제 완료. 위치 보정(S->W) 수행...")
-                time.sleep(0.5) # [누락 복구] 모션 완전 종료 후 안전한 조작을 위한 0.5초 최소 딜레이
-                send_cmd('S'); time.sleep(0.8); send_cmd('R')
-                time.sleep(0.2)
-                send_cmd('W'); time.sleep(0.8); send_cmd('R')
-                
-                bprint("  > [완료] 잠수 방지 시퀀스 종료. 0.7초 대기 후 복귀합니다.")
-                send_blynk_notification("[완료]잠수 방지 해제") 
-                time.sleep(0.7) # [누락 복구] 메인 봇 복귀 전 0.7초 안정화 딜레이
-                
-                state = 1 # 메인 루프가 사각지대(대기 중)에 갇혀있더라도 1단계부터 깔끔하게 다시 시작하도록 오버라이드
+                    bprint("  > [복구] 절대 기준점(미끼 아이콘) 탐색 및 상태 강제 초기화 루프 진입")
+
+                    recovery_attempts = 0
+                    while recovery_attempts < 15:
+                        if check_afk_img('bait_change.png', 0.75):
+                            bprint("  > [성공] 낚시 준비 상태(bait_change.png) 확인 완료.")
+                            break
+                        
+                        elif check_afk_img('catch_F.png', 0.70):
+                            bprint("  > [조치] 수거 창(catch_F.png) 발견 -> F 입력")
+                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                            time.sleep(1.0) 
+                            
+                        else:
+                            bprint("  > [조치] 목표 미발견 -> 화면 강제 초기화(ESC) 시도")
+                            send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                            
+                            wait_esc = time.time()
+                            while time.time() - wait_esc < 3.0:
+                                if check_afk_img('bait_change.png', 0.75):
+                                    break
+                                time.sleep(0.5)
+                        
+                        recovery_attempts += 1
+
+                    # 위치 보정 (S 0.8초 -> W 0.8초)
+                    bprint("  > [보정] 해제 완료. 위치 보정(S->W) 수행...")
+                    time.sleep(0.5) 
+                    send_cmd('S'); time.sleep(0.8); send_cmd('R')
+                    time.sleep(0.2)
+                    send_cmd('W'); time.sleep(0.8); send_cmd('R')
+                    
+                    bprint("  > [완료] 잠수 방지 시퀀스 종료. 0.7초 대기 후 복귀합니다.")
+                    send_blynk_notification("[완료]잠수 방지 해제") 
+                    time.sleep(0.7) 
+                    
+                    state = 1 
+                    is_afk_processing = False
+            except BotStopException:
                 is_afk_processing = False
-        except BotStopException:
-            is_afk_processing = False
-        except Exception as e:
-            is_afk_processing = False
-        
-        try:
-            time.sleep(0.1) # 0.1초 간격 무한 감시 (CPU 부하 최소화)
-        except BotStopException:
-            is_afk_processing = False # 사용자가 봇 강제 정지([) 시 발생하는 예외를 안전하게 무시하고 대기 상태 해제
+            except Exception as e:
+                is_afk_processing = False
+            
+            try:
+                time.sleep(0.1) 
+            except BotStopException:
+                is_afk_processing = False
 
 # 시스템 부팅 시 전역 감시망 스레드 자동 출격
 threading.Thread(target=afk_monitor_loop, daemon=True).start()
@@ -1773,6 +1783,84 @@ def fishing_bot(max_allowed_seconds):
     state_start_time = time.time()
     force_watchdog_reason = None # [신규] 명시적 워치독 트리거 사유
 
+    def auto_equip_rod():
+        """3곳에 흩어진 낚싯대 장착 로직을 통합한 단일 모듈"""
+        nonlocal force_watchdog_reason
+        swap_attempts = 0
+        while bot_active:
+            if check_exit_notification():
+                return False
+                
+            if safe_find_image('popup_char.png', 0.75):
+                bprint("  > 💡 [자정 팝업] 장착 중 팝업 감지! ESC 1회 입력...")
+                send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                time.sleep(0.5)
+                continue
+                
+            swap_attempts += 1
+            if swap_attempts > 10:
+                bprint("  > ❌ [장착 실패] 예비 낚싯대가 모두 소진되었거나 꼬였습니다. 스마트 복구를 호출합니다.")
+                force_watchdog_reason = "장착 10회 연속 실패(예비 소진)"
+                return False
+
+            if safe_find_image('bait_change.png', 0.75):
+                bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
+                return True
+
+            bprint("  > 🎣 [탐색 1단계] 낚싯대 파지 상태 확인 중...")
+            current_rod_state = None
+            wait_throw = time.time()
+            
+            while time.time() - wait_throw < 1.5 and bot_active:
+                if check_exit_notification(): return False
+                if safe_find_image('broken_rod.png', 0.75):
+                    current_rod_state = "UNFOLDED"
+                    break
+                elif safe_find_image('throw_btn.png', 0.75):
+                    current_rod_state = "HELD"
+                    break
+                time.sleep(0.05)
+
+            if not current_rod_state and bot_active:
+                if safe_find_image('broken_rod.png', 0.75, region="FULL_SCREEN"):
+                    current_rod_state = "UNFOLDED"
+                elif safe_find_image('throw_btn.png', 0.75, region="FULL_SCREEN"):
+                    current_rod_state = "HELD"
+
+            if not current_rod_state:
+                bprint("  > 🔄 [낚싯대 스왑] 아이콘 미인식. 숫자 '0' 입력 후 재탐색...")
+                send_cmd('0'); time.sleep(0.1); send_cmd('R')
+                time.sleep(0.6)
+                continue
+
+            if current_rod_state == "UNFOLDED":
+                bprint("  > ✅ [장착 완료] 낚싯대가 이미 펼쳐져 있습니다. 즉시 낚시를 재개합니다.")
+                return True
+                
+            elif current_rod_state == "HELD":
+                bprint("  > 🎣 [클릭 2단계] '던지기' 아이콘 확인! 좌클릭(C) 입력 후 장착 대기...")
+                send_cmd('C'); time.sleep(0.1); send_cmd('R')
+                
+                found_start = False
+                wait_start = time.time()
+                while time.time() - wait_start < 1.5 and bot_active:
+                    if safe_find_image('bait_change.png', 0.75):
+                        found_start = True
+                        break
+                    time.sleep(0.05)
+                    
+                if not found_start and bot_active:
+                    if safe_find_image('bait_change.png', 0.75, region="FULL_SCREEN"):
+                        found_start = True
+                        
+                if found_start:
+                    bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
+                    return True
+                else:
+                    bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터 다시 시도합니다.")
+                    continue
+        return False
+
     while True:
         try:
             # [시간 누적 클러치] State 0(잠수방지 대기) 및 State -1(초기화/정지)에서는 스톱워치를 일시 정지합니다.
@@ -1984,84 +2072,9 @@ def fishing_bot(max_allowed_seconds):
                     bprint("  > [확인] 낚싯대 장착 확인. 캐스팅 진입")
                     time.sleep(0.1)
                 else:
-                    bprint("  > ⚠️ [내구도 파괴 의심] 낚싯대 미인식! 검증된 릴레이 모드 장착 로직을 실행합니다.")
-                    swap_attempts = 0
-                    while bot_active:
-                        # [최우선 방어] 무기 스왑 중 잠수방지 알림이 뜨면 헛돌지 않게 즉시 탈출하여 메인루프에 맡김
-                        if check_exit_notification():
-                            break
-                            
-                        swap_attempts += 1
-                        if swap_attempts > 10:
-                            bprint("  > ❌ [장착 실패] 예비 낚싯대가 모두 소진되었거나 꼬였습니다. 스마트 복구를 호출합니다.")
-                            force_watchdog_reason = "장착 10회 연속 실패(예비 소진)"
-                            break
-
-                        # 0) 이미 완벽하게 장착된 상태인지 최우선 확인
-                        if safe_find_image('bait_change.png', 0.75):
-                            bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
-                            break
-
-                        # 1) 상태 감지 능동 대기 (최대 1.5초)
-                            bprint("  > 🎣 [탐색 1단계] 낚싯대 파지 상태 확인 중...")
-                            current_rod_state = None
-                            wait_throw = time.time()
-                            
-                            while time.time() - wait_throw < 1.5 and bot_active:
-                                if check_exit_notification(): break
-                                if safe_find_image('broken_rod.png', 0.75):
-                                    current_rod_state = "UNFOLDED"
-                                    break
-                                elif safe_find_image('throw_btn.png', 0.75):
-                                    current_rod_state = "HELD"
-                                    break
-                                time.sleep(0.05)
-
-                            # 타임아웃 시 전체화면 1회 폴백 스캔
-                            if not current_rod_state and bot_active:
-                                if safe_find_image('broken_rod.png', 0.75, region="FULL_SCREEN"):
-                                    current_rod_state = "UNFOLDED"
-                                elif safe_find_image('throw_btn.png', 0.75, region="FULL_SCREEN"):
-                                    current_rod_state = "HELD"
-
-                            # 1.5초 동안 둘 다 못 찾았으면 0번 입력 후 루프 재시작
-                            if not current_rod_state:
-                                bprint("  > 🔄 [낚시 스왑] 아이콘 미인식. 숫자 '0' 입력 후 재탐색...")
-                                send_cmd('0'); time.sleep(0.1); send_cmd('R')
-                                time.sleep(0.6)
-                                continue
-
-                            # 2) 상태에 따른 분기 처리 (유저 논리 적용)
-                            if current_rod_state == "UNFOLDED":
-                                bprint("  > ✅ [장착 완료] 낚싯대가 이미 펼쳐져 있습니다. 즉시 낚시를 재개합니다.")
-                                break
-                                
-                            elif current_rod_state == "HELD":
-                                bprint("  > 🎣 [클릭 2단계] '던지기' 아이콘 확인! 좌클릭(C) 입력 후 장착 대기...")
-                                send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                                
-                                found_start = False
-                                wait_start = time.time()
-                                while time.time() - wait_start < 1.5 and bot_active:
-                                    if safe_find_image('bait_change.png', 0.75):
-                                        found_start = True
-                                        break
-                                    time.sleep(0.05)
-                                    
-                                if not found_start and bot_active:
-                                    if safe_find_image('bait_change.png', 0.75, region="FULL_SCREEN"):
-                                        found_start = True
-                                        
-                                if found_start:
-                                    bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
-                                    break
-                                else:
-                                    bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터 다시 시도합니다.")
-                                    continue
-
-                    # 예비 낚싯대가 없어서 루프를 탈출한 경우 억지로 캐스팅하지 않고 메인 루프로 넘김(워치독 발동)
-                    if swap_attempts > 10:
-                        continue
+                    bprint("  > ⚠️ [내구도 파괴 의심] 낚싯대 미인식! 검증된 자동 장착 로직을 실행합니다.")
+                    if not auto_equip_rod():
+                        continue # 실패 시 메인 루프로 넘겨 워치독 발동 또는 AFK 처리
 
                 # 4. 좌클릭 '꾹' 누르기 (Mouse.press 상태 진입)
                 # 아두이노 버퍼 초기화 후 L 신호 전송 (입력 씹힘 이중 방지)
@@ -2177,84 +2190,9 @@ def fishing_bot(max_allowed_seconds):
                     time.sleep(0.05)
 
                 if not rod_found:
-                    bprint("  > ⚠️ [파괴 감지] 낚싯대가 부서졌습니다! 검증된 릴레이 모드 장착 로직을 실행합니다.")
-                    
-                    # [내구도 시스템 대응] 낚싯대 파괴 감지 및 자동 재장착 로직 (안정화 버전 이식)
-                    swap_attempts = 0
-                    while bot_active:
-                        # [최우선 방어] 무기 스왑 중 잠수방지 알림이 뜨면 헛돌지 않게 즉시 탈출하여 메인루프에 맡김
-                        if check_exit_notification():
-                            break
-                            
-                        swap_attempts += 1
-                        if swap_attempts > 10:
-                            bprint("  > ❌ [장착 실패] 예비 낚싯대가 모두 소진되었거나 꼬였습니다. 스마트 복구를 호출합니다.")
-                            force_watchdog_reason = "장착 10회 연속 실패(예비 소진)"
-                            break
-
-                        # 0) 이미 완벽하게 장착된 상태인지 최우선 확인
-                        if safe_find_image('bait_change.png', 0.75):
-                            bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
-                            break
-
-                        # 1) 상태 감지 능동 대기 (최대 1.5초)
-                        bprint("  > 🎣 [탐색 1단계] 낚싯대 파지 상태 확인 중...")
-                        current_rod_state = None
-                        wait_throw = time.time()
-                        
-                        while time.time() - wait_throw < 1.5 and bot_active:
-                            if check_exit_notification(): break
-                            if safe_find_image('broken_rod.png', 0.75):
-                                current_rod_state = "UNFOLDED"
-                                break
-                            elif safe_find_image('throw_btn.png', 0.75):
-                                current_rod_state = "HELD"
-                                break
-                            time.sleep(0.05)
-
-                        # 타임아웃 시 전체화면 1회 폴백 스캔
-                        if not current_rod_state and bot_active:
-                            if safe_find_image('broken_rod.png', 0.75, region="FULL_SCREEN"):
-                                current_rod_state = "UNFOLDED"
-                            elif safe_find_image('throw_btn.png', 0.75, region="FULL_SCREEN"):
-                                current_rod_state = "HELD"
-
-                        # 1.5초 동안 둘 다 못 찾았으면 0번 입력 후 루프 재시작
-                        if not current_rod_state:
-                            bprint("  > 🔄 [낚시대 스왑] 아이콘 미인식. 숫자 '0' 입력 후 재탐색...")
-                            send_cmd('0'); time.sleep(0.1); send_cmd('R')
-                            time.sleep(0.6)
-                            continue
-
-                        # 2) 상태에 따른 분기 처리 (유저 논리 적용)
-                        if current_rod_state == "UNFOLDED":
-                            bprint("  > ✅ [장착 완료] 낚싯대가 이미 펼쳐져 있습니다. 즉시 낚시를 재개합니다.")
-                            break
-                            
-                        elif current_rod_state == "HELD":
-                            bprint("  > 🎣 [클릭 2단계] '던지기' 아이콘 확인! 좌클릭(C) 입력 후 장착 대기...")
-                            send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                            
-                            found_start = False
-                            wait_start = time.time()
-                            while time.time() - wait_start < 1.5 and bot_active:
-                                if safe_find_image('bait_change.png', 0.75):
-                                    found_start = True
-                                    break
-                                time.sleep(0.05)
-                                
-                            if not found_start and bot_active:
-                                if safe_find_image('bait_change.png', 0.75, region="FULL_SCREEN"):
-                                    found_start = True
-                                    
-                            if found_start:
-                                bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
-                                break
-                            else:
-                                bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터 다시 시도합니다.")
-                                continue
-
-                    # 장착 완료 여부와 무관하게 루프를 빠져나오면 캐스팅(State 1)으로 강제 복귀하여 처음부터 흐름을 이어감
+                    bprint("  > ⚠️ [파괴 감지] 낚싯대가 부서졌습니다! 검증된 자동 장착 로직을 실행합니다.")
+                    auto_equip_rod()
+                    # 장착 완료 여부와 무관하게 캐스팅(State 1)으로 강제 복귀하여 처음부터 흐름을 이어감
                     state = 1
                     continue
 
@@ -3113,60 +3051,7 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.5) # 인게임 안착을 위한 최소한의 안전 딜레이 0.5초만 부여
                 
                 bprint("  > 6. 낚싯대 장착(bait_change.png) 초고속 스왑 엔진...")
-                while bot_active:
-                    # [팝업 방어] 접속 직후 무기 스왑 중 팝업이 뜨면 즉시 ESC로 닫아냅니다.
-                    if safe_find_image('popup_char.png', 0.75):
-                        bprint("  > 💡 [자정 팝업] 장착 중 팝업 감지! ESC 1회 입력...")
-                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                        time.sleep(0.5)
-                        continue
-
-                    # 0) 이미 완벽하게 장착된 상태인지 최우선 확인 (불필요한 0번/클릭 방지)
-                    if safe_find_image('bait_change.png', 0.75):
-                        bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
-                        break
-
-                    # 1) '던지기(throw_btn.png)' 사진 능동 대기 (최대 3초)
-                    bprint("  > 🎣 [탐색 1단계] '던지기(throw_btn.png)' 아이콘 확인 중...")
-                    found_throw = False
-                    wait_throw = time.time()
-                    while time.time() - wait_throw < 1.5 and bot_active:
-                        if safe_find_image('throw_btn.png', 0.75): # ROI 탐색 우선
-                            found_throw = True
-                            break
-                        if safe_find_image('throw_btn.png', 0.75, region="FULL_SCREEN"): # ROI 실패 시 전체화면 탐색
-                            found_throw = True
-                            break
-                        time.sleep(0.1)
-
-                    # 3초 동안 전체화면에서도 못 찾았으면 0번 입력 후 루프 재시작
-                    if not found_throw:
-                        bprint("  > 🔄 [낚시대 스왑] '던지기' 아이콘 미인식. 숫자 '0' 입력 후 재탐색...")
-                        send_cmd('0'); time.sleep(0.1); send_cmd('R')
-                        time.sleep(0.6) # 0번 누른 직후 강제 모션 딜레이
-                        continue
-
-                    # 2) 던지기 아이콘 확인됨 -> 좌클릭(C) 후 bait_change.png 능동 대기 (최대 3초)
-                    bprint("  > 🎣 [클릭 2단계] '던지기' 확인 완료! 좌클릭(C) 입력 후 낚싯대 아이콘 대기...")
-                    send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                    
-                    found_start = False
-                    wait_start = time.time()
-                    while time.time() - wait_start < 1.5 and bot_active:
-                        if safe_find_image('bait_change.png', 0.75): # ROI 탐색 우선
-                            found_start = True
-                            break
-                        if safe_find_image('bait_change.png', 0.75, region="FULL_SCREEN"): # ROI 실패 시 전체화면 탐색
-                            found_start = True
-                            break
-                        time.sleep(0.1)
-
-                    if found_start:
-                        bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
-                        break
-                    else:
-                        bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터(팝업검사->던지기검사) 다시 시도합니다.")
-                        continue # 상단으로 돌아가 다시 팝업/던지기 확인 후 좌클릭을 수행하므로 가장 안전한 로직입니다.
+                auto_equip_rod()
                     
                 bprint(f"  > ✅ [접속 완료] '{next_char['name']}' 낚시를 시작합니다.")
                 send_blynk_notification(f"✅ 캐릭터 변경 완료 ('{next_char['name']}' 접속 성공)")

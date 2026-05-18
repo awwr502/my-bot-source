@@ -2195,11 +2195,26 @@ def fishing_bot(max_allowed_seconds):
                 bprint("  > [내구도 검사] 챔질 후 애니메이션 안정화 및 낚싯대(fishing.png) 확인 중...")
                 rod_found = False
                 
-                # [다중 UI 맹점 해결] fishing.png가 화면에 두 군데 뜰 때 발생하는 ROI 시야 협착(오탐)을 방지하기 위해,
-                # 이 구간에 한해 강제로 전체 화면(FULL_SCREEN) 스캔을 지시합니다. 대기 시간은 원래 속도인 1.0초로 복구합니다.
+                # [ROI 시야 강제 고정] fishing.png가 화면 좌측과 중앙에 두 번 뜨는 문제 해결
+                # ROI 엔진이 '중앙'의 가짜 이미지를 학습하지 못하도록, 초기 마스터 박스를 '화면 왼쪽 1/3'로 강제 주입합니다.
+                if 'fishing.png' not in ROI_SAMPLER:
+                    ROI_SAMPLER['fishing.png'] = {'samples': deque(maxlen=10), 'master_box': None}
+                
+                # 기존 학습된 데이터가 없거나, 중앙/우측으로 오염(left > 화면 1/3)되었다면 즉시 폭파하고 왼쪽 1/3로 초기화
+                mb = ROI_SAMPLER['fishing.png'].get('master_box')
+                if not mb or (mb['left'] > SCREEN_W // 3):
+                    ROI_SAMPLER['fishing.png']['samples'].clear()
+                    ROI_SAMPLER['fishing.png']['master_box'] = {
+                        "left": 0, "top": 0, "width": SCREEN_W // 3, "height": SCREEN_H
+                    }
+                    if hasattr(safe_find_image, 'session') and 'fishing.png' in safe_find_image.session:
+                        safe_find_image.session['fishing.png']['is_locked'] = False
+                        safe_find_image.session['fishing.png']['history'].clear()
+
                 check_start = time.time()
                 while time.time() - check_start < 2.5 and bot_active:
-                    if safe_find_image('fishing.png', 0.65, region="FULL_SCREEN"):
+                    # region 인자를 빼서, 제한된 master_box 안에서 정상적으로 30회 학습 및 ROI 영구 저장이 작동하도록 유도
+                    if safe_find_image('fishing.png', 0.65):
                         rod_found = True
                         break
                     time.sleep(0.05)

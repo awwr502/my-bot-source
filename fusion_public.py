@@ -155,22 +155,36 @@ def restore_monitors_brightness(bright_data):
 
 # =====================================================================
 # 👑 [캐릭터 마스터 컨트롤러] 👑
-# 이곳에 캐릭터를 추가/수정/삭제하면 봇 전체의 모든 로직(단축키, 순서 등)이 100% 자동 적용됩니다!
-#  - img: 캡처해둔 파일명 (1.png, 5.png 등)
-#  - name: 로그에 출력될 예쁜 이름
-#  - hotkey: 수동 접속 단축키 (F5 ~ F11 등 자유 지정)
-#  - is_anchor: 타이머 보상을 수령할 앵커 캐릭터인지 (True는 파티에 딱 1명만!)
-#  - use_fusion: 모드 3, 4 (자동 융합) 사이클에 포함시킬지 여부
+# 이제 로컬 폴더의 'my_characters.json' 파일을 통해 캐릭터를 관리합니다.
+# 파일이 없다면 기본 배열을 바탕으로 자동 생성됩니다.
 # =====================================================================
-MY_CHARACTERS = [
-    {"img": "13.png", "name": "베릭핑크",  "hotkey": "F5", "is_anchor": False, "use_fusion": False},
-    {"img": "5.png",  "name": "베릭산성1", "hotkey": "F6",  "is_anchor": True,  "use_fusion": True},
-    {"img": "8.png",  "name": "베릭산성2", "hotkey": "F7",  "is_anchor": False, "use_fusion": True},
-    {"img": "9.png",  "name": "베릭산성3", "hotkey": "F8",  "is_anchor": False, "use_fusion": True},
-    {"img": "10.png", "name": "베릭유전1", "hotkey": "F9",  "is_anchor": False, "use_fusion": True},
-    {"img": "11.png", "name": "베릭유전2", "hotkey": "F10", "is_anchor": False, "use_fusion": True},
-    {"img": "12.png", "name": "베릭유전3", "hotkey": "F11", "is_anchor": False, "use_fusion": True}
-]
+MY_CHARACTERS = []
+characters_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "my_characters.json")
+
+def load_characters_config():
+    global MY_CHARACTERS
+    try:
+        if os.path.exists(characters_config_path):
+            with open(characters_config_path, "r", encoding="utf-8") as f:
+                MY_CHARACTERS = json.load(f)
+        else:
+            default_chars = [
+                {"img": "13.png", "name": "캐릭1",  "hotkey": "F5", "is_anchor": False, "use_fusion": False},
+                {"img": "5.png",  "name": "캐릭2", "hotkey": "F6",  "is_anchor": True,  "use_fusion": True},
+                {"img": "8.png",  "name": "캐릭3", "hotkey": "F7",  "is_anchor": False, "use_fusion": True},
+                {"img": "9.png",  "name": "캐릭4", "hotkey": "F8",  "is_anchor": False, "use_fusion": True},
+                {"img": "10.png", "name": "캐릭5", "hotkey": "F9",  "is_anchor": False, "use_fusion": True},
+                {"img": "11.png", "name": "캐릭6", "hotkey": "F10", "is_anchor": False, "use_fusion": True},
+                {"img": "12.png", "name": "캐릭7", "hotkey": "F11", "is_anchor": False, "use_fusion": True}
+            ]
+            with open(characters_config_path, "w", encoding="utf-8") as f:
+                json.dump(default_chars, f, indent=4, ensure_ascii=False)
+            MY_CHARACTERS = default_chars
+    except Exception as e:
+        bprint(f"!!! [오류] my_characters.json 로드 실패: {e}")
+        MY_CHARACTERS = []
+
+load_characters_config()
 
 # [1/5 자동화] 마스터 배열을 바탕으로 CHAR_NAMES 자동 생성
 CHAR_NAMES = {c["img"]: c["name"] for c in MY_CHARACTERS}
@@ -2697,35 +2711,18 @@ def main_bot():
     
     keyboard.add_hotkey('[', toggle_stop)
     keyboard.add_hotkey(']', lambda: toggle_start(1)) # 모드 1: 타이머만
-    keyboard.add_hotkey('>', lambda: toggle_start(2)) # 모드 2: 멀티 교체
     keyboard.add_hotkey('?', lambda: toggle_start(3)) # 모드 3: 지능형 융합
     keyboard.add_hotkey('<', lambda: toggle_start(4)) # 모드 4: 5/5 지능형 복사
-    keyboard.add_hotkey(';', lambda: toggle_start(5)) # 모드 5: 감염물 분별
     keyboard.add_hotkey('-', toggle_dimming_setting) # 모니터 절전 토글
-    
-    # [5/5 자동화] 중앙 관리 배열(MY_CHARACTERS)을 스캔하여 수동 캐릭터 단축키를 자동으로 생성합니다!
-    for c in MY_CHARACTERS:
-        if c.get("hotkey"):
-            # 람다 클로저 충돌을 피하기 위해 k=c["img"]로 변수 바인딩
-            keyboard.add_hotkey(c["hotkey"], lambda k=c["img"]: threading.Thread(target=force_change_character, args=(k,), daemon=True).start())
 
     bprint("\n=========================================")
     bprint(" 🚀 원스휴먼 스마트 융합 봇 가동 준비 🚀")
     bprint("=========================================")
     bprint(" [ : 정지 (대기 상태)")
     bprint(" ] : 융합 타이머(기본) 시작")
-    bprint(" > : 캐릭터 자동 전환 모드 시작")
     bprint(" ? : 깡 복사 모드 시작")
     bprint(" < : 5/5 복사 모드 시작")
-    bprint(" ; : 감염물 분별 모드 시작")
     bprint(" - : 모니터 절전(밝기 0%) 자동 켜기/끄기")
-    bprint(" ---------------------------------------")
-    bprint(" [수동 캐릭터 변경 단축키]")
-    
-    # 생성된 단축키를 메뉴판에 보기 좋게 자동 출력
-    for c in MY_CHARACTERS:
-        if c.get("hotkey"):
-            bprint(f" {c['hotkey']:<4} : {c['name']}")
     bprint("=========================================\n")
 
     while True:

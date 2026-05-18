@@ -1215,6 +1215,9 @@ def afk_monitor_loop():
     import cv2
     import numpy as np
     
+    # [핵심 1] 무거움 방지용 초경량 AFK 전용 캐시
+    afk_roi_cache = {}
+
     # [근본 해결] 전역 카메라 충돌을 방지하기 위해 잠수방지 전용 독립 카메라 할당
     with mss.mss() as afk_sct:
         # 가벼운 스레드 전용 탐색 헬퍼 함수
@@ -1222,10 +1225,29 @@ def afk_monitor_loop():
             try:
                 template = IMAGE_CACHE.get(img_name)
                 if template is None: return False
-                sct_img = afk_sct.grab(afk_sct.monitors[1])
+                
+                # [CPU 최적화] 한 번 찾은 팝업은 전체화면 대신 400x300의 좁은 구역만 스캔합니다.
+                if img_name in afk_roi_cache:
+                    monitor = afk_roi_cache[img_name]
+                else:
+                    monitor = afk_sct.monitors[1]
+                    
+                sct_img = afk_sct.grab(monitor)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-                return cv2.minMaxLoc(res)[1] >= conf
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                
+                if max_val >= conf:
+                    # 최초 발견 시, 해당 위치를 400x300 박스로 영구 고정하여 연산 폭주를 차단합니다.
+                    if monitor == afk_sct.monitors[1]:
+                        h, w = template.shape
+                        cx, cy = max_loc[0] + w // 2, max_loc[1] + h // 2
+                        afk_roi_cache[img_name] = {
+                            "left": max(0, cx - 200), "top": max(0, cy - 150),
+                            "width": 400, "height": 300
+                        }
+                    return True
+                return False
             except:
                 return False
 
@@ -1280,7 +1302,8 @@ def afk_monitor_loop():
                     send_blynk_notification("[완료]잠수 방지 해제") 
                     time.sleep(0.7) 
                     
-                    state = 1 
+                    # [핵심 2] 비동기 스레드는 여기서 조용히 동결만 풀어주고 퇴장합니다. 
+                    # state = 1 변경은 잠에서 깬 메인 스레드의 check_exit_notification()이 직접 처리하도록 위임합니다.
                     is_afk_processing = False
             except BotStopException:
                 is_afk_processing = False

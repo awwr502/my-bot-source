@@ -899,7 +899,7 @@ def log_confidence_to_csv(log_type, img_path, target_conf, actual_conf, min_c=No
                              f"{min_c:.3f}" if min_c else "-", f"{max_c:.3f}" if max_c else "-", note])
     except: pass
 
-def safe_find_image(img_path, conf=0.6, region=None):
+def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진 (동적 임계값 폐기 & CSV 로깅)"""
     global IMAGE_CACHE, ROI_SAMPLER
     template = IMAGE_CACHE.get(img_path)
@@ -914,17 +914,19 @@ def safe_find_image(img_path, conf=0.6, region=None):
         is_fallback_scan = (region == "FULL_SCREEN")
         target_monitor = None
 
+        active_sct = custom_sct if custom_sct else sct
+
         if is_fallback_scan:
-            target_monitor = sct.monitors[1]
+            target_monitor = active_sct.monitors[1]
             region = None 
         elif region:
             target_monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
         elif cache_data['master_box']:
             target_monitor = cache_data['master_box']
         else:
-            target_monitor = sct.monitors[1]
+            target_monitor = active_sct.monitors[1]
 
-        sct_img = sct.grab(target_monitor)
+        sct_img = active_sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
         res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
@@ -939,7 +941,7 @@ def safe_find_image(img_path, conf=0.6, region=None):
         is_rechecked = False
         if active_conf > max_val >= (active_conf - 0.04):
             time.sleep(0.05)
-            sct_re = sct.grab(target_monitor)
+            sct_re = active_sct.grab(target_monitor)
             res_re = cv2.matchTemplate(cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2GRAY), template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res_re)
             is_rechecked = True
@@ -974,7 +976,7 @@ def safe_find_image(img_path, conf=0.6, region=None):
                         try:
                             if cache_data['master_box']:
                                 mb = cache_data['master_box']
-                                roi_img = np.array(sct.grab(mb))
+                                roi_img = np.array(active_sct.grab(mb))
                                 save_path = os.path.join(LOCKED_ROI_DIR, f"locked_{img_path}")
                                 # [한글 경로 버그 해결] cv2.imwrite 대신 파이썬 내장 바이트 스트림으로 강제 기록
                                 success, encoded_img = cv2.imencode('.png', cv2.cvtColor(roi_img, cv2.COLOR_BGRA2BGR))
@@ -997,7 +999,7 @@ def safe_find_image(img_path, conf=0.6, region=None):
                 if not os.path.exists(save_path):
                     try:
                         mb = cache_data['master_box']
-                        roi_img = np.array(sct.grab(mb))
+                        roi_img = np.array(active_sct.grab(mb))
                         success, encoded_img = cv2.imencode('.png', cv2.cvtColor(roi_img, cv2.COLOR_BGRA2BGR))
                         if success:
                             with open(save_path, 'wb') as f:
@@ -1038,7 +1040,7 @@ def safe_find_image(img_path, conf=0.6, region=None):
                 pad_x = min(30, max(5, int(x_variance * 0.8)))
                 pad_y = min(30, max(5, int(y_variance * 0.8)))
 
-                p_mon = sct.monitors[1]
+                p_mon = active_sct.monitors[1]
                 l_limit, t_limit = p_mon["left"], p_mon["top"]
                 r_limit, b_limit = l_limit + p_mon["width"], t_limit + p_mon["height"]
                 
@@ -1220,45 +1222,14 @@ def afk_monitor_loop():
 
     # [근본 해결] 전역 카메라 충돌을 방지하기 위해 잠수방지 전용 독립 카메라 할당
     with mss.mss() as afk_sct:
-        # 가벼운 스레드 전용 탐색 헬퍼 함수
-        def check_afk_img(img_name, conf=0.75):
-            try:
-                template = IMAGE_CACHE.get(img_name)
-                if template is None: return False
-                
-                # [CPU 최적화] 한 번 찾은 팝업은 전체화면 대신 400x300의 좁은 구역만 스캔합니다.
-                if img_name in afk_roi_cache:
-                    monitor = afk_roi_cache[img_name]
-                else:
-                    monitor = afk_sct.monitors[1]
-                    
-                sct_img = afk_sct.grab(monitor)
-                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                
-                if max_val >= conf:
-                    # 최초 발견 시, 해당 위치를 400x300 박스로 영구 고정하여 연산 폭주를 차단합니다.
-                    if monitor == afk_sct.monitors[1]:
-                        h, w = template.shape
-                        cx, cy = max_loc[0] + w // 2, max_loc[1] + h // 2
-                        afk_roi_cache[img_name] = {
-                            "left": max(0, cx - 200), "top": max(0, cy - 150),
-                            "width": 400, "height": 300
-                        }
-                    return True
-                return False
-            except:
-                return False
-
         while True:
             if not bot_active:
                 time.sleep(0.5)
                 continue
                 
             try:
-                # 전역 엔진 대신 스레드 전용 무충돌 헬퍼 함수 사용
-                if check_afk_img('exit_notice.png', 0.80) and not is_afk_processing:
+                # 전역 엔진에 독립 카메라를 넘겨주어 충돌 없이 100% 동일한 ROI를 적용합니다.
+                if safe_find_image('exit_notice.png', 0.80, custom_sct=afk_sct) and not is_afk_processing:
                     is_afk_processing = True
                     stats['afk_bypass_count'] += 1
                     bprint("\n=============================================")
@@ -1269,7 +1240,7 @@ def afk_monitor_loop():
                     
                     # 알림창 이미지가 화면에서 완전히 사라질 때까지 F키 반복
                     while True:
-                        if not check_afk_img('exit_notice.png', 0.75):
+                        if not safe_find_image('exit_notice.png', 0.75, custom_sct=afk_sct):
                             break
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
                         time.sleep(0.5)
@@ -1281,12 +1252,12 @@ def afk_monitor_loop():
                     # 낚싯대 회수 애니메이션(파이팅 취소 등)을 고려하여 넉넉하게 4.0초 능동 대기
                     wait_esc = time.time()
                     while time.time() - wait_esc < 4.0:
-                        if check_afk_img('bait_change.png', 0.75):
+                        if safe_find_image('bait_change.png', 0.75, custom_sct=afk_sct):
                             break
                         time.sleep(0.5)
 
                     # [안전장치] 낚시 중이 아닌 상태에서 알림이 떠서 첫 ESC가 시스템 메뉴를 열었다면 강제로 닫아줌
-                    if check_afk_img('sys_1.png', 0.75) or check_afk_img('sys_2.png', 0.75):
+                    if safe_find_image('sys_1.png', 0.75, custom_sct=afk_sct) or safe_find_image('sys_2.png', 0.75, custom_sct=afk_sct):
                         bprint("  > ⚠️ [방어] 시스템 메뉴가 열린 것을 감지했습니다. ESC를 눌러 닫습니다.")
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         time.sleep(1.0)

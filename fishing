@@ -2764,7 +2764,8 @@ def fishing_bot(max_allowed_seconds):
                         bprint("  > ✅ [진입 성공] 감염물 분별 코어 로직을 실행합니다.")
                         
                         def run_discrimination_scan(scan_name):
-                            bprint(f"  > 🔍 [모드 5 자동화] {scan_name} 감염물 일괄 탐색 시작...")
+                            bprint(f"  > 🔍 [모드 5] {scan_name} 감염물 일괄 탐색 시작...")
+                            
                             inv_roi = {"left": 0, "top": 0, "width": 960, "height": 1080}
                             screen_bgr = cv2.cvtColor(np.asarray(sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
                             X_OFFSET = 0 
@@ -2773,17 +2774,16 @@ def fishing_bot(max_allowed_seconds):
                             search_items_mode5 = ['item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png']
                             
                             for item_name in search_items_mode5:
-                                template = IMAGE_CACHE.get(item_name) # FUSION_CACHE를 IMAGE_CACHE로 수정
-                                if template is None: 
-                                    bprint(f"  > ⚠️ [경고] {item_name} 이미지를 찾을 수 없어 스킵합니다.")
-                                    continue
+                                template = IMAGE_CACHE.get(item_name)
+                                if template is None: continue
                                 
-                                # 템플릿과 스크린샷 채널 일치 보정
+                                # [OpenCV 에러 방지용] 템플릿과 스크린샷의 채널 수를 강제로 일치시킵니다.
+                                # 로직은 사용자님 원본 그대로 유지합니다.
                                 if len(template.shape) == 3 and len(screen_bgr.shape) == 2:
-                                    template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+                                    template_process = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+                                    res = cv2.matchTemplate(cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY), template_process, cv2.TM_CCOEFF_NORMED)
                                 elif len(template.shape) == 2 and len(screen_bgr.shape) == 3:
-                                    screen_bgr_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
-                                    res = cv2.matchTemplate(screen_bgr_gray, template, cv2.TM_CCOEFF_NORMED)
+                                    res = cv2.matchTemplate(cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY), template, cv2.TM_CCOEFF_NORMED)
                                 else:
                                     res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
 
@@ -2798,7 +2798,7 @@ def fishing_bot(max_allowed_seconds):
                             bprint(f"  > [완료] 총 {len(all_candidates)}개의 감염물을 발견했습니다. 자동 판독을 시작합니다!")
                             
                             for pt_data in all_candidates:
-                                if not bot_active: break
+                                if not bot_active or bot_mode != 5: break
                                 real_x, real_y, w, h, item_name = pt_data
                                 cx, cy = real_x + w//2, real_y + h//2
                                 pyautogui.moveTo(cx, cy)
@@ -2809,7 +2809,7 @@ def fishing_bot(max_allowed_seconds):
                                 r_width, r_height = min(500, mon["left"] + mon["width"] - r_left), mon["height"]
                                 tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
 
-                                # 라벨 기반 동기화
+                                # 1단계: 라벨 기반 동기화 (이벤트 트리거)
                                 label_found = False
                                 lx, ly = 0, 0
                                 wait_l = time.time()
@@ -2828,88 +2828,125 @@ def fishing_bot(max_allowed_seconds):
                                 if not label_found: 
                                     fast_clear_tooltip(); continue
                                     
-                                time.sleep(0.2) # 툴팁 애니메이션 렌더링 딜레이 헷지
-                                
-                                sct_frame = np.asarray(sct.grab(tooltip_roi))
-                                hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
-                                hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
-                                
-                                label_w = template_label.shape[1]
-                                col_x_start = lx + label_w
-                                col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
-                                col_y_start = max(0, ly - 20)
-                                col_y_end = min(hover_gray.shape[0], ly + 150)
-                                
-                                trait_x_start = max(0, lx - 10)
-                                trait_x_end = lx + 360
-                                trait_y_start = ly + 30
-                                trait_y_end = ly + 300
-                                
-                                roi_col_color = hover_color[col_y_start:col_y_end, col_x_start:col_x_end]
-                                roi_trait_name_gray = hover_gray[trait_y_start:trait_y_end, trait_x_start:trait_x_end]
+                                # 2단계: 이중 보정 적응형 시간 학습(Dual-Adaptive Learning) 엔진
+                                if not hasattr(fishing_bot, 'l5_times'): # fishing_bot에 속성 추가
+                                    fishing_bot.l5_times = deque(maxlen=10)
+                                    fishing_bot.tr_times = deque(maxlen=10)
 
-                                is_level_5 = False
-                                template_5 = IMAGE_CACHE.get('level_5.png')
+                                def get_dynamic_limit(d_queue):
+                                    if len(d_queue) < 10: return 0.25
+                                    return min(0.25, (sum(d_queue) / 10.0) + 0.05)
+
+                                l5_limit = get_dynamic_limit(fishing_bot.l5_times)
+                                tr_limit = get_dynamic_limit(fishing_bot.tr_times)
+                                max_wait_limit = max(l5_limit, tr_limit)
+                                time_mode_str = "동적" if len(fishing_bot.l5_times) >= 10 else "고정"
+
+                                col_x1 = lx + template_label.shape[1]
+                                col_x2 = col_x1 + 360
+                                col_y1 = max(0, ly - 20)
+                                col_y2 = ly + 150
                                 
-                                if template_5 is not None and len(template_5.shape) == 3:
-                                    t5_hsv = cv2.cvtColor(template_5, cv2.COLOR_BGR2HSV)
+                                trait_x1 = max(0, lx - 10)
+                                trait_x2 = lx + 200
+                                trait_y1 = ly + 30
+                                trait_y2 = ly + 300
+
+                                trait_name_x1 = max(0, lx - 10)
+                                trait_name_x2 = lx + 360
+                                trait_name_y1 = ly + 30
+                                trait_name_y2 = ly + 300
+
+                                scan_start = time.time()
+                                is_level_5 = False
+                                has_trait = False
+                                
+                                max_seen_5 = 0.0
+                                max_seen_trait = 0.0
+                                
+                                t5_color = IMAGE_CACHE.get('level_5.png')
+                                if t5_color is not None and len(t5_color.shape) == 3:
+                                    t5_hsv = cv2.cvtColor(t5_color, cv2.COLOR_BGR2HSV)
                                     lower_neon = np.array([45, 50, 80])
                                     upper_neon = np.array([105, 255, 255])
                                     t5_mask = cv2.inRange(t5_hsv, lower_neon, upper_neon)
+                                else: t5_mask = None
                                     
-                                    if roi_col_color.size > 0:
+                                t_trait_g = cv2.cvtColor(IMAGE_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(IMAGE_CACHE['trait.png'].shape) == 3 else IMAGE_CACHE['trait.png']
+                                conf_lvl5 = 0.65
+                                conf_trait = 0.70 # 임계값 고정
+                                
+                                while time.time() - scan_start < 0.25 and bot_active:
+                                    elapsed = time.time() - scan_start
+                                    sct_frame = np.asarray(sct.grab(tooltip_roi))
+                                    hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                    hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
+                                    
+                                    roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
+                                    roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                    roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
+                                    
+                                    if not is_level_5 and t5_mask is not None and roi_col_color.size > 0:
                                         roi_col_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
                                         roi_col_mask = cv2.inRange(roi_col_hsv, lower_neon, upper_neon)
-                                        
                                         res_5 = cv2.matchTemplate(roi_col_mask, t5_mask, cv2.TM_CCOEFF_NORMED)
-                                        if np.max(res_5) >= 0.65:
+                                        _, cur_l5, _, _ = cv2.minMaxLoc(res_5)
+                                        max_seen_5 = max(max_seen_5, cur_l5)
+                                        if cur_l5 >= conf_lvl5:
                                             is_level_5 = True
+                                            fishing_bot.l5_times.append(elapsed)
+                                            break 
                                             
+                                    if not has_trait and roi_trait_gray.size > 0:
+                                        for scale in [0.95, 1.0, 1.05]:
+                                            width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                            if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                cur_tr = np.max(res_t)
+                                                max_seen_trait = max(max_seen_trait, cur_tr)
+                                                if cur_tr >= conf_trait:
+                                                    has_trait = True
+                                                    fishing_bot.tr_times.append(elapsed)
+                                                    break
+
+                                    if has_trait and elapsed > l5_limit: break
+                                    if not is_level_5 and not has_trait and elapsed > max_wait_limit: break
+                                    time.sleep(0.01)
+
                                 if is_level_5:
-                                    bprint(f"  > 🛑 [보호] 5레벨이 포함된 감염물입니다! 보호를 위해 스킵합니다.")
-                                    fast_clear_tooltip()
-                                    continue
+                                    bprint(f"  > 🛑 [보호] 5레벨 감염물.")
+                                elif has_trait:
+                                    identified_trait_name = "미등록 특성"
+                                    active_trait_files = [k for k in IMAGE_CACHE.keys() if k.startswith('trait_') and IMAGE_CACHE[k] is not None]
+                                    best_score = 0.0
+                                    temp_scores = []
+                                    for t_file in active_trait_files:
+                                        t_template = IMAGE_CACHE[t_file]
+                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                        file_best_score = 0.0
+                                        for scale in [0.95, 1.0, 1.05]:
+                                            width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
+                                            if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_name_gray.shape[0]:
+                                                res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                file_best_score = max(file_best_score, np.max(res_st))
+                                        temp_scores.append((t_file, file_best_score))
+                                    sorted_scores = sorted(temp_scores, key=lambda x: x[1], reverse=True)
+                                    if len(sorted_scores) >= 1:
+                                        top1_file, top1_score = sorted_scores[0]
+                                        top2_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
+                                        top1_name = TRAIT_NAMES.get(top1_file, top1_file)
+                                        has_number = any(char.isdigit() for char in top1_name)
+                                        smart_floor = 0.82 if has_number else 0.77
+                                        if top1_score >= 0.88 or (top1_score >= smart_floor and (top1_score - top2_score) >= 0.06):
+                                            identified_trait_name = top1_name
                                     
-                                identified_trait_name = "미등록 특성"
-                                active_trait_files = [k for k in IMAGE_CACHE.keys() if k.startswith('trait_') and IMAGE_CACHE[k] is not None]
-                                
-                                best_score = 0.0
-                                temp_scores = []
-                                
-                                for t_file in active_trait_files:
-                                    t_template = IMAGE_CACHE[t_file]
-                                    t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                    
-                                    file_best_score = 0.0
-                                    for scale in [0.95, 1.0, 1.05]:
-                                        width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
-                                        if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_name_gray.shape[0]:
-                                            res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                                            file_best_score = max(file_best_score, np.max(res_st))
-                                            
-                                    temp_scores.append((t_file, file_best_score))
-                                    
-                                sorted_scores = sorted(temp_scores, key=lambda x: x[1], reverse=True)
-                                
-                                if len(sorted_scores) >= 1:
-                                    top1_file, top1_score = sorted_scores[0]
-                                    top2_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
-                                    
-                                    target_conf = 0.88 
-                                    top1_name = TRAIT_NAMES.get(top1_file, top1_file)
-                                    
-                                    has_number = any(char.isdigit() for char in top1_name)
-                                    smart_floor = 0.82 if has_number else 0.77
-                                    
-                                    if top1_score >= target_conf or (top1_score >= smart_floor and (top1_score - top2_score) >= 0.06):
-                                        identified_trait_name = top1_name
-                                        
-                                if identified_trait_name == "미등록 특성":
-                                    bprint(f"  > ♻️ [분해] 미등록 특성 포착. 분해 대상으로 선택합니다.")
-                                    pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                    if identified_trait_name == "미등록 특성":
+                                        bprint(f"  > ♻️ [분해] 미등록 특성 포착. 분해 대상으로 선택합니다.")
+                                        pyautogui.moveTo(cx, cy); time.sleep(0.02); send_cmd('C'); time.sleep(0.05)
+                                    else:
+                                        bprint(f"  > 👑 [보호] 등록된 특성 '{identified_trait_name}' 발견!")
                                 else:
-                                    bprint(f"  > 👑 [보호] 등록된 특성 '{identified_trait_name}' 발견!")
-                                    
+                                    bprint(f"  > 💎 [보관] 순정 확정.")
                                 fast_clear_tooltip()
 
                         # 1차 판별 실행

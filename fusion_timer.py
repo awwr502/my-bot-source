@@ -716,11 +716,27 @@ def victory_coin_bot_loop():
     
     # [경로 변경] 융합봇의 폴더인 base_dir(fusion_imgs)에서 직접 읽어옵니다.
     target_images = ['v_1.png', 'v_2.png', 'v_3.png', 'v_4.png', 'v_5.png', 'v_6.png', 'v_7.png', 'v_8.png', 'v_9.png']
+    
+    # ------------------ [보완 및 디버깅 로그 추가] ------------------
+    vprint("  > 🏆 [승리코인] 이미지 사전 적재 및 정밀 검증을 시작합니다...")
+    loaded_count = 0
     for img_name in target_images:
         full_path = os.path.join(base_dir, img_name)
         if os.path.exists(full_path):
             img_array = np.fromfile(full_path, np.uint8)
-            VICTORY_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            # [수정] 원본 fishing 봇과 동일하게 그레이스케일(IMREAD_GRAYSCALE)로 디코딩하여 인식률을 높입니다.
+            VICTORY_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+            if VICTORY_CACHE[img_name] is not None:
+                loaded_count += 1
+            else:
+                vprint(f"  > ⚠️ [경고] '{img_name}' 디코딩 실패 (파일이 손상되었을 수 있습니다)")
+        else:
+            # 파일이 진짜 없는 경우 화면에 파일 경로와 함께 에러 문구를 띄워줍니다.
+            vprint(f"  > ❌ [치명적 오류] '{img_name}' 파일이 존재하지 않습니다!")
+            vprint(f"    └ 예상 경로: {full_path}")
+            
+    vprint(f"  > 🏆 [승리코인] 총 {len(target_images)}개 중 {loaded_count}개 이미지 로딩 완료.")
+    # ----------------------------------------------------------------
 
     def v_check_img(img_name, thread_sct):
         global victory_active
@@ -729,9 +745,11 @@ def victory_coin_bot_loop():
             raise BotStopException() 
         template = VICTORY_CACHE.get(img_name)
         if template is None: return False
+        
+        # [수정] 원본 fishing 봇과 완전히 동일하게 흑백(COLOR_BGRA2GRAY) 화면 캡처 후 매칭을 진행합니다.
         sct_img = thread_sct.grab(thread_sct.monitors[1])
-        screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-        res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
+        screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+        res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(res)
         return max_val >= VICTORY_CONF.get(img_name, 0.75)
 

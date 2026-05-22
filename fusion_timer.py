@@ -1459,7 +1459,12 @@ def fusion_bot_loop():
 
                 # --- [State 3] 캐릭터 지정 및 F 입력 ---
                 elif state == 3:
-                    target_char = char_images[char_index]
+                    # 승리 연계용 본캐 접속 시에는 강제로 13.png를 타겟으로 지정합니다.
+                    if pending_victory_mode:
+                        target_char = "13.png"
+                    else:
+                        target_char = char_images[char_index]
+                        
                     c_name = CHAR_NAMES.get(target_char, target_char)
                     bprint(f"  > [State 3] G 1회 입력 후 '{c_name}' 탐색 (진행: {char_index+1}/{loop_count})")
                     
@@ -1508,12 +1513,14 @@ def fusion_bot_loop():
                             wait_vanish('6.png', thread_sct)
                             bprint("  > [성공] 6.png 소멸 완료. 5단계 이동.")
                             current_logged_in_char = char_images[char_index]
-                            global pending_victory_mode
+                            
+                            # 중복된 global 선언 줄을 지우고 깔끔하게 연계 플래그만 확인합니다.
                             if pending_victory_mode:
                                 pending_victory_mode = False
                                 bprint("\n🏆 [융합+승리 연계] 본캐 접속 완료! 승리코인 모드 2를 자동으로 실행합니다.")
-                                toggle_victory_start(2) # 승리 스레드 On
-                                raise BotStopException() # 현재 융합 루프는 완전히 탈출
+                                toggle_victory_start(2)
+                                raise BotStopException()
+                                
                             state = 5
                             break
                         else:
@@ -2367,69 +2374,8 @@ def fusion_bot_loop():
                                 bprint("  > 🏆 [승리 연계] 승리코인을 진행할 본캐(13.png)로 자동 접속합니다!")
                                 
                                 pending_victory_mode = True
-                                
-                                # 인벤토리 닫기
-                                inv_closed = False
-                                while bot_active and not inv_closed:
-                                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                                    wait_inv = time.time()
-                                    while time.time() - wait_inv < 1.5 and bot_active:
-                                        if check_popup_char(thread_sct):
-                                            wait_inv = time.time() 
-                                            continue
-                                        if not check_img('inv_title.png', thread_sct): 
-                                            inv_closed = True
-                                            break
-                                        time.sleep(0.03)
-                                    if not inv_closed:
-                                        time.sleep(0.1)
-                                
-                                if not bot_active: break
-                                        
-                                # ▼▼▼ 13.png 직접 찾아서 진입하는 다이렉트 로직 ▼▼▼
-                                bprint("  > [초고속 탈출] ESC 2회 입력 후 13.png 탐색 진입...")
-                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
-                                time.sleep(0.5)
-                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
-                                
-                                # 2.png(서버 선택창) 확인 후 N 누르기
-                                wait_2 = time.time()
-                                while time.time() - wait_2 < 5.0 and bot_active:
-                                    if check_img('2.png', thread_sct): break
-                                    time.sleep(0.05)
-                                    
-                                if bot_active:
-                                    send_cmd('N'); time.sleep(0.1); send_cmd('R')
-                                    time.sleep(1.0)
-                                    
-                                    # 3.png(캐릭터 선택창) 확인 후 G 누르기
-                                    while bot_active and not check_img('3.png', thread_sct, force_full=True):
-                                        send_cmd('C'); time.sleep(0.1)
-                                        
-                                    send_cmd('G'); time.sleep(0.1); send_cmd('R')
-                                    
-                                    # [핵심] 13.png 0.92 정밀 인식 및 클릭
-                                    found_13 = False
-                                    wait_g = time.time()
-                                    while time.time() - wait_g < 2.0 and bot_active:
-                                        res = cv2.matchTemplate(cv2.cvtColor(np.array(thread_sct.grab(thread_sct.monitors[1])), cv2.COLOR_BGRA2BGR), FUSION_CACHE['13.png'], cv2.TM_CCOEFF_NORMED)
-                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                        if max_val >= 0.92:
-                                            found_13 = True
-                                            cx, cy = max_loc[0] + FUSION_CACHE['13.png'].shape[1]//2, max_loc[1] + FUSION_CACHE['13.png'].shape[0]//2
-                                            pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
-                                            break
-                                        time.sleep(0.1)
-                                        
-                                    if found_13 and bot_active:
-                                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                        bprint("  > 13.png 접속 완료! 6.png 로딩 대기로 넘어갑니다.")
-                                        state = 4
-                                        break # 이너 루프(while bot_active)를 완전히 빠져나가서 State 4로 전환되게 유도
-                                    else:
-                                        bprint("  > ❌ [오류] 13.png를 찾을 수 없습니다. 봇을 정지합니다.")
-                                        toggle_stop()
-                                        break
+                                state = 1
+                                continue
                                 
                             bprint("  > [탈출 준비] 인벤토리 창 닫기 (inv_title.png 소멸 능동 대기)...")
                             inv_closed = False

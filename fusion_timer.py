@@ -203,16 +203,15 @@ def toggle_dimming_setting():
             except: pass
 
 def jitter_sleep(seconds):
-    global bot_active, char_thread_active
-    # [핵심] 수동 캐릭터 변경 스레드(char_thread_active)가 돌아가고 있을 때는 에러를 발생시키지 않고 무사통과시킵니다!
-    if not bot_active and not char_thread_active: raise BotStopException() 
+    global bot_active, char_thread_active, victory_active
+    # bot_active, char_thread_active, victory_active 중 하나라도 켜져 있으면 대기 허용
+    if not bot_active and not char_thread_active and not victory_active: raise BotStopException() 
     jitter = random.uniform(-0.05, 0.05)
     final_time = max(0, seconds + jitter)
-    was_active_at_start = bot_active
     start_t = time.time()
     
     while time.time() - start_t < final_time:
-        if not bot_active and not char_thread_active:
+        if not bot_active and not char_thread_active and not victory_active:
             raise BotStopException()
         original_sleep(max(0, min(0.05, final_time - (time.time() - start_t))))
 
@@ -678,8 +677,9 @@ def check_fusion_afk(thread_sct):
     return False
 
 def toggle_stop():
-    global bot_active, original_brightness, is_dimmed, char_thread_active
+    global bot_active, original_brightness, is_dimmed, char_thread_active, victory_active
     char_thread_active = False # 수동 캐릭터 변경 스레드도 함께 정지
+    victory_active = False     # 승리코인 자동 루프도 정지 상태로 전환하도록 추가
     if bot_active:
         print() # [복구] 강제 줄바꿈을 추가하여 \r 동적 타이머 라인과 텍스트가 겹치는 현상을 원천 차단합니다.
         bot_active = False
@@ -723,7 +723,10 @@ def victory_coin_bot_loop():
             VICTORY_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
     def v_check_img(img_name, thread_sct):
-        if not victory_active or keyboard.is_pressed('['): raise BotStopException() 
+        global victory_active
+        if not victory_active or keyboard.is_pressed('['): 
+            victory_active = False # 단축키 수신 시 승리모드 플래그 꺼줌
+            raise BotStopException() 
         template = VICTORY_CACHE.get(img_name)
         if template is None: return False
         sct_img = thread_sct.grab(thread_sct.monitors[1])
@@ -733,11 +736,13 @@ def victory_coin_bot_loop():
         return max_val >= VICTORY_CONF.get(img_name, 0.75)
 
     def v_wait_vanish(img_name, thread_sct):
+        global victory_active
         vprint(f"  > [대기] {img_name} 사라짐 대기 중...")
         vanish_count = 0
         while victory_active:
-            # ▼ 이 줄을 추가해서 대기 중에도 [ 키가 즉각 먹히게 만듭니다 ▼
-            if not victory_active or keyboard.is_pressed('['): raise BotStopException()
+            if not victory_active or keyboard.is_pressed('['): 
+                victory_active = False # 단축키 수신 시 승리모드 플래그 꺼줌
+                raise BotStopException()
             if v_check_img(img_name, thread_sct): vanish_count = 0
             else: vanish_count += 1
             if vanish_count >= 5: break

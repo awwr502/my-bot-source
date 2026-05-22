@@ -296,7 +296,7 @@ def is_truly_tier_1(roi, x, y, h):
 FUSION_CONF = {
     'stop_btn.png': 0.85,
     '1.png': 0.75, '2.png': 0.75, '3.png': 0.75,
-    '6.png': 0.75, '7.png': 0.75, '14.png': 0.70,
+    '6.png': 0.75, '7.png': 0.75, '14.png': 0.65,
     'check_mark.png': 0.85,
     'get_reward.png': 0.85,
     'select_2_2.png': 0.85,

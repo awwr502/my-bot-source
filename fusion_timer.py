@@ -679,8 +679,13 @@ def check_fusion_afk(thread_sct):
 def toggle_stop():
     global bot_active, original_brightness, is_dimmed, char_thread_active, victory_active
     char_thread_active = False # 수동 캐릭터 변경 스레드도 함께 정지
+    
+    # 정지 명령을 내리기 직전 매크로 중 하나라도 켜져 있었는지 상태 기억
+    was_running = bot_active or victory_active
+    
     victory_active = False     # 승리코인 자동 루프도 정지 상태로 전환하도록 추가
-    if bot_active:
+    
+    if was_running:
         print() # [복구] 강제 줄바꿈을 추가하여 \r 동적 타이머 라인과 텍스트가 겹치는 현상을 원천 차단합니다.
         bot_active = False
         bprint("\n=============================================")
@@ -770,7 +775,7 @@ def victory_coin_bot_loop():
         while True:
             try:
                 if not victory_active:
-                    time.sleep(0.1)
+                    original_sleep(0.1) # [수정] 커스텀 sleep 대신 순수 파이썬 대기를 사용하여 무한 예외 루프를 영구 차단합니다.
                     state = 1
                     continue
                 

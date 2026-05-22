@@ -253,9 +253,9 @@ except Exception as e:
     sys.exit(1)
 
 def send_cmd(cmd, dx=None, dy=None):
-    global bot_active, char_thread_active
-    # 융합 매크로(bot_active)가 정지 상태여도, 수동 캐릭터 변경 스레드(char_thread_active)가 켜져 있다면 예외적으로 아두이노 명령을 허용합니다!
-    if not bot_active and not char_thread_active and cmd not in ['U', 'R']:
+    global bot_active, char_thread_active, victory_active
+    # bot_active, char_thread_active, 혹은 victory_active 중 하나라도 켜져 있다면 아두이노 명령을 허용합니다.
+    if not bot_active and not char_thread_active and not victory_active and cmd not in ['U', 'R']:
         raise BotStopException()
     
     if dx is not None and dy is not None:

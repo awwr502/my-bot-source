@@ -2361,8 +2361,9 @@ def fusion_bot_loop():
                             
                             if active_chars <= 0:
                                 bprint("  > 🛑 [알림] 모든 캐릭터의 재료가 소진되었습니다.")
-                                bprint("  > 🏆 [승리 연계] 승리코인 진행을 위해 앵커(본캐)로 자동 복귀합니다!")
+                                bprint("  > 🏆 [승리 연계] 승리코인을 진행할 본캐(13.png)로 자동 접속합니다!")
                                 
+                                global pending_victory_mode
                                 pending_victory_mode = True
                                 
                                 # 인벤토리 닫기
@@ -2381,9 +2382,11 @@ def fusion_bot_loop():
                                     if not inv_closed:
                                         time.sleep(0.1)
                                         
-                                # 앵커(본캐) 번호로 강제 이동 및 로그인(State 1) 진입
-                                anchor_idx = next((i for i, c in enumerate(MY_CHARACTERS) if c["is_anchor"]), 0)
-                                char_index = anchor_idx
+                                # 본캐로 강제 이동 및 로그인(State 1) 진입
+                                victory_char_img = "13.png"
+                                victory_idx = next((i for i, c in enumerate(MY_CHARACTERS) if c["img"] == victory_char_img), 0)
+                                
+                                char_index = victory_idx
                                 state = 1
                                 continue
                                 

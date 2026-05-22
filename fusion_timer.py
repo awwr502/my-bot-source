@@ -137,6 +137,9 @@ original_sleep = time.sleep
 bot_active = False
 bot_mode = 1 # 1: 단일 타이머, 2: 멀티 루프, 3: 자동 융합, 4: 5/5 복사, 5: 분별 모드
 original_brightness = [100] # 모니터 원래 밝기 복구용 저장소 (다중 모니터 대응 리스트)
+victory_active = False
+victory_mode = 2
+pending_victory_mode = False # 융합 완료 후 승리모드 전환을 위한 플래그
 enable_dimming = False # [수정] 기본값을 '꺼짐(False)'으로 변경했습니다. 단축키(-)를 눌러야 활성화됩니다.
 is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 char_thread_active = False # 수동 캐릭터 변경 스레드 제어 플래그
@@ -689,6 +692,155 @@ def toggle_stop():
                 is_dimmed = False
                 bprint(f"  > ☀️ [화면 복구] 모니터 밝기를 원래대로({original_brightness}%) 되돌렸습니다.")
             except: pass
+
+def toggle_victory_start(mode=2):
+    global bot_active, victory_active, victory_mode
+    if bot_active: toggle_stop()
+    victory_active = True
+    victory_mode = mode
+    bprint("\n=============================================")
+    bprint(f"🟡 [승리코인 모드 {mode} 자동 연계 가동 시작]")
+    bprint("=============================================")
+
+def victory_coin_bot_loop():
+    global victory_active, victory_mode
+    state = 1
+    
+    def vprint(msg):
+        current_time = datetime.now().strftime("%H:%M:%S")
+        print(f"[{current_time}]{msg}")
+
+    VICTORY_CONF = {'1.png': 0.75, '2.png': 0.75, '3.png': 0.75, '4.png': 0.70, '5.png': 0.75, '6.png': 0.70, '7.png': 0.70, '8.png': 0.70, '9.png': 0.75}
+    VICTORY_CACHE = {}
+    
+    # 융합 폴더의 1.png(로그인 창)와 겹치지 않게, 승리코인 사진은 낚시 폴더에서 불러옵니다.
+    FISHING_IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fishing_imgs")
+    target_images = ['1.png', '2.png', '3.png', '4.png', '5.png', '6.png', '7.png', '8.png', '9.png']
+    for img_name in target_images:
+        full_path = os.path.join(FISHING_IMG_DIR, img_name)
+        if os.path.exists(full_path):
+            img_array = np.fromfile(full_path, np.uint8)
+            VICTORY_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+    def v_check_img(img_name, thread_sct):
+        template = VICTORY_CACHE.get(img_name)
+        if template is None: return False
+        sct_img = thread_sct.grab(thread_sct.monitors[1])
+        screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+        res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(res)
+        return max_val >= VICTORY_CONF.get(img_name, 0.75)
+
+    def v_wait_vanish(img_name, thread_sct):
+        vprint(f"  > [대기] {img_name} 사라짐 대기 중...")
+        vanish_count = 0
+        while victory_active:
+            if v_check_img(img_name, thread_sct): vanish_count = 0
+            else: vanish_count += 1
+            if vanish_count >= 5: break
+            time.sleep(0.05)
+
+    with mss.mss() as thread_sct:
+        while True:
+            try:
+                if not victory_active:
+                    time.sleep(0.1)
+                    state = 1
+                    continue
+                
+                if state == 1:
+                    vprint("  > [승리코인] 1단계: 1.png / 2.png 탐색 중...")
+                    found = None
+                    for _ in range(11):
+                        if v_check_img('1.png', thread_sct): found = '1.png'; break
+                        if v_check_img('2.png', thread_sct): found = '2.png'; break
+                        time.sleep(0.05)
+                    if found:
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        v_wait_vanish(found, thread_sct); state = 2
+                    else:
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        
+                elif state == 2:
+                    vprint("  > [승리코인] 2단계: 3.png 탐색 중...")
+                    found = False
+                    for _ in range(11):
+                        if v_check_img('3.png', thread_sct): found = True; break
+                        time.sleep(0.05)
+                    if found:
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        v_wait_vanish('3.png', thread_sct)
+                    state = 3
+                    
+                elif state == 3:
+                    if victory_mode == 2:
+                        vprint("  > [승리코인] 3단계: 2초 대기 후 1.png/9.png 탐색 (모드 2)")
+                        time.sleep(2.0)
+                        found_1 = False
+                        while victory_active:
+                            if v_check_img('1.png', thread_sct): found_1 = True; break
+                            time.sleep(0.1)
+                        if found_1:
+                            found_9 = False
+                            for _ in range(11):
+                                if v_check_img('9.png', thread_sct): found_9 = True; break
+                                time.sleep(0.05)
+                            if found_9:
+                                send_cmd('W'); time.sleep(3.0); send_cmd('R')
+                    state = 4
+                    
+                elif state == 4:
+                    vprint("  > [승리코인] 4단계: 보스 처치 대기 중...")
+                    target_success = '4.png' if victory_mode == 1 else '6.png'
+                    found_img = None
+                    while victory_active:
+                        if v_check_img(target_success, thread_sct): found_img = target_success; break
+                        if v_check_img('8.png', thread_sct): found_img = '8.png'; break
+                        time.sleep(0.05) 
+                    if found_img == '4.png':
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        v_wait_vanish('4.png', thread_sct); state = 5
+                    elif found_img == '6.png':
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        v_wait_vanish('6.png', thread_sct); state = 8
+                    elif found_img == '8.png': state = 7
+                        
+                elif state == 5:
+                    time.sleep(0.05); state = 6
+                elif state == 6:
+                    found = False
+                    for _ in range(11):
+                        if v_check_img('5.png', thread_sct): found = True; break
+                        time.sleep(0.05)
+                    if found:
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        v_wait_vanish('5.png', thread_sct)
+                    state = 7
+                elif state == 7:
+                    found = False
+                    for _ in range(11):
+                        if v_check_img('6.png', thread_sct): found = True; break
+                        time.sleep(0.05)
+                    if found:
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        v_wait_vanish('6.png', thread_sct)
+                    state = 8
+                elif state == 8:
+                    found = False
+                    for _ in range(11):
+                        if v_check_img('7.png', thread_sct): found = True; break
+                        time.sleep(0.05)
+                    if found:
+                        v_wait_vanish('7.png', thread_sct); time.sleep(0.05); state = 1
+                    else:
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        
+            except BotStopException:
+                try:
+                    arduino.write('U'.encode()); arduino.flush()
+                    arduino.write('R'.encode()); arduino.flush()
+                except: pass
+                continue
 
 def toggle_start(mode=1):
     global bot_active, bot_mode, original_brightness, enable_dimming, is_dimmed
@@ -1351,6 +1503,12 @@ def fusion_bot_loop():
                             wait_vanish('6.png', thread_sct)
                             bprint("  > [성공] 6.png 소멸 완료. 5단계 이동.")
                             current_logged_in_char = char_images[char_index]
+                            global pending_victory_mode
+                            if pending_victory_mode:
+                                pending_victory_mode = False
+                                bprint("\n🏆 [융합+승리 연계] 본캐 접속 완료! 승리코인 모드 2를 자동으로 실행합니다.")
+                                toggle_victory_start(2) # 승리 스레드 On
+                                raise BotStopException() # 현재 융합 루프는 완전히 탈출
                             state = 5
                             break
                         else:
@@ -2200,8 +2358,32 @@ def fusion_bot_loop():
                             active_chars = loop_count - len(skipped_chars)
                             
                             if active_chars <= 0:
-                                bprint("  > 🛑 [알림] 모든 캐릭터의 재료가 소진되었습니다. 매크로를 자동 정지합니다.")
-                                toggle_stop()
+                                bprint("  > 🛑 [알림] 모든 캐릭터의 재료가 소진되었습니다.")
+                                bprint("  > 🏆 [승리 연계] 승리코인 진행을 위해 앵커(본캐)로 자동 복귀합니다!")
+                                
+                                global pending_victory_mode
+                                pending_victory_mode = True
+                                
+                                # 인벤토리 닫기
+                                inv_closed = False
+                                while bot_active and not inv_closed:
+                                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                                    wait_inv = time.time()
+                                    while time.time() - wait_inv < 1.5 and bot_active:
+                                        if check_popup_char(thread_sct):
+                                            wait_inv = time.time() 
+                                            continue
+                                        if not check_img('inv_title.png', thread_sct): 
+                                            inv_closed = True
+                                            break
+                                        time.sleep(0.03)
+                                    if not inv_closed:
+                                        time.sleep(0.1)
+                                        
+                                # 앵커(본캐) 번호로 강제 이동 및 로그인(State 1) 진입
+                                anchor_idx = next((i for i, c in enumerate(MY_CHARACTERS) if c["is_anchor"]), 0)
+                                char_index = anchor_idx
+                                state = 1
                                 continue
                                 
                             bprint("  > [탈출 준비] 인벤토리 창 닫기 (inv_title.png 소멸 능동 대기)...")
@@ -2694,6 +2876,7 @@ def force_change_character(char_key):
 # === [시작점 및 단축키 설정] ===
 def main_bot():
     threading.Thread(target=fusion_bot_loop, daemon=True).start()
+    threading.Thread(target=victory_coin_bot_loop, daemon=True).start()
     
     keyboard.add_hotkey('[', toggle_stop)
     keyboard.add_hotkey(']', lambda: toggle_start(1)) # 모드 1: 타이머만

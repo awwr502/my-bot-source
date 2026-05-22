@@ -710,14 +710,14 @@ def victory_coin_bot_loop():
         current_time = datetime.now().strftime("%H:%M:%S")
         print(f"[{current_time}]{msg}")
 
-    VICTORY_CONF = {'1.png': 0.75, '2.png': 0.75, '3.png': 0.75, '4.png': 0.70, '5.png': 0.75, '6.png': 0.70, '7.png': 0.70, '8.png': 0.70, '9.png': 0.75}
+    # [이름 변경 적용] v_ 접두사 추가
+    VICTORY_CONF = {'v_1.png': 0.75, 'v_2.png': 0.75, 'v_3.png': 0.75, 'v_4.png': 0.70, 'v_5.png': 0.75, 'v_6.png': 0.70, 'v_7.png': 0.70, 'v_8.png': 0.70, 'v_9.png': 0.75}
     VICTORY_CACHE = {}
     
-    # 융합 폴더의 1.png(로그인 창)와 겹치지 않게, 승리코인 사진은 낚시 폴더에서 불러옵니다.
-    FISHING_IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fishing_imgs")
-    target_images = ['1.png', '2.png', '3.png', '4.png', '5.png', '6.png', '7.png', '8.png', '9.png']
+    # [경로 변경] 융합봇의 폴더인 base_dir(fusion_imgs)에서 직접 읽어옵니다.
+    target_images = ['v_1.png', 'v_2.png', 'v_3.png', 'v_4.png', 'v_5.png', 'v_6.png', 'v_7.png', 'v_8.png', 'v_9.png']
     for img_name in target_images:
-        full_path = os.path.join(FISHING_IMG_DIR, img_name)
+        full_path = os.path.join(base_dir, img_name)
         if os.path.exists(full_path):
             img_array = np.fromfile(full_path, np.uint8)
             VICTORY_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
@@ -749,11 +749,11 @@ def victory_coin_bot_loop():
                     continue
                 
                 if state == 1:
-                    vprint("  > [승리코인] 1단계: 1.png / 2.png 탐색 중...")
+                    vprint("  > [승리코인] 1단계: v_1 / v_2 탐색 중...")
                     found = None
                     for _ in range(11):
-                        if v_check_img('1.png', thread_sct): found = '1.png'; break
-                        if v_check_img('2.png', thread_sct): found = '2.png'; break
+                        if v_check_img('v_1.png', thread_sct): found = 'v_1.png'; break
+                        if v_check_img('v_2.png', thread_sct): found = 'v_2.png'; break
                         time.sleep(0.05)
                     if found:
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
@@ -762,28 +762,28 @@ def victory_coin_bot_loop():
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
                         
                 elif state == 2:
-                    vprint("  > [승리코인] 2단계: 3.png 탐색 중...")
+                    vprint("  > [승리코인] 2단계: v_3 탐색 중...")
                     found = False
                     for _ in range(11):
-                        if v_check_img('3.png', thread_sct): found = True; break
+                        if v_check_img('v_3.png', thread_sct): found = True; break
                         time.sleep(0.05)
                     if found:
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        v_wait_vanish('3.png', thread_sct)
+                        v_wait_vanish('v_3.png', thread_sct)
                     state = 3
                     
                 elif state == 3:
                     if victory_mode == 2:
-                        vprint("  > [승리코인] 3단계: 2초 대기 후 1.png/9.png 탐색 (모드 2)")
+                        vprint("  > [승리코인] 3단계: 2초 대기 후 v_1/v_9 탐색 (모드 2)")
                         time.sleep(2.0)
                         found_1 = False
                         while victory_active:
-                            if v_check_img('1.png', thread_sct): found_1 = True; break
+                            if v_check_img('v_1.png', thread_sct): found_1 = True; break
                             time.sleep(0.1)
                         if found_1:
                             found_9 = False
                             for _ in range(11):
-                                if v_check_img('9.png', thread_sct): found_9 = True; break
+                                if v_check_img('v_9.png', thread_sct): found_9 = True; break
                                 time.sleep(0.05)
                             if found_9:
                                 send_cmd('W'); time.sleep(3.0); send_cmd('R')
@@ -791,47 +791,47 @@ def victory_coin_bot_loop():
                     
                 elif state == 4:
                     vprint("  > [승리코인] 4단계: 보스 처치 대기 중...")
-                    target_success = '4.png' if victory_mode == 1 else '6.png'
+                    target_success = 'v_4.png' if victory_mode == 1 else 'v_6.png'
                     found_img = None
                     while victory_active:
                         if v_check_img(target_success, thread_sct): found_img = target_success; break
-                        if v_check_img('8.png', thread_sct): found_img = '8.png'; break
+                        if v_check_img('v_8.png', thread_sct): found_img = 'v_8.png'; break
                         time.sleep(0.05) 
-                    if found_img == '4.png':
+                    if found_img == 'v_4.png':
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                        v_wait_vanish('4.png', thread_sct); state = 5
-                    elif found_img == '6.png':
+                        v_wait_vanish('v_4.png', thread_sct); state = 5
+                    elif found_img == 'v_6.png':
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        v_wait_vanish('6.png', thread_sct); state = 8
-                    elif found_img == '8.png': state = 7
+                        v_wait_vanish('v_6.png', thread_sct); state = 8
+                    elif found_img == 'v_8.png': state = 7
                         
                 elif state == 5:
                     time.sleep(0.05); state = 6
                 elif state == 6:
                     found = False
                     for _ in range(11):
-                        if v_check_img('5.png', thread_sct): found = True; break
+                        if v_check_img('v_5.png', thread_sct): found = True; break
                         time.sleep(0.05)
                     if found:
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                        v_wait_vanish('5.png', thread_sct)
+                        v_wait_vanish('v_5.png', thread_sct)
                     state = 7
                 elif state == 7:
                     found = False
                     for _ in range(11):
-                        if v_check_img('6.png', thread_sct): found = True; break
+                        if v_check_img('v_6.png', thread_sct): found = True; break
                         time.sleep(0.05)
                     if found:
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        v_wait_vanish('6.png', thread_sct)
+                        v_wait_vanish('v_6.png', thread_sct)
                     state = 8
                 elif state == 8:
                     found = False
                     for _ in range(11):
-                        if v_check_img('7.png', thread_sct): found = True; break
+                        if v_check_img('v_7.png', thread_sct): found = True; break
                         time.sleep(0.05)
                     if found:
-                        v_wait_vanish('7.png', thread_sct); time.sleep(0.05); state = 1
+                        v_wait_vanish('v_7.png', thread_sct); time.sleep(0.05); state = 1
                     else:
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
                         
@@ -888,6 +888,8 @@ def toggle_start(mode=1):
 # === [메인 융합 봇 루프] ===
 def fusion_bot_loop():
     global bot_active, bot_mode, current_logged_in_char
+    global pending_victory_mode 
+    
     state = 0
     fusion_end_time = 0.0
     char_index = 0
@@ -2361,7 +2363,6 @@ def fusion_bot_loop():
                                 bprint("  > 🛑 [알림] 모든 캐릭터의 재료가 소진되었습니다.")
                                 bprint("  > 🏆 [승리 연계] 승리코인 진행을 위해 앵커(본캐)로 자동 복귀합니다!")
                                 
-                                global pending_victory_mode
                                 pending_victory_mode = True
                                 
                                 # 인벤토리 닫기

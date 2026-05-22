@@ -2363,7 +2363,6 @@ def fusion_bot_loop():
                                 bprint("  > 🛑 [알림] 모든 캐릭터의 재료가 소진되었습니다.")
                                 bprint("  > 🏆 [승리 연계] 승리코인을 진행할 본캐(13.png)로 자동 접속합니다!")
                                 
-                                global pending_victory_mode
                                 pending_victory_mode = True
                                 
                                 # 인벤토리 닫기

@@ -17,67 +17,10 @@ from datetime import datetime, date # 06시 정기보고 및 블랙박스 시간
 from PIL import Image # 이미지 캐싱용 메모리 관리 모듈
 import json
 import mss # [초고속 캡처 엔진]
+import screen_brightness_control as sbc # [화면 밝기 제어]
 import atexit # 프로그램 비정상 종료 시 화면 밝기 자동 복구용
 import winsound # 비프음 출력 모듈 추가
 import hashlib
-import ctypes
-import tkinter as tk
-
-# --- 초정밀 보안 스크린 오버레이 디머 (캡처 우회형 물리 암전) ---
-overlay_window = None
-
-def _create_dimmer_thread():
-    global overlay_window
-    try:
-        root = tk.Tk()
-        root.withdraw() # 초기 상태는 숨김
-        root.overrideredirect(True)
-        
-        # 기본 모니터 크기로 전체 화면 지정
-        w = root.winfo_screenwidth()
-        h = root.winfo_screenheight()
-        root.geometry(f"{w}x{h}+0+0")
-        root.configure(bg='black')
-        root.attributes("-topmost", True)
-        
-        hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
-        
-        # 윈도우 스타일 설정: layered 투명 처리 + 마우스 클릭 관통(transparent)
-        GWL_EXSTYLE = -20
-        WS_EX_LAYERED = 0x80000
-        WS_EX_TRANSPARENT = 0x20
-        style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT)
-        
-        # 투명도 설정 (253/255 -> 약 99% 어두운 칠흑 상태)
-        LWA_ALPHA = 0x2
-        ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, 0, 253, LWA_ALPHA)
-        
-        # 시스템 캡처 엔진에서 이 오버레이를 완전히 제외하여 mss 캡처 이미지를 오염시키지 않습니다.
-        WDA_EXCLUDEFROMCAPTURE = 0x11
-        ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
-        
-        overlay_window = root
-        root.mainloop()
-    except:
-        pass
-
-# 백그라운드 스레드에서 암전용 오버레이 엔진을 가동합니다.
-threading.Thread(target=_create_dimmer_thread, daemon=True).start()
-
-def set_screen_darkness(on=True):
-    """물리 모니터를 칠흑 같은 어둠 상태로 덮거나 치웁니다."""
-    global overlay_window
-    if overlay_window is None:
-        return
-    try:
-        if on:
-            overlay_window.deiconify()
-            overlay_window.attributes("-topmost", True)
-        else:
-            overlay_window.withdraw()
-    except:
-        pass
 import queue
 import csv
 import concurrent.futures # [추가] 스레드 풀 재사용을 위한 모듈
@@ -248,9 +191,11 @@ def toggle_relay_start():
         bprint(f"  > [순환 메모리] 이전 진행 상태를 복구하여 '{c_name}'부터 이어서 낚시를 재개합니다.")
     bprint("=============================================")
     try:
-        set_screen_darkness(True)
+        curr_b = sbc.get_brightness()
+        if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
+        sbc.set_brightness(0)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 오버레이를 가동하여 화면을 완전히 암전시킵니다.")
+        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
     except: pass
 
 def jitter_sleep(seconds):
@@ -697,9 +642,9 @@ def toggle_stop():
     bprint("=============================================")
     if is_dimmed:
         try:
-            set_screen_darkness(False)
+            sbc.set_brightness(original_brightness)
             is_dimmed = False
-            bprint("  > ☀️ [화면 복구] 오버레이를 제거하여 원본 화면을 노출합니다.")
+            bprint(f"  > ☀️ [화면 복구] 모니터 밝기를 원래대로({original_brightness}%) 되돌렸습니다.")
         except: pass
 
     save_stats_cache() # 봇이 대기 모드로 들어갈 때까지의 통계와 가동 시간을 안전하게 세이브
@@ -723,9 +668,12 @@ def toggle_start():
     bprint("🟢 [낚시 시작 명령 접수] 단축키(]) 입력 감지")
     bprint("=============================================")
     try:
-        set_screen_darkness(True)
+        curr_b = sbc.get_brightness()
+        # [핵심] 현재 밝기가 10 이상일 때만 원본으로 저장하여 0% 무한 갇힘 버그 차단
+        if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
+        sbc.set_brightness(0)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 오버레이를 가동하여 화면을 완전히 암전시킵니다.")
+        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
     except: pass
 
 def toggle_victory_start(mode=1):
@@ -739,9 +687,11 @@ def toggle_victory_start(mode=1):
     bprint(f"🟡 [승리코인 모드 {mode} 시작 명령 접수] 단축키 입력 감지")
     bprint("=============================================")
     try:
-        set_screen_darkness(True)
+        curr_b = sbc.get_brightness()
+        if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
+        sbc.set_brightness(0)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 오버레이를 가동하여 화면을 완전히 암전시킵니다.")
+        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
     except: pass
 
 def toggle_animal_start():
@@ -753,9 +703,11 @@ def toggle_animal_start():
     bprint("🦝 [동물포획 모드 시작 명령 접수] 단축키(') 입력 감지")
     bprint("=============================================")
     try:
-        set_screen_darkness(True)
+        curr_b = sbc.get_brightness()
+        if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
+        sbc.set_brightness(0)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 오버레이를 가동하여 화면을 완전히 암전시킵니다.")
+        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
     except: pass
 
 # --- 아두이노 자동 연결 (플러그 앤 플레이) ---
@@ -1237,11 +1189,11 @@ def force_exit():
 
 # 콘솔 우측 상단의 X 버튼 등으로 프로그램이 비정상 종료되어도 화면 밝기를 무조건 복구하는 안전장치
 def restore_brightness_on_exit():
-    global is_dimmed
+    global original_brightness, is_dimmed
     if is_dimmed:
         try:
-            set_screen_darkness(False)
-            print("\n💡 [시스템 종료] 오버레이를 정상적으로 제거하여 화면 출력을 안전하게 복원했습니다.")
+            sbc.set_brightness(original_brightness)
+            print(f"\n💡 [시스템 종료] 모니터 밝기를 원래대로({original_brightness}%) 안전하게 복구했습니다.")
         except: pass
 
 atexit.register(restore_brightness_on_exit)

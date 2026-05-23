@@ -17,50 +17,70 @@ from datetime import datetime, date # 06시 정기보고 및 블랙박스 시간
 from PIL import Image # 이미지 캐싱용 메모리 관리 모듈
 import json
 import mss # [초고속 캡처 엔진]
-import screen_brightness_control as sbc # [화면 밝기 제어]
 import atexit # 프로그램 비정상 종료 시 화면 밝기 자동 복구용
 import winsound # 비프음 출력 모듈 추가
 import hashlib
+import ctypes
+import tkinter as tk
+
+# --- 초정밀 보안 스크린 오버레이 디머 (캡처 우회형 물리 암전) ---
+overlay_window = None
+
+def _create_dimmer_thread():
+    global overlay_window
+    try:
+        root = tk.Tk()
+        root.withdraw() # 초기 상태는 숨김
+        root.overrideredirect(True)
+        
+        # 기본 모니터 크기로 전체 화면 지정
+        w = root.winfo_screenwidth()
+        h = root.winfo_screenheight()
+        root.geometry(f"{w}x{h}+0+0")
+        root.configure(bg='black')
+        root.attributes("-topmost", True)
+        
+        hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+        
+        # 윈도우 스타일 설정: layered 투명 처리 + 마우스 클릭 관통(transparent)
+        GWL_EXSTYLE = -20
+        WS_EX_LAYERED = 0x80000
+        WS_EX_TRANSPARENT = 0x20
+        style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT)
+        
+        # 투명도 설정 (253/255 -> 약 99% 어두운 칠흑 상태)
+        LWA_ALPHA = 0x2
+        ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, 0, 253, LWA_ALPHA)
+        
+        # 시스템 캡처 엔진에서 이 오버레이를 완전히 제외하여 mss 캡처 이미지를 오염시키지 않습니다.
+        WDA_EXCLUDEFROMCAPTURE = 0x11
+        ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+        
+        overlay_window = root
+        root.mainloop()
+    except:
+        pass
+
+# 백그라운드 스레드에서 암전용 오버레이 엔진을 가동합니다.
+threading.Thread(target=_create_dimmer_thread, daemon=True).start()
+
+def set_screen_darkness(on=True):
+    """물리 모니터를 칠흑 같은 어둠 상태로 덮거나 치웁니다."""
+    global overlay_window
+    if overlay_window is None:
+        return
+    try:
+        if on:
+            overlay_window.deiconify()
+            overlay_window.attributes("-topmost", True)
+        else:
+            overlay_window.withdraw()
+    except:
+        pass
 import queue
 import csv
 import concurrent.futures # [추가] 스레드 풀 재사용을 위한 모듈
-import ctypes
-
-# --- Windows 시스템 감마 제어 엔진 (물리 화면 강제 암전) ---
-gdi32 = ctypes.windll.gdi32
-user32 = ctypes.windll.user32
-original_ramp = (ctypes.c_ushort * 768)()
-
-def save_original_gamma():
-    """모니터의 순정 감마 설정을 프로그램 시작 시점에 안전하게 백업합니다."""
-    hdc = user32.GetDC(None)
-    gdi32.GetDeviceGammaRamp(hdc, ctypes.byref(original_ramp))
-    user32.ReleaseDC(None, hdc)
-
-def set_screen_darkness(factor):
-    """
-    화면 광출력을 강제로 제한합니다.
-    0.00에 가까울수록 모니터가 아예 꺼진 수준으로 어두워집니다. (0.01 권장)
-    """
-    ramp = (ctypes.c_ushort * 768)()
-    for i in range(256):
-        val = int(i * 256 * factor)
-        val = max(0, min(65535, val))
-        ramp[i] = val          # Red
-        ramp[256 + i] = val    # Green
-        ramp[512 + i] = val    # Blue
-    hdc = user32.GetDC(None)
-    gdi32.SetDeviceGammaRamp(hdc, ctypes.byref(ramp))
-    user32.ReleaseDC(None, hdc)
-
-def restore_gamma():
-    """모니터 화면의 광출력을 원래 순정 감마 프로필로 복원합니다."""
-    hdc = user32.GetDC(None)
-    gdi32.SetDeviceGammaRamp(hdc, ctypes.byref(original_ramp))
-    user32.ReleaseDC(None, hdc)
-
-# 프로그램이 작동하기 전 원래의 시스템 감마를 최초 1회 백업합니다.
-save_original_gamma()
 
 # mss 객체는 딱 한 번만 생성해두고 계속 재사용합니다 (메모리 최적화)
 sct = mss.mss()
@@ -228,9 +248,9 @@ def toggle_relay_start():
         bprint(f"  > [순환 메모리] 이전 진행 상태를 복구하여 '{c_name}'부터 이어서 낚시를 재개합니다.")
     bprint("=============================================")
     try:
-        set_screen_darkness(0.05)
+        set_screen_darkness(True)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 모니터 화면의 출력을 물리적으로 완전히 암전시킵니다. (0.01 레벨)")
+        bprint("  > 🌙 [절전 모드] 오버레이를 가동하여 화면을 완전히 암전시킵니다.")
     except: pass
 
 def jitter_sleep(seconds):
@@ -677,9 +697,9 @@ def toggle_stop():
     bprint("=============================================")
     if is_dimmed:
         try:
-            restore_gamma()
+            set_screen_darkness(False)
             is_dimmed = False
-            bprint("  > ☀️ [화면 복구] 시스템 원래 화면 설정으로 강제 복원 완료")
+            bprint("  > ☀️ [화면 복구] 오버레이를 제거하여 원본 화면을 노출합니다.")
         except: pass
 
     save_stats_cache() # 봇이 대기 모드로 들어갈 때까지의 통계와 가동 시간을 안전하게 세이브
@@ -703,9 +723,9 @@ def toggle_start():
     bprint("🟢 [낚시 시작 명령 접수] 단축키(]) 입력 감지")
     bprint("=============================================")
     try:
-        set_screen_darkness(0.05)
+        set_screen_darkness(True)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 모니터 화면의 출력을 물리적으로 완전히 암전시킵니다. (0.01 레벨)")
+        bprint("  > 🌙 [절전 모드] 오버레이를 가동하여 화면을 완전히 암전시킵니다.")
     except: pass
 
 def toggle_victory_start(mode=1):
@@ -719,9 +739,9 @@ def toggle_victory_start(mode=1):
     bprint(f"🟡 [승리코인 모드 {mode} 시작 명령 접수] 단축키 입력 감지")
     bprint("=============================================")
     try:
-        set_screen_darkness(0.05)
+        set_screen_darkness(True)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 모니터 화면의 출력을 물리적으로 완전히 암전시킵니다. (0.01 레벨)")
+        bprint("  > 🌙 [절전 모드] 오버레이를 가동하여 화면을 완전히 암전시킵니다.")
     except: pass
 
 def toggle_animal_start():
@@ -733,9 +753,9 @@ def toggle_animal_start():
     bprint("🦝 [동물포획 모드 시작 명령 접수] 단축키(') 입력 감지")
     bprint("=============================================")
     try:
-        set_screen_darkness(0.05)
+        set_screen_darkness(True)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 모니터 화면의 출력을 물리적으로 완전히 암전시킵니다. (0.01 레벨)")
+        bprint("  > 🌙 [절전 모드] 오버레이를 가동하여 화면을 완전히 암전시킵니다.")
     except: pass
 
 # --- 아두이노 자동 연결 (플러그 앤 플레이) ---
@@ -1220,8 +1240,8 @@ def restore_brightness_on_exit():
     global is_dimmed
     if is_dimmed:
         try:
-            restore_gamma()
-            print("\n💡 [시스템 종료] 감마 프로필을 원래대로 되돌려 화면 출력을 비상 안전 복구했습니다.")
+            set_screen_darkness(False)
+            print("\n💡 [시스템 종료] 오버레이를 정상적으로 제거하여 화면 출력을 안전하게 복원했습니다.")
         except: pass
 
 atexit.register(restore_brightness_on_exit)

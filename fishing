@@ -1069,7 +1069,6 @@ def find_anchor_final(target_img_path):
     global last_success_scale
     try:
         screen_gray = fast_cv_screenshot(gray=True)
-        # 부팅 시 올려둔 RAM 캐시에서 즉시 꺼내옵니다 (하드디스크 읽기 제거)
         template = IMAGE_CACHE.get(target_img_path)
         if template is None: return None
 
@@ -1088,20 +1087,27 @@ def find_anchor_final(target_img_path):
             res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-            if max_val > 0.65 and max_val > best_score:
-                best_score = max_val
+            # [수정 1] 스케일 전환 흔들림 방지 (Hysteresis)
+            # 직전에 성공한 스케일과 동일한 스케일 검사 시 미세한 가산점(0.03)을 부여하여 스케일이 수시로 교체되며 조준점이 흔들리는 것을 방지합니다.
+            bias = 0.03 if scale == last_success_scale else 0.0
+            evaluated_score = max_val + bias
+
+            # [수정 2] 배경 노이즈 오탐 방지를 위해 기준 컷오프를 0.65에서 0.70으로 안정화합니다.
+            if evaluated_score > 0.70 and evaluated_score > best_score:
+                best_score = evaluated_score
                 last_success_scale = scale
                 
-                # [v6 핵심] 화면 중앙(1920/2) 기준 좌우 보정치 결정
                 current_tx = max_loc[0] + (w / 2)
-                if current_tx < 960: # 화면 왼쪽 영역
-                    ADJUST_X = 0.35 # 왼쪽일 때 우측 쏠림을 방지하기 위해 타겟을 왼쪽으로 당김
-                else: # 화면 오른쪽 영역
-                    ADJUST_X = 0.5 # 오른쪽일 때 사용자님이 만족하신 중앙값 유지
+                
+                # [수정 3] 중앙값 경계선 급변(Discontinuity) 해결 (Linear Interpolation)
+                # 960을 기준으로 보정치(0.35 -> 0.5)가 갑자기 튀는 것을 막기 위해, 화면 좌우 위치에 비례하여 ADJUST_X 값을 소수점 단위로 부드럽게 연속 전환시킵니다.
+                # x가 0일 때는 0.35, 중앙(960)일 때는 0.425, 오른쪽 끝(1920)일 때는 0.5가 부드럽게 계산되어 경계선 도달 시 튕기는 현상이 완벽히 사라집니다.
+                ADJUST_X = 0.35 + (0.15 * (current_tx / 1920.0))
                 
                 cx = max_loc[0] + (w * ADJUST_X)
                 cy = max_loc[1] + (h * ADJUST_Y)
                 best_pos = (int(cx), int(cy))
+                
             if max_val > 0.9: break 
         return best_pos
     except: return None
@@ -2795,7 +2801,7 @@ def fishing_bot(max_allowed_seconds):
                         bprint("  > [보관] 앵커 재탐색 실패, 정밀 스캔 시도")
                         pos = find_anchor_final('anchor.png')
                         if not pos and bot_active:
-                            safe_find_image('anchor.png', 0.35, region="FULL_SCREEN")
+                            safe_find_image('anchor.png', 0.40, region="FULL_SCREEN")
                     
                     if bot_active:
                         send_blynk_notification("[완료]인벤토리 비움. 낚시 재개")

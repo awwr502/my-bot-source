@@ -24,6 +24,43 @@ import hashlib
 import queue
 import csv
 import concurrent.futures # [추가] 스레드 풀 재사용을 위한 모듈
+import ctypes
+
+# --- Windows 시스템 감마 제어 엔진 (물리 화면 강제 암전) ---
+gdi32 = ctypes.windll.gdi32
+user32 = ctypes.windll.user32
+original_ramp = (ctypes.c_ushort * 768)()
+
+def save_original_gamma():
+    """모니터의 순정 감마 설정을 프로그램 시작 시점에 안전하게 백업합니다."""
+    hdc = user32.GetDC(None)
+    gdi32.GetDeviceGammaRamp(hdc, ctypes.byref(original_ramp))
+    user32.ReleaseDC(None, hdc)
+
+def set_screen_darkness(factor):
+    """
+    화면 광출력을 강제로 제한합니다.
+    0.00에 가까울수록 모니터가 아예 꺼진 수준으로 어두워집니다. (0.01 권장)
+    """
+    ramp = (ctypes.c_ushort * 768)()
+    for i in range(256):
+        val = int(i * 256 * factor)
+        val = max(0, min(65535, val))
+        ramp[i] = val          # Red
+        ramp[256 + i] = val    # Green
+        ramp[512 + i] = val    # Blue
+    hdc = user32.GetDC(None)
+    gdi32.SetDeviceGammaRamp(hdc, ctypes.byref(ramp))
+    user32.ReleaseDC(None, hdc)
+
+def restore_gamma():
+    """모니터 화면의 광출력을 원래 순정 감마 프로필로 복원합니다."""
+    hdc = user32.GetDC(None)
+    gdi32.SetDeviceGammaRamp(hdc, ctypes.byref(original_ramp))
+    user32.ReleaseDC(None, hdc)
+
+# 프로그램이 작동하기 전 원래의 시스템 감마를 최초 1회 백업합니다.
+save_original_gamma()
 
 # mss 객체는 딱 한 번만 생성해두고 계속 재사용합니다 (메모리 최적화)
 sct = mss.mss()
@@ -191,11 +228,9 @@ def toggle_relay_start():
         bprint(f"  > [순환 메모리] 이전 진행 상태를 복구하여 '{c_name}'부터 이어서 낚시를 재개합니다.")
     bprint("=============================================")
     try:
-        curr_b = sbc.get_brightness()
-        if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
-        sbc.set_brightness(0)
+        set_screen_darkness(0.05)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
+        bprint("  > 🌙 [절전 모드] 모니터 화면의 출력을 물리적으로 완전히 암전시킵니다. (0.01 레벨)")
     except: pass
 
 def jitter_sleep(seconds):
@@ -642,9 +677,9 @@ def toggle_stop():
     bprint("=============================================")
     if is_dimmed:
         try:
-            sbc.set_brightness(original_brightness)
+            restore_gamma()
             is_dimmed = False
-            bprint(f"  > ☀️ [화면 복구] 모니터 밝기를 원래대로({original_brightness}%) 되돌렸습니다.")
+            bprint("  > ☀️ [화면 복구] 시스템 원래 화면 설정으로 강제 복원 완료")
         except: pass
 
     save_stats_cache() # 봇이 대기 모드로 들어갈 때까지의 통계와 가동 시간을 안전하게 세이브
@@ -668,12 +703,9 @@ def toggle_start():
     bprint("🟢 [낚시 시작 명령 접수] 단축키(]) 입력 감지")
     bprint("=============================================")
     try:
-        curr_b = sbc.get_brightness()
-        # [핵심] 현재 밝기가 10 이상일 때만 원본으로 저장하여 0% 무한 갇힘 버그 차단
-        if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
-        sbc.set_brightness(0)
+        set_screen_darkness(0.05)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
+        bprint("  > 🌙 [절전 모드] 모니터 화면의 출력을 물리적으로 완전히 암전시킵니다. (0.01 레벨)")
     except: pass
 
 def toggle_victory_start(mode=1):
@@ -687,11 +719,9 @@ def toggle_victory_start(mode=1):
     bprint(f"🟡 [승리코인 모드 {mode} 시작 명령 접수] 단축키 입력 감지")
     bprint("=============================================")
     try:
-        curr_b = sbc.get_brightness()
-        if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
-        sbc.set_brightness(0)
+        set_screen_darkness(0.05)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
+        bprint("  > 🌙 [절전 모드] 모니터 화면의 출력을 물리적으로 완전히 암전시킵니다. (0.01 레벨)")
     except: pass
 
 def toggle_animal_start():
@@ -703,11 +733,9 @@ def toggle_animal_start():
     bprint("🦝 [동물포획 모드 시작 명령 접수] 단축키(') 입력 감지")
     bprint("=============================================")
     try:
-        curr_b = sbc.get_brightness()
-        if curr_b and curr_b[0] >= 10: original_brightness = curr_b[0]
-        sbc.set_brightness(0)
+        set_screen_darkness(0.05)
         is_dimmed = True
-        bprint("  > 🌙 [절전 모드] 모니터 밝기를 0%로 낮춥니다.")
+        bprint("  > 🌙 [절전 모드] 모니터 화면의 출력을 물리적으로 완전히 암전시킵니다. (0.01 레벨)")
     except: pass
 
 # --- 아두이노 자동 연결 (플러그 앤 플레이) ---
@@ -1189,11 +1217,11 @@ def force_exit():
 
 # 콘솔 우측 상단의 X 버튼 등으로 프로그램이 비정상 종료되어도 화면 밝기를 무조건 복구하는 안전장치
 def restore_brightness_on_exit():
-    global original_brightness, is_dimmed
+    global is_dimmed
     if is_dimmed:
         try:
-            sbc.set_brightness(original_brightness)
-            print(f"\n💡 [시스템 종료] 모니터 밝기를 원래대로({original_brightness}%) 안전하게 복구했습니다.")
+            restore_gamma()
+            print("\n💡 [시스템 종료] 감마 프로필을 원래대로 되돌려 화면 출력을 비상 안전 복구했습니다.")
         except: pass
 
 atexit.register(restore_brightness_on_exit)

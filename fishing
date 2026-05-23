@@ -2634,17 +2634,46 @@ def fishing_bot(max_allowed_seconds):
 
                 if not bot_active or state == 1: continue
 
-                # --- 2단계: 상태 검증 및 방생 알림(auto_release) 0.5초 정밀 감시 ---
-                bprint("  > [완료] 수거 동작 종료. 상태 검증 진입...")
+                # --- 2단계: 상태 검증 및 방생 알림(auto_release) / 낚싯대 준비(bait_change) 동시 정밀 감시 ---
+                bprint("  > [완료] 수거 동작 종료. 실시간 동적 상태 검증 진입...")
                 if check_exit_notification(): state = 1; continue
 
                 is_inventory_full = False
+                skip_to_state_1 = False
+                
+                # 동시 감시를 위한 템플릿 로드
+                template_ar = IMAGE_CACHE.get('auto_release.png')
+                template_bc = IMAGE_CACHE.get('bait_change.png')
+
+                # 0.05초씩 최대 10회(0.5초) 스캔하되, 어느 한쪽이라도 감지되면 즉시 대기 종료 및 조기 탈출
                 for _ in range(10):
-                    time.sleep(0.05) # 0.05초씩 10회 = 0.5초간 감시
-                    screen_ar = fast_cv_screenshot(gray=True)
-                    if template_ar is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_ar, template_ar, cv2.TM_CCOEFF_NORMED))[1] >= 0.65:
-                        is_inventory_full = True
-                        break # 발견 시 즉시 감시 종료
+                    time.sleep(0.05) 
+                    
+                    # 1장 캡처한 흑백 화면으로 두 이미지 병렬 매칭 시도 (연산 낭비 최소화)
+                    screen_gray = fast_cv_screenshot(gray=True)
+                    
+                    # 1. 인벤토리 가득 참 알림 감시
+                    if template_ar is not None:
+                        res_ar = cv2.matchTemplate(screen_gray, template_ar, cv2.TM_CCOEFF_NORMED)
+                        if cv2.minMaxLoc(res_ar)[1] >= 0.65:
+                            is_inventory_full = True
+                            bprint("  > 🚨 [감지] 인벤토리 가득 참 알림 포착! 창고 보관 로직을 실행합니다.")
+                            break
+                            
+                    # 2. 낚싯대 복귀(정상 준비 상태) 감시
+                    if template_bc is not None:
+                        res_bc = cv2.matchTemplate(screen_gray, template_bc, cv2.TM_CCOEFF_NORMED)
+                        if cv2.minMaxLoc(res_bc)[1] >= 0.70:
+                            skip_to_state_1 = True
+                            break # 정상 장착 확인 시 즉시 루프 조기 탈출
+
+                # 낚싯대 복귀가 먼저 확인되어 조기 조준이 가능한 상태일 때
+                if skip_to_state_1:
+                    bprint("  > ⚡ [즉각 탈출] 낚싯대 복구 상태가 조기에 확인되었습니다. 수거 단계를 즉시 마감합니다.")
+                    import gc; gc.collect()
+                    bprint("  > 🧹 [메모리 청소] 잔여 캐시 포맷 완료 (프레임 드랍 방어)")
+                    state = 1
+                    continue # 보관함 로직을 전부 패스하고 즉시 다음 캐스팅 단계로 점프
 
                 # --- 3단계: 인벤토리 감지 결과에 따른 보관 또는 낚시 재개 ---
                 # 위 0.5초 감시에서 포착했거나, 탈출 후 혹시 막 떴을 경우를 모두 커버

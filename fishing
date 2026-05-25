@@ -132,6 +132,9 @@ victory_mode = 1 # 승리코인 모드 선택 변수 (1 또는 2)
 original_brightness = 100 # [화면 밝기] 모니터 원래 밝기 복구용 저장소
 is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 
+# [추가] 최상단 전역 공간에 미리 변수 생성
+check_char_popup = True 
+
 bot_mode = 1 # 1: 일반 낚시, 3: 부캐 릴레이 낚시
 char_index = 0 # 릴레이 모드 캐릭터 순번 추적기
 char_start_time = None # [신규] 개별 캐릭터 가동 시간 측정용
@@ -1781,9 +1784,10 @@ def fishing_bot(max_allowed_seconds):
     # 봇이 켜지자마자 가장 먼저 사진들부터 메모리에 싹 다 올립니다.
     preload_all_images()
     
-    # [팝업 탐색 비활성화 킬스위치]
-    # 램(RAM) 캐시에서 해당 이미지를 강제로 비워, 봇 전체의 모든 탐색 함수가 0.0001초 만에 즉시 스킵(None 반환)하도록 차단합니다.
-    IMAGE_CACHE['popup_char.png'] = None
+    # [팝업 감시 제어용 플래그] 
+    # 캐릭터 접속 초반에만 True 상태를 유지하며 팝업을 감시합니다.
+    global check_char_popup
+    check_char_popup = True
     
     send_cmd('R')
     time.sleep(0.5)
@@ -1815,12 +1819,14 @@ def fishing_bot(max_allowed_seconds):
     def auto_equip_rod():
         """3곳에 흩어진 낚싯대 장착 로직을 통합한 단일 모듈"""
         nonlocal force_watchdog_reason
+        global check_char_popup
         swap_attempts = 0
         while bot_active:
             if check_exit_notification():
                 return False
                 
-            if safe_find_image('popup_char.png', 0.75):
+            # 플래그가 True 일 때만 자정 팝업을 체크합니다.
+            if check_char_popup and safe_find_image('popup_char.png', 0.75):
                 bprint("  > 💡 [자정 팝업] 장착 중 팝업 감지! ESC 1회 입력...")
                 send_cmd('E'); time.sleep(0.1); send_cmd('R')
                 time.sleep(0.5)
@@ -2042,6 +2048,10 @@ def fishing_bot(max_allowed_seconds):
                 bprint("  > [시작 처리 완료] 시스템을 초기화하고 '작동 모드'로 전환합니다.")
                 send_cmd('R'); time.sleep(1.0)
                 
+                # [수정 추가] 수동으로 처음부터 다시 시작할 때도 첫 캐스팅에서 팝업을 체크하도록 리셋
+                global check_char_popup
+                check_char_popup = True
+                
                 # 봇 시작 시 특정 사진(예: bait_change.png) 확인
                 if safe_find_image('bait_change.png', 0.70):
                     bprint("  > [확인] 조건 사진 발견! 정상 낚시 모드 진입 (State 1)")
@@ -2066,9 +2076,6 @@ def fishing_bot(max_allowed_seconds):
                 if not bot_active: raise BotStopException() 
                 bprint(f"\n[State 1] 캐스팅 시퀀스 시작")
 
-                # [삭제] 여기서 시점 복구를 하면 낚싯대를 다시 잡기 전이라 앵커를 못 찾아 2초 타임아웃을 다 채우며 딜레이가 생깁니다.
-                # align_view_by_anchor('anchor.png') 
-
                 # 1. 캐스팅 전 초기화 및 마우스 떼기 (Reset)
                 send_cmd('R'); time.sleep(0.1)
 
@@ -2076,8 +2083,8 @@ def fishing_bot(max_allowed_seconds):
                 wait_bait_start = time.time()
                 found_bait = False
                 
-                # [팝업 방어] 캐스팅 직전 팝업 확인
-                if safe_find_image('popup_char.png', 0.75):
+                # [팝업 방어] 플래그가 True 일 때만 캐스팅 전 팝업 확인
+                if check_char_popup and safe_find_image('popup_char.png', 0.75):
                     bprint("  > 💡 [자정 팝업] 캐스팅 전 팝업 감지! ESC 1회 입력...")
                     send_cmd('E'); time.sleep(0.1); send_cmd('R')
                     time.sleep(0.1)
@@ -2146,17 +2153,16 @@ def fishing_bot(max_allowed_seconds):
                 if not bot_active: raise BotStopException() # 즉각 폭파
 
                 # 3. fishing.png 확인 시 즉시 2단계로 (동적 대기)
-                bprint("  > 찌 낙하 확인 대기...")
+                bprint("  > 찌 낚하 확인 대기...")
                 wait_ui_start = time.time()
                 found_ui = False
                 
                 while time.time() - wait_ui_start < 7.0 and bot_active:
-                    # [팝업 방어] 낚싯대를 던진 후 fishing.png가 뜨기 전에 팝업 검사
-                    if safe_find_image('popup_char.png', 0.75) or safe_find_image('popup_char.png', 0.75):
+                    # [팝업 방어] 플래그가 True 일 때만 찌 낙하 중 팝업 검사
+                    if check_char_popup and (safe_find_image('popup_char.png', 0.75) or safe_find_image('popup_char.png', 0.75)):
                         bprint("  > 💡 [자정 팝업] 찌 낙하 중 팝업 감지! ESC 1회 입력하여 닫습니다.")
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         time.sleep(0.5)
-                        # 팝업에 의해 낚시가 취소되었을 수 있으므로 루프를 즉시 탈출하여 State 1을 처음부터 다시 시도(재캐스팅)합니다.
                         break
                         
                     if safe_find_image('fishing.png', 0.65):
@@ -2172,6 +2178,10 @@ def fishing_bot(max_allowed_seconds):
                 if found_ui:
                     bprint("  > [성공] fishing.png 포착 -> 즉시 2단계 전이")
                     state = 2
+                    # 첫 번째 캐스팅에 성공하여 정상 낚시 상태에 진입했으므로 팝업 감시를 종료합니다.
+                    if check_char_popup:
+                        bprint("  > 🔒 [감시 해제] 첫 번째 캐스팅 성공이 확인되어 인게임 자정 팝업 감시를 비활성화합니다.")
+                        check_char_popup = False
 
                 if not bot_active: raise BotStopException() # [문제 1 해결] 전이 대기 중 [ 눌렀을 때 즉시 폭파
 
@@ -2887,6 +2897,10 @@ def fishing_bot(max_allowed_seconds):
 
             # --- [State 10] 부캐 릴레이 캐릭터 자동 교체 로직 ---
             elif state == 10:
+                # 다음 캐릭터 접속 프로세스를 시작하므로 팝업 감시를 다시 활성화합니다.
+                global check_char_popup
+                check_char_popup = True
+                
                 if char_index + 1 >= len(MY_CHARACTERS):
                     current_char_time = char_pure_run_time
                     if char_start_time is not None: current_char_time += (time.time() - char_start_time)

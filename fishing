@@ -871,18 +871,14 @@ def preload_all_images():
             try:
                 full_path = os.path.join(BASE_IMG_DIR, filename)
                 img_array = np.fromfile(full_path, np.uint8)
-                # 컬러 판별이 필요한 이미지들은 3채널 BGR 포맷으로 보존하여 로드
-                if filename.lower() in ['level_5.png', 'item_a1.png', 'item_b1.png', 'item_a2.png', 'item_b2.png', 'tier_1.png', 'tier_2.png', 'tier_3.png', 'tier_4.png']:
-                    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-                else:
-                    img = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+                img = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
                 if img is not None:
                     IMAGE_CACHE[filename] = img
                     count += 1
             except Exception as e:
                 print(f"  > [경고] {filename} 메모리 적재 실패: {e}")
                 
-        bprint(f">>> [시스템] 총 {count}개의 낚시 이미지 RAM 캐싱 완료! (탐색 준비 끝) <<<\n")
+    bprint(f">>> [시스템] 총 {count}개의 낚시 이미지 RAM 캐싱 완료! (탐색 준비 끝) <<<\n")
 
 # [신규] 로깅 폴더 및 파일 설정
 LOG_DIR = os.path.join(BASE_IMG_DIR, "logs")
@@ -1177,387 +1173,6 @@ def get_tension_status(exact_roi):
         
     except Exception as e:
         return 0
-
-# ==========================================
-# [인벤토리 분별 및 감염물 스캔 연동 로직]
-# ==========================================
-TRAIT_NAMES = {}
-trait_config_path = os.path.join(BASE_IMG_DIR, "trait_names.json")
-
-def load_trait_names():
-    global TRAIT_NAMES
-    try:
-        if os.path.exists(trait_config_path):
-            with open(trait_config_path, "r", encoding="utf-8-sig") as f:
-                TRAIT_NAMES = json.load(f)
-    except: pass
-
-load_trait_names()
-
-def is_truly_tier_1(roi, x, y, h):
-    probe_x_start = max(0, x - 18)
-    probe_x_end = max(0, x - 3)
-    probe_y_start = max(0, y)
-    probe_y_end = min(roi.shape[0], y + h)
-
-    if probe_x_start >= roi.shape[1]: return True
-
-    sample_area = roi[probe_y_start:probe_y_end, probe_x_start:probe_x_end]
-    if sample_area.size == 0: return True
-
-    if np.max(sample_area) > 50: 
-        return False 
-    return True 
-
-def execute_inventory_discrimination(thread_sct):
-    bprint("  > [분별모드] 인벤토리 열기 (I 키)")
-    send_cmd('E'); time.sleep(0.15); send_cmd('R')
-    time.sleep(0.05)
-    send_cmd('I'); time.sleep(0.15); send_cmd('R')
-    time.sleep(0.6) # 인벤토리 창 로딩 대기
-
-    attempt = 0
-    while attempt < 3 and bot_active:
-        attempt += 1
-        bprint(f"  > [분별모드] 시퀀스 시도 중 ({attempt}/3)...")
-        
-        # 1) i키 입력 후 최대 2초간 roi로 dis_1.png 능동 탐색 (찾으면 즉시 3번으로 / 못찾으면 2번으로)
-        found_dis1 = False
-        start_t = time.time()
-        while time.time() - start_t < 2.0 and bot_active:
-            if safe_find_image('dis_1.png', 0.75):
-                found_dis1 = True
-                break
-            time.sleep(0.05)
-            
-        state_step = 3 if found_dis1 else 2
-        
-        # 2) dis_1.png를 못찾았으면 dis_2.png을 클릭 후 최대 1초간 roi로 dis_1.png 능동탐색 (찾으면 즉시 3번으로 / 못찾으면 전체화면으로 1회 재탐색)
-        if state_step == 2:
-            pos_dis2 = safe_find_image('dis_2.png', 0.75)
-            if pos_dis2:
-                pyautogui.moveTo(pos_dis2.left + pos_dis2.width//2, pos_dis2.top + pos_dis2.height//2)
-                time.sleep(0.05)
-                send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                time.sleep(0.2)
-                
-                start_t = time.time()
-                while time.time() - start_t < 1.0 and bot_active:
-                    if safe_find_image('dis_1.png', 0.75):
-                        found_dis1 = True
-                        break
-                    time.sleep(0.05)
-                    
-            if found_dis1:
-                state_step = 3
-            else:
-                bprint("  > [분별모드] 전체화면으로 dis_1.png 1회 재탐색 수행...")
-                if safe_find_image('dis_1.png', 0.75, region="FULL_SCREEN"):
-                    state_step = 3
-                else:
-                    bprint("  > [분별모드] dis_1.png 최종 미감지. 1단계부터 재시도.")
-                    time.sleep(0.5)
-                    continue
-                    
-        # 3) 최대 1초간 dis_3.png를 찾고, 찾으면 즉시 dis_3.png를 클릭 (못찾으면 1번부터 다시)
-        if state_step == 3:
-            found_dis3 = False
-            start_t = time.time()
-            pos_dis3 = None
-            while time.time() - start_t < 1.0 and bot_active:
-                pos_dis3 = safe_find_image('dis_3.png', 0.75)
-                if pos_dis3:
-                    found_dis3 = True
-                    break
-                time.sleep(0.05)
-                
-            if found_dis3 and pos_dis3:
-                pyautogui.moveTo(pos_dis3.left + pos_dis3.width//2, pos_dis3.top + pos_dis3.height//2)
-                time.sleep(0.05)
-                send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                time.sleep(0.3)
-                state_step = 4
-            else:
-                bprint("  > [분별모드] dis_3.png 감지 실패. 1단계부터 재시도.")
-                time.sleep(0.5)
-                continue
-                
-        # 4) dis_4.png가 인식되면 감염물 분별모드 실행 / 인식 안되면 dis_3.png를 다시 찾고 클릭
-        if state_step == 4:
-            if safe_find_image('dis_4.png', 0.75):
-                bprint("  > ✅ [분별모드] dis_4.png 감지 성공! 감염물 분별 스캔 작동.")
-                run_discrimination_scan_fishing(thread_sct)
-                return True
-            else:
-                bprint("  > ⚠️ [분별모드] dis_4.png 미인식. dis_3.png 다시 찾아 재클릭 시도...")
-                pos_dis3 = safe_find_image('dis_3.png', 0.75, region="FULL_SCREEN")
-                if pos_dis3:
-                    pyautogui.moveTo(pos_dis3.left + pos_dis3.width//2, pos_dis3.top + pos_dis3.height//2)
-                    time.sleep(0.05)
-                    send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                    time.sleep(0.4)
-                    
-                    if safe_find_image('dis_4.png', 0.75):
-                        bprint("  > ✅ [분별모드] 재시도 후 dis_4.png 감지 성공! 스캔 작동.")
-                        run_discrimination_scan_fishing(thread_sct)
-                        return True
-                
-                bprint("  > [분별모드] dis_4.png 최종 확인 실패. 1단계부터 재시도.")
-                time.sleep(0.5)
-                continue
-                
-    bprint("  > [분별모드] 3회 시도 모두 실패하여 인벤토리를 강제 종료합니다.")
-    send_cmd('E'); time.sleep(0.2); send_cmd('R')
-    return False
-
-def run_discrimination_scan_fishing(thread_sct):
-    bprint("  > 🔍 [분별모드] 감염물 일괄 탐색 및 분별 시작...")
-    
-    def scan_and_process():
-        inv_roi = {"left": 0, "top": 0, "width": 960, "height": 1080}
-        screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
-        all_candidates = []
-        search_items_mode5 = ['item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png']
-        
-        for item_name in search_items_mode5:
-            template = IMAGE_CACHE.get(item_name)
-            if template is None: continue
-            # 불러온 템플릿의 채널 수에 맞춰 적응형 다채널 탐색 기법 적용
-            if len(template.shape) == 2:
-                screen_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
-                res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-            else:
-                res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
-            loc = np.where(res >= 0.80)
-            h, w = template.shape[:2]
-            for pt in zip(*loc[::-1]):
-                real_x, real_y = pt[0], pt[1]
-                if any(math.hypot(real_x-cp[0], real_y-cp[1]) < 50 for cp in all_candidates): continue
-                all_candidates.append((real_x, real_y, w, h, item_name))
-        
-        all_candidates.sort(key=lambda c: (-int(c[0] / 80), c[1]))
-        bprint(f"  > [분별모드] 발견된 감염물 후보: {len(all_candidates)}개. 순차 판독 개시...")
-        
-        for pt_data in all_candidates:
-            if not bot_active: break
-            real_x, real_y, w, h, item_name = pt_data
-            cx, cy = real_x + w//2, real_y + h//2
-            pyautogui.moveTo(cx, cy)
-            
-            template_label = IMAGE_CACHE.get('ability_label.png')
-            if template_label is None: continue
-            
-            mon = thread_sct.monitors[1]
-            r_left, r_top = max(mon["left"], cx - 20), mon["top"]
-            r_width, r_height = min(500, mon["left"] + mon["width"] - r_left), mon["height"]
-            tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
-
-            label_found = False
-            lx, ly = 0, 0
-            wait_l = time.time()
-            while time.time() - wait_l < 0.8 and bot_active:
-                hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
-                _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                if mv_l >= 0.80:
-                    label_found = True; lx, ly = ml_l[0], ml_l[1]; break
-                time.sleep(0.01)
-
-            if not label_found: 
-                pyautogui.moveTo(1700, 500)
-                wt = time.time()
-                while time.time() - wt < 1.0 and bot_active:
-                    if not safe_find_image('ability_label.png', 0.80): break
-                    time.sleep(0.01)
-                continue
-                
-            col_x1 = lx + template_label.shape[1]
-            col_x2 = col_x1 + 360
-            col_y1 = max(0, ly - 20)
-            col_y2 = ly + 150
-            
-            trait_x1 = max(0, lx - 10)
-            trait_x2 = lx + 200
-            trait_y1 = ly + 30
-            trait_y2 = ly + 300
-
-            trait_name_x1 = max(0, lx - 10)
-            trait_name_x2 = lx + 360
-            trait_name_y1 = ly + 30
-            trait_name_y2 = ly + 300
-
-            scan_start = time.time()
-            is_level_5 = False
-            has_trait = False
-            
-            t5_color = IMAGE_CACHE.get('level_5.png')
-            if t5_color is not None and len(t5_color.shape) == 3:
-                t5_hsv = cv2.cvtColor(t5_color, cv2.COLOR_BGR2HSV)
-                lower_neon = np.array([45, 50, 80])
-                upper_neon = np.array([105, 255, 255])
-                t5_mask = cv2.inRange(t5_hsv, lower_neon, upper_neon)
-            else: t5_mask = None
-                
-            t_trait = IMAGE_CACHE.get('trait.png')
-            t_trait_g = cv2.cvtColor(t_trait, cv2.COLOR_BGR2GRAY) if t_trait is not None and len(t_trait.shape) == 3 else t_trait
-            
-            while time.time() - scan_start < 0.25 and bot_active:
-                sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
-                hover_color = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2BGR)
-                
-                roi_col_color = hover_color[col_y1:col_y2, col_x1:col_x2]
-                roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
-                
-                if not is_level_5 and t5_mask is not None and roi_col_color.size > 0:
-                    roi_col_hsv = cv2.cvtColor(roi_col_color, cv2.COLOR_BGR2HSV)
-                    roi_col_mask = cv2.inRange(roi_col_hsv, lower_neon, upper_neon)
-                    res_5 = cv2.matchTemplate(roi_col_mask, t5_mask, cv2.TM_CCOEFF_NORMED)
-                    _, cur_l5, _, _ = cv2.minMaxLoc(res_5)
-                    if cur_l5 >= 0.65:
-                        is_level_5 = True
-                        break 
-                                
-                if not has_trait and t_trait_g is not None and roi_trait_gray.size > 0:
-                    for scale in [0.95, 1.0, 1.05]:
-                        width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
-                        if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
-                            res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                            if np.max(res_t) >= 0.70:
-                                has_trait = True
-                                break
-                if has_trait: break
-                time.sleep(0.01)
-
-            if is_level_5:
-                bprint("  > 🛑 [보호] 5레벨 감염물")
-            elif has_trait:
-                identified_trait_name = "미등록 특성"
-                active_trait_files = [k for k in IMAGE_CACHE.keys() if k.startswith('trait_') and IMAGE_CACHE[k] is not None]
-                
-                best_score = 0.0
-                temp_scores = []
-                
-                for t_file in active_trait_files:
-                    t_template = IMAGE_CACHE[t_file]
-                    t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                    
-                    file_best_score = 0.0
-                    for scale in [0.95, 1.0, 1.05]:
-                        width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
-                        if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_name_gray.shape[0]:
-                            res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                            file_best_score = max(file_best_score, np.max(res_st))
-                            
-                    best_score = max(best_score, file_best_score)
-                    temp_scores.append((t_file, file_best_score))
-                    
-                sorted_scores = sorted(temp_scores, key=lambda x: x[1], reverse=True)
-                if len(sorted_scores) >= 1:
-                    top1_file, top1_score = sorted_scores[0]
-                    top2_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
-                    
-                    target_conf = 0.92
-                    top1_name = TRAIT_NAMES.get(top1_file, top1_file)
-                    has_number = any(char.isdigit() for char in top1_name)
-                    smart_floor = 0.82 if has_number else 0.77
-                    
-                    if top1_score >= target_conf or (top1_score >= smart_floor and (top1_score - top2_score) >= 0.06):
-                        identified_trait_name = top1_name
-                        
-                if identified_trait_name == "미등록 특성":
-                    bprint("  > ♻️ [분해] 미등록 특성 포착! 버리기 예약 클릭.")
-                    pyautogui.moveTo(cx, cy)
-                    time.sleep(0.02)
-                    send_cmd('C')
-                    time.sleep(0.05)
-                else:
-                    bprint(f"  > 👑 [보호] 등록된 특성 '{identified_trait_name}' 감지!")
-            else:
-                bprint("  > 💎 [보관] 순정 확정.")
-            
-            pyautogui.moveTo(1700, 500)
-            wt = time.time()
-            while time.time() - wt < 1.0 and bot_active:
-                if not safe_find_image('ability_label.png', 0.80): break
-                time.sleep(0.01)
-
-        scan_and_process()
-        if not bot_active: return
-        
-        bprint("  > [초점 확보] 1차 판별 후 F키(버리기) 입력...")
-        time.sleep(0.2)
-        send_cmd('F'); time.sleep(0.2); send_cmd('R')
-        time.sleep(0.2)
-        
-        target_x, target_y = 488, 570
-        pyautogui.moveTo(target_x, target_y); time.sleep(0.1); send_cmd('C')
-        time.sleep(0.2)
-        
-        bprint("  > [스크롤 이동] 화면 아래로 스크롤(17회) 진행...")
-        for _ in range(17): pyautogui.scroll(-120); time.sleep(0.02)
-        time.sleep(0.3)
-
-        bprint("  > [보정 대기] 감염물이 40개가 맞는지 체크...")
-        max_scroll_attempts = 20 
-        scroll_count = 0
-        while bot_active and scroll_count < max_scroll_attempts:
-            inv_roi = {"left": 0, "top": 0, "width": 960, "height": 1080}
-            screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
-            temp_candidates = []
-            for item_name in ['item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png']:
-                template = IMAGE_CACHE.get(item_name)
-                if template is None: continue
-                if len(template.shape) == 2:
-                    screen_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
-                    res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-                else:
-                    res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
-                loc = np.where(res >= 0.80)
-                for pt in zip(*loc[::-1]):
-                    real_x, real_y = pt[0], pt[1]
-                    if any(math.hypot(real_x-cp[0], real_y-cp[1]) < 50 for cp in temp_candidates): continue
-                    temp_candidates.append((real_x, real_y))
-            
-            if len(temp_candidates) >= 40:
-                bprint(f"  > ✅ [보정 완료] {len(temp_candidates)}개의 감염물 인식 성공.")
-                time.sleep(0.1)
-                break
-            
-            pyautogui.scroll(-120)
-            time.sleep(0.1)
-            scroll_count += 1
-        
-        scan_and_process()
-        if not bot_active: return
-        
-        bprint("  > [초점 확보] 2차 판별 후 F키(버리기) 입력...")
-        time.sleep(0.2)
-        send_cmd('F'); time.sleep(0.2); send_cmd('R')
-        time.sleep(0.2)
-        
-        pyautogui.moveTo(target_x, target_y); time.sleep(0.1); send_cmd('C')
-        time.sleep(0.2)
-        
-        bprint("  > [스크롤 이동] 화면 아래로 스크롤(10회) 진행...")
-        for _ in range(10): pyautogui.scroll(-120); time.sleep(0.02)
-        time.sleep(0.1)
-        
-        scan_and_process()
-        time.sleep(0.2)
-        send_cmd('F'); time.sleep(0.2); send_cmd('R')
-        time.sleep(0.2)
-        
-        bprint("  > [포커스 복구]")
-        pyautogui.moveTo(target_x, target_y); time.sleep(0.1); send_cmd('C')
-        time.sleep(0.1)
-        
-        bprint("  > [초기화] ESC 2회 입력하여 인벤토리 창 완전히 종료...")
-        send_cmd('E'); time.sleep(0.25); send_cmd('R')
-        time.sleep(0.25)
-        send_cmd('E'); time.sleep(0.25); send_cmd('R')
-        time.sleep(0.5)
 
 def force_exit():
     global run_start_time, original_brightness, is_dimmed
@@ -3078,192 +2693,199 @@ def fishing_bot(max_allowed_seconds):
                         current_char_time += (time.time() - char_start_time)
                     formatted_char_time = get_formatted_time(current_char_time)
 
-                    is_anchor_char = (char_index == 0)
-
-                    if is_anchor_char:
-                        bprint("\n\n!!! [알림] 앵커 캐릭터 인벤토리 풀 감지 - 분별 및 보관 시퀀스 진입 !!!")
-                        send_blynk_notification("⚠️ 앵커 캐릭 인벤토리 풀 감지")
-                        dump_blackbox_log("앵커_인벤토리_가득참_감지")
-                        
-                        # 1. 후진 보정 (S 0.8초)
-                        bprint("  > [보정] 위치 보정 시작: S(후진) 0.8초")
-                        send_cmd('S')
-                        move_start = time.time()
-                        while time.time() - move_start < 0.8:
-                            if not bot_active: raise BotStopException()
-                            time.sleep(0.1)
-                        send_cmd('R')
-                        time.sleep(0.2)
-                        
-                        # 2. 인벤토리 분별 모드 실행 (미등록 특성 감염물 필터링 및 폐기)
-                        bprint("  > [분별] 감염물 분별모드 실행 시작...")
-                        execute_inventory_discrimination(sct)
-                        time.sleep(0.5)
-
-                        # 3. 보관함에 넣기 시퀀스 (보호된 우수 감염물 보관함 전송)
-                        # 3-1. 앵커 정렬
-                        align_view_by_anchor('anchor.png')
-                        if not bot_active: continue
-                        time.sleep(0.1)
-
-                        # 3-2. Y축 최하단 이동 및 보관함(A) 탐색
-                        bprint("  > [보관] 2. 바닥 보기 및 보관함(A) 탐색")
-                        a_scan_start = time.time()
-                        while True:
-                            if not bot_active: raise BotStopException()
-                            if check_exit_notification(): state = 1; break
-                            send_cmd('M0,120'); time.sleep(0.5)
-                            
-                            if safe_find_image('specific_A.png', 0.6):
-                                bprint("  > [보관] 보관함(A) 발견")
-                                break
-                                
-                            # ROI 탐색 실패 누적 시 전체화면 1회 스캔 (자가 치유 기회)
-                            if time.time() - a_scan_start > 1.5:
-                                if safe_find_image('specific_A.png', 0.6, region="FULL_SCREEN"):
-                                    bprint("  > [보관] 보관함(A) 발견 (폴백 복구)")
-                                    break
-                            time.sleep(0.2)
-                        if state == 1: continue
-
-                        # 3-3. F 입력 및 보관함(B) 확인
-                        bprint("  > [보관] 3. 보관함 열기(F) 및 아이템 넣기(H)")
-                        while True:
-                            if not bot_active: raise BotStopException()
-                            if check_exit_notification(): state = 1; break
-                            send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.7)
-                            is_b_opened = False
-                            b_scan_start = time.time()
-                            for _ in range(20):
-                                time.sleep(0.1)
-                                if safe_find_image('specific_B.png', 0.6):
-                                    is_b_opened = True
-                                    break
-                                if time.time() - b_scan_start > 1.0:
-                                    if safe_find_image('specific_B.png', 0.6, region="FULL_SCREEN"):
-                                        is_b_opened = True
-                                        break
-                                        
-                            if is_b_opened:
-                                bprint("  > [보관] 보관함 UI(B) 확인됨. 화면 정중앙 1회 클릭 후 아이템 전송(H)")
-                                pyautogui.moveTo(CENTER_X, CENTER_Y)
-                                time.sleep(0.01)
-                                send_cmd('C'); time.sleep(0.05); send_cmd('R')
-                                time.sleep(0.05)
-                                
-                                send_cmd('G'); time.sleep(0.1); send_cmd('R')
-                                time.sleep(0.5)
-                                send_cmd('H'); time.sleep(0.1); send_cmd('R')
-                                time.sleep(1)
-                                send_cmd('H'); time.sleep(0.1); send_cmd('R')
-                                break
-                            bprint("  > [보관] UI(B) 미발견, F 재입력...")
-                        if state == 1: continue
-
-                        # 3-4. 전송 시퀀스 (C 뜰 때까지 H 반복)
-                        bprint("  > [보관] 4-1. 완료창(C) 대기 중 (H 입력 후 능동 확인)...")
-                        c_scan_start = time.time()
-                        while True:
-                            if not bot_active: raise BotStopException()
-                            if check_exit_notification(): state = 1; break
-                            if time.time() - c_scan_start > 5.0:
-                                bprint("  > [보관] 타임아웃(5초): 완료창(C) 미발견. 강제 UI 종료 시도.")
-                                send_cmd('E'); time.sleep(1.0); send_cmd('R')
-                                
-                                if bot_mode == 3 and char_index == 0:
-                                    bprint(f"  > 📦 [창고 풀] 본캐 창고가 가득 찼습니다! ({formatted_char_time} 가동) 부캐 릴레이 접속을 시작합니다.")
-                                    send_blynk_notification(f"🚀 캐릭터 변경 시작 (본캐 창고풀 / ⏱️ {formatted_char_time})")
-                                    state = 10
-                                elif bot_mode == 1:
-                                    bprint(f"  > 📦 [창고 풀] 창고가 가득 찼습니다! ({formatted_char_time} 가동) 매크로를 대기 모드로 전환합니다.")
-                                    toggle_stop()
-                                    send_blynk_notification(f"🛑 창고 가득 참. 매크로 대기 모드 전환 (⏱️ {formatted_char_time})")
-                                break
-
-                            send_cmd('H'); time.sleep(0.1); send_cmd('R')
-                            found_c = False
-                            c_inner_start = time.time()
-                            for _ in range(10):
-                                time.sleep(0.1)
-                                if safe_find_image('specific_C.png', 0.65):
-                                    found_c = True
-                                    break
-                                if time.time() - c_inner_start > 0.5:
-                                    if safe_find_image('specific_C.png', 0.65, region="FULL_SCREEN"):
-                                        found_c = True
-                                        break
-                                        
-                            if found_c:
-                                bprint("  > [보관] 완료창(C) 포착! 전송 성공. 1차 ESC")
-                                send_cmd('E'); time.sleep(1.0); send_cmd('R')
-                                break
-                            else:
-                                bprint("  > [보관] 완료창(C) 미발견. H 재입력...")
-                        if state in [1, 10]: continue
-
-                        # 3-5. UI 정리 시퀀스 (B 소멸 능동 대기 및 ESC 반복)
-                        bprint("  > [보관] 4-2. 보관함 UI(B) 소멸 능동 대기 (최대 1.5초)...")
-                        while True:
-                            if not bot_active: raise BotStopException()
-                            if check_exit_notification(): state = 1; break
-                            
-                            vanish_start = time.time()
-                            is_vanished = False
-                            while time.time() - vanish_start < 1.5 and bot_active:
-                                if not safe_find_image('specific_B.png', 0.7):
-                                    is_vanished = True
-                                    break
-                                time.sleep(0.1)
-                                
-                            if is_vanished:
-                                bprint("  > [보관] UI(B) 소멸 확인 완료. 필드 복귀")
-                                break
-                            else:
-                                bprint("  > [보관] 1.5초 경과: UI(B) 잔존 확인. ESC 재타격 시도...")
-                                send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                                time.sleep(0.5)
-                                
-                        if state == 1: continue
-
-                        # 3-6. 보관함 UI 종료 및 시점 원래대로 복구 (M0,-120)
-                        bprint("  > [보관] 5. 시점 복구 및 낚시터 복귀 준비")
-                        send_cmd('M0,-120'); time.sleep(0.5)
-
-                        # 4. 강가 복귀 전진 보정 (W 0.8초)
-                        bprint("  > [보정] 위치 보정 마무리: W(전진) 0.8초")
-                        send_cmd('W')
-                        move_start = time.time()
-                        while time.time() - move_start < 0.8:
-                            if not bot_active: raise BotStopException()
-                            time.sleep(0.1)
-                        send_cmd('R')
-                        time.sleep(0.2)
-
-                        # 5. 시점 복구 및 앵커 정렬 후 낚시 완전 복귀
-                        if bot_active and not align_view_by_anchor('anchor.png'):
-                            bprint("  > [보관] 앵커 재탐색 실패, 정밀 스캔 시도")
-                            pos = find_anchor_final('anchor.png')
-                            if not pos and bot_active:
-                                safe_find_image('anchor.png', 0.40, region="FULL_SCREEN")
-                        
-                        if bot_active:
-                            send_blynk_notification("[완료]인벤토리 정리 및 창고 전송 완료. 낚시 재개")
-                            bprint("  > [완료] 인벤토리 분별/보관 완료! 낚시 재개 전 애니메이션 대기(0.5초)...")
-                        time.sleep(0.5)
-                        import gc; gc.collect()
-                        bprint("  > 🧹 [메모리 청소] 잔여 캐시 포맷 완료 (프레임 드랍 방어)")
-                        state = 1
-                        continue
-                    else:
-                        # 앵커가 아닌 부캐릭터일 경우 (보관 시퀀스 없이 현장에서 분별 정리 후 바로 캐릭터 변경)
-                        bprint(f"\n\n!!! [알림] 부캐릭터('{CHAR_NAMES.get(MY_CHARACTERS[char_index]['img'], '부캐')}') 인벤토리 풀! ({formatted_char_time} 가동) 분별 후 교체 진행 !!!")
-                        send_blynk_notification(f"🚀 부캐 인벤풀 분별 및 교체 시작 ('{CHAR_NAMES.get(MY_CHARACTERS[char_index]['img'], '부캐')}' / ⏱️ {formatted_char_time})")
-                        dump_blackbox_log("부캐_인벤토리_가득참_감지")
-                        
-                        execute_inventory_discrimination(sct)
-                        
+                    # [모드 3: 부캐 릴레이] 현재 부캐(char_index > 0)라면 창고 보관을 스킵하고 즉시 교체!
+                    # [안전장치] char_index가 배열 길이를 초과하지 않을 때만 참조하도록 바운더리 체크 추가
+                    if bot_mode == 3 and 0 < char_index < len(MY_CHARACTERS):
+                        c_name = CHAR_NAMES.get(MY_CHARACTERS[char_index]['img'], "부캐")
+                        bprint(f"\n\n!!! [알림] '{c_name}' 인벤토리 풀! ({formatted_char_time} 가동) 창고 보관을 스킵하고 다음 캐릭터로 접속합니다 !!!")
+                        send_blynk_notification(f"🚀 캐릭터 변경 시작 ('{c_name}' 인벤풀 / ⏱️ {formatted_char_time})")
                         state = 10
                         continue
+
+                    bprint("\n\n!!! [알림] 자동 방생(인벤토리 풀) 감지 - 자동 보관 시퀀스 진입 !!!")
+                    send_blynk_notification("⚠️ 인벤토리 풀 감지")
+                    dump_blackbox_log("인벤토리_가득참_감지") # [블랙박스 트리거 추가]
+                    
+                    # S 입력 전 딜레이 0.8초 (정지 가능 모드)
+                    if bot_active:
+                        bprint("  > [보관] S 입력 전 0.8초 대기 중...")
+                    delay_start = time.time()
+                    while time.time() - delay_start < 0.8:
+                        if not bot_active: raise BotStopException() # 즉시 폭파 (2번 로그 직행)
+                        time.sleep(0.1)
+
+                    # 앵커 정렬 전 위치 보정 시퀀스 (S 0.8초 -> W 0.8초)
+                    bprint("  > [보관] 위치 보정 시작: S(후진) 0.8초")
+                    send_cmd('S')
+                    move_start = time.time()
+                    while time.time() - move_start < 0.8:
+                        if not bot_active: raise BotStopException() # 즉시 폭파
+                        time.sleep(0.1)
+                    send_cmd('R')
+
+                    bprint("  > [보관] 위치 보정 계속: W(전진) 0.8초")
+                    send_cmd('W')
+                    move_start = time.time()
+                    while time.time() - move_start < 0.8:
+                        if not bot_active: raise BotStopException() # 즉시 폭파
+                        time.sleep(0.1)
+                    send_cmd('R')
+
+                    # 1. 앵커 정렬
+                    align_view_by_anchor('anchor.png')
+                    if not bot_active: continue
+                    time.sleep(0.1)
+
+                    # 2. Y축 최하단 이동 및 보관함(A) 탐색
+                    bprint("  > [보관] 2. 바닥 보기 및 보관함(A) 탐색")
+                    a_scan_start = time.time()
+                    while True: # bot_active로 스르륵 탈출 방지
+                        if not bot_active: raise BotStopException() # 즉시 폭파
+                        if check_exit_notification(): state = 1; break
+                        send_cmd('M0,120'); time.sleep(0.5)
+                        
+                        if safe_find_image('specific_A.png', 0.6):
+                            bprint("  > [보관] 보관함(A) 발견")
+                            break
+                            
+                        # [유저 논리 적용] ROI 탐색 실패 누적 시 전체화면 1회 스캔 (자가 치유 기회)
+                        if time.time() - a_scan_start > 1.5:
+                            if safe_find_image('specific_A.png', 0.6, region="FULL_SCREEN"):
+                                bprint("  > [보관] 보관함(A) 발견 (폴백 복구)")
+                                break
+                                
+                        time.sleep(0.2)
+                    if state == 1: continue
+
+                    # 3. F 입력 및 보관함(B) 확인
+                    bprint("  > [보관] 3. 보관함 열기(F) 및 아이템 넣기(H)")
+                    while True: # bot_active로 스르륵 탈출 방지
+                        if not bot_active: raise BotStopException() # 즉시 폭파
+                        if check_exit_notification(): state = 1; break
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.7)
+                        is_b_opened = False
+                        b_scan_start = time.time()
+                        for _ in range(20):
+                            time.sleep(0.1)
+                            if safe_find_image('specific_B.png', 0.6):
+                                is_b_opened = True
+                                break
+                                
+                            # [유저 논리 적용] ROI 탐색 실패 누적 시 전체화면 1회 스캔 (자가 치유 기회)
+                            if time.time() - b_scan_start > 1.0:
+                                if safe_find_image('specific_B.png', 0.6, region="FULL_SCREEN"):
+                                    is_b_opened = True
+                                    break
+                                    
+                        if is_b_opened:
+                            bprint("  > [보관] 보관함 UI(B) 확인됨. 화면 정중앙 1회 클릭 후 아이템 전송(H)")                            
+                            # [신규 로직] 상자 오픈 후 H 누르기 전, 화면 정중앙 1회 클릭 (기본/릴레이 공통)
+                            pyautogui.moveTo(CENTER_X, CENTER_Y)
+                            time.sleep(0.01)
+                            send_cmd('C'); time.sleep(0.05); send_cmd('R')
+                            time.sleep(0.05)
+                            
+                            send_cmd('G'); time.sleep(0.1); send_cmd('R')
+                            time.sleep(0.5)
+                            send_cmd('H'); time.sleep(0.1); send_cmd('R')
+                            time.sleep(1)
+                            send_cmd('H'); time.sleep(0.1); send_cmd('R')
+                            break
+                        bprint("  > [보관] UI(B) 미발견, F 재입력...")
+                    if state == 1: continue
+
+                    # 4-1. 전송 시퀀스 (C 뜰 때까지 H 반복)
+                    bprint("  > [보관] 4-1. 완료창(C) 대기 중 (H 입력 후 능동 확인)...")
+                    c_scan_start = time.time()
+                    while True: # bot_active로 스르륵 탈출 방지
+                        if not bot_active: raise BotStopException() # 즉시 폭파
+                        
+                        if check_exit_notification(): state = 1; break
+                        if time.time() - c_scan_start > 5.0:
+                            bprint("  > [보관] 타임아웃(5초): 완료창(C) 미발견. 강제 UI 종료 시도.")
+                            send_cmd('E'); time.sleep(1.0); send_cmd('R')
+                            
+                            # [모드 3: 부캐 릴레이] 5초간 안 떴다면 본캐 창고가 꽉 찬 것으로 간주하고 교체!
+                            if bot_mode == 3 and char_index == 0:
+                                bprint(f"  > 📦 [창고 풀] 본캐 창고가 가득 찼습니다! ({formatted_char_time} 가동) 부캐 릴레이 접속을 시작합니다.")
+                                send_blynk_notification(f"🚀 캐릭터 변경 시작 (본캐 창고풀 / ⏱️ {formatted_char_time})")
+                                state = 10
+                            # [모드 1: 일반 낚시] 5초간 안 떴다면 본캐 창고 풀로 간주하고 대기 모드 전환
+                            elif bot_mode == 1:
+                                bprint(f"  > 📦 [창고 풀] 창고가 가득 찼습니다! ({formatted_char_time} 가동) 매크로를 대기 모드로 전환합니다.")
+                                toggle_stop()
+                                send_blynk_notification(f"🛑 창고 가득 참. 매크로 대기 모드 전환 (⏱️ {formatted_char_time})")
+                            break
+
+                        send_cmd('H'); time.sleep(0.1); send_cmd('R')
+                        found_c = False
+                        c_inner_start = time.time()
+                        for _ in range(10):
+                            time.sleep(0.1)
+                            if safe_find_image('specific_C.png', 0.65):
+                                found_c = True
+                                break
+                                
+                            # [유저 논리 적용] ROI 탐색 실패 누적 시 전체화면 1회 스캔 (자가 치유 기회)
+                            if time.time() - c_inner_start > 0.5:
+                                if safe_find_image('specific_C.png', 0.65, region="FULL_SCREEN"):
+                                    found_c = True
+                                    break
+                                    
+                        if found_c:
+                            bprint("  > [보관] 완료창(C) 포착! 전송 성공. 1차 ESC")
+                            send_cmd('E'); time.sleep(1.0); send_cmd('R')
+                            break
+                        else:
+                            bprint("  > [보관] 완료창(C) 미발견. H 재입력...")
+                    # [핵심 수정] 4-1 루프를 빠져나왔을 때, 상태가 1(잠수방지)이거나 10(창고만석)이라면
+                    # 4-2(ESC연타)와 5번(시점복구) 과정을 모조리 무시하고 즉시 다음 턴으로 점프합니다!
+                    if state in [1, 10]: continue
+
+                    # 4-2. UI 정리 시퀀스 (B 소멸 능동 대기 및 ESC 반복)
+                    bprint("  > [보관] 4-2. 보관함 UI(B) 소멸 능동 대기 (최대 1.5초)...")
+                    while True: # bot_active로 스르륵 탈출 방지
+                        if not bot_active: raise BotStopException() # 즉시 폭파
+                        if check_exit_notification(): state = 1; break
+                        
+                        # 1. 1.5초 동안 UI가 자연스럽게 사라지기를 기다림 (잔상 방어)
+                        vanish_start = time.time()
+                        is_vanished = False
+                        while time.time() - vanish_start < 1.5 and bot_active:
+                            if not safe_find_image('specific_B.png', 0.7):
+                                is_vanished = True
+                                break
+                            time.sleep(0.1) # 0.1초 간격으로 확인
+                            
+                        # 2. 결과 판정
+                        if is_vanished:
+                            bprint("  > [보관] UI(B) 소멸 확인 완료. 필드 복귀")
+                            break
+                        else:
+                            # 1.5초가 지났는데도 꿋꿋하게 남아있다면 그때서야 ESC 재타격
+                            bprint("  > [보관] 1.5초 경과: UI(B) 잔존 확인. ESC 재타격 시도...")
+                            send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                            time.sleep(0.5) # 타격 후 기본 딜레이 부여 후 루프 처음(소멸 대기)으로 복귀
+                            
+                    if state == 1: continue
+
+                    # 5. 시점 복구 및 앵커 재탐색
+                    bprint("  > [보관] 5. 시점 복구 및 낚시 재개 준비")
+                    send_cmd('M0,-120'); time.sleep(0.5)
+                    
+                    if bot_active and not align_view_by_anchor('anchor.png'):
+                        bprint("  > [보관] 앵커 재탐색 실패, 정밀 스캔 시도")
+                        pos = find_anchor_final('anchor.png')
+                        if not pos and bot_active:
+                            safe_find_image('anchor.png', 0.40, region="FULL_SCREEN")
+                    
+                    if bot_active:
+                        send_blynk_notification("[완료]인벤토리 비움. 낚시 재개")
+                        bprint("  > [완료] 인벤토리 비움. 낚시 재개 전 애니메이션 대기(0.5초)...")
+                    time.sleep(0.5)
+                    import gc; gc.collect()
+                    bprint("  > 🧹 [메모리 청소] 잔여 캐시 포맷 완료 (프레임 드랍 방어)")
+                    state = 1
                 else:
                     bprint("  > [정상] 특이사항 없음. 다음 낚시를 시작합니다.")
                     import gc; gc.collect()

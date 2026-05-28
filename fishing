@@ -931,7 +931,17 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         sct_img = active_sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-        res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+
+        # 패치로 인해 배경색이 반전(어두운색<->밝은색)된 대상 UI 군들을 보정하기 위해
+        # 정방향 대조와 반전(Invert) 대조를 동시 수행하여 양방향 명도 대비를 모두 수용합니다.
+        if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
+            res_normal = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+            template_inv = cv2.bitwise_not(template)
+            res_inv = cv2.matchTemplate(screen_gray, template_inv, cv2.TM_CCOEFF_NORMED)
+            res = np.maximum(res_normal, res_inv)
+        else:
+            res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
@@ -1267,7 +1277,16 @@ def afk_monitor_loop():
                             if temp is None: return False
                             sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
-                            return cv2.minMaxLoc(cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED))[1] >= conf
+                            
+                            # 명암 반전 양방향 매칭 보정 기법 자동 적용
+                            if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
+                                res_normal = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
+                                temp_inv = cv2.bitwise_not(temp)
+                                res_inv = cv2.matchTemplate(screen_gray_ui, temp_inv, cv2.TM_CCOEFF_NORMED)
+                                res = np.maximum(res_normal, res_inv)
+                            else:
+                                res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
+                            return cv2.minMaxLoc(res)[1] >= conf
 
                         found_fishing = check_ui('fishing.png', 0.65)
                         time.sleep(0.5) # 0.5초 딜레이
@@ -1304,10 +1323,8 @@ def afk_monitor_loop():
                         bprint("  > [대기] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)...")
                         wait_idle_start = time.time()
                         while time.time() - wait_idle_start < 6.0:
-                            sct_img_idle = afk_sct.grab(afk_sct.monitors[1])
-                            screen_idle = cv2.cvtColor(np.array(sct_img_idle), cv2.COLOR_BGRA2GRAY)
-                            temp_idle = IMAGE_CACHE.get('bait_change.png')
-                            if temp_idle is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_idle, temp_idle, cv2.TM_CCOEFF_NORMED))[1] >= 0.80:
+                            # 반전 대응 구조가 반영된 check_ui 함수를 호출하여 명도 반전 상태에서도 정확하게 회수 동작을 마감합니다.
+                            if check_ui('bait_change.png', 0.80):
                                 break
                             time.sleep(0.8)
 
@@ -2434,7 +2451,16 @@ def fishing_bot(max_allowed_seconds):
                                         mb = ROI_SAMPLER[img_name]['master_box']
                                         x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
                                         roi_gray = screen_full_gray[y:y+h, x:x+w]
-                                        res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
+                                        
+                                        # 배경 명암 반전 보완을 위한 양방향 듀얼 매칭 분기
+                                        if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
+                                            res_normal = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            template_inv = cv2.bitwise_not(template)
+                                            res_inv = cv2.matchTemplate(roi_gray, template_inv, cv2.TM_CCOEFF_NORMED)
+                                            res = np.maximum(res_normal, res_inv)
+                                        else:
+                                            res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            
                                         _, max_val, _, max_loc = cv2.minMaxLoc(res)
                                         
                                         if max_val >= conf:
@@ -2459,7 +2485,14 @@ def fishing_bot(max_allowed_seconds):
                                         return False
                                     else:
                                         # ROI가 없을 땐 전체화면 배열 그대로 매칭
-                                        res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
+                                        if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
+                                            res_normal = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            template_inv = cv2.bitwise_not(template)
+                                            res_inv = cv2.matchTemplate(screen_full_gray, template_inv, cv2.TM_CCOEFF_NORMED)
+                                            res = np.maximum(res_normal, res_inv)
+                                        else:
+                                            res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            
                                         _, max_val, _, max_loc = cv2.minMaxLoc(res)
                                         
                                         if max_val >= conf:

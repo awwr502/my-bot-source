@@ -315,7 +315,8 @@ FUSION_CONF = {
     'ability_label.png': 0.92,
     'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72,
     'exit_notice.png': 0.85,
-    'bug_time.png': 0.85
+    'bug_time.png': 0.85,
+    'dis_4.png': 0.85
 }
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
@@ -336,7 +337,7 @@ GRAY_IMAGES.extend([c["img"] for c in MY_CHARACTERS])
 COLOR_IMAGES = [
     'check_mark.png', 'item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png', 
     'level_5.png', 'fusion_start.png',
-    'tier_1.png', 'tier_2.png', 'tier_3.png', 'tier_4.png'
+    'tier_1.png', 'tier_2.png', 'tier_3.png', 'tier_4.png', 'dis_4.png'
 ]
 target_images = GRAY_IMAGES + COLOR_IMAGES
 
@@ -1186,11 +1187,13 @@ def fusion_bot_loop():
                         run_discrimination_scan("1차")
                         if not bot_active: continue
                         
-                        bprint("  > [초점 확보] F키(버리기) 입력 및 절대좌표 클릭 진행...")
+                        bprint("  > [초점 확보] dis_4.png 탐색 및 클릭 진행 (F키 버그 우회)...")
                         
-                        # [핵심 수정 1] 판별 완료 직후 클라이언트 렉을 0.3초간 기다린 뒤, F키를 0.2초간 길고 확실하게 누릅니다.
                         time.sleep(0.2)
-                        send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        # send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        if check_img('dis_4.png', thread_sct):
+                            cx, cy = FUSION_ROI['dis_4.png']['last_pos']
+                            pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                         time.sleep(0.2)
                         
                         # [핵심 수정 2] 오류가 잦은 픽셀 탐색을 폐기하고, 빨간 박스 하단 여백의 가장 안전한 '절대 좌표'를 강제 클릭합니다.
@@ -1240,9 +1243,12 @@ def fusion_bot_loop():
                         run_discrimination_scan("2차")
                         if not bot_active: continue
                         
-                        bprint("  > [초점 확보] 2차 판별 후 F키(버리기) 입력 및 절대좌표 클릭 진행...")
+                        bprint("  > [초점 확보] 2차 판별 후 dis_4.png 탐색 및 클릭 진행 (F키 버그 우회)...")
                         time.sleep(0.2)
-                        send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        # send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        if check_img('dis_4.png', thread_sct):
+                            cx, cy = FUSION_ROI['dis_4.png']['last_pos']
+                            pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                         time.sleep(0.2)
                         
                         target_x, target_y = 488, 570
@@ -1258,7 +1264,10 @@ def fusion_bot_loop():
                         run_discrimination_scan("3차")
                         # 3차 판별 후 최종 정리 및 창 닫기
                         time.sleep(0.2)
-                        send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        # send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        if check_img('dis_4.png', thread_sct):
+                            cx, cy = FUSION_ROI['dis_4.png']['last_pos']
+                            pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                         time.sleep(0.2)
                         
                         bprint("  > [포커스 복구]")

@@ -931,7 +931,16 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         sct_img = active_sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-        res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+
+        # bait_change.png의 경우 패치로 인한 배경 반전(검정<->흰색)에 간섭받지 않도록
+        # 외곽선 에지 매칭(Canny Edge Match) 기법을 적용해 물리적 구조 형태만 대조합니다.
+        if img_path == 'bait_change.png':
+            proc_template = cv2.Canny(template, 30, 100)
+            proc_screen = cv2.Canny(screen_gray, 30, 100)
+            res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCOEFF_NORMED)
+        else:
+            res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
@@ -1304,10 +1313,8 @@ def afk_monitor_loop():
                         bprint("  > [대기] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)...")
                         wait_idle_start = time.time()
                         while time.time() - wait_idle_start < 6.0:
-                            sct_img_idle = afk_sct.grab(afk_sct.monitors[1])
-                            screen_idle = cv2.cvtColor(np.array(sct_img_idle), cv2.COLOR_BGRA2GRAY)
-                            temp_idle = IMAGE_CACHE.get('bait_change.png')
-                            if temp_idle is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_idle, temp_idle, cv2.TM_CCOEFF_NORMED))[1] >= 0.80:
+                            # 엣지 맵 매칭 구조가 반영된 안전 함수를 호출하여 완벽하게 상태를 복구합니다.
+                            if safe_find_image('bait_change.png', 0.80):
                                 break
                             time.sleep(0.8)
 

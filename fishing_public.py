@@ -1859,7 +1859,7 @@ def fishing_bot(max_allowed_seconds):
             if check_exit_notification():
                 send_cmd('U') # 혹시 모를 클릭 해제
                 send_cmd('R')
-                if safe_find_image('bait_change.png', 0.75):
+                if safe_find_image('bait_change.png', 0.65):
                     state = 1
                 else:
                     state = 0
@@ -1953,7 +1953,7 @@ def fishing_bot(max_allowed_seconds):
                 send_cmd('R'); time.sleep(1.0)
                 
                 # 봇 시작 시 특정 사진(예: bait_change.png) 확인
-                if safe_find_image('bait_change.png', 0.75):
+                if safe_find_image('bait_change.png', 0.65):
                     bprint("  > [확인] 조건 사진 발견! 정상 낚시 모드 진입 (State 1)")
                     state = 1
                 else:
@@ -1963,7 +1963,7 @@ def fishing_bot(max_allowed_seconds):
             # --- [State 0] 잠수 방지 전용 모드 (대기 및 자가 복귀) ---
             if state == 0:
                 # 낚시 준비 상태가 확인되면 스스로 대기를 풀고 다시 낚시를 시작합니다.
-                if safe_find_image('bait_change.png', 0.75):
+                if safe_find_image('bait_change.png', 0.65):
                     bprint("  > [복귀] 낚시 준비 상태가 확인되었습니다. 정상 낚시 모드(State 1)로 진입합니다.")
                     state = 1
                     state_start_time = time.time()
@@ -1995,7 +1995,7 @@ def fishing_bot(max_allowed_seconds):
                     
                 # 2. 최대 6초 동안 기본 탐색 (ROI 엔진)
                 while time.time() - wait_bait_start < 6.0 and bot_active:
-                    if safe_find_image('bait_change.png', 0.75):
+                    if safe_find_image('bait_change.png', 0.65):
                         found_bait = True
                         break
                     time.sleep(0.2)
@@ -2003,7 +2003,7 @@ def fishing_bot(max_allowed_seconds):
                 # 3. 미발견 시 전체화면 강제 탐색 (딱 1회)
                 if not found_bait and bot_active:
                     bprint("  > [폴백] ROI 탐색 실패. 전체화면 1회 스캔하여 자가치유 여부 판단")
-                    if safe_find_image('bait_change.png', 0.75, region="FULL_SCREEN"):
+                    if safe_find_image('bait_change.png', 0.65, region="FULL_SCREEN"):
                         found_bait = True
 
                 # [내구도 시스템 대응] 낚싯대 파괴 감지 및 자동 재장착 로직
@@ -2025,7 +2025,7 @@ def fishing_bot(max_allowed_seconds):
                             break
 
                         # 0) 이미 완벽하게 장착된 상태인지 최우선 확인
-                        if safe_find_image('bait_change.png', 0.75):
+                        if safe_find_image('bait_change.png', 0.65):
                             bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
                             break
 
@@ -2070,13 +2070,13 @@ def fishing_bot(max_allowed_seconds):
                                 found_start = False
                                 wait_start = time.time()
                                 while time.time() - wait_start < 1.5 and bot_active:
-                                    if safe_find_image('bait_change.png', 0.75):
+                                    if safe_find_image('bait_change.png', 0.65):
                                         found_start = True
                                         break
                                     time.sleep(0.5)
                                     
                                 if not found_start and bot_active:
-                                    if safe_find_image('bait_change.png', 0.75, region="FULL_SCREEN"):
+                                    if safe_find_image('bait_change.png', 0.65, region="FULL_SCREEN"):
                                         found_start = True
                                         
                                 if found_start:
@@ -2236,7 +2236,7 @@ def fishing_bot(max_allowed_seconds):
                             break
 
                         # 0) 이미 완벽하게 장착된 상태인지 최우선 확인
-                        if safe_find_image('bait_change.png', 0.75):
+                        if safe_find_image('bait_change.png', 0.65):
                             bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
                             break
 
@@ -2281,13 +2281,13 @@ def fishing_bot(max_allowed_seconds):
                             found_start = False
                             wait_start = time.time()
                             while time.time() - wait_start < 1.5 and bot_active:
-                                if safe_find_image('bait_change.png', 0.75):
+                                if safe_find_image('bait_change.png', 0.65):
                                     found_start = True
                                     break
                                 time.sleep(0.5)
                                 
                             if not found_start and bot_active:
-                                if safe_find_image('bait_change.png', 0.75, region="FULL_SCREEN"):
+                                if safe_find_image('bait_change.png', 0.65, region="FULL_SCREEN"):
                                     found_start = True
                                     
                             if found_start:
@@ -3135,7 +3135,7 @@ def fishing_bot(max_allowed_seconds):
                         continue
 
                     # 0) 이미 완벽하게 장착된 상태인지 최우선 확인 (불필요한 0번/클릭 방지)
-                    if safe_find_image('bait_change.png', 0.75):
+                    if safe_find_image('bait_change.png', 0.65):
                         bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
                         break
 
@@ -3166,10 +3166,10 @@ def fishing_bot(max_allowed_seconds):
                     found_start = False
                     wait_start = time.time()
                     while time.time() - wait_start < 1.5 and bot_active:
-                        if safe_find_image('bait_change.png', 0.75): # ROI 탐색 우선
+                        if safe_find_image('bait_change.png', 0.65): # ROI 탐색 우선
                             found_start = True
                             break
-                        if safe_find_image('bait_change.png', 0.75, region="FULL_SCREEN"): # ROI 실패 시 전체화면 탐색
+                        if safe_find_image('bait_change.png', 0.65, region="FULL_SCREEN"): # ROI 실패 시 전체화면 탐색
                             found_start = True
                             break
                         time.sleep(0.1)

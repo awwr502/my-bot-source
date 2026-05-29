@@ -854,12 +854,10 @@ def preload_all_images():
                 if not img_name.endswith('.png'): continue
                 full_path = os.path.join(BASE_IMG_DIR, img_name)
                 
-                remote_sha = item_data['sha']
-                local_sha = get_git_sha(full_path)
-                
-                # 깃허브 파일과 로컬 파일의 해시가 다르면 즉시 다운로드하여 덮어쓰기
-                if local_sha != remote_sha:
-                    bprint(f"  > ☁️ [클라우드 패치] '{img_name}' 최신화 다운로드 중...")
+                # [순수 로컬 보존] 사용자가 게임 화면에 맞게 커스텀 크롭한 이미지가 날아가는 것을 완전히 방지합니다.
+                # 오직 이미지 폴더가 비어있거나 누락된 파일이 있을 때만 안전하게 다운로드합니다.
+                if not os.path.exists(full_path):
+                    bprint(f"  > ☁️ [클라우드 다운로드] 누락된 이미지 '{img_name}' 받는 중...")
                     dl_res = requests.get(item_data['download_url'], timeout=5)
                     dl_res.raise_for_status()
                     with open(full_path, 'wb') as f:
@@ -880,12 +878,20 @@ def preload_all_images():
                     IMAGE_CACHE[filename] = img_gray
                     count += 1
                     
+                    # [스마트 획 추출기] 찌나 캐릭터 사진 등을 제외한 글씨/버튼류 템플릿의 배경색을 지우고 글자 선만 따서 마스크 자동 빌드
+                    if filename not in ['green_float.png', 'anchor.png', 'animal_1.png', 'char_1.png', 'char_2.png', 'char_3.png', 'char_4.png', 'char_5.png']:
+                        median_val = np.median(img_gray)
+                        diff = cv2.absdiff(img_gray, int(median_val))
+                        # 미세 명도 편차가 15 이상 발생하는 고대비 영역(즉, 글씨 획)만 마스크로 채택
+                        _, auto_mask = cv2.threshold(diff, 15, 255, cv2.THRESH_BINARY)
+                        IMAGE_MASK_CACHE[filename] = auto_mask
+                    
                 # 2. 알파 투명도 마스크 및 고대비 컬러 매칭용 원본 채널 적재
                 img_unchanged = cv2.imdecode(img_array, cv2.IMREAD_UNCHANGED)
                 if img_unchanged is not None:
                     if len(img_unchanged.shape) == 3 and img_unchanged.shape[2] == 4:
-                        # 4채널(BGRA)인 경우 컬러와 투명 알파 마스크 분리 저장
                         IMAGE_COLOR_CACHE[filename] = img_unchanged[:, :, :3]
+                        # 사용자가 포토샵 등으로 알파 채널을 따둔 이미지는 수동 마스크 우선 적용
                         IMAGE_MASK_CACHE[filename] = img_unchanged[:, :, 3]
                     else:
                         IMAGE_COLOR_CACHE[filename] = img_unchanged
@@ -924,7 +930,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     mask = IMAGE_MASK_CACHE.get(img_path)
     template_color = IMAGE_COLOR_CACHE.get(img_path)
     
-    # [설정] 수면/월드 위에서 배경 간섭을 받아 왜곡이 발생하는 핵심 낚시 UI 요소들만 가변 대피소 연산을 허용 (팝업 오탐 완전히 차단)
+    # [설정] 수면/월드 위에서 배경 간섭을 받아 왜곡이 발생하는 핵심 낚시 UI 요소들만 가변 대피소 연산을 허용
     DYNAMIC_UI_LIST = [
         'bait_change.png', 'throw_btn.png', 'broken_rod.png', 'catch_F.png', 
         'green_range.png', 'fishing.png', 'fishing_mode.png'
@@ -957,7 +963,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         sct_img = active_sct.grab(target_monitor)
         
-        # 1. 색상 분석 및 정합성 매치 진행
+        # 분기 처리:
+        # A. 녹색 찌의 경우: 기존 특화 추출식 사용
         if img_path == 'green_float.png' and template_color is not None:
             screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
             sb, sg, sr = cv2.split(screen_bgr)
@@ -967,11 +974,15 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             template_processed = cv2.subtract(tg, cv2.max(tr, tb))
             use_mask = None
             use_color = True
-        elif mask is not None and template_color is not None:
-            screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-            template_processed = template_color
+            
+        # B. 자동 생성 및 수동 추출된 획 마스크가 존재하는 모든 글자/버튼류: 배경 제거 글자선 대조 가동
+        elif mask is not None:
+            screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+            template_processed = template_gray
             use_mask = mask
-            use_color = True
+            use_color = False
+            
+        # C. 마스크가 생성되지 않은 이미지 계열
         else:
             screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
             template_processed = template_gray
@@ -979,6 +990,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             use_color = False
 
         if use_mask is not None:
+            # 글자선 전용 마스크 매칭 시 규격화 수식 작동
             res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
         else:
             res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
@@ -996,8 +1008,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 screen_bgr_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
                 sb_f, sg_f, sr_f = cv2.split(screen_bgr_f)
                 screen_processed_f = cv2.subtract(sg_f, cv2.max(sr_f, sb_f))
-            elif mask is not None and template_color is not None:
-                screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
+            elif mask is not None:
+                screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
             else:
                 screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
                 
@@ -1022,7 +1034,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 screen_processed = screen_processed_f
 
         # 3. [적응형 이진화 및 배율 교정 대피소]
-        # 오직 수면/월드 위 배경 간섭을 받는 핵심 낚시 UI 요소들만 형태 대조를 허용 (일반 판넬/팝업창 오탐 점수 0.925 버그 완벽 차단)
+        # 오직 배경 간섭을 받는 핵심 낚시 UI 요소들만 형태 대조를 허용 (일반 판넬/팝업창 오탐 점수 0.925 버그 완벽 차단)
         if max_val < active_conf and img_path in DYNAMIC_UI_LIST:
             s_gray = screen_processed if not use_color else cv2.cvtColor(screen_processed, cv2.COLOR_BGR2GRAY)
             t_gray = template_processed if not use_color else cv2.cvtColor(template_processed, cv2.COLOR_BGR2GRAY)

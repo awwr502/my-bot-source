@@ -932,20 +932,23 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         sct_img = active_sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
 
-        # [Local-Contrast Equalized Dual Engine]
-        # 수면의 색상(극단적인 흰색 거품/어두운 물빛)과 상관없이 반투명 UI의 미세한 명암 대비를 국소적으로 강제 극대화합니다.
-        # 소벨 필터처럼 외곽선을 흐릿하게 뭉개지 않고, CLAHE(4x4 타일) 기법으로 초정밀 로컬 대비를 복원한 뒤 양방향 정밀 매칭을 수행합니다.
+        # [Sobel Gradient Magnitude Matching Engine]
+        # 수면의 색상(배경 흰색 변경 등)과 상관없이 반투명 UI의 외곽 형태선만 추출하여 매칭합니다.
+        # 배경색이 흰색으로 바뀌더라도 평탄한 영역의 기울기(Gradient)는 0이 되므로 아이콘 본연의 형태만 뚜렷하게 매칭됩니다.
         if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-            # 국소 대비 극대화 필터 생성 (투명 배경으로 인해 뭉개진 명암 대비를 복원)
-            clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(4, 4))
-            proc_screen = clahe.apply(screen_gray)
-            proc_template = clahe.apply(template)
+            grad_s_x = cv2.Sobel(screen_gray, cv2.CV_32F, 1, 0, ksize=3)
+            grad_s_y = cv2.Sobel(screen_gray, cv2.CV_32F, 0, 1, ksize=3)
+            mag_screen = cv2.magnitude(grad_s_x, grad_s_y)
+            cv2.normalize(mag_screen, mag_screen, 0, 255, cv2.NORM_MINMAX)
+            proc_screen = np.uint8(mag_screen)
 
-            # 정방향 및 반전 대조군 동시 매칭 수행
-            res_normal = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCOEFF_NORMED)
-            proc_template_inv = cv2.bitwise_not(proc_template)
-            res_inv = cv2.matchTemplate(proc_screen, proc_template_inv, cv2.TM_CCOEFF_NORMED)
-            res = np.maximum(res_normal, res_inv)
+            grad_t_x = cv2.Sobel(template, cv2.CV_32F, 1, 0, ksize=3)
+            grad_t_y = cv2.Sobel(template, cv2.CV_32F, 0, 1, ksize=3)
+            mag_template = cv2.magnitude(grad_t_x, grad_t_y)
+            cv2.normalize(mag_template, mag_template, 0, 255, cv2.NORM_MINMAX)
+            proc_template = np.uint8(mag_template)
+
+            res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCOEFF_NORMED)
             h, w = template.shape[:2]
         else:
             res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
@@ -1287,16 +1290,21 @@ def afk_monitor_loop():
                             sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
                             
-                            # 로컬 명암 대비(CLAHE 4x4) 극대화 및 명암 반전 대비 기법 통합 적용
+                            # 소벨 필터를 활용한 배경 무관 형태 매칭 적용
                             if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(4, 4))
-                                proc_screen = clahe.apply(screen_gray_ui)
-                                proc_temp = clahe.apply(temp)
-                                
-                                res_normal = cv2.matchTemplate(proc_screen, proc_temp, cv2.TM_CCOEFF_NORMED)
-                                temp_inv = cv2.bitwise_not(proc_temp)
-                                res_inv = cv2.matchTemplate(proc_screen, temp_inv, cv2.TM_CCOEFF_NORMED)
-                                res = np.maximum(res_normal, res_inv)
+                                grad_s_x = cv2.Sobel(screen_gray_ui, cv2.CV_32F, 1, 0, ksize=3)
+                                grad_s_y = cv2.Sobel(screen_gray_ui, cv2.CV_32F, 0, 1, ksize=3)
+                                mag_screen = cv2.magnitude(grad_s_x, grad_s_y)
+                                cv2.normalize(mag_screen, mag_screen, 0, 255, cv2.NORM_MINMAX)
+                                proc_screen = np.uint8(mag_screen)
+
+                                grad_t_x = cv2.Sobel(temp, cv2.CV_32F, 1, 0, ksize=3)
+                                grad_t_y = cv2.Sobel(temp, cv2.CV_32F, 0, 1, ksize=3)
+                                mag_template = cv2.magnitude(grad_t_x, grad_t_y)
+                                cv2.normalize(mag_template, mag_template, 0, 255, cv2.NORM_MINMAX)
+                                proc_template = np.uint8(mag_template)
+
+                                res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCOEFF_NORMED)
                             else:
                                 res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
                             return cv2.minMaxLoc(res)[1] >= conf
@@ -2466,16 +2474,21 @@ def fishing_bot(max_allowed_seconds):
                                         x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
                                         roi_gray = screen_full_gray[y:y+h, x:x+w]
                                         
-                                        # 로컬 명암 최적화(CLAHE 4x4) 및 양방향 대비 매칭 분기
+                                        # 소벨 필터를 활용한 배경 무관 형태 매칭 적용 (ROI 전용)
                                         if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(4, 4))
-                                            proc_roi = clahe.apply(roi_gray)
-                                            proc_template = clahe.apply(template)
-                                            
-                                            res_normal = cv2.matchTemplate(proc_roi, proc_template, cv2.TM_CCOEFF_NORMED)
-                                            proc_template_inv = cv2.bitwise_not(proc_template)
-                                            res_inv = cv2.matchTemplate(proc_roi, proc_template_inv, cv2.TM_CCOEFF_NORMED)
-                                            res = np.maximum(res_normal, res_inv)
+                                            grad_s_x = cv2.Sobel(roi_gray, cv2.CV_32F, 1, 0, ksize=3)
+                                            grad_s_y = cv2.Sobel(roi_gray, cv2.CV_32F, 0, 1, ksize=3)
+                                            mag_screen = cv2.magnitude(grad_s_x, grad_s_y)
+                                            cv2.normalize(mag_screen, mag_screen, 0, 255, cv2.NORM_MINMAX)
+                                            proc_screen = np.uint8(mag_screen)
+
+                                            grad_t_x = cv2.Sobel(template, cv2.CV_32F, 1, 0, ksize=3)
+                                            grad_t_y = cv2.Sobel(template, cv2.CV_32F, 0, 1, ksize=3)
+                                            mag_template = cv2.magnitude(grad_t_x, grad_t_y)
+                                            cv2.normalize(mag_template, mag_template, 0, 255, cv2.NORM_MINMAX)
+                                            proc_template = np.uint8(mag_template)
+
+                                            res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCOEFF_NORMED)
                                         else:
                                             res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
                                             
@@ -2502,16 +2515,21 @@ def fishing_bot(max_allowed_seconds):
                                             return True
                                         return False
                                     else:
-                                        # ROI가 없을 땐 전체화면 배열 그대로 매칭
+                                        # ROI가 없을 땐 전체화면 배열 그대로 매칭 (소벨 적용)
                                         if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(4, 4))
-                                            proc_screen = clahe.apply(screen_full_gray)
-                                            proc_template = clahe.apply(template)
-                                            
-                                            res_normal = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCOEFF_NORMED)
-                                            proc_template_inv = cv2.bitwise_not(proc_template)
-                                            res_inv = cv2.matchTemplate(proc_screen, proc_template_inv, cv2.TM_CCOEFF_NORMED)
-                                            res = np.maximum(res_normal, res_inv)
+                                            grad_s_x = cv2.Sobel(screen_full_gray, cv2.CV_32F, 1, 0, ksize=3)
+                                            grad_s_y = cv2.Sobel(screen_full_gray, cv2.CV_32F, 0, 1, ksize=3)
+                                            mag_screen = cv2.magnitude(grad_s_x, grad_s_y)
+                                            cv2.normalize(mag_screen, mag_screen, 0, 255, cv2.NORM_MINMAX)
+                                            proc_screen = np.uint8(mag_screen)
+
+                                            grad_t_x = cv2.Sobel(template, cv2.CV_32F, 1, 0, ksize=3)
+                                            grad_t_y = cv2.Sobel(template, cv2.CV_32F, 0, 1, ksize=3)
+                                            mag_template = cv2.magnitude(grad_t_x, grad_t_y)
+                                            cv2.normalize(mag_template, mag_template, 0, 255, cv2.NORM_MINMAX)
+                                            proc_template = np.uint8(mag_template)
+
+                                            res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCOEFF_NORMED)
                                         else:
                                             res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
                                             

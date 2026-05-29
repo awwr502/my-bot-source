@@ -186,7 +186,7 @@ def toggle_relay_start():
     char_pure_run_time = 0.0
     char_start_time = time.time()
     bprint("\n=============================================")
-    bprint("🟢 [모드 3: 부캐 릴레이 낚시 start] 단축키(;) 입력 감지")
+    bprint("🟢 [모드 3: 부캐 릴레이 낚시 시작] 단축키(;) 입력 감지")
     if char_index == 0:
         bprint("  > [순환 메모리] 새로운 사이클을 본캐(기본)부터 시작합니다.")
     else:
@@ -931,28 +931,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         sct_img = active_sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-
-        # [Sobel Gradient & Edge Masking Combined Engine]
-        # [Unified Shaved Absolute Correlation Engine]
-        # 수면 배경 변화로 인한 테두리 누수를 원천 차단하기 위해 템플릿의 외곽 10%를 깎아내고(Shaving),
-        # 명암 반전 상황에서도 완벽히 검출될 수 있도록 표준 매칭 결과에 절대값(np.abs)을 적용합니다.
-        # 이 방식은 복잡한 필터링 없이 원본 이미지의 핵심 형태 정보만 순수하게 비교하므로 연산이 매우 빠르고 100% 정확합니다.
-        if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
-            orig_h, orig_w = template.shape[:2]
-            shave_y = max(1, int(orig_h * 0.10))
-            shave_x = max(1, int(orig_w * 0.10))
-            shaved_template = template[shave_y:orig_h-shave_y, shave_x:orig_w-shave_x]
-            
-            res_raw = cv2.matchTemplate(screen_gray, shaved_template, cv2.TM_CCOEFF_NORMED)
-            res = np.abs(res_raw)
-            h, w = orig_h, orig_w
-        else:
-            res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-            h, w = template.shape[:2]
-            shave_x, shave_y = 0, 0
-
+        res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        max_loc = (max_loc[0] - shave_x, max_loc[1] - shave_y)
 
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
         ctx = safe_find_image.session.setdefault(img_path, {
@@ -1030,15 +1010,13 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                             print(f"  > 📸 [ROI 복구 캡처] '{img_path}'의 누락된 고정 범위 사진을 다시 저장했습니다.")
                     except: pass
 
-        # [신규] 인식 실패 시 엑셀 및 콘솔 동시 진단 경보 시스템 (1초 쿨다운)
+        # [신규] 인식 실패 시 엑셀 로깅 (팝업 제외 및 1초당 1회 기록)
         if max_val < active_conf:
             ctx['found'] = False
             # 팝업 이미지는 평소에 안 뜨는 것이 정상이므로 실패 로그에서 완전히 제외
             if img_path not in ['popup_char.png', 'popup_main.png']:
                 if time.time() - ctx['last_fail_time'] > 1.0:
                     log_confidence_to_csv("인식실패", img_path, active_conf, max_val, None, None, "임계값 미달")
-                    # 실시간 모니터링용 상세 콘솔 출력 추가
-                    print(f"  > 🔴 [인식 실패] {img_path:<18} | 현재 일치율: {max_val:.3f} / 필요 컷오프: {active_conf:.3f} (부족분: {active_conf - max_val:+.3f})")
                     ctx['last_fail_time'] = time.time()
             return None
 
@@ -1289,21 +1267,7 @@ def afk_monitor_loop():
                             if temp is None: return False
                             sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
-                            
-                            # 외곽 깎기(Shaving) 및 절대값 엔진 일괄 적용
-                            if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
-                                orig_h, orig_w = temp.shape[:2]
-                                shave_y = max(1, int(orig_h * 0.10))
-                                shave_x = max(1, int(orig_w * 0.10))
-                                shaved_template = temp[shave_y:orig_h-shave_y, shave_x:orig_w-shave_x]
-                                
-                                res_raw = cv2.matchTemplate(screen_gray_ui, shaved_template, cv2.TM_CCOEFF_NORMED)
-                                res = np.abs(res_raw)
-                            else:
-                                res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
-                            
-                            _, max_val, _, _ = cv2.minMaxLoc(res)
-                            return max_val >= conf
+                            return cv2.minMaxLoc(cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED))[1] >= conf
 
                         found_fishing = check_ui('fishing.png', 0.65)
                         time.sleep(0.5) # 0.5초 딜레이
@@ -1340,8 +1304,10 @@ def afk_monitor_loop():
                         bprint("  > [대기] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)...")
                         wait_idle_start = time.time()
                         while time.time() - wait_idle_start < 6.0:
-                            # 구조체 경계 매칭이 내장된 check_ui 함수를 거쳐 명도 오차 없이 완벽하게 감지합니다.
-                            if check_ui('bait_change.png', 0.80):
+                            sct_img_idle = afk_sct.grab(afk_sct.monitors[1])
+                            screen_idle = cv2.cvtColor(np.array(sct_img_idle), cv2.COLOR_BGRA2GRAY)
+                            temp_idle = IMAGE_CACHE.get('bait_change.png')
+                            if temp_idle is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_idle, temp_idle, cv2.TM_CCOEFF_NORMED))[1] >= 0.80:
                                 break
                             time.sleep(0.8)
 
@@ -1870,7 +1836,7 @@ def fishing_bot(max_allowed_seconds):
                 force_watchdog_reason = "장착 10회 연속 실패(예비 소진)"
                 return False
 
-            if safe_find_image('bait_change.png', 0.65):
+            if safe_find_image('bait_change.png', 0.70):
                 bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
                 return True
 
@@ -1911,13 +1877,13 @@ def fishing_bot(max_allowed_seconds):
                 found_start = False
                 wait_start = time.time()
                 while time.time() - wait_start < 1.5 and bot_active:
-                    if safe_find_image('bait_change.png', 0.65):
+                    if safe_find_image('bait_change.png', 0.70):
                         found_start = True
                         break
                     time.sleep(0.05)
                     
                 if not found_start and bot_active:
-                    if safe_find_image('bait_change.png', 0.65, region="FULL_SCREEN"):
+                    if safe_find_image('bait_change.png', 0.70, region="FULL_SCREEN"):
                         found_start = True
                         
                 if found_start:
@@ -1987,7 +1953,7 @@ def fishing_bot(max_allowed_seconds):
             if check_exit_notification():
                 send_cmd('U') # 혹시 모를 클릭 해제
                 send_cmd('R')
-                if safe_find_image('bait_change.png', 0.65):
+                if safe_find_image('bait_change.png', 0.70):
                     state = 1
                 else:
                     state = 0
@@ -2084,7 +2050,7 @@ def fishing_bot(max_allowed_seconds):
                 check_char_popup = True
                 
                 # 봇 시작 시 특정 사진(예: bait_change.png) 확인
-                if safe_find_image('bait_change.png', 0.65):
+                if safe_find_image('bait_change.png', 0.70):
                     bprint("  > [확인] 조건 사진 발견! 정상 낚시 모드 진입 (State 1)")
                     state = 1
                 else:
@@ -2094,7 +2060,7 @@ def fishing_bot(max_allowed_seconds):
             # --- [State 0] 잠수 방지 전용 모드 (대기 및 자가 복귀) ---
             if state == 0:
                 # 낚시 준비 상태가 확인되면 스스로 대기를 풀고 다시 낚시를 시작합니다.
-                if safe_find_image('bait_change.png', 0.65):
+                if safe_find_image('bait_change.png', 0.70):
                     bprint("  > [복귀] 낚시 준비 상태가 확인되었습니다. 정상 낚시 모드(State 1)로 진입합니다.")
                     state = 1
                     state_start_time = time.time()
@@ -2122,7 +2088,7 @@ def fishing_bot(max_allowed_seconds):
                     
                 # 2. 최대 6초 동안 기본 탐색 (ROI 엔진)
                 while time.time() - wait_bait_start < 6.0 and bot_active:
-                    if safe_find_image('bait_change.png', 0.65):
+                    if safe_find_image('bait_change.png', 0.70):
                         found_bait = True
                         break
                     time.sleep(0.05)
@@ -2130,7 +2096,7 @@ def fishing_bot(max_allowed_seconds):
                 # 3. 미발견 시 전체화면 강제 탐색 (딱 1회)
                 if not found_bait and bot_active:
                     bprint("  > [폴백] ROI 탐색 실패. 전체화면 1회 스캔하여 자가치유 여부 판단")
-                    if safe_find_image('bait_change.png', 0.65, region="FULL_SCREEN"):
+                    if safe_find_image('bait_change.png', 0.70, region="FULL_SCREEN"):
                         found_bait = True
 
                 # [내구도 시스템 대응] 낚싯대 파괴 감지 및 자동 재장착 로직
@@ -2454,7 +2420,6 @@ def fishing_bot(max_allowed_seconds):
 
                     with mss.mss() as cctv_sct:
                         while fighting_active and bot_active:
-
                             # [핵심 최적화] 5번씩 찍던 캡처를 딱 1번의 전체화면 캡처로 통합! (캡처 병목 원천 차단)
                             sct_full = cctv_sct.grab(cctv_sct.monitors[1])
                             screen_full_gray = cv2.cvtColor(np.array(sct_full), cv2.COLOR_BGRA2GRAY)
@@ -2469,28 +2434,13 @@ def fishing_bot(max_allowed_seconds):
                                         mb = ROI_SAMPLER[img_name]['master_box']
                                         x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
                                         roi_gray = screen_full_gray[y:y+h, x:x+w]
-                                        
-                                        if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
-                                            orig_h, orig_w = template.shape[:2]
-                                            shave_y = max(1, int(orig_h * 0.10))
-                                            shave_x = max(1, int(orig_w * 0.10))
-                                            shaved_template = template[shave_y:orig_h-shave_y, shave_x:orig_w-shave_x]
-                                            
-                                            res_raw = cv2.matchTemplate(roi_gray, shaved_template, cv2.TM_CCOEFF_NORMED)
-                                            res = np.abs(res_raw)
-                                            h, w = orig_h, orig_w
-                                        else:
-                                            res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
-                                            h, w = template.shape[:2]
-                                            shave_x, shave_y = 0, 0
-                                            
+                                        res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
                                         _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                        max_loc = (max_loc[0] - shave_x, max_loc[1] - shave_y)
-                                        th, tw = template.shape[:2]
                                         
                                         if max_val >= conf:
                                             # 좌표 보정 및 동적 패딩 갱신
                                             real_x, real_y = max_loc[0] + x, max_loc[1] + y
+                                            th, tw = template.shape
                                             roi_data = ROI_SAMPLER[img_name]
                                             roi_data['samples'].append((real_x, real_y, tw, th))
                                             
@@ -2508,27 +2458,13 @@ def fishing_bot(max_allowed_seconds):
                                             return True
                                         return False
                                     else:
-                                        # ROI가 없을 땐 전체화면 배열 그대로 매칭 적용
-                                        if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
-                                            orig_h, orig_w = template.shape[:2]
-                                            shave_y = max(1, int(orig_h * 0.10))
-                                            shave_x = max(1, int(orig_w * 0.10))
-                                            shaved_template = template[shave_y:orig_h-shave_y, shave_x:orig_w-shave_x]
-                                            
-                                            res_raw = cv2.matchTemplate(screen_full_gray, shaved_template, cv2.TM_CCOEFF_NORMED)
-                                            res = np.abs(res_raw)
-                                            h, w = orig_h, orig_w
-                                        else:
-                                            res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
-                                            h, w = template.shape[:2]
-                                            shave_x, shave_y = 0, 0
-                                            
+                                        # ROI가 없을 땐 전체화면 배열 그대로 매칭
+                                        res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
                                         _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                        max_loc = (max_loc[0] - shave_x, max_loc[1] - shave_y)
-                                        th, tw = template.shape[:2]
                                         
                                         if max_val >= conf:
                                             real_x, real_y = max_loc[0], max_loc[1]
+                                            th, tw = template.shape
                                             if img_name not in ROI_SAMPLER:
                                                 ROI_SAMPLER[img_name] = {'samples': deque(maxlen=10), 'master_box': None}
                                             ROI_SAMPLER[img_name]['samples'].append((real_x, real_y, tw, th))

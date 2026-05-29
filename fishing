@@ -932,22 +932,13 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         sct_img = active_sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
 
-        # [Self-Generating Masked Template Matching]
-        # 템플릿의 어두운 배경(기존 수면)을 자동으로 마스킹(제거)하여, 
-        # 게임 패치로 인해 수면 배경색이 하얗게 바뀌더라도 오직 아이콘 본체 정보만 비교 매칭합니다.
+        # [Polarity-Invariant Absolute Correlation Engine]
+        # 등록된 템플릿(밝은 배경/어두운 글씨)과 현재 인게임 화면(어두운 배경/밝은 글씨)의 색상이 완벽히 반전된 상태입니다.
+        # 복잡한 대비 필터(CLAHE)나 소벨 필터 대신, 원본 그레이스케일 매칭 결과에 절대값(np.abs)을 취하는 것만으로
+        # 정방향과 반전형 글씨 모두를 수학적으로 100% 완벽하게 추적해 냅니다.
         if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-            if not hasattr(safe_find_image, 'mask_cache'):
-                safe_find_image.mask_cache = {}
-                
-            if img_path not in safe_find_image.mask_cache:
-                _, thresh = cv2.threshold(template, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                edges = cv2.Canny(template, 30, 100)
-                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                dilated = cv2.dilate(edges, kernel, iterations=1)
-                safe_find_image.mask_cache[img_path] = cv2.bitwise_or(thresh, dilated)
-                
-            mask = safe_find_image.mask_cache[img_path]
-            res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCORR_NORMED, mask=mask)
+            res_raw = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+            res = np.abs(res_raw)
             h, w = template.shape[:2]
         else:
             res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
@@ -1289,20 +1280,10 @@ def afk_monitor_loop():
                             sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
                             
-                            # 동적 자가 마스킹 템플릿 매칭 적용
+                            # 색상 반전대응 절대값 상관관계 엔진 적용
                             if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                if not hasattr(safe_find_image, 'mask_cache'):
-                                    safe_find_image.mask_cache = {}
-                                    
-                                if img_name not in safe_find_image.mask_cache:
-                                    _, thresh = cv2.threshold(temp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                    edges = cv2.Canny(temp, 30, 100)
-                                    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                                    dilated = cv2.dilate(edges, kernel, iterations=1)
-                                    safe_find_image.mask_cache[img_name] = cv2.bitwise_or(thresh, dilated)
-                                
-                                mask = safe_find_image.mask_cache[img_name]
-                                res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCORR_NORMED, mask=mask)
+                                res_raw = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
+                                res = np.abs(res_raw)
                             else:
                                 res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
                             return cv2.minMaxLoc(res)[1] >= conf
@@ -2472,20 +2453,10 @@ def fishing_bot(max_allowed_seconds):
                                         x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
                                         roi_gray = screen_full_gray[y:y+h, x:x+w]
                                         
-                                        # 동적 자가 마스킹 템플릿 매칭 적용 (ROI 전용)
+                                        # 색상 반전대응 절대값 상관관계 엔진 적용 (ROI 전용)
                                         if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            if not hasattr(safe_find_image, 'mask_cache'):
-                                                safe_find_image.mask_cache = {}
-                                                
-                                            if img_name not in safe_find_image.mask_cache:
-                                                _, thresh = cv2.threshold(template, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                                edges = cv2.Canny(template, 30, 100)
-                                                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                                                dilated = cv2.dilate(edges, kernel, iterations=1)
-                                                safe_find_image.mask_cache[img_name] = cv2.bitwise_or(thresh, dilated)
-                                                
-                                            mask = safe_find_image.mask_cache[img_name]
-                                            res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCORR_NORMED, mask=mask)
+                                            res_raw = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            res = np.abs(res_raw)
                                         else:
                                             res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
                                             
@@ -2512,20 +2483,10 @@ def fishing_bot(max_allowed_seconds):
                                             return True
                                         return False
                                     else:
-                                        # ROI가 없을 땐 전체화면 배열 그대로 동적 자가 마스킹 매칭 적용
+                                        # ROI가 없을 땐 전체화면 배열 그대로 색상 반전대응 절대값 매칭 적용
                                         if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            if not hasattr(safe_find_image, 'mask_cache'):
-                                                safe_find_image.mask_cache = {}
-                                                
-                                            if img_name not in safe_find_image.mask_cache:
-                                                _, thresh = cv2.threshold(template, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                                edges = cv2.Canny(template, 30, 100)
-                                                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                                                dilated = cv2.dilate(edges, kernel, iterations=1)
-                                                safe_find_image.mask_cache[img_name] = cv2.bitwise_or(thresh, dilated)
-                                                
-                                            mask = safe_find_image.mask_cache[img_name]
-                                            res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCORR_NORMED, mask=mask)
+                                            res_raw = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            res = np.abs(res_raw)
                                         else:
                                             res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
                                             

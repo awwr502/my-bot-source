@@ -938,8 +938,13 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     try:
         if template_gray is None: return None
 
-        # [안전장치] UnboundLocalError 방지를 위해 active_conf를 먼저 선언
+        # [안전장치] UnboundLocalError 방지를 위해 active_conf 및 세션 컨텍스트(ctx)를 먼저 선언
         active_conf = conf
+        
+        if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
+        ctx = safe_find_image.session.setdefault(img_path, {
+            'history': deque(maxlen=30), 'is_locked': False, 'found': False, 'last_fail_time': 0
+        })
 
         if img_path not in ROI_SAMPLER:
             ROI_SAMPLER[img_path] = {'samples': deque(maxlen=10), 'master_box': None}
@@ -995,6 +1000,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCOEFF_NORMED)
             _, max_val_f, _, max_loc_f = cv2.minMaxLoc(res_f)
             
+            # 전체화면 정합성 검증 성공 시, 즉각 캐시를 폭파하고 좌표를 갱신
             if max_val_f >= active_conf:
                 print(f"  > 💊 [자가 치유] '{img_path}' 캐시 수명 만료 감지! 전체화면 좌표로 자가 복구 완료.")
                 cache_data['master_box'] = None
@@ -1048,11 +1054,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                     ctx['history'].clear()
                     ctx['is_locked'] = False
                     target_monitor = active_sct.monitors[1]
-
-        if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
-        ctx = safe_find_image.session.setdefault(img_path, {
-            'history': deque(maxlen=30), 'is_locked': False, 'found': False, 'last_fail_time': 0
-        })
 
         is_rechecked = False
         if active_conf > max_val >= (active_conf - 0.04):

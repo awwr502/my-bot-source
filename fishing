@@ -920,10 +920,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진 (동적 임계값 폐기 & CSV 로깅)"""
     global IMAGE_CACHE, IMAGE_COLOR_CACHE, IMAGE_MASK_CACHE, ROI_SAMPLER
     
-    # 1. 원본 그레이스케일 템플릿 확보 (표준 매칭용)
     template_gray = IMAGE_CACHE.get(img_path)
-    
-    # 알파 마스크 존재 여부 확인
     mask = IMAGE_MASK_CACHE.get(img_path)
     template_color = IMAGE_COLOR_CACHE.get(img_path)
     
@@ -951,8 +948,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         sct_img = active_sct.grab(target_monitor)
         
-        # 분기 처리: 
-        # A. 녹색 찌의 경우: 기존 특화 추출식 사용
+        # 분기 처리
         if img_path == 'green_float.png' and template_color is not None:
             screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
             sb, sg, sr = cv2.split(screen_bgr)
@@ -962,15 +958,11 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             template_processed = cv2.subtract(tg, cv2.max(tr, tb))
             use_mask = None
             use_color = True
-            
-        # B. 알파 투명 마스크가 존재하는 템플릿의 경우: 컬러 마스크 매칭 수행 (배경 노이즈 원천 차단)
         elif mask is not None and template_color is not None:
             screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
             template_processed = template_color
             use_mask = mask
             use_color = True
-            
-        # C. 그 외 모든 표준 템플릿: 오탐 방지를 위해 기존의 검증된 Grayscale 매칭 사용 (오탐 완벽 해결)
         else:
             screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
             template_processed = template_gray
@@ -984,13 +976,60 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
+        # [실시간 자가 치유 능동 폴백]
+        # 캐시된 master_box 내에서 매칭에 실패하는 순간 즉각 전체화면을 재스캔하여 좌표를 자동 교정합니다.
+        is_using_cache = (not is_fallback_scan and not region and cache_data['master_box'] is not None)
+        if max_val < active_conf and is_using_cache:
+            full_monitor = active_sct.monitors[1]
+            sct_img_full = active_sct.grab(full_monitor)
+            
+            if img_path == 'green_float.png' and template_color is not None:
+                screen_bgr_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
+                sb_f, sg_f, sr_f = cv2.split(screen_bgr_f)
+                screen_processed_f = cv2.subtract(sg_f, cv2.max(sr_f, sb_f))
+            elif mask is not None and template_color is not None:
+                screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
+            else:
+                screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
+                
+            if use_mask is not None:
+                res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
+            else:
+                res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCOEFF_NORMED)
+                
+            _, max_val_f, _, max_loc_f = cv2.minMaxLoc(res_f)
+            
+            # 전체화면 전이 상태에서의 이진화 대피소 작동
+            if max_val_f < active_conf and img_path != 'green_float.png':
+                s_gray_f = screen_processed_f if not use_color else cv2.cvtColor(screen_processed_f, cv2.COLOR_BGR2GRAY)
+                t_gray_f = template_processed if not use_color else cv2.cvtColor(template_processed, cv2.COLOR_BGR2GRAY)
+                s_bin_f = cv2.adaptiveThreshold(s_gray_f, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+                t_bin_f = cv2.adaptiveThreshold(t_gray_f, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+                res_bin_f = cv2.matchTemplate(s_bin_f, t_bin_f, cv2.TM_CCOEFF_NORMED)
+                _, bin_max_val_f, _, bin_max_loc_f = cv2.minMaxLoc(res_bin_f)
+                
+                if bin_max_val_f >= active_conf:
+                    max_val_f = bin_max_val_f
+                    max_loc_f = bin_max_loc_f
+                    
+            if max_val_f >= active_conf:
+                print(f"  > 💊 [자가 치유] '{img_path}' 캐시 오염 극복 완료! 실시간 좌표를 자동 갱신합니다.")
+                cache_data['master_box'] = None
+                cache_data['samples'].clear()
+                ctx['history'].clear()
+                ctx['is_locked'] = False
+                
+                target_monitor = full_monitor
+                max_val = max_val_f
+                max_loc = max_loc_f
+                screen_processed = screen_processed_f
+
         # --- [적응형 이진화 대피소] ---
         # 배경색, 대비, 투명도가 바뀌는 경우 글자의 '형태(획)'만을 따서 매칭하므로 100% 인식률에 도달합니다.
         if max_val < active_conf and img_path != 'green_float.png':
             s_gray = screen_processed if not use_color else cv2.cvtColor(screen_processed, cv2.COLOR_BGR2GRAY)
             t_gray = template_processed if not use_color else cv2.cvtColor(template_processed, cv2.COLOR_BGR2GRAY)
             
-            # 가우시안 적응형 이진화로 수면 거품/반투명 배경을 지우고 오직 글씨 윤곽만 추출
             s_bin = cv2.adaptiveThreshold(s_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
             t_bin = cv2.adaptiveThreshold(t_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
             

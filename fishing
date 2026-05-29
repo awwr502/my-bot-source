@@ -934,7 +934,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         # [Sobel Gradient & Edge Masking Combined Engine]
         # 템플릿의 형태 엣지 마스크와 소벨 기울기 지도를 결합하여 배경 물빛 변화와 노이즈를 100% 무시합니다.
-        # 이 연산을 거치면 임계값을 낮추지 않아도 매칭률이 0.85 이상으로 회복되어 오탐이 발생하지 않습니다.
+        # [에지 고갈 방어 시스템] 매칭 구역의 평균 에지 세기가 낮을 시 inf/NaN 및 오탐 발생을 강제로 0점화하여 방어합니다.
         if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
             if not hasattr(safe_find_image, 'mask_cache'):
                 safe_find_image.mask_cache = {}
@@ -965,12 +965,19 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             proc_template = np.uint8(mag_template)
 
             res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCORR_NORMED, mask=mask)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            
             h, w = template.shape[:2]
+            ty, tx = max_loc[1], max_loc[0]
+            if 0 <= ty < proc_screen.shape[0] and 0 <= tx < proc_screen.shape[1]:
+                screen_crop = proc_screen[ty:ty+h, tx:tx+w]
+                if screen_crop.shape == mask.shape:
+                    if cv2.mean(screen_crop, mask=mask)[0] < 6.0:
+                        max_val = 0.0
         else:
             res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
             h, w = template.shape[:2]
-
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
         ctx = safe_find_image.session.setdefault(img_path, {
@@ -1308,7 +1315,7 @@ def afk_monitor_loop():
                             sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
                             
-                            # 기울기 마스크 기반 매칭 엔진 일괄 적용
+                            # 기울기 마스크 기반 매칭 엔진 일괄 적용 (평탄 보호 적용)
                             if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
                                 if not hasattr(safe_find_image, 'mask_cache'):
                                     safe_find_image.mask_cache = {}
@@ -1339,9 +1346,19 @@ def afk_monitor_loop():
                                 proc_template = np.uint8(mag_template)
 
                                 res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCORR_NORMED, mask=mask)
+                                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                
+                                h, w = temp.shape[:2]
+                                ty, tx = max_loc[1], max_loc[0]
+                                if 0 <= ty < proc_screen.shape[0] and 0 <= tx < proc_screen.shape[1]:
+                                    screen_crop = proc_screen[ty:ty+h, tx:tx+w]
+                                    if screen_crop.shape == mask.shape:
+                                        if cv2.mean(screen_crop, mask=mask)[0] < 6.0:
+                                            max_val = 0.0
                             else:
                                 res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
-                            return cv2.minMaxLoc(res)[1] >= conf
+                                _, max_val, _, _ = cv2.minMaxLoc(res)
+                            return max_val >= conf
 
                         found_fishing = check_ui('fishing.png', 0.65)
                         time.sleep(0.5) # 0.5초 딜레이
@@ -2539,10 +2556,19 @@ def fishing_bot(max_allowed_seconds):
                                             proc_template = np.uint8(mag_template)
 
                                             res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCORR_NORMED, mask=mask)
+                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                            
+                                            h, w = template.shape[:2]
+                                            ty, tx = max_loc[1], max_loc[0]
+                                            if 0 <= ty < proc_screen.shape[0] and 0 <= tx < proc_screen.shape[1]:
+                                                screen_crop = proc_screen[ty:ty+h, tx:tx+w]
+                                                if screen_crop.shape == mask.shape:
+                                                    if cv2.mean(screen_crop, mask=mask)[0] < 6.0:
+                                                        max_val = 0.0
                                         else:
                                             res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
                                             
-                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
                                         th, tw = template.shape[:2]
                                         
                                         if max_val >= conf:
@@ -2596,10 +2622,19 @@ def fishing_bot(max_allowed_seconds):
                                             proc_template = np.uint8(mag_template)
 
                                             res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCORR_NORMED, mask=mask)
+                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                            
+                                            h, w = template.shape[:2]
+                                            ty, tx = max_loc[1], max_loc[0]
+                                            if 0 <= ty < proc_screen.shape[0] and 0 <= tx < proc_screen.shape[1]:
+                                                screen_crop = proc_screen[ty:ty+h, tx:tx+w]
+                                                if screen_crop.shape == mask.shape:
+                                                    if cv2.mean(screen_crop, mask=mask)[0] < 6.0:
+                                                        max_val = 0.0
                                         else:
                                             res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
                                             
-                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
                                         th, tw = template.shape[:2]
                                         
                                         if max_val >= conf:

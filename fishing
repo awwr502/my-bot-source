@@ -751,7 +751,8 @@ def send_cmd(cmd):
     arduino.flush()
 
 # [스마트 비전 엔진] 이미지 램(RAM) 캐싱 저장소
-IMAGE_CACHE = {} 
+IMAGE_COLOR_CACHE = {}
+IMAGE_MASK_CACHE = {}
 
 # [데이터 샘플링 엔진] 점진적 확장(Incremental Expansion) ROI 저장소
 from collections import deque
@@ -871,10 +872,22 @@ def preload_all_images():
             try:
                 full_path = os.path.join(BASE_IMG_DIR, filename)
                 img_array = np.fromfile(full_path, np.uint8)
-                img = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
-                if img is not None:
-                    IMAGE_CACHE[filename] = img
+                
+                # 1. 기존 레거시 함수 호환용 Grayscale 적재
+                img_gray = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+                if img_gray is not None:
+                    IMAGE_CACHE[filename] = img_gray
                     count += 1
+                    
+                # 2. 알파 투명도 마스크 및 고대비 컬러 매칭용 원본 채널 적재
+                img_unchanged = cv2.imdecode(img_array, cv2.IMREAD_UNCHANGED)
+                if img_unchanged is not None:
+                    if len(img_unchanged.shape) == 3 and img_unchanged.shape[2] == 4:
+                        # 4채널(BGRA)인 경우 컬러와 투명 알파 마스크 분리 저장
+                        IMAGE_COLOR_CACHE[filename] = img_unchanged[:, :, :3]
+                        IMAGE_MASK_CACHE[filename] = img_unchanged[:, :, 3]
+                    else:
+                        IMAGE_COLOR_CACHE[filename] = img_unchanged
             except Exception as e:
                 print(f"  > [경고] {filename} 메모리 적재 실패: {e}")
                 
@@ -904,11 +917,15 @@ def log_confidence_to_csv(log_type, img_path, target_conf, actual_conf, min_c=No
 
 def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진 (동적 임계값 폐기 & CSV 로깅)"""
-    global IMAGE_CACHE, ROI_SAMPLER
-    template = IMAGE_CACHE.get(img_path)
+    global IMAGE_CACHE, IMAGE_COLOR_CACHE, IMAGE_MASK_CACHE, ROI_SAMPLER
+    template_color = IMAGE_COLOR_CACHE.get(img_path)
+    mask = IMAGE_MASK_CACHE.get(img_path)
     
+    if template_color is None:
+        template_color = IMAGE_CACHE.get(img_path)
+        
     try:
-        if template is None: return None
+        if template_color is None: return None
 
         if img_path not in ROI_SAMPLER:
             ROI_SAMPLER[img_path] = {'samples': deque(maxlen=10), 'master_box': None}
@@ -930,8 +947,25 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             target_monitor = active_sct.monitors[1]
 
         sct_img = active_sct.grab(target_monitor)
-        screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-        res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+        screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+        
+        if img_path == 'green_float.png':
+            sb, sg, sr = cv2.split(screen_bgr)
+            screen_processed = cv2.subtract(sg, cv2.max(sr, sb))
+            
+            tb, tg, tr = cv2.split(template_color)
+            template_processed = cv2.subtract(tg, cv2.max(tr, tb))
+            use_mask = None
+        else:
+            screen_processed = screen_bgr
+            template_processed = template_color
+            use_mask = mask
+
+        if use_mask is not None:
+            res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
+        else:
+            res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+            
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
@@ -945,12 +979,24 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         if active_conf > max_val >= (active_conf - 0.04):
             time.sleep(0.05)
             sct_re = active_sct.grab(target_monitor)
-            res_re = cv2.matchTemplate(cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2GRAY), template, cv2.TM_CCOEFF_NORMED)
+            re_bgr = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2BGR)
+            
+            if img_path == 'green_float.png':
+                rb, rg, rr = cv2.split(re_bgr)
+                re_processed = cv2.subtract(rg, cv2.max(rr, rb))
+            else:
+                re_processed = re_bgr
+                
+            if use_mask is not None:
+                res_re = cv2.matchTemplate(re_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
+            else:
+                res_re = cv2.matchTemplate(re_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+                
             _, max_val, _, max_loc = cv2.minMaxLoc(res_re)
             is_rechecked = True
 
         if max_val >= active_conf:
-            h, w = template.shape
+            h, w = template_processed.shape[:2]
             real_x = max_loc[0] + target_monitor["left"]
             real_y = max_loc[1] + target_monitor["top"]
 

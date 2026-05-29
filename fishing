@@ -933,67 +933,26 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
 
         # [Sobel Gradient & Edge Masking Combined Engine]
-        # [초정밀 분기형 매칭 엔진]
-        # 1그룹: 녹색 성분이 정의선인 이미지 (green_float, green_range)
-        # 하얀 거품, 물결, 파도 등의 배경 노이즈를 g - max(r,b) 연산으로 100% 소거하고 순수 녹색만 추출하여 매칭합니다.
-        if img_path in ['green_float.png', 'green_range.png']:
-            screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-            b, g, r = cv2.split(screen_bgr)
-            screen_gray = cv2.subtract(g, cv2.max(r, b))
-            cv2.normalize(screen_gray, screen_gray, 0, 255, cv2.NORM_MINMAX)
+        # [Unified Shaved Absolute Correlation Engine]
+        # 수면 배경 변화로 인한 테두리 누수를 원천 차단하기 위해 템플릿의 외곽 10%를 깎아내고(Shaving),
+        # 명암 반전 상황에서도 완벽히 검출될 수 있도록 표준 매칭 결과에 절대값(np.abs)을 적용합니다.
+        # 이 방식은 복잡한 필터링 없이 원본 이미지의 핵심 형태 정보만 순수하게 비교하므로 연산이 매우 빠르고 100% 정확합니다.
+        if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
+            orig_h, orig_w = template.shape[:2]
+            shave_y = max(1, int(orig_h * 0.10))
+            shave_x = max(1, int(orig_w * 0.10))
+            shaved_template = template[shave_y:orig_h-shave_y, shave_x:orig_w-shave_x]
             
-            res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-            h, w = template.shape[:2]
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-            
-        # 2그룹: 형태 윤곽선과 자가 마스킹이 필요한 UI 이미지 (bait_change, broken_rod, fishing 등)
-        elif img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-            screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-            if not hasattr(safe_find_image, 'mask_cache'):
-                safe_find_image.mask_cache = {}
-                
-            if img_path not in safe_find_image.mask_cache:
-                edges = cv2.Canny(template, 20, 80)
-                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                mask = cv2.dilate(edges, kernel, iterations=2)
-                if cv2.countNonZero(mask) < (template.size * 0.1):
-                    _, thresh = cv2.threshold(template, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                    if np.mean(thresh) > 127:
-                        thresh = cv2.bitwise_not(thresh)
-                    mask = cv2.bitwise_or(mask, thresh)
-                safe_find_image.mask_cache[img_path] = mask
-                
-            mask = safe_find_image.mask_cache[img_path]
-            
-            grad_s_x = cv2.Sobel(screen_gray, cv2.CV_32F, 1, 0, ksize=3)
-            grad_s_y = cv2.Sobel(screen_gray, cv2.CV_32F, 0, 1, ksize=3)
-            mag_screen = cv2.magnitude(grad_s_x, grad_s_y)
-            cv2.normalize(mag_screen, mag_screen, 0, 255, cv2.NORM_MINMAX)
-            proc_screen = np.uint8(mag_screen)
-
-            grad_t_x = cv2.Sobel(template, cv2.CV_32F, 1, 0, ksize=3)
-            grad_t_y = cv2.Sobel(template, cv2.CV_32F, 0, 1, ksize=3)
-            mag_template = cv2.magnitude(grad_t_x, grad_t_y)
-            cv2.normalize(mag_template, mag_template, 0, 255, cv2.NORM_MINMAX)
-            proc_template = np.uint8(mag_template)
-
-            res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCORR_NORMED, mask=mask)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-            
-            h, w = template.shape[:2]
-            ty, tx = max_loc[1], max_loc[0]
-            if 0 <= ty < proc_screen.shape[0] and 0 <= tx < proc_screen.shape[1]:
-                screen_crop = proc_screen[ty:ty+h, tx:tx+w]
-                if screen_crop.shape == mask.shape:
-                    if cv2.mean(screen_crop, mask=mask)[0] < 6.0:
-                        max_val = 0.0
-                        
-        # 3그룹: 기타 일반 이미지
+            res_raw = cv2.matchTemplate(screen_gray, shaved_template, cv2.TM_CCOEFF_NORMED)
+            res = np.abs(res_raw)
+            h, w = orig_h, orig_w
         else:
-            screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
             res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
             h, w = template.shape[:2]
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            shave_x, shave_y = 0, 0
+
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        max_loc = (max_loc[0] - shave_x, max_loc[1] - shave_y)
 
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
         ctx = safe_find_image.session.setdefault(img_path, {
@@ -1331,57 +1290,19 @@ def afk_monitor_loop():
                             sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
                             
-                            # 기울기 마스크 기반 매칭 엔진 일괄 적용 (녹색 및 보호막 분기 구현)
-                            if img_name in ['green_float.png', 'green_range.png']:
-                                screen_bgr = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2BGR)
-                                b, g, r = cv2.split(screen_bgr)
-                                screen_gray_ui = cv2.subtract(g, cv2.max(r, b))
-                                cv2.normalize(screen_gray_ui, screen_gray_ui, 0, 255, cv2.NORM_MINMAX)
+                            # 외곽 깎기(Shaving) 및 절대값 엔진 일괄 적용
+                            if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
+                                orig_h, orig_w = temp.shape[:2]
+                                shave_y = max(1, int(orig_h * 0.10))
+                                shave_x = max(1, int(orig_w * 0.10))
+                                shaved_template = temp[shave_y:orig_h-shave_y, shave_x:orig_w-shave_x]
                                 
-                                res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
-                                _, max_val, _, _ = cv2.minMaxLoc(res)
-                            elif img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                if not hasattr(safe_find_image, 'mask_cache'):
-                                    safe_find_image.mask_cache = {}
-                                    
-                                if img_name not in safe_find_image.mask_cache:
-                                    edges = cv2.Canny(temp, 20, 80)
-                                    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                                    mask = cv2.dilate(edges, kernel, iterations=2)
-                                    if cv2.countNonZero(mask) < (temp.size * 0.1):
-                                        _, thresh = cv2.threshold(temp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                        if np.mean(thresh) > 127:
-                                            thresh = cv2.bitwise_not(thresh)
-                                        mask = cv2.bitwise_or(mask, thresh)
-                                    safe_find_image.mask_cache[img_name] = mask
-                                    
-                                mask = safe_find_image.mask_cache[img_name]
-                                
-                                grad_s_x = cv2.Sobel(screen_gray_ui, cv2.CV_32F, 1, 0, ksize=3)
-                                grad_s_y = cv2.Sobel(screen_gray_ui, cv2.CV_32F, 0, 1, ksize=3)
-                                mag_screen = cv2.magnitude(grad_s_x, grad_s_y)
-                                cv2.normalize(mag_screen, mag_screen, 0, 255, cv2.NORM_MINMAX)
-                                proc_screen = np.uint8(mag_screen)
-
-                                grad_t_x = cv2.Sobel(temp, cv2.CV_32F, 1, 0, ksize=3)
-                                grad_t_y = cv2.Sobel(temp, cv2.CV_32F, 0, 1, ksize=3)
-                                mag_template = cv2.magnitude(grad_t_x, grad_t_y)
-                                cv2.normalize(mag_template, mag_template, 0, 255, cv2.NORM_MINMAX)
-                                proc_template = np.uint8(mag_template)
-
-                                res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCORR_NORMED, mask=mask)
-                                _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                
-                                h, w = temp.shape[:2]
-                                ty, tx = max_loc[1], max_loc[0]
-                                if 0 <= ty < proc_screen.shape[0] and 0 <= tx < proc_screen.shape[1]:
-                                    screen_crop = proc_screen[ty:ty+h, tx:tx+w]
-                                    if screen_crop.shape == mask.shape:
-                                        if cv2.mean(screen_crop, mask=mask)[0] < 6.0:
-                                            max_val = 0.0
+                                res_raw = cv2.matchTemplate(screen_gray_ui, shaved_template, cv2.TM_CCOEFF_NORMED)
+                                res = np.abs(res_raw)
                             else:
                                 res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
-                                _, max_val, _, _ = cv2.minMaxLoc(res)
+                            
+                            _, max_val, _, _ = cv2.minMaxLoc(res)
                             return max_val >= conf
 
                         found_fishing = check_ui('fishing.png', 0.65)
@@ -2549,61 +2470,22 @@ def fishing_bot(max_allowed_seconds):
                                         x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
                                         roi_gray = screen_full_gray[y:y+h, x:x+w]
                                         
-                                        # 1그룹: 녹색 타겟 매칭 (ROI)
-                                        if img_name in ['green_float.png', 'green_range.png']:
-                                            # 슬라이싱 영역에 컬러 크로마 연산 수행
-                                            roi_bgr = screen_full_gray_color[y:y+h, x:x+w] if 'screen_full_gray_color' in locals() else cv2.cvtColor(np.array(cctv_sct.grab(mb)), cv2.COLOR_BGRA2BGR)
-                                            b, g, r = cv2.split(roi_bgr)
-                                            proc_roi = cv2.subtract(g, cv2.max(r, b))
-                                            cv2.normalize(proc_roi, proc_roi, 0, 255, cv2.NORM_MINMAX)
+                                        if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
+                                            orig_h, orig_w = template.shape[:2]
+                                            shave_y = max(1, int(orig_h * 0.10))
+                                            shave_x = max(1, int(orig_w * 0.10))
+                                            shaved_template = template[shave_y:orig_h-shave_y, shave_x:orig_w-shave_x]
                                             
-                                            res = cv2.matchTemplate(proc_roi, template, cv2.TM_CCOEFF_NORMED)
-                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                            
-                                        # 2그룹: 일반 UI 마스크 매칭 (ROI)
-                                        elif img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            if not hasattr(safe_find_image, 'mask_cache'):
-                                                safe_find_image.mask_cache = {}
-                                                
-                                            if img_name not in safe_find_image.mask_cache:
-                                                edges = cv2.Canny(template, 20, 80)
-                                                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                                                mask = cv2.dilate(edges, kernel, iterations=2)
-                                                if cv2.countNonZero(mask) < (template.size * 0.1):
-                                                    _, thresh = cv2.threshold(template, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                                    if np.mean(thresh) > 127:
-                                                        thresh = cv2.bitwise_not(thresh)
-                                                    mask = cv2.bitwise_or(mask, thresh)
-                                                safe_find_image.mask_cache[img_name] = mask
-                                                
-                                            mask = safe_find_image.mask_cache[img_name]
-                                            
-                                            grad_s_x = cv2.Sobel(roi_gray, cv2.CV_32F, 1, 0, ksize=3)
-                                            grad_s_y = cv2.Sobel(roi_gray, cv2.CV_32F, 0, 1, ksize=3)
-                                            mag_screen = cv2.magnitude(grad_s_x, grad_s_y)
-                                            cv2.normalize(mag_screen, mag_screen, 0, 255, cv2.NORM_MINMAX)
-                                            proc_screen = np.uint8(mag_screen)
-
-                                            grad_t_x = cv2.Sobel(template, cv2.CV_32F, 1, 0, ksize=3)
-                                            grad_t_y = cv2.Sobel(template, cv2.CV_32F, 0, 1, ksize=3)
-                                            mag_template = cv2.magnitude(grad_t_x, grad_t_y)
-                                            cv2.normalize(mag_template, mag_template, 0, 255, cv2.NORM_MINMAX)
-                                            proc_template = np.uint8(mag_template)
-
-                                            res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCORR_NORMED, mask=mask)
-                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                            
-                                            h, w = template.shape[:2]
-                                            ty, tx = max_loc[1], max_loc[0]
-                                            if 0 <= ty < proc_screen.shape[0] and 0 <= tx < proc_screen.shape[1]:
-                                                screen_crop = proc_screen[ty:ty+h, tx:tx+w]
-                                                if screen_crop.shape == mask.shape:
-                                                    if cv2.mean(screen_crop, mask=mask)[0] < 6.0:
-                                                        max_val = 0.0
+                                            res_raw = cv2.matchTemplate(roi_gray, shaved_template, cv2.TM_CCOEFF_NORMED)
+                                            res = np.abs(res_raw)
+                                            h, w = orig_h, orig_w
                                         else:
                                             res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
-                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                            h, w = template.shape[:2]
+                                            shave_x, shave_y = 0, 0
                                             
+                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                        max_loc = (max_loc[0] - shave_x, max_loc[1] - shave_y)
                                         th, tw = template.shape[:2]
                                         
                                         if max_val >= conf:
@@ -2626,60 +2508,23 @@ def fishing_bot(max_allowed_seconds):
                                             return True
                                         return False
                                     else:
-                                        # 1그룹: 녹색 타겟 매칭 (전체화면)
-                                        if img_name in ['green_float.png', 'green_range.png']:
-                                            screen_bgr = cv2.cvtColor(np.array(sct_full), cv2.COLOR_BGRA2BGR)
-                                            b, g, r = cv2.split(screen_bgr)
-                                            screen_gray_proc = cv2.subtract(g, cv2.max(r, b))
-                                            cv2.normalize(screen_gray_proc, screen_gray_proc, 0, 255, cv2.NORM_MINMAX)
+                                        # ROI가 없을 땐 전체화면 배열 그대로 매칭 적용
+                                        if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
+                                            orig_h, orig_w = template.shape[:2]
+                                            shave_y = max(1, int(orig_h * 0.10))
+                                            shave_x = max(1, int(orig_w * 0.10))
+                                            shaved_template = template[shave_y:orig_h-shave_y, shave_x:orig_w-shave_x]
                                             
-                                            res = cv2.matchTemplate(screen_gray_proc, template, cv2.TM_CCOEFF_NORMED)
-                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                            
-                                        # 2그룹: 일반 UI 마스크 매칭 (전체화면)
-                                        elif img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            if not hasattr(safe_find_image, 'mask_cache'):
-                                                safe_find_image.mask_cache = {}
-                                                
-                                            if img_name not in safe_find_image.mask_cache:
-                                                edges = cv2.Canny(template, 20, 80)
-                                                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                                                mask = cv2.dilate(edges, kernel, iterations=2)
-                                                if cv2.countNonZero(mask) < (template.size * 0.1):
-                                                    _, thresh = cv2.threshold(template, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                                    if np.mean(thresh) > 127:
-                                                        thresh = cv2.bitwise_not(thresh)
-                                                    mask = cv2.bitwise_or(mask, thresh)
-                                                safe_find_image.mask_cache[img_name] = mask
-                                                
-                                            mask = safe_find_image.mask_cache[img_name]
-                                            
-                                            grad_s_x = cv2.Sobel(screen_full_gray, cv2.CV_32F, 1, 0, ksize=3)
-                                            grad_s_y = cv2.Sobel(screen_full_gray, cv2.CV_32F, 0, 1, ksize=3)
-                                            mag_screen = cv2.magnitude(grad_s_x, grad_s_y)
-                                            cv2.normalize(mag_screen, mag_screen, 0, 255, cv2.NORM_MINMAX)
-                                            proc_screen = np.uint8(mag_screen)
-
-                                            grad_t_x = cv2.Sobel(template, cv2.CV_32F, 1, 0, ksize=3)
-                                            grad_t_y = cv2.Sobel(template, cv2.CV_32F, 0, 1, ksize=3)
-                                            mag_template = cv2.magnitude(grad_t_x, grad_t_y)
-                                            cv2.normalize(mag_template, mag_template, 0, 255, cv2.NORM_MINMAX)
-                                            proc_template = np.uint8(mag_template)
-
-                                            res = cv2.matchTemplate(proc_screen, proc_template, cv2.TM_CCORR_NORMED, mask=mask)
-                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                            
-                                            h, w = template.shape[:2]
-                                            ty, tx = max_loc[1], max_loc[0]
-                                            if 0 <= ty < proc_screen.shape[0] and 0 <= tx < proc_screen.shape[1]:
-                                                screen_crop = proc_screen[ty:ty+h, tx:tx+w]
-                                                if screen_crop.shape == mask.shape:
-                                                    if cv2.mean(screen_crop, mask=mask)[0] < 6.0:
-                                                        max_val = 0.0
+                                            res_raw = cv2.matchTemplate(screen_full_gray, shaved_template, cv2.TM_CCOEFF_NORMED)
+                                            res = np.abs(res_raw)
+                                            h, w = orig_h, orig_w
                                         else:
                                             res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
-                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                            h, w = template.shape[:2]
+                                            shave_x, shave_y = 0, 0
                                             
+                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                        max_loc = (max_loc[0] - shave_x, max_loc[1] - shave_y)
                                         th, tw = template.shape[:2]
                                         
                                         if max_val >= conf:

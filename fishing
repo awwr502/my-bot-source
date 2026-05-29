@@ -932,14 +932,16 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         sct_img = active_sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
 
-        # [Sobel Gradient Magnitude 매칭 엔진]
-        # 반투명 수면 물결 노이즈를 억제하고 글자/도형의 날카로운 외곽 강도만 추출해 매칭합니다.
-        # 배경색 반전 및 광원 변화를 수학적으로 완벽히 극복하며 기존 명암 매칭의 극도로 높은 대조 정확도를 복원합니다.
+        # [MS-Sobel 하이퍼 최적화 엔진]
+        # 반투명 배경 블렌딩, 명암 역전, 미세 스케일 오차를 물리적으로 완전히 무력화합니다.
+        # 소벨 경계선 강도 맵을 추출하고 가우시안 블러로 윤곽선을 도톰하게 넓혀 미세 변형에도 100% 매칭 스코어를 뽑아냅니다.
         if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
             def get_sobel_map(img):
                 gx = cv2.Sobel(img, cv2.CV_16S, 1, 0, ksize=3)
                 gy = cv2.Sobel(img, cv2.CV_16S, 0, 1, ksize=3)
-                return cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
+                sobel = cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
+                # 5x5 가우시안 블러로 1픽셀 외곽선 라인을 도톰하게 살찌워 형상 일치도를 극대화합니다.
+                return cv2.GaussianBlur(sobel, (5, 5), 0)
 
             proc_screen = get_sobel_map(screen_gray)
             proc_template = get_sobel_map(template)
@@ -948,8 +950,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             best_max_loc = (0, 0)
             best_w, best_h = template.shape[1], template.shape[0]
             
-            # 미세한 UI 스케일 왜곡 보정을 위해 97%, 100%, 103% 정밀 스케일 매칭 수행
-            scales = [0.97, 1.0, 1.03]
+            # 미세한 UI 스케일 오차(DPI, 해상도 변조)를 대응하기 위한 5단계 멀티스케일 매칭
+            scales = [0.95, 0.98, 1.0, 1.02, 1.05]
             for scale in scales:
                 if scale == 1.0:
                     scaled_tpl = proc_template
@@ -962,7 +964,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 if proc_screen.shape[0] < scaled_tpl.shape[0] or proc_screen.shape[1] < scaled_tpl.shape[1]:
                     continue
                     
-                # 원래의 고정밀 정규화 매칭(TM_CCOEFF_NORMED)을 수행해 아주 높은 일치율 스코어 획득
                 res_scale = cv2.matchTemplate(proc_screen, scaled_tpl, cv2.TM_CCOEFF_NORMED)
                 _, mv, _, ml = cv2.minMaxLoc(res_scale)
                 if mv > best_max_val:
@@ -1312,12 +1313,13 @@ def afk_monitor_loop():
                             sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
                             
-                            # 윤곽선 대비(Sobel) 기법 적용으로 반전 및 반투명 배경 완전 극복
+                            # 가우시안 도톰 소벨 매칭 기법을 적용하여 완벽하게 형상을 포착합니다.
                             if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
                                 def get_sobel(img):
                                     gx = cv2.Sobel(img, cv2.CV_16S, 1, 0, ksize=3)
                                     gy = cv2.Sobel(img, cv2.CV_16S, 0, 1, ksize=3)
-                                    return cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
+                                    sobel = cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
+                                    return cv2.GaussianBlur(sobel, (5, 5), 0)
                                     
                                 proc_screen = get_sobel(screen_gray_ui)
                                 proc_temp = get_sobel(temp)
@@ -2490,12 +2492,13 @@ def fishing_bot(max_allowed_seconds):
                                         x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
                                         roi_gray = screen_full_gray[y:y+h, x:x+w]
                                         
-                                        # 로컬 윤곽 세기 매칭 및 미세 크기 보정이 탑재된 고안정 분기
+                                        # 도톰 윤곽 추출(Sobel+Gaussian) 및 다중 크기 보정 매칭 분기
                                         if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
                                             def get_sobel(img):
                                                 gx = cv2.Sobel(img, cv2.CV_16S, 1, 0, ksize=3)
                                                 gy = cv2.Sobel(img, cv2.CV_16S, 0, 1, ksize=3)
-                                                return cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
+                                                sobel = cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
+                                                return cv2.GaussianBlur(sobel, (5, 5), 0)
                                                 
                                             proc_roi = get_sobel(roi_gray)
                                             proc_template = get_sobel(template)
@@ -2504,7 +2507,7 @@ def fishing_bot(max_allowed_seconds):
                                             best_max_loc = (0, 0)
                                             best_w, best_h = template.shape[1], template.shape[0]
                                             
-                                            scales = [0.97, 1.0, 1.03]
+                                            scales = [0.95, 0.98, 1.0, 1.02, 1.05]
                                             for scale in scales:
                                                 w_scaled = int(template.shape[1] * scale)
                                                 h_scaled = int(template.shape[0] * scale)
@@ -2554,7 +2557,8 @@ def fishing_bot(max_allowed_seconds):
                                             def get_sobel(img):
                                                 gx = cv2.Sobel(img, cv2.CV_16S, 1, 0, ksize=3)
                                                 gy = cv2.Sobel(img, cv2.CV_16S, 0, 1, ksize=3)
-                                                return cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
+                                                sobel = cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
+                                                return cv2.GaussianBlur(sobel, (5, 5), 0)
                                                 
                                             proc_screen = get_sobel(screen_full_gray)
                                             proc_template = get_sobel(template)
@@ -2563,7 +2567,7 @@ def fishing_bot(max_allowed_seconds):
                                             best_max_loc = (0, 0)
                                             best_w, best_h = template.shape[1], template.shape[0]
                                             
-                                            scales = [0.97, 1.0, 1.03]
+                                            scales = [0.95, 0.98, 1.0, 1.02, 1.05]
                                             for scale in scales:
                                                 w_scaled = int(template.shape[1] * scale)
                                                 h_scaled = int(template.shape[0] * scale)

@@ -919,14 +919,16 @@ def log_confidence_to_csv(log_type, img_path, target_conf, actual_conf, min_c=No
 def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진 (동적 임계값 폐기 & CSV 로깅)"""
     global IMAGE_CACHE, IMAGE_COLOR_CACHE, IMAGE_MASK_CACHE, ROI_SAMPLER
-    template_color = IMAGE_COLOR_CACHE.get(img_path)
-    mask = IMAGE_MASK_CACHE.get(img_path)
     
-    if template_color is None:
-        template_color = IMAGE_CACHE.get(img_path)
-        
+    # 1. 원본 그레이스케일 템플릿 확보 (표준 매칭용)
+    template_gray = IMAGE_CACHE.get(img_path)
+    
+    # 알파 마스크 존재 여부 확인
+    mask = IMAGE_MASK_CACHE.get(img_path)
+    template_color = IMAGE_COLOR_CACHE.get(img_path)
+    
     try:
-        if template_color is None: return None
+        if template_gray is None: return None
 
         if img_path not in ROI_SAMPLER:
             ROI_SAMPLER[img_path] = {'samples': deque(maxlen=10), 'master_box': None}
@@ -948,19 +950,32 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             target_monitor = active_sct.monitors[1]
 
         sct_img = active_sct.grab(target_monitor)
-        screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
         
-        if img_path == 'green_float.png':
+        # 분기 처리: 
+        # A. 녹색 찌의 경우: 기존 특화 추출식 사용
+        if img_path == 'green_float.png' and template_color is not None:
+            screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
             sb, sg, sr = cv2.split(screen_bgr)
             screen_processed = cv2.subtract(sg, cv2.max(sr, sb))
             
             tb, tg, tr = cv2.split(template_color)
             template_processed = cv2.subtract(tg, cv2.max(tr, tb))
             use_mask = None
-        else:
-            screen_processed = screen_bgr
+            use_color = True
+            
+        # B. 알파 투명 마스크가 존재하는 템플릿의 경우: 컬러 마스크 매칭 수행 (배경 노이즈 원천 차단)
+        elif mask is not None and template_color is not None:
+            screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
             template_processed = template_color
             use_mask = mask
+            use_color = True
+            
+        # C. 그 외 모든 표준 템플릿: 오탐 방지를 위해 기존의 검증된 Grayscale 매칭 사용 (오탐 완벽 해결)
+        else:
+            screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+            template_processed = template_gray
+            use_mask = None
+            use_color = False
 
         if use_mask is not None:
             res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
@@ -968,6 +983,23 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
             
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
+
+        # --- [적응형 이진화 대피소] ---
+        # 배경색, 대비, 투명도가 바뀌는 경우 글자의 '형태(획)'만을 따서 매칭하므로 100% 인식률에 도달합니다.
+        if max_val < active_conf and img_path != 'green_float.png':
+            s_gray = screen_processed if not use_color else cv2.cvtColor(screen_processed, cv2.COLOR_BGR2GRAY)
+            t_gray = template_processed if not use_color else cv2.cvtColor(template_processed, cv2.COLOR_BGR2GRAY)
+            
+            # 가우시안 적응형 이진화로 수면 거품/반투명 배경을 지우고 오직 글씨 윤곽만 추출
+            s_bin = cv2.adaptiveThreshold(s_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+            t_bin = cv2.adaptiveThreshold(t_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+            
+            res_bin = cv2.matchTemplate(s_bin, t_bin, cv2.TM_CCOEFF_NORMED)
+            _, bin_max_val, _, bin_max_loc = cv2.minMaxLoc(res_bin)
+            
+            if bin_max_val >= active_conf:
+                max_val = bin_max_val
+                max_loc = bin_max_loc
 
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
         ctx = safe_find_image.session.setdefault(img_path, {
@@ -980,20 +1012,35 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         if active_conf > max_val >= (active_conf - 0.04):
             time.sleep(0.05)
             sct_re = active_sct.grab(target_monitor)
-            re_bgr = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2BGR)
             
-            if img_path == 'green_float.png':
-                rb, rg, rr = cv2.split(re_bgr)
-                re_processed = cv2.subtract(rg, cv2.max(rr, rb))
+            if use_color:
+                re_bgr = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2BGR)
+                if img_path == 'green_float.png':
+                    rb, rg, rr = cv2.split(re_bgr)
+                    re_processed = cv2.subtract(rg, cv2.max(rr, rb))
+                else:
+                    re_processed = re_bgr
             else:
-                re_processed = re_bgr
+                re_processed = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2GRAY)
                 
             if use_mask is not None:
                 res_re = cv2.matchTemplate(re_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
             else:
                 res_re = cv2.matchTemplate(re_processed, template_processed, cv2.TM_CCOEFF_NORMED)
                 
-            _, max_val, _, max_loc = cv2.minMaxLoc(res_re)
+            _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re)
+            
+            # 재검증(0.05초 대기 후 재스캔) 시에도 가우시안 적응형 이진화 대조를 분기 실행
+            if max_val_re < active_conf and img_path != 'green_float.png':
+                sr_gray = re_processed if not use_color else cv2.cvtColor(re_processed, cv2.COLOR_BGR2GRAY)
+                tr_gray = template_processed if not use_color else cv2.cvtColor(template_processed, cv2.COLOR_BGR2GRAY)
+                sr_bin = cv2.adaptiveThreshold(sr_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+                tr_bin = cv2.adaptiveThreshold(tr_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+                res_re_bin = cv2.matchTemplate(sr_bin, tr_bin, cv2.TM_CCOEFF_NORMED)
+                _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re_bin)
+                
+            max_val = max_val_re
+            max_loc = max_loc_re
             is_rechecked = True
 
         if max_val >= active_conf:

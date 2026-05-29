@@ -921,7 +921,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     template_gray = IMAGE_CACHE.get(img_path)
     template_color = IMAGE_COLOR_CACHE.get(img_path)
     
-    # [설정] 수면/월드 위에서 배경 간섭을 받아 왜곡이 발생하는 핵심 낚시 UI 요소들만 가변 대피소 연산을 허용 (팝업 오탐 완전히 차단)
+    # [설정] 배경 간섭을 받아 왜곡이 발생하는 핵심 낚시 UI 요소들 (조준 글씨인 green_range.png를 포함하여 정밀 추적)
     DYNAMIC_UI_LIST = [
         'bait_change.png', 'throw_btn.png', 'broken_rod.png', 'catch_F.png', 
         'green_range.png', 'fishing.png', 'fishing_mode.png'
@@ -959,7 +959,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         sct_img = active_sct.grab(target_monitor)
         
-        # 1. 색상 분석 및 정합성 매치 진행
+        # 1. 색상 분석 및 정합성 매치 분기 처리
+        # A. 녹색 찌의 경우: 기존 특화 추출식 사용
         if img_path == 'green_float.png' and template_color is not None:
             screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
             sb, sg, sr = cv2.split(screen_bgr)
@@ -967,20 +968,23 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             
             tb, tg, tr = cv2.split(template_color)
             template_processed = cv2.subtract(tg, cv2.max(tr, tb))
+            use_color = True
+            
+        # B. 조준 글씨를 포함한 모든 일반 UI/문자열: 흑백 정규화(Min-Max) 명암비 극대화 대조 가동
         else:
             screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
             template_processed = template_gray
             
-            # [명암비 자동 맥스 부스팅] 극도로 낮은 대비의 회색조 글자들을 선명한 흑백으로 자동 인장시킵니다.
+            # [명암비 자동 맥스 부스팅] 극도로 낮은 대비의 회색조 글자들을 선명한 흑백으로 자동 인장시킵니다. (배경색 차이 강제 소멸)
             screen_processed = cv2.normalize(screen_processed, None, 0, 255, cv2.NORM_MINMAX)
             template_processed = cv2.normalize(template_processed, None, 0, 255, cv2.NORM_MINMAX)
+            use_color = False
 
-        # 표준 TM_CCOEFF_NORMED 매칭 (평평한 팝업 영역 오탐 방지)
         res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         # 2. [실시간 자가 치유 능동 폴백]
-        # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재조준하여 스캔
+        # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 스캔 구역 리셋
         is_using_cache = (not is_fallback_scan and not region and cache_data['master_box'] is not None)
         if max_val < active_conf and is_using_cache:
             full_monitor = active_sct.monitors[1]
@@ -992,13 +996,11 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 screen_processed_f = cv2.subtract(sg_f, cv2.max(sr_f, sb_f))
             else:
                 screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
-                # 동일한 부스팅 적용
                 screen_processed_f = cv2.normalize(screen_processed_f, None, 0, 255, cv2.NORM_MINMAX)
                 
             res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCOEFF_NORMED)
             _, max_val_f, _, max_loc_f = cv2.minMaxLoc(res_f)
             
-            # 전체화면 정합성 검증 성공 시, 즉각 캐시를 폭파하고 좌표를 갱신
             if max_val_f >= active_conf:
                 print(f"  > 💊 [자가 치유] '{img_path}' 캐시 수명 만료 감지! 전체화면 좌표로 자가 복구 완료.")
                 cache_data['master_box'] = None
@@ -1012,7 +1014,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 screen_processed = screen_processed_f
 
         # 3. [적응형 이진화 및 배율 교정 대피소]
-        # 오직 수면/월드 위 배경 간섭을 받는 핵심 낚시 UI 요소들만 형태 대조를 허용 (일반 판넬/팝업창 오탐 점수 0.925 버그 완벽 차단)
+        # 오직 수면/월드 위 배경 간섭을 받는 핵심 낚시 UI 요소들만 형태 대조를 허용 (일반 판넬/팝업창 오탐 점수 0.925 완벽 차단)
         if max_val < active_conf and img_path in DYNAMIC_UI_LIST:
             s_gray = screen_processed
             t_gray = template_processed
@@ -1058,13 +1060,10 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             time.sleep(0.05)
             sct_re = active_sct.grab(target_monitor)
             
-            if img_path == 'green_float.png' and template_color is not None:
-                re_bgr = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2BGR)
-                rb, rg, rr = cv2.split(re_bgr)
-                re_processed = cv2.subtract(rg, cv2.max(rr, rb))
+            if use_color:
+                re_processed = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2BGR)
             else:
                 re_processed = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2GRAY)
-                # 재검증 시에도 동일하게 명암 복구 적용
                 re_processed = cv2.normalize(re_processed, None, 0, 255, cv2.NORM_MINMAX)
                 
             res_re = cv2.matchTemplate(re_processed, template_processed, cv2.TM_CCOEFF_NORMED)

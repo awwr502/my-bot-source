@@ -932,36 +932,37 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         sct_img = active_sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
 
-        # [MS-CLAHE 하이퍼 엔진]
-        # 반투명 배경 블렌딩, 미세 스케일(크기) 왜곡, 명암 대비 반전 문제를 모두 무력화합니다.
+        # [MS-Masked 하이퍼 최적화 엔진]
+        # 반투명 배경(Alpha 채널), 주야간 안개, 명암 대비 반전, 미세 스케일 오차를 물리적으로 무력화합니다.
+        # 이진화 마스크를 생성하여 배경을 연산에서 원천 배제하고 형체의 윤곽(알맹이)만 100% 추출해 대조합니다.
         if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-            # 1. CLAHE 필터로 반투명 배경 대비를 극대화 (로컬 명암 강제 보정)
-            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-            proc_screen = clahe.apply(screen_gray)
-            proc_template = clahe.apply(template)
+            # 1. 템플릿에서 어두운 배경(35 이하)을 강제로 날려버리고 순수 문자/심볼 형태만 흰색(255)으로 추출
+            _, mask = cv2.threshold(template, 35, 255, cv2.THRESH_BINARY)
+            screen_inv = cv2.bitwise_not(screen_gray)
             
             best_max_val = -1
             best_max_loc = (0, 0)
             best_w, best_h = template.shape[1], template.shape[0]
             
-            # 2. 미세 크기 변동 보정을 위해 멀티 스케일(96%, 100%, 104%) 매칭 수행
+            # 2. 미세 크기 보정을 위해 멀티스케일(96%, 100%, 104%) 매칭 수행
             scales = [0.96, 1.0, 1.04]
             for scale in scales:
                 if scale == 1.0:
-                    scaled_tpl = proc_template
+                    scaled_tpl = template
+                    scaled_mask = mask
                 else:
                     w_scaled = int(template.shape[1] * scale)
                     h_scaled = int(template.shape[0] * scale)
                     if w_scaled < 10 or h_scaled < 10: continue
-                    scaled_tpl = cv2.resize(proc_template, (w_scaled, h_scaled), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                    scaled_tpl = cv2.resize(template, (w_scaled, h_scaled), interpolation=cv2.INTER_CUBIC)
+                    scaled_mask = cv2.resize(mask, (w_scaled, h_scaled), interpolation=cv2.INTER_NEAREST)
                 
-                if proc_screen.shape[0] < scaled_tpl.shape[0] or proc_screen.shape[1] < scaled_tpl.shape[1]:
+                if screen_gray.shape[0] < scaled_tpl.shape[0] or screen_gray.shape[1] < scaled_tpl.shape[1]:
                     continue
                     
-                # 3. 명암 정방향/반전 동시 매칭으로 배경 오탐 완벽 차단
-                res_normal = cv2.matchTemplate(proc_screen, scaled_tpl, cv2.TM_CCOEFF_NORMED)
-                scaled_tpl_inv = cv2.bitwise_not(scaled_tpl)
-                res_inv = cv2.matchTemplate(proc_screen, scaled_tpl_inv, cv2.TM_CCOEFF_NORMED)
+                # 3. 마스크 매칭(TM_CCORR_NORMED)을 통해 주변 배경 노이즈를 100% 무시하고 구조체만 추적
+                res_normal = cv2.matchTemplate(screen_gray, scaled_tpl, cv2.TM_CCORR_NORMED, mask=scaled_mask)
+                res_inv = cv2.matchTemplate(screen_inv, scaled_tpl, cv2.TM_CCORR_NORMED, mask=scaled_mask)
                 res_scale = np.maximum(res_normal, res_inv)
                 
                 _, mv, _, ml = cv2.minMaxLoc(res_scale)
@@ -1312,15 +1313,13 @@ def afk_monitor_loop():
                             sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
                             
-                            # 로컬 명암 보정(CLAHE) 및 반전 대조 기법 적용
+                            # 로컬 마스크 매칭 및 명암 반전 대비 기법 통합 적용
                             if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-                                proc_screen = clahe.apply(screen_gray_ui)
-                                proc_temp = clahe.apply(temp)
+                                _, mask = cv2.threshold(temp, 35, 255, cv2.THRESH_BINARY)
+                                screen_inv = cv2.bitwise_not(screen_gray_ui)
                                 
-                                res_normal = cv2.matchTemplate(proc_screen, proc_temp, cv2.TM_CCOEFF_NORMED)
-                                temp_inv = cv2.bitwise_not(proc_temp)
-                                res_inv = cv2.matchTemplate(proc_screen, temp_inv, cv2.TM_CCOEFF_NORMED)
+                                res_normal = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCORR_NORMED, mask=mask)
+                                res_inv = cv2.matchTemplate(screen_inv, temp, cv2.TM_CCORR_NORMED, mask=mask)
                                 res = np.maximum(res_normal, res_inv)
                             else:
                                 res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
@@ -1361,8 +1360,8 @@ def afk_monitor_loop():
                         bprint("  > [대기] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)...")
                         wait_idle_start = time.time()
                         while time.time() - wait_idle_start < 6.0:
-                            # 반전 대응 구조가 반영된 check_ui 함수를 호출하여 명도 반전 상태에서도 정확하게 회수 동작을 마감합니다.
-                            if check_ui('bait_change.png', 0.65):
+                            # 구조체 투과 마스크 필터가 반영된 check_ui 함수를 호출하여 완벽히 감지합니다.
+                            if check_ui('bait_change.png', 0.80):
                                 break
                             time.sleep(0.8)
 
@@ -2490,11 +2489,10 @@ def fishing_bot(max_allowed_seconds):
                                         x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
                                         roi_gray = screen_full_gray[y:y+h, x:x+w]
                                         
-                                        # 로컬 대비 최적화(CLAHE) 및 미세 크기 보정이 탑재된 양방향 매칭 분기
+                                        # 마스크 필터 매칭 및 멀티스케일 스캔 분기
                                         if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-                                            proc_roi = clahe.apply(roi_gray)
-                                            proc_template = clahe.apply(template)
+                                            _, mask = cv2.threshold(template, 35, 255, cv2.THRESH_BINARY)
+                                            roi_inv = cv2.bitwise_not(roi_gray)
                                             
                                             best_max_val = -1
                                             best_max_loc = (0, 0)
@@ -2505,14 +2503,14 @@ def fishing_bot(max_allowed_seconds):
                                                 w_scaled = int(template.shape[1] * scale)
                                                 h_scaled = int(template.shape[0] * scale)
                                                 if w_scaled < 10 or h_scaled < 10: continue
-                                                scaled_tpl = cv2.resize(proc_template, (w_scaled, h_scaled), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                                scaled_tpl = cv2.resize(template, (w_scaled, h_scaled), interpolation=cv2.INTER_CUBIC)
+                                                scaled_mask = cv2.resize(mask, (w_scaled, h_scaled), interpolation=cv2.INTER_NEAREST)
                                                 
-                                                if proc_roi.shape[0] < scaled_tpl.shape[0] or proc_roi.shape[1] < scaled_tpl.shape[1]:
+                                                if roi_gray.shape[0] < scaled_tpl.shape[0] or roi_gray.shape[1] < scaled_tpl.shape[1]:
                                                     continue
                                                     
-                                                res_normal = cv2.matchTemplate(proc_roi, scaled_tpl, cv2.TM_CCOEFF_NORMED)
-                                                scaled_tpl_inv = cv2.bitwise_not(scaled_tpl)
-                                                res_inv = cv2.matchTemplate(proc_roi, scaled_tpl_inv, cv2.TM_CCOEFF_NORMED)
+                                                res_normal = cv2.matchTemplate(roi_gray, scaled_tpl, cv2.TM_CCORR_NORMED, mask=scaled_mask)
+                                                res_inv = cv2.matchTemplate(roi_inv, scaled_tpl, cv2.TM_CCORR_NORMED, mask=scaled_mask)
                                                 res_scale = np.maximum(res_normal, res_inv)
                                                 
                                                 _, mv, _, ml = cv2.minMaxLoc(res_scale)
@@ -2551,9 +2549,8 @@ def fishing_bot(max_allowed_seconds):
                                     else:
                                         # ROI가 없을 땐 전체화면 배열 그대로 매칭
                                         if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-                                            proc_screen = clahe.apply(screen_full_gray)
-                                            proc_template = clahe.apply(template)
+                                            _, mask = cv2.threshold(template, 35, 255, cv2.THRESH_BINARY)
+                                            screen_inv = cv2.bitwise_not(screen_full_gray)
                                             
                                             best_max_val = -1
                                             best_max_loc = (0, 0)
@@ -2564,14 +2561,14 @@ def fishing_bot(max_allowed_seconds):
                                                 w_scaled = int(template.shape[1] * scale)
                                                 h_scaled = int(template.shape[0] * scale)
                                                 if w_scaled < 10 or h_scaled < 10: continue
-                                                scaled_tpl = cv2.resize(proc_template, (w_scaled, h_scaled), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                                scaled_tpl = cv2.resize(template, (w_scaled, h_scaled), interpolation=cv2.INTER_CUBIC)
+                                                scaled_mask = cv2.resize(mask, (w_scaled, h_scaled), interpolation=cv2.INTER_NEAREST)
                                                 
-                                                if proc_screen.shape[0] < scaled_tpl.shape[0] or proc_screen.shape[1] < scaled_tpl.shape[1]:
+                                                if screen_full_gray.shape[0] < scaled_tpl.shape[0] or screen_full_gray.shape[1] < scaled_tpl.shape[1]:
                                                     continue
                                                     
-                                                res_normal = cv2.matchTemplate(proc_screen, scaled_tpl, cv2.TM_CCOEFF_NORMED)
-                                                scaled_tpl_inv = cv2.bitwise_not(scaled_tpl)
-                                                res_inv = cv2.matchTemplate(proc_screen, scaled_tpl_inv, cv2.TM_CCOEFF_NORMED)
+                                                res_normal = cv2.matchTemplate(screen_full_gray, scaled_tpl, cv2.TM_CCORR_NORMED, mask=scaled_mask)
+                                                res_inv = cv2.matchTemplate(screen_inv, scaled_tpl, cv2.TM_CCORR_NORMED, mask=scaled_mask)
                                                 res_scale = np.maximum(res_normal, res_inv)
                                                 
                                                 _, mv, _, ml = cv2.minMaxLoc(res_scale)

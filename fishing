@@ -927,6 +927,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     try:
         if template_gray is None: return None
 
+        # [해결] UnboundLocalError 방지를 위해 탐색전에 목표 요구치를 먼저 변수에 할당합니다.
+        active_conf = conf
+
         if img_path not in ROI_SAMPLER:
             ROI_SAMPLER[img_path] = {'samples': deque(maxlen=10), 'master_box': None}
             
@@ -977,7 +980,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         # [실시간 자가 치유 능동 폴백]
-        # 캐시된 master_box 내에서 매칭에 실패하는 순간 즉각 전체화면을 재스캔하여 좌표를 자동 교정합니다.
         is_using_cache = (not is_fallback_scan and not region and cache_data['master_box'] is not None)
         if max_val < active_conf and is_using_cache:
             full_monitor = active_sct.monitors[1]
@@ -1008,6 +1010,23 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 res_bin_f = cv2.matchTemplate(s_bin_f, t_bin_f, cv2.TM_CCOEFF_NORMED)
                 _, bin_max_val_f, _, bin_max_loc_f = cv2.minMaxLoc(res_bin_f)
                 
+                # 창모드 배율 왜곡 대응 (전체화면 스캔)
+                if bin_max_val_f < active_conf:
+                    test_scales = [0.98, 1.02, 0.96, 1.04]
+                    for sc in test_scales:
+                        tw = int(t_bin_f.shape[1] * sc)
+                        th = int(t_bin_f.shape[0] * sc)
+                        if tw < 10 or th < 10 or tw > s_bin_f.shape[1] or th > s_bin_f.shape[0]:
+                            continue
+                        t_bin_res_f = cv2.resize(t_bin_f, (tw, th), interpolation=cv2.INTER_AREA if sc < 1.0 else cv2.INTER_CUBIC)
+                        res_bin_sc_f = cv2.matchTemplate(s_bin_f, t_bin_res_f, cv2.TM_CCOEFF_NORMED)
+                        _, sc_max_val_f, _, sc_max_loc_f = cv2.minMaxLoc(res_bin_sc_f)
+                        if sc_max_val_f >= active_conf:
+                            bin_max_val_f = sc_max_val_f
+                            bin_max_loc_f = sc_max_loc_f
+                            template_processed = t_bin_res_f
+                            break
+                
                 if bin_max_val_f >= active_conf:
                     max_val_f = bin_max_val_f
                     max_loc_f = bin_max_loc_f
@@ -1025,7 +1044,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 screen_processed = screen_processed_f
 
         # --- [적응형 이진화 대피소] ---
-        # 배경색, 대비, 투명도가 바뀌는 경우 글자의 '형태(획)'만을 따서 매칭하므로 100% 인식률에 도달합니다.
         if max_val < active_conf and img_path != 'green_float.png':
             s_gray = screen_processed if not use_color else cv2.cvtColor(screen_processed, cv2.COLOR_BGR2GRAY)
             t_gray = template_processed if not use_color else cv2.cvtColor(template_processed, cv2.COLOR_BGR2GRAY)
@@ -1036,6 +1054,23 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             res_bin = cv2.matchTemplate(s_bin, t_bin, cv2.TM_CCOEFF_NORMED)
             _, bin_max_val, _, bin_max_loc = cv2.minMaxLoc(res_bin)
             
+            # 창모드 배율 왜곡 대응 (일반 스캔)
+            if bin_max_val < active_conf:
+                test_scales = [0.98, 1.02, 0.96, 1.04]
+                for sc in test_scales:
+                    tw = int(t_bin.shape[1] * sc)
+                    th = int(t_bin.shape[0] * sc)
+                    if tw < 10 or th < 10 or tw > s_bin.shape[1] or th > s_bin.shape[0]:
+                        continue
+                    t_bin_res = cv2.resize(t_bin, (tw, th), interpolation=cv2.INTER_AREA if sc < 1.0 else cv2.INTER_CUBIC)
+                    res_bin_sc = cv2.matchTemplate(s_bin, t_bin_res, cv2.TM_CCOEFF_NORMED)
+                    _, sc_max_val, _, sc_max_loc = cv2.minMaxLoc(res_bin_sc)
+                    if sc_max_val >= active_conf:
+                        bin_max_val = sc_max_val
+                        bin_max_loc = sc_max_loc
+                        template_processed = t_bin_res
+                        break
+            
             if bin_max_val >= active_conf:
                 max_val = bin_max_val
                 max_loc = bin_max_loc
@@ -1044,8 +1079,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         ctx = safe_find_image.session.setdefault(img_path, {
             'history': deque(maxlen=30), 'is_locked': False, 'found': False, 'last_fail_time': 0
         })
-
-        active_conf = conf
 
         is_rechecked = False
         if active_conf > max_val >= (active_conf - 0.04):
@@ -1069,7 +1102,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 
             _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re)
             
-            # 재검증(0.05초 대기 후 재스캔) 시에도 가우시안 적응형 이진화 대조를 분기 실행
+            # 재검증 시에도 가우시안 적응형 이진화 대조 및 배율 교정 분기 실행
             if max_val_re < active_conf and img_path != 'green_float.png':
                 sr_gray = re_processed if not use_color else cv2.cvtColor(re_processed, cv2.COLOR_BGR2GRAY)
                 tr_gray = template_processed if not use_color else cv2.cvtColor(template_processed, cv2.COLOR_BGR2GRAY)

@@ -931,17 +931,17 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         sct_img = active_sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                
+        
         # [Canny Edge Shape Matching Engine]
         # 배경색(하얀 수면/어두운 수면 등)과 관계없이 오직 아이콘 고유의 '외곽 형태 선(Shape)'만 추출하여 매칭합니다.
         # 거품이나 단순 수면 등 에지가 없는 구역은 수학적으로 원천 무효화되어 오탐율이 0%로 수렴합니다.
         if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
             t_edges = cv2.Canny(template, 50, 150)
             s_edges = cv2.Canny(screen_gray, 50, 150)
-                    
+            
             res = cv2.matchTemplate(s_edges, t_edges, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                    
+            
             h, w = template.shape[:2]
             ty, tx = max_loc[1], max_loc[0]
             if 0 <= ty < s_edges.shape[0] and 0 <= tx < s_edges.shape[1]:
@@ -969,7 +969,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             is_rechecked = True
 
         if max_val >= active_conf:
-            h, w = template.shape
+            h, w = template.shape[:2]
             real_x = max_loc[0] + target_monitor["left"]
             real_y = max_loc[1] + target_monitor["top"]
 
@@ -1000,7 +1000,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                                 mb = cache_data['master_box']
                                 roi_img = np.array(active_sct.grab(mb))
                                 save_path = os.path.join(LOCKED_ROI_DIR, f"locked_{img_path}")
-                                # [한글 경로 버그 해결] cv2.imwrite 대신 파이썬 내장 바이트 스트림으로 강제 기록
                                 success, encoded_img = cv2.imencode('.png', cv2.cvtColor(roi_img, cv2.COLOR_BGRA2BGR))
                                 if success:
                                     with open(save_path, 'wb') as f:
@@ -1015,7 +1014,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             print(f"  > 🟢 [인식 완료] {img_path} | 일치율: {max_val:.3f} / 컷오프({mode_str}): {active_conf:.3f}{recheck_str}")
             ctx['found'] = True
 
-            # [신규 핵심 로직] 고정 상태인데 폴더에 사진이 지워졌거나 없다면 즉시 다시 찍어서 복구합니다.
             if ctx['is_locked'] and cache_data.get('master_box'):
                 save_path = os.path.join(LOCKED_ROI_DIR, f"locked_{img_path}")
                 if not os.path.exists(save_path):
@@ -1029,13 +1027,21 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                             print(f"  > 📸 [ROI 복구 캡처] '{img_path}'의 누락된 고정 범위 사진을 다시 저장했습니다.")
                     except: pass
 
-        # [신규] 인식 실패 시 엑셀 로깅 (팝업 제외 및 1초당 1회 기록)
         if max_val < active_conf:
             ctx['found'] = False
-            # 팝업 이미지는 평소에 안 뜨는 것이 정상이므로 실패 로그에서 완전히 제외
             if img_path not in ['popup_char.png', 'popup_main.png']:
                 if time.time() - ctx['last_fail_time'] > 1.0:
                     log_confidence_to_csv("인식실패", img_path, active_conf, max_val, None, None, "임계값 미달")
+                    print(f"  > 🔴 [인식 실패] {img_path:<18} | 현재 일치율: {max_val:.3f} / 필요 컷오프: {active_conf:.3f} (부족분: {active_conf - max_val:+.3f})")
+                    
+                    # [진단용 실시간 화면 덤프 시스템]
+                    # 실패하는 순간 봇이 바라본 실제 화면을 'debug_capture.png'로 물리 디스크에 즉시 저장합니다.
+                    if img_path in ['bait_change.png', 'fishing.png']:
+                        try:
+                            cv2.imwrite("debug_capture.png", cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR))
+                            print("  > 📸 [시스템 진단] 봇이 현재 캡처하고 있는 실제 화면이 'debug_capture.png'로 실시간 저장되었습니다. 이 이미지를 확인해 보세요!")
+                        except: pass
+                        
                     ctx['last_fail_time'] = time.time()
             return None
 

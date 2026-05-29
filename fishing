@@ -933,9 +933,22 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
 
         # [Sobel Gradient & Edge Masking Combined Engine]
-        # 템플릿의 형태 엣지 마스크와 소벨 기울기 지도를 결합하여 배경 물빛 변화와 노이즈를 100% 무시합니다.
-        # [에지 고갈 방어 시스템] 매칭 구역의 평균 에지 세기가 낮을 시 inf/NaN 및 오탐 발생을 강제로 0점화하여 방어합니다.
-        if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
+        # [초정밀 분기형 매칭 엔진]
+        # 1그룹: 녹색 성분이 정의선인 이미지 (green_float, green_range)
+        # 하얀 거품, 물결, 파도 등의 배경 노이즈를 g - max(r,b) 연산으로 100% 소거하고 순수 녹색만 추출하여 매칭합니다.
+        if img_path in ['green_float.png', 'green_range.png']:
+            screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+            b, g, r = cv2.split(screen_bgr)
+            screen_gray = cv2.subtract(g, cv2.max(r, b))
+            cv2.normalize(screen_gray, screen_gray, 0, 255, cv2.NORM_MINMAX)
+            
+            res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+            h, w = template.shape[:2]
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            
+        # 2그룹: 형태 윤곽선과 자가 마스킹이 필요한 UI 이미지 (bait_change, broken_rod, fishing 등)
+        elif img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
+            screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
             if not hasattr(safe_find_image, 'mask_cache'):
                 safe_find_image.mask_cache = {}
                 
@@ -974,7 +987,10 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 if screen_crop.shape == mask.shape:
                     if cv2.mean(screen_crop, mask=mask)[0] < 6.0:
                         max_val = 0.0
+                        
+        # 3그룹: 기타 일반 이미지
         else:
+            screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
             res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
             h, w = template.shape[:2]
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
@@ -1315,8 +1331,16 @@ def afk_monitor_loop():
                             sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
                             
-                            # 기울기 마스크 기반 매칭 엔진 일괄 적용 (평탄 보호 적용)
-                            if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
+                            # 기울기 마스크 기반 매칭 엔진 일괄 적용 (녹색 및 보호막 분기 구현)
+                            if img_name in ['green_float.png', 'green_range.png']:
+                                screen_bgr = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2BGR)
+                                b, g, r = cv2.split(screen_bgr)
+                                screen_gray_ui = cv2.subtract(g, cv2.max(r, b))
+                                cv2.normalize(screen_gray_ui, screen_gray_ui, 0, 255, cv2.NORM_MINMAX)
+                                
+                                res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
+                                _, max_val, _, _ = cv2.minMaxLoc(res)
+                            elif img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
                                 if not hasattr(safe_find_image, 'mask_cache'):
                                     safe_find_image.mask_cache = {}
                                     
@@ -2525,8 +2549,19 @@ def fishing_bot(max_allowed_seconds):
                                         x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
                                         roi_gray = screen_full_gray[y:y+h, x:x+w]
                                         
-                                        # 기울기 마스크 기반 매칭 엔진 일괄 적용 (ROI 전용)
-                                        if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
+                                        # 1그룹: 녹색 타겟 매칭 (ROI)
+                                        if img_name in ['green_float.png', 'green_range.png']:
+                                            # 슬라이싱 영역에 컬러 크로마 연산 수행
+                                            roi_bgr = screen_full_gray_color[y:y+h, x:x+w] if 'screen_full_gray_color' in locals() else cv2.cvtColor(np.array(cctv_sct.grab(mb)), cv2.COLOR_BGRA2BGR)
+                                            b, g, r = cv2.split(roi_bgr)
+                                            proc_roi = cv2.subtract(g, cv2.max(r, b))
+                                            cv2.normalize(proc_roi, proc_roi, 0, 255, cv2.NORM_MINMAX)
+                                            
+                                            res = cv2.matchTemplate(proc_roi, template, cv2.TM_CCOEFF_NORMED)
+                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                            
+                                        # 2그룹: 일반 UI 마스크 매칭 (ROI)
+                                        elif img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
                                             if not hasattr(safe_find_image, 'mask_cache'):
                                                 safe_find_image.mask_cache = {}
                                                 
@@ -2591,8 +2626,18 @@ def fishing_bot(max_allowed_seconds):
                                             return True
                                         return False
                                     else:
-                                        # ROI가 없을 땐 전체화면 배열 그대로 기울기 마스크 매칭 적용
-                                        if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png', 'green_float.png']:
+                                        # 1그룹: 녹색 타겟 매칭 (전체화면)
+                                        if img_name in ['green_float.png', 'green_range.png']:
+                                            screen_bgr = cv2.cvtColor(np.array(sct_full), cv2.COLOR_BGRA2BGR)
+                                            b, g, r = cv2.split(screen_bgr)
+                                            screen_gray_proc = cv2.subtract(g, cv2.max(r, b))
+                                            cv2.normalize(screen_gray_proc, screen_gray_proc, 0, 255, cv2.NORM_MINMAX)
+                                            
+                                            res = cv2.matchTemplate(screen_gray_proc, template, cv2.TM_CCOEFF_NORMED)
+                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                            
+                                        # 2그룹: 일반 UI 마스크 매칭 (전체화면)
+                                        elif img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
                                             if not hasattr(safe_find_image, 'mask_cache'):
                                                 safe_find_image.mask_cache = {}
                                                 

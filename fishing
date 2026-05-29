@@ -924,10 +924,16 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     mask = IMAGE_MASK_CACHE.get(img_path)
     template_color = IMAGE_COLOR_CACHE.get(img_path)
     
+    # [설정] 수면/월드 위에서 배경 간섭을 받아 왜곡이 발생하는 핵심 낚시 UI 요소들만 가변 대피소 연산을 허용 (팝업 오탐 완전히 차단)
+    DYNAMIC_UI_LIST = [
+        'bait_change.png', 'throw_btn.png', 'broken_rod.png', 'catch_F.png', 
+        'green_range.png', 'fishing.png', 'fishing_mode.png'
+    ]
+    
     try:
         if template_gray is None: return None
 
-        # [해결] UnboundLocalError 방지를 위해 탐색전에 목표 요구치를 먼저 변수에 할당합니다.
+        # [안전장치] UnboundLocalError 방지를 위해 active_conf를 먼저 선언
         active_conf = conf
 
         if img_path not in ROI_SAMPLER:
@@ -951,7 +957,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         sct_img = active_sct.grab(target_monitor)
         
-        # 분기 처리
+        # 1. 색상 분석 및 정합성 매치 진행
         if img_path == 'green_float.png' and template_color is not None:
             screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
             sb, sg, sr = cv2.split(screen_bgr)
@@ -979,7 +985,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-        # [실시간 자가 치유 능동 폴백]
+        # 2. [실시간 자가 치유 능동 폴백]
+        # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재조준하여 스캔
         is_using_cache = (not is_fallback_scan and not region and cache_data['master_box'] is not None)
         if max_val < active_conf and is_using_cache:
             full_monitor = active_sct.monitors[1]
@@ -1001,38 +1008,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 
             _, max_val_f, _, max_loc_f = cv2.minMaxLoc(res_f)
             
-            # 전체화면 전이 상태에서의 이진화 대피소 작동
-            if max_val_f < active_conf and img_path != 'green_float.png':
-                s_gray_f = screen_processed_f if not use_color else cv2.cvtColor(screen_processed_f, cv2.COLOR_BGR2GRAY)
-                t_gray_f = template_processed if not use_color else cv2.cvtColor(template_processed, cv2.COLOR_BGR2GRAY)
-                s_bin_f = cv2.adaptiveThreshold(s_gray_f, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-                t_bin_f = cv2.adaptiveThreshold(t_gray_f, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-                res_bin_f = cv2.matchTemplate(s_bin_f, t_bin_f, cv2.TM_CCOEFF_NORMED)
-                _, bin_max_val_f, _, bin_max_loc_f = cv2.minMaxLoc(res_bin_f)
-                
-                # 창모드 배율 왜곡 대응 (전체화면 스캔)
-                if bin_max_val_f < active_conf:
-                    test_scales = [0.98, 1.02, 0.96, 1.04]
-                    for sc in test_scales:
-                        tw = int(t_bin_f.shape[1] * sc)
-                        th = int(t_bin_f.shape[0] * sc)
-                        if tw < 10 or th < 10 or tw > s_bin_f.shape[1] or th > s_bin_f.shape[0]:
-                            continue
-                        t_bin_res_f = cv2.resize(t_bin_f, (tw, th), interpolation=cv2.INTER_AREA if sc < 1.0 else cv2.INTER_CUBIC)
-                        res_bin_sc_f = cv2.matchTemplate(s_bin_f, t_bin_res_f, cv2.TM_CCOEFF_NORMED)
-                        _, sc_max_val_f, _, sc_max_loc_f = cv2.minMaxLoc(res_bin_sc_f)
-                        if sc_max_val_f >= active_conf:
-                            bin_max_val_f = sc_max_val_f
-                            bin_max_loc_f = sc_max_loc_f
-                            template_processed = t_bin_res_f
-                            break
-                
-                if bin_max_val_f >= active_conf:
-                    max_val_f = bin_max_val_f
-                    max_loc_f = bin_max_loc_f
-                    
+            # 전체화면 정합성 검증 성공 시, 즉각 캐시를 폭파하고 좌표를 갱신
             if max_val_f >= active_conf:
-                print(f"  > 💊 [자가 치유] '{img_path}' 캐시 오염 극복 완료! 실시간 좌표를 자동 갱신합니다.")
+                print(f"  > 💊 [자가 치유] '{img_path}' 캐시 수명 만료 감지! 전체화면 좌표로 자가 복구 완료.")
                 cache_data['master_box'] = None
                 cache_data['samples'].clear()
                 ctx['history'].clear()
@@ -1043,8 +1021,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 max_loc = max_loc_f
                 screen_processed = screen_processed_f
 
-        # --- [적응형 이진화 대피소] ---
-        if max_val < active_conf and img_path != 'green_float.png':
+        # 3. [적응형 이진화 및 배율 교정 대피소]
+        # 오직 수면/월드 위 배경 간섭을 받는 핵심 낚시 UI 요소들만 형태 대조를 허용 (일반 판넬/팝업창 오탐 점수 0.925 버그 완벽 차단)
+        if max_val < active_conf and img_path in DYNAMIC_UI_LIST:
             s_gray = screen_processed if not use_color else cv2.cvtColor(screen_processed, cv2.COLOR_BGR2GRAY)
             t_gray = template_processed if not use_color else cv2.cvtColor(template_processed, cv2.COLOR_BGR2GRAY)
             
@@ -1054,7 +1033,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             res_bin = cv2.matchTemplate(s_bin, t_bin, cv2.TM_CCOEFF_NORMED)
             _, bin_max_val, _, bin_max_loc = cv2.minMaxLoc(res_bin)
             
-            # 창모드 배율 왜곡 대응 (일반 스캔)
+            # 창모드 배율 왜곡 대응 (96% ~ 104% 미세 가변 대조)
             if bin_max_val < active_conf:
                 test_scales = [0.98, 1.02, 0.96, 1.04]
                 for sc in test_scales:
@@ -1074,6 +1053,14 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             if bin_max_val >= active_conf:
                 max_val = bin_max_val
                 max_loc = bin_max_loc
+                # 만약 전체화면 스캔 상태에서 적응형 이진화로 겨우 찾아낸 상황이라면, 캐시를 갱신해줌
+                if is_using_cache:
+                    print(f"  > 💊 [자가 치유] '{img_path}' 캐시 수명 만료 감지 (이진화)! 전체화면 좌표로 복구 완료.")
+                    cache_data['master_box'] = None
+                    cache_data['samples'].clear()
+                    ctx['history'].clear()
+                    ctx['is_locked'] = False
+                    target_monitor = active_sct.monitors[1]
 
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
         ctx = safe_find_image.session.setdefault(img_path, {
@@ -1102,8 +1089,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 
             _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re)
             
-            # 재검증 시에도 가우시안 적응형 이진화 대조 및 배율 교정 분기 실행
-            if max_val_re < active_conf and img_path != 'green_float.png':
+            # 재검증 시에도 핵심 UI인 경우 적응형 이진화 대조 분기 가동
+            if max_val_re < active_conf and img_path in DYNAMIC_UI_LIST:
                 sr_gray = re_processed if not use_color else cv2.cvtColor(re_processed, cv2.COLOR_BGR2GRAY)
                 tr_gray = template_processed if not use_color else cv2.cvtColor(template_processed, cv2.COLOR_BGR2GRAY)
                 sr_bin = cv2.adaptiveThreshold(sr_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
@@ -1111,8 +1098,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 res_re_bin = cv2.matchTemplate(sr_bin, tr_bin, cv2.TM_CCOEFF_NORMED)
                 _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re_bin)
                 
-            max_val = max_val_re
-            max_loc = max_loc_re
+                max_val = max_val_re
+                max_loc = max_loc_re
             is_rechecked = True
 
         if max_val >= active_conf:
@@ -1147,7 +1134,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                                 mb = cache_data['master_box']
                                 roi_img = np.array(active_sct.grab(mb))
                                 save_path = os.path.join(LOCKED_ROI_DIR, f"locked_{img_path}")
-                                # [한글 경로 버그 해결] cv2.imwrite 대신 파이썬 내장 바이트 스트림으로 강제 기록
                                 success, encoded_img = cv2.imencode('.png', cv2.cvtColor(roi_img, cv2.COLOR_BGRA2BGR))
                                 if success:
                                     with open(save_path, 'wb') as f:
@@ -1162,7 +1148,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             print(f"  > 🟢 [인식 완료] {img_path} | 일치율: {max_val:.3f} / 컷오프({mode_str}): {active_conf:.3f}{recheck_str}")
             ctx['found'] = True
 
-            # [신규 핵심 로직] 고정 상태인데 폴더에 사진이 지워졌거나 없다면 즉시 다시 찍어서 복구합니다.
             if ctx['is_locked'] and cache_data.get('master_box'):
                 save_path = os.path.join(LOCKED_ROI_DIR, f"locked_{img_path}")
                 if not os.path.exists(save_path):
@@ -1176,12 +1161,11 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                             print(f"  > 📸 [ROI 복구 캡처] '{img_path}'의 누락된 고정 범위 사진을 다시 저장했습니다.")
                     except: pass
 
-        # [신규] 인식 실패 시 엑셀 로깅 (팝업 제외 및 1초당 1회 기록)
+        # [인식 실패 연동 및 디버그용 콘솔 알림] (10초당 1회만 노출)
         if max_val < active_conf:
             ctx['found'] = False
             if img_path not in ['popup_char.png', 'popup_main.png']:
                 now = time.time()
-                # 10초 쿨다운 콘솔 출력으로 피드백 제공
                 if now - ctx.get('last_fail_log_time', 0) > 10.0:
                     ctx['last_fail_log_time'] = now
                     print(f"  > 🔴 [인식 미달] {img_path} | 최고 점수: {max_val:.3f} / 목표 요구치: {active_conf:.3f}")

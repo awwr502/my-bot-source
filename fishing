@@ -932,21 +932,45 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         sct_img = active_sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
 
-        # [Dual-Contrast 정밀 보정 엔진]
-        # 윤곽선을 흐릿하게 만드는 필터(소벨+블러)를 배제하고 원본 고화질 그대로 매칭을 진행하되,
-        # 정방향 대조와 반전(Invert) 대조를 동시 수행하여 배경색 급변과 명암 역전 현상을 완벽히 극복합니다.
-        # 오탐(가짜 매칭)을 원천 차단하고 실제 타겟만 칼처럼 찾아내어 정확도를 극대화합니다.
+        # [UI 스케일 및 배율 보정용 광대역 Dual-Contrast 매칭 엔진]
+        # 게임 패치로 인해 인게임 'UI 크기 조절(Scale)' 설정이 바뀌었거나 해상도 배율(DPI)이 어긋났을 때,
+        # 외곽선 왜곡을 배제하고 원본 구조 형태를 80%부터 120%까지 폭넓게 탐색하며, 명암 역전까지 완벽히 보정합니다.
         if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-            res_normal = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-            template_inv = cv2.bitwise_not(template)
-            res_inv = cv2.matchTemplate(screen_gray, template_inv, cv2.TM_CCOEFF_NORMED)
-            res = np.maximum(res_normal, res_inv)
-            h, w = template.shape[:2]
+            best_max_val = -1
+            best_max_loc = (0, 0)
+            best_w, best_h = template.shape[1], template.shape[0]
+            
+            # 80%, 90%, 100%, 110%, 120%의 인게임 UI 배율 설정을 모두 대응하는 5단계 광대역 스케일 검색
+            scales = [0.8, 0.9, 1.0, 1.1, 1.2]
+            for scale in scales:
+                w_scaled = int(template.shape[1] * scale)
+                h_scaled = int(template.shape[0] * scale)
+                if w_scaled < 10 or h_scaled < 10: continue
+                
+                if screen_gray.shape[0] < h_scaled or screen_gray.shape[1] < w_scaled:
+                    continue
+                    
+                scaled_tpl = cv2.resize(template, (w_scaled, h_scaled), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                
+                # 정방향 및 반전 보색 대조군 동시 매칭으로 명암 역전 극복
+                res_normal = cv2.matchTemplate(screen_gray, scaled_tpl, cv2.TM_CCOEFF_NORMED)
+                scaled_tpl_inv = cv2.bitwise_not(scaled_tpl)
+                res_inv = cv2.matchTemplate(screen_gray, scaled_tpl_inv, cv2.TM_CCOEFF_NORMED)
+                res_scale = np.maximum(res_normal, res_inv)
+                
+                _, mv, _, ml = cv2.minMaxLoc(res_scale)
+                if mv > best_max_val:
+                    best_max_val = mv
+                    best_max_loc = ml
+                    best_w, best_h = w_scaled, h_scaled
+            
+            max_val = best_max_val
+            max_loc = best_max_loc
+            h, w = best_h, best_w
         else:
             res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
             h, w = template.shape[:2]
-
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
         ctx = safe_find_image.session.setdefault(img_path, {
@@ -1282,15 +1306,26 @@ def afk_monitor_loop():
                             sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
                             
-                            # 고정밀 Dual-Contrast 기법 적용 (오탐 방지 및 칼매칭 복원)
+                            # 광대역 스케일 및 Dual-Contrast 융합 적용
                             if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                res_normal = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
-                                temp_inv = cv2.bitwise_not(temp)
-                                res_inv = cv2.matchTemplate(screen_gray_ui, temp_inv, cv2.TM_CCOEFF_NORMED)
-                                res = np.maximum(res_normal, res_inv)
+                                best_mv = -1
+                                scales = [0.8, 0.9, 1.0, 1.1, 1.2]
+                                for scale in scales:
+                                    w_scaled = int(temp.shape[1] * scale)
+                                    h_scaled = int(temp.shape[0] * scale)
+                                    if w_scaled < 10 or h_scaled < 10: continue
+                                    if screen_gray_ui.shape[0] < h_scaled or screen_gray_ui.shape[1] < w_scaled: continue
+                                    
+                                    scaled_tpl = cv2.resize(temp, (w_scaled, h_scaled), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                    res_normal = cv2.matchTemplate(screen_gray_ui, scaled_tpl, cv2.TM_CCOEFF_NORMED)
+                                    scaled_tpl_inv = cv2.bitwise_not(scaled_tpl)
+                                    res_inv = cv2.matchTemplate(screen_gray_ui, scaled_tpl_inv, cv2.TM_CCOEFF_NORMED)
+                                    res_scale = np.maximum(res_normal, res_inv)
+                                    best_mv = max(best_mv, cv2.minMaxLoc(res_scale)[1])
+                                max_val_res = best_mv
                             else:
-                                res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
-                            return cv2.minMaxLoc(res)[1] >= conf
+                                max_val_res = cv2.minMaxLoc(cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED))[1]
+                            return max_val_res >= conf
 
                         found_fishing = check_ui('fishing.png', 0.65)
                         time.sleep(0.5) # 0.5초 딜레이
@@ -2457,18 +2492,39 @@ def fishing_bot(max_allowed_seconds):
                                         x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
                                         roi_gray = screen_full_gray[y:y+h, x:x+w]
                                         
-                                        # 고화질 Dual-Contrast 양방향 매칭 분기
+                                        # 광대역 UI 크기 및 명암 반전 대비 매칭 분기
                                         if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            res_normal = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
-                                            template_inv = cv2.bitwise_not(template)
-                                            res_inv = cv2.matchTemplate(roi_gray, template_inv, cv2.TM_CCOEFF_NORMED)
-                                            res = np.maximum(res_normal, res_inv)
+                                            best_max_val = -1
+                                            best_max_loc = (0, 0)
+                                            best_w, best_h = template.shape[1], template.shape[0]
+                                            
+                                            scales = [0.8, 0.9, 1.0, 1.1, 1.2]
+                                            for scale in scales:
+                                                w_scaled = int(template.shape[1] * scale)
+                                                h_scaled = int(template.shape[0] * scale)
+                                                if w_scaled < 10 or h_scaled < 10: continue
+                                                if roi_gray.shape[0] < h_scaled or roi_gray.shape[1] < w_scaled: continue
+                                                
+                                                scaled_tpl = cv2.resize(template, (w_scaled, h_scaled), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                                res_normal = cv2.matchTemplate(roi_gray, scaled_tpl, cv2.TM_CCOEFF_NORMED)
+                                                scaled_tpl_inv = cv2.bitwise_not(scaled_tpl)
+                                                res_inv = cv2.matchTemplate(roi_gray, scaled_tpl_inv, cv2.TM_CCOEFF_NORMED)
+                                                res_scale = np.maximum(res_normal, res_inv)
+                                                
+                                                _, mv, _, ml = cv2.minMaxLoc(res_scale)
+                                                if mv > best_max_val:
+                                                    best_max_val = mv
+                                                    best_max_loc = ml
+                                                    best_w, best_h = w_scaled, h_scaled
+                                            
+                                            max_val = best_max_val
+                                            max_loc = best_max_loc
+                                            th, tw = best_h, best_w
                                         else:
                                             res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                            th, tw = template.shape[:2]
                                             
-                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                        th, tw = template.shape[:2]
-                                        
                                         if max_val >= conf:
                                             # 좌표 보정 및 동적 패딩 갱신
                                             real_x, real_y = max_loc[0] + x, max_loc[1] + y
@@ -2491,16 +2547,37 @@ def fishing_bot(max_allowed_seconds):
                                     else:
                                         # ROI가 없을 땐 전체화면 배열 그대로 매칭
                                         if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            res_normal = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
-                                            template_inv = cv2.bitwise_not(template)
-                                            res_inv = cv2.matchTemplate(screen_full_gray, template_inv, cv2.TM_CCOEFF_NORMED)
-                                            res = np.maximum(res_normal, res_inv)
+                                            best_max_val = -1
+                                            best_max_loc = (0, 0)
+                                            best_w, best_h = template.shape[1], template.shape[0]
+                                            
+                                            scales = [0.8, 0.9, 1.0, 1.1, 1.2]
+                                            for scale in scales:
+                                                w_scaled = int(template.shape[1] * scale)
+                                                h_scaled = int(template.shape[0] * scale)
+                                                if w_scaled < 10 or h_scaled < 10: continue
+                                                if screen_full_gray.shape[0] < h_scaled or screen_full_gray.shape[1] < w_scaled: continue
+                                                
+                                                scaled_tpl = cv2.resize(template, (w_scaled, h_scaled), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                                res_normal = cv2.matchTemplate(screen_full_gray, scaled_tpl, cv2.TM_CCOEFF_NORMED)
+                                                scaled_tpl_inv = cv2.bitwise_not(scaled_tpl)
+                                                res_inv = cv2.matchTemplate(screen_full_gray, scaled_tpl_inv, cv2.TM_CCOEFF_NORMED)
+                                                res_scale = np.maximum(res_normal, res_inv)
+                                                
+                                                _, mv, _, ml = cv2.minMaxLoc(res_scale)
+                                                if mv > best_max_val:
+                                                    best_max_val = mv
+                                                    best_max_loc = ml
+                                                    best_w, best_h = w_scaled, h_scaled
+                                            
+                                            max_val = best_max_val
+                                            max_loc = best_max_loc
+                                            th, tw = best_h, best_w
                                         else:
                                             res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                            th, tw = template.shape[:2]
                                             
-                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                        th, tw = template.shape[:2]
-                                        
                                         if max_val >= conf:
                                             real_x, real_y = max_loc[0], max_loc[1]
                                             if img_name not in ROI_SAMPLER:

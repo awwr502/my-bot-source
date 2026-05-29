@@ -932,52 +932,21 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         sct_img = active_sct.grab(target_monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
 
-        # [MS-Sobel 하이퍼 최적화 엔진]
-        # 반투명 배경 블렌딩, 명암 역전, 미세 스케일 오차를 물리적으로 완전히 무력화합니다.
-        # 소벨 경계선 강도 맵을 추출하고 가우시안 블러로 윤곽선을 도톰하게 넓혀 미세 변형에도 100% 매칭 스코어를 뽑아냅니다.
+        # [Dual-Contrast 정밀 보정 엔진]
+        # 윤곽선을 흐릿하게 만드는 필터(소벨+블러)를 배제하고 원본 고화질 그대로 매칭을 진행하되,
+        # 정방향 대조와 반전(Invert) 대조를 동시 수행하여 배경색 급변과 명암 역전 현상을 완벽히 극복합니다.
+        # 오탐(가짜 매칭)을 원천 차단하고 실제 타겟만 칼처럼 찾아내어 정확도를 극대화합니다.
         if img_path in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-            def get_sobel_map(img):
-                gx = cv2.Sobel(img, cv2.CV_16S, 1, 0, ksize=3)
-                gy = cv2.Sobel(img, cv2.CV_16S, 0, 1, ksize=3)
-                sobel = cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
-                # 5x5 가우시안 블러로 1픽셀 외곽선 라인을 도톰하게 살찌워 형상 일치도를 극대화합니다.
-                return cv2.GaussianBlur(sobel, (5, 5), 0)
-
-            proc_screen = get_sobel_map(screen_gray)
-            proc_template = get_sobel_map(template)
-            
-            best_max_val = -1
-            best_max_loc = (0, 0)
-            best_w, best_h = template.shape[1], template.shape[0]
-            
-            # 미세한 UI 스케일 오차(DPI, 해상도 변조)를 대응하기 위한 5단계 멀티스케일 매칭
-            scales = [0.95, 0.98, 1.0, 1.02, 1.05]
-            for scale in scales:
-                if scale == 1.0:
-                    scaled_tpl = proc_template
-                else:
-                    w_scaled = int(template.shape[1] * scale)
-                    h_scaled = int(template.shape[0] * scale)
-                    if w_scaled < 10 or h_scaled < 10: continue
-                    scaled_tpl = cv2.resize(proc_template, (w_scaled, h_scaled), interpolation=cv2.INTER_CUBIC)
-                
-                if proc_screen.shape[0] < scaled_tpl.shape[0] or proc_screen.shape[1] < scaled_tpl.shape[1]:
-                    continue
-                    
-                res_scale = cv2.matchTemplate(proc_screen, scaled_tpl, cv2.TM_CCOEFF_NORMED)
-                _, mv, _, ml = cv2.minMaxLoc(res_scale)
-                if mv > best_max_val:
-                    best_max_val = mv
-                    best_max_loc = ml
-                    best_w, best_h = scaled_tpl.shape[1], scaled_tpl.shape[0]
-            
-            max_val = best_max_val
-            max_loc = best_max_loc
-            h, w = best_h, best_w
+            res_normal = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+            template_inv = cv2.bitwise_not(template)
+            res_inv = cv2.matchTemplate(screen_gray, template_inv, cv2.TM_CCOEFF_NORMED)
+            res = np.maximum(res_normal, res_inv)
+            h, w = template.shape[:2]
         else:
             res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
             h, w = template.shape[:2]
+
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
         ctx = safe_find_image.session.setdefault(img_path, {
@@ -1313,17 +1282,12 @@ def afk_monitor_loop():
                             sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
                             
-                            # 가우시안 도톰 소벨 매칭 기법을 적용하여 완벽하게 형상을 포착합니다.
+                            # 고정밀 Dual-Contrast 기법 적용 (오탐 방지 및 칼매칭 복원)
                             if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                def get_sobel(img):
-                                    gx = cv2.Sobel(img, cv2.CV_16S, 1, 0, ksize=3)
-                                    gy = cv2.Sobel(img, cv2.CV_16S, 0, 1, ksize=3)
-                                    sobel = cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
-                                    return cv2.GaussianBlur(sobel, (5, 5), 0)
-                                    
-                                proc_screen = get_sobel(screen_gray_ui)
-                                proc_temp = get_sobel(temp)
-                                res = cv2.matchTemplate(proc_screen, proc_temp, cv2.TM_CCOEFF_NORMED)
+                                res_normal = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
+                                temp_inv = cv2.bitwise_not(temp)
+                                res_inv = cv2.matchTemplate(screen_gray_ui, temp_inv, cv2.TM_CCOEFF_NORMED)
+                                res = np.maximum(res_normal, res_inv)
                             else:
                                 res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
                             return cv2.minMaxLoc(res)[1] >= conf
@@ -2477,6 +2441,11 @@ def fishing_bot(max_allowed_seconds):
 
                     with mss.mss() as cctv_sct:
                         while fighting_active and bot_active:
+
+                            # [핵심 최적화] 5번씩 찍던 캡처를 딱 1번의 전체화면 캡처로 통합! (캡처 병목 원천 차단)
+                            sct_full = cctv_sct.grab(cctv_sct.monitors[1])
+                            screen_full_gray = cv2.cvtColor(np.array(sct_full), cv2.COLOR_BGRA2GRAY)
+
                             def thread_safe_find(img_name, conf):
                                 try:
                                     template = IMAGE_CACHE.get(img_name)
@@ -2488,46 +2457,18 @@ def fishing_bot(max_allowed_seconds):
                                         x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
                                         roi_gray = screen_full_gray[y:y+h, x:x+w]
                                         
-                                        # 도톰 윤곽 추출(Sobel+Gaussian) 및 다중 크기 보정 매칭 분기
+                                        # 고화질 Dual-Contrast 양방향 매칭 분기
                                         if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            def get_sobel(img):
-                                                gx = cv2.Sobel(img, cv2.CV_16S, 1, 0, ksize=3)
-                                                gy = cv2.Sobel(img, cv2.CV_16S, 0, 1, ksize=3)
-                                                sobel = cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
-                                                return cv2.GaussianBlur(sobel, (5, 5), 0)
-                                                
-                                            proc_roi = get_sobel(roi_gray)
-                                            proc_template = get_sobel(template)
-                                            
-                                            best_max_val = -1
-                                            best_max_loc = (0, 0)
-                                            best_w, best_h = template.shape[1], template.shape[0]
-                                            
-                                            scales = [0.95, 0.98, 1.0, 1.02, 1.05]
-                                            for scale in scales:
-                                                w_scaled = int(template.shape[1] * scale)
-                                                h_scaled = int(template.shape[0] * scale)
-                                                if w_scaled < 10 or h_scaled < 10: continue
-                                                scaled_tpl = cv2.resize(proc_template, (w_scaled, h_scaled), interpolation=cv2.INTER_CUBIC)
-                                                
-                                                if roi_gray.shape[0] < scaled_tpl.shape[0] or roi_gray.shape[1] < scaled_tpl.shape[1]:
-                                                    continue
-                                                    
-                                                res_scale = cv2.matchTemplate(proc_roi, scaled_tpl, cv2.TM_CCOEFF_NORMED)
-                                                _, mv, _, ml = cv2.minMaxLoc(res_scale)
-                                                if mv > best_max_val:
-                                                    best_max_val = mv
-                                                    best_max_loc = ml
-                                                    best_w, best_h = scaled_tpl.shape[1], scaled_tpl.shape[0]
-                                            
-                                            max_val = best_max_val
-                                            max_loc = best_max_loc
-                                            th, tw = best_h, best_w
+                                            res_normal = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            template_inv = cv2.bitwise_not(template)
+                                            res_inv = cv2.matchTemplate(roi_gray, template_inv, cv2.TM_CCOEFF_NORMED)
+                                            res = np.maximum(res_normal, res_inv)
                                         else:
                                             res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
-                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                            th, tw = template.shape[:2]
                                             
+                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                        th, tw = template.shape[:2]
+                                        
                                         if max_val >= conf:
                                             # 좌표 보정 및 동적 패딩 갱신
                                             real_x, real_y = max_loc[0] + x, max_loc[1] + y
@@ -2550,44 +2491,16 @@ def fishing_bot(max_allowed_seconds):
                                     else:
                                         # ROI가 없을 땐 전체화면 배열 그대로 매칭
                                         if img_name in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'fishing_mode.png', 'green_range.png', 'throw_btn.png', 'press_A.png', 'press_D.png']:
-                                            def get_sobel(img):
-                                                gx = cv2.Sobel(img, cv2.CV_16S, 1, 0, ksize=3)
-                                                gy = cv2.Sobel(img, cv2.CV_16S, 0, 1, ksize=3)
-                                                sobel = cv2.addWeighted(cv2.convertScaleAbs(gx), 0.5, cv2.convertScaleAbs(gy), 0.5, 0)
-                                                return cv2.GaussianBlur(sobel, (5, 5), 0)
-                                                
-                                            proc_screen = get_sobel(screen_full_gray)
-                                            proc_template = get_sobel(template)
-                                            
-                                            best_max_val = -1
-                                            best_max_loc = (0, 0)
-                                            best_w, best_h = template.shape[1], template.shape[0]
-                                            
-                                            scales = [0.95, 0.98, 1.0, 1.02, 1.05]
-                                            for scale in scales:
-                                                w_scaled = int(template.shape[1] * scale)
-                                                h_scaled = int(template.shape[0] * scale)
-                                                if w_scaled < 10 or h_scaled < 10: continue
-                                                scaled_tpl = cv2.resize(proc_template, (w_scaled, h_scaled), interpolation=cv2.INTER_CUBIC)
-                                                
-                                                if screen_full_gray.shape[0] < scaled_tpl.shape[0] or screen_full_gray.shape[1] < scaled_tpl.shape[1]:
-                                                    continue
-                                                    
-                                                res_scale = cv2.matchTemplate(proc_screen, scaled_tpl, cv2.TM_CCOEFF_NORMED)
-                                                _, mv, _, ml = cv2.minMaxLoc(res_scale)
-                                                if mv > best_max_val:
-                                                    best_max_val = mv
-                                                    best_max_loc = ml
-                                                    best_w, best_h = scaled_tpl.shape[1], scaled_tpl.shape[0]
-                                            
-                                            max_val = best_max_val
-                                            max_loc = best_max_loc
-                                            th, tw = best_h, best_w
+                                            res_normal = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
+                                            template_inv = cv2.bitwise_not(template)
+                                            res_inv = cv2.matchTemplate(screen_full_gray, template_inv, cv2.TM_CCOEFF_NORMED)
+                                            res = np.maximum(res_normal, res_inv)
                                         else:
                                             res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
-                                            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                            th, tw = template.shape[:2]
                                             
+                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                                        th, tw = template.shape[:2]
+                                        
                                         if max_val >= conf:
                                             real_x, real_y = max_loc[0], max_loc[1]
                                             if img_name not in ROI_SAMPLER:

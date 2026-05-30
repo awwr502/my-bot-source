@@ -2313,15 +2313,32 @@ def fusion_bot_loop():
                                             
                                 if rogue_check_found:
                                     bprint("  > 🚨 [치명적 버그 방어] 의도하지 않은 과거 감염물에 버그성 체크마크가 발생했습니다!")
-                                    # 버그 체크마크 클릭하여 강제 해제
-                                    for ptd in rogue_pts:
-                                        hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
-                                        pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
+                                    
+                                    # 화면에 실제로 잔여 v표시가 검출되는지 2차 확인 진행
+                                    check_res = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
+                                    check_loc = np.where(check_res >= 0.85)
+                                    check_pts = list(zip(*check_loc[::-1]))
+                                    
+                                    if len(check_pts) == 0:
+                                        bprint("  > 🔄 [v표시 미발견] 체크가 해제된 상태입니다. 올바른 감염물 2개를 다시 클릭합니다.")
+                                        for idx, (px, py, pcx, pcy) in enumerate(safe_pts):
+                                            pyautogui.moveTo(pcx, pcy); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
+                                        pyautogui.moveTo(200, 500); time.sleep(0.2)
+                                    else:
+                                        bprint("  > 🔄 [v표시 발견] 버그성 체크마크가 감지되었습니다. 우선 체크 해제부터 다시 정밀 진행합니다.")
+                                        dc_unique_err = []
+                                        for ptd in check_pts:
+                                            if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique_err):
+                                                dc_unique_err.append(ptd)
+                                        for ptd in dc_unique_err:
+                                            hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
+                                            pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
                                         
-                                    bprint("  > 🔄 버그 체크마크 해제 완료. 올바른 감염물을 다시 클릭합니다.")
-                                    for idx, (px, py, pcx, pcy) in enumerate(safe_pts):
-                                        pyautogui.moveTo(pcx, pcy); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
-                                    pyautogui.moveTo(200, 500); time.sleep(0.2)
+                                        pyautogui.moveTo(200, 500); time.sleep(0.2)
+                                        bprint("  > 🔄 버그 체크마크 해제 완료. 올바른 감염물 2개를 다시 정밀하게 클릭합니다.")
+                                        for idx, (px, py, pcx, pcy) in enumerate(safe_pts):
+                                            pyautogui.moveTo(pcx, pcy); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
+                                        pyautogui.moveTo(200, 500); time.sleep(0.2)
                                     
                                     wait_sel = time.time() # 2/2 대기 타이머 리셋
                                     continue # F를 누르지 않고 while 루프로 돌아가 select_2_2.png 상태를 처음부터 재검증합니다.

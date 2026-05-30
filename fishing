@@ -879,8 +879,6 @@ def preload_all_images():
                 if img_unchanged is not None:
                     if len(img_unchanged.shape) == 3 and img_unchanged.shape[2] == 4:
                         IMAGE_COLOR_CACHE[filename] = img_unchanged[:, :, :3]
-                        # [알파 투명 마스크 추출] 이미지 자체에 들어있는 투명(배경 제거) 레이어를 추출하여 저장합니다.
-                        IMAGE_MASK_CACHE[filename] = img_unchanged[:, :, 3]
                     else:
                         IMAGE_COLOR_CACHE[filename] = img_unchanged
             except Exception as e:
@@ -966,28 +964,27 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             template_processed = cv2.subtract(tg, cv2.max(tr, tb))
             use_color = True
             
-        # B. 연두 게이지 막대의 경우: 색상 보존 및 형태 보존을 위해 원색 BGR 컬러 매칭 가동
+        # B. 연두 게이지 막대의 경우: 색상 보존 및 형태 보존을 위해 원색 BGR 컬러 매칭 강제 가동
         elif img_path == 'green_range.png' and template_color is not None:
             screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
             template_processed = template_color
             use_color = True
             
-        # C. 그 외 모든 일반 UI/문자열: 흑백 그레이스케일 대조 가동
+        # C. 그 외 모든 일반 UI/문자열: 흑백 정규화(Min-Max) 명암비 극대화 대조 가동 (배경색 차이 강제 소멸)
         else:
             screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
             template_processed = template_gray
-            use_color = False
             
-            # [명암비 자동 맥스 부스팅] 오직 배경의 간섭을 받아 흐려지는 핵심 낚시 UI 요소들만 명암비 인장을 적용 (일반 판넬 팝업창 오탐 점수 상승 방지)
-            if img_path in DYNAMIC_UI_LIST:
-                screen_processed = cv2.normalize(screen_processed, None, 0, 255, cv2.NORM_MINMAX)
-                template_processed = cv2.normalize(template_processed, None, 0, 255, cv2.NORM_MINMAX)
+            # [명암비 자동 맥스 부스팅] 극도로 낮은 대비의 회색조 글자들을 선명한 흑백으로 자동 인장시킵니다.
+            screen_processed = cv2.normalize(screen_processed, None, 0, 255, cv2.NORM_MINMAX)
+            template_processed = cv2.normalize(template_processed, None, 0, 255, cv2.NORM_MINMAX)
+            use_color = False
 
         res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         # 2. [실시간 자가 치유 능동 폴백]
-        # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재스캔 수행
+        # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 스캔 구역 리셋
         is_using_cache = (not is_fallback_scan and not region and cache_data['master_box'] is not None)
         if max_val < active_conf and is_using_cache:
             full_monitor = active_sct.monitors[1]
@@ -1001,14 +998,43 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
             else:
                 screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
-                # 동일한 조건부 명암 복구 적용
-                if img_path in DYNAMIC_UI_LIST:
-                    screen_processed_f = cv2.normalize(screen_processed_f, None, 0, 255, cv2.NORM_MINMAX)
+                screen_processed_f = cv2.normalize(screen_processed_f, None, 0, 255, cv2.NORM_MINMAX)
                 
             res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCOEFF_NORMED)
             _, max_val_f, _, max_loc_f = cv2.minMaxLoc(res_f)
             
-            # 전체화면 정합성 검증 성공 시, 즉각 캐시를 폭파하고 좌표를 갱신
+            # 전체화면 전이 상태에서의 이진화 대피소 작동
+            if max_val_f < active_conf and img_path in DYNAMIC_UI_LIST:
+                s_gray_f = screen_processed_f
+                t_gray_f = template_processed
+                
+                # 명도 180 기준 절대 이진화 처리 (최댓값 255 인자 오타 교정)
+                _, s_bin_f = cv2.threshold(s_gray_f, 180, 255, cv2.THRESH_BINARY)
+                _, t_bin_f = cv2.threshold(t_gray_f, 180, 255, cv2.THRESH_BINARY)
+                res_bin_f = cv2.matchTemplate(s_bin_f, t_bin_f, cv2.TM_CCOEFF_NORMED)
+                _, bin_max_val_f, _, bin_max_loc_f = cv2.minMaxLoc(res_bin_f)
+                
+                # 창모드 배율 왜곡 대응 (전체화면 스캔)
+                if bin_max_val_f < active_conf:
+                    test_scales = [0.98, 1.02, 0.96, 1.04]
+                    for sc in test_scales:
+                        tw = int(t_bin_f.shape[1] * sc)
+                        th = int(t_bin_f.shape[0] * sc)
+                        if tw < 10 or th < 10 or tw > s_bin_f.shape[1] or th > s_bin_f.shape[0]:
+                            continue
+                        t_bin_res_f = cv2.resize(t_bin_f, (tw, th), interpolation=cv2.INTER_AREA if sc < 1.0 else cv2.INTER_CUBIC)
+                        res_bin_sc_f = cv2.matchTemplate(s_bin_f, t_bin_res_f, cv2.TM_CCOEFF_NORMED)
+                        _, sc_max_val_f, _, sc_max_loc_f = cv2.minMaxLoc(res_bin_sc_f)
+                        if sc_max_val_f >= active_conf:
+                            bin_max_val_f = sc_max_val_f
+                            bin_max_loc_f = sc_max_loc_f
+                            template_processed = t_bin_res_f
+                            break
+                
+                if bin_max_val_f >= active_conf:
+                    max_val_f = bin_max_val_f
+                    max_loc_f = bin_max_loc_f
+                    
             if max_val_f >= active_conf:
                 print(f"  > 💊 [자가 치유] '{img_path}' 캐시 수명 만료 감지! 전체화면 좌표로 자가 복구 완료.")
                 cache_data['master_box'] = None
@@ -1022,7 +1048,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 screen_processed = screen_processed_f
 
         # 3. [고대비 절대 이진화 및 배율 교정 대피소]
-        # 오직 수면 파도 물결 등 어설픈 배경 명도 변화를 완전히 무채색 블랙(0)으로 격리하고 흰색 글씨 획만 정밀 매치
+        # 수면 파도 물결 등 어설픈 배경 명도 변화를 완전히 무채색 블랙(0)으로 격리하고 흰색 글씨 획만 정밀 매치
         if max_val < active_conf and img_path in DYNAMIC_UI_LIST:
             s_gray = screen_processed
             t_gray = template_processed
@@ -1072,9 +1098,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 re_processed = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2BGR)
             else:
                 re_processed = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2GRAY)
-                # 동일한 조건부 명암비 복구 적용
-                if img_path in DYNAMIC_UI_LIST:
-                    re_processed = cv2.normalize(re_processed, None, 0, 255, cv2.NORM_MINMAX)
+                re_processed = cv2.normalize(re_processed, None, 0, 255, cv2.NORM_MINMAX)
                 
             res_re = cv2.matchTemplate(re_processed, template_processed, cv2.TM_CCOEFF_NORMED)
             _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re)
@@ -1083,6 +1107,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             if max_val_re < active_conf and img_path in DYNAMIC_UI_LIST:
                 sr_gray = re_processed
                 tr_gray = template_processed
+                # 최댓값 255 인자 오타 교정
                 _, sr_bin = cv2.threshold(sr_gray, 180, 255, cv2.THRESH_BINARY)
                 _, tr_bin = cv2.threshold(tr_gray, 180, 255, cv2.THRESH_BINARY)
                 res_re_bin = cv2.matchTemplate(sr_bin, tr_bin, cv2.TM_CCOEFF_NORMED)

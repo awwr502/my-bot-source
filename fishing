@@ -879,8 +879,19 @@ def preload_all_images():
                 if img_unchanged is not None:
                     if len(img_unchanged.shape) == 3 and img_unchanged.shape[2] == 4:
                         IMAGE_COLOR_CACHE[filename] = img_unchanged[:, :, :3]
+                        # 사용자가 배경제거한 PNG 파일의 수동 투명 알파 채널 수집
+                        IMAGE_MASK_CACHE[filename] = img_unchanged[:, :, 3]
                     else:
                         IMAGE_COLOR_CACHE[filename] = img_unchanged
+                        
+                # 3. [지정 대상 자동 마스킹] 사용자가 수동 투명화를 하지 않았더라도, 지시하신 4개 핵심 파일에 한해 글자선 마스크를 강제 추출하여 적재합니다.
+                if filename in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png']:
+                    if filename not in IMAGE_MASK_CACHE and img_gray is not None:
+                        median_val = np.median(img_gray)
+                        diff = cv2.absdiff(img_gray, int(median_val))
+                        _, auto_mask = cv2.threshold(diff, 15, 255, cv2.THRESH_BINARY)
+                        IMAGE_MASK_CACHE[filename] = auto_mask
+                        
             except Exception as e:
                 print(f"  > [경고] {filename} 메모리 적재 실패: {e}")
                 
@@ -910,16 +921,14 @@ def log_confidence_to_csv(log_type, img_path, target_conf, actual_conf, min_c=No
 
 def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진 (동적 임계값 폐기 & CSV 로깅)"""
-    global IMAGE_CACHE, IMAGE_COLOR_CACHE, ROI_SAMPLER
+    global IMAGE_CACHE, IMAGE_COLOR_CACHE, IMAGE_MASK_CACHE, ROI_SAMPLER
     
     template_gray = IMAGE_CACHE.get(img_path)
+    mask = IMAGE_MASK_CACHE.get(img_path)
     template_color = IMAGE_COLOR_CACHE.get(img_path)
     
-    # [설정] 배경 간섭을 받아 왜곡이 발생하는 핵심 낚시 UI 요소들 (조준 글씨인 green_range.png를 포함하여 정밀 추적)
-    DYNAMIC_UI_LIST = [
-        'bait_change.png', 'throw_btn.png', 'broken_rod.png', 'catch_F.png', 
-        'green_range.png', 'fishing.png', 'fishing_mode.png'
-    ]
+    # [지정] 사용자가 지시한 투명 마스크 매칭(TM_CCORR_NORMED + mask) 강제 가동 대상 4개 핵심 파일
+    MASK_UI_LIST = ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png']
     
     try:
         if template_gray is None: return None
@@ -962,29 +971,33 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             
             tb, tg, tr = cv2.split(template_color)
             template_processed = cv2.subtract(tg, cv2.max(tr, tb))
+            use_mask = None
             use_color = True
             
-        # B. 연두 게이지 막대의 경우: 색상 보존 및 형태 보존을 위해 원색 BGR 컬러 매칭 강제 가동
-        elif img_path == 'green_range.png' and template_color is not None:
-            screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-            template_processed = template_color
-            use_color = True
+        # B. 지정된 4개 이미지의 경우: 배경을 100% 생략하는 투명 마스크 매칭 강제 가동 (수동 투명화/자동 획 마스크 공용)
+        elif img_path in MASK_UI_LIST and mask is not None:
+            screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+            template_processed = template_gray
+            use_mask = mask
+            use_color = False
             
-        # C. 그 외 모든 일반 UI/문자열: 흑백 정규화(Min-Max) 명암비 극대화 대조 가동 (배경색 차이 강제 소멸)
+        # C. 그 외 모든 일반 UI/문자열: 기존의 검증된 Grayscale 매칭 사용
         else:
             screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
             template_processed = template_gray
-            
-            # [명암비 자동 맥스 부스팅] 극도로 낮은 대비의 회색조 글자들을 선명한 흑백으로 자동 인장시킵니다.
-            screen_processed = cv2.normalize(screen_processed, None, 0, 255, cv2.NORM_MINMAX)
-            template_processed = cv2.normalize(template_processed, None, 0, 255, cv2.NORM_MINMAX)
+            use_mask = None
             use_color = False
 
-        res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+        if use_mask is not None:
+            # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
+            res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
+        else:
+            res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+            
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         # 2. [실시간 자가 치유 능동 폴백]
-        # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 스캔 구역 리셋
+        # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재조준하여 스캔
         is_using_cache = (not is_fallback_scan and not region and cache_data['master_box'] is not None)
         if max_val < active_conf and is_using_cache:
             full_monitor = active_sct.monitors[1]
@@ -994,47 +1007,18 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 screen_bgr_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
                 sb_f, sg_f, sr_f = cv2.split(screen_bgr_f)
                 screen_processed_f = cv2.subtract(sg_f, cv2.max(sr_f, sb_f))
-            elif img_path == 'green_range.png' and template_color is not None:
-                screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
+            elif img_path in MASK_UI_LIST and mask is not None:
+                screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
             else:
                 screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
-                screen_processed_f = cv2.normalize(screen_processed_f, None, 0, 255, cv2.NORM_MINMAX)
                 
-            res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCOEFF_NORMED)
+            if use_mask is not None:
+                res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
+            else:
+                res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCOEFF_NORMED)
+                
             _, max_val_f, _, max_loc_f = cv2.minMaxLoc(res_f)
             
-            # 전체화면 전이 상태에서의 이진화 대피소 작동
-            if max_val_f < active_conf and img_path in DYNAMIC_UI_LIST:
-                s_gray_f = screen_processed_f
-                t_gray_f = template_processed
-                
-                # 명도 180 기준 절대 이진화 처리 (최댓값 255 인자 오타 교정)
-                _, s_bin_f = cv2.threshold(s_gray_f, 180, 255, cv2.THRESH_BINARY)
-                _, t_bin_f = cv2.threshold(t_gray_f, 180, 255, cv2.THRESH_BINARY)
-                res_bin_f = cv2.matchTemplate(s_bin_f, t_bin_f, cv2.TM_CCOEFF_NORMED)
-                _, bin_max_val_f, _, bin_max_loc_f = cv2.minMaxLoc(res_bin_f)
-                
-                # 창모드 배율 왜곡 대응 (전체화면 스캔)
-                if bin_max_val_f < active_conf:
-                    test_scales = [0.98, 1.02, 0.96, 1.04]
-                    for sc in test_scales:
-                        tw = int(t_bin_f.shape[1] * sc)
-                        th = int(t_bin_f.shape[0] * sc)
-                        if tw < 10 or th < 10 or tw > s_bin_f.shape[1] or th > s_bin_f.shape[0]:
-                            continue
-                        t_bin_res_f = cv2.resize(t_bin_f, (tw, th), interpolation=cv2.INTER_AREA if sc < 1.0 else cv2.INTER_CUBIC)
-                        res_bin_sc_f = cv2.matchTemplate(s_bin_f, t_bin_res_f, cv2.TM_CCOEFF_NORMED)
-                        _, sc_max_val_f, _, sc_max_loc_f = cv2.minMaxLoc(res_bin_sc_f)
-                        if sc_max_val_f >= active_conf:
-                            bin_max_val_f = sc_max_val_f
-                            bin_max_loc_f = sc_max_loc_f
-                            template_processed = t_bin_res_f
-                            break
-                
-                if bin_max_val_f >= active_conf:
-                    max_val_f = bin_max_val_f
-                    max_loc_f = bin_max_loc_f
-                    
             if max_val_f >= active_conf:
                 print(f"  > 💊 [자가 치유] '{img_path}' 캐시 수명 만료 감지! 전체화면 좌표로 자가 복구 완료.")
                 cache_data['master_box'] = None
@@ -1047,47 +1031,26 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 max_loc = max_loc_f
                 screen_processed = screen_processed_f
 
-        # 3. [고대비 절대 이진화 및 배율 교정 대피소]
-        # 수면 파도 물결 등 어설픈 배경 명도 변화를 완전히 무채색 블랙(0)으로 격리하고 흰색 글씨 획만 정밀 매치
-        if max_val < active_conf and img_path in DYNAMIC_UI_LIST:
+        # 3. [기존 가우시안 적응형 이진화 대피소 복구]
+        # 지정된 4개 마스크 대상 외의 다른 일반 이미지 매칭 실패 시, 이전의 가우시안 적응형 이진화를 안정적으로 수행합니다.
+        if max_val < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png':
             s_gray = screen_processed
             t_gray = template_processed
             
-            # 명암부스팅 상태에서 밝기 180 이상의 글씨만 추출 (최댓값 255 인자 오타 교정)
-            _, s_bin = cv2.threshold(s_gray, 180, 255, cv2.THRESH_BINARY)
-            _, t_bin = cv2.threshold(t_gray, 180, 255, cv2.THRESH_BINARY)
+            s_bin = cv2.adaptiveThreshold(s_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+            t_bin = cv2.adaptiveThreshold(t_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
             
             res_bin = cv2.matchTemplate(s_bin, t_bin, cv2.TM_CCOEFF_NORMED)
             _, bin_max_val, _, bin_max_loc = cv2.minMaxLoc(res_bin)
             
-            # 창모드 배율 왜곡 대응 (96% ~ 104% 미세 가변 대조)
-            if bin_max_val < active_conf:
-                test_scales = [0.98, 1.02, 0.96, 1.04]
-                for sc in test_scales:
-                    tw = int(t_bin.shape[1] * sc)
-                    th = int(t_bin.shape[0] * sc)
-                    if tw < 10 or th < 10 or tw > s_bin.shape[1] or th > s_bin.shape[0]:
-                        continue
-                    t_bin_res = cv2.resize(t_bin, (tw, th), interpolation=cv2.INTER_AREA if sc < 1.0 else cv2.INTER_CUBIC)
-                    res_bin_sc = cv2.matchTemplate(s_bin, t_bin_res, cv2.TM_CCOEFF_NORMED)
-                    _, sc_max_val, _, sc_max_loc = cv2.minMaxLoc(res_bin_sc)
-                    if sc_max_val >= active_conf:
-                        bin_max_val = sc_max_val
-                        bin_max_loc = sc_max_loc
-                        template_processed = t_bin_res
-                        break
-            
             if bin_max_val >= active_conf:
                 max_val = bin_max_val
                 max_loc = bin_max_loc
-                # 만약 전체화면 스캔 상태에서 이진화로 겨우 찾아낸 상황이라면, 캐시를 갱신해줌
-                if is_using_cache:
-                    print(f"  > 💊 [자가 치유] '{img_path}' 캐시 수명 만료 감지 (이진화)! 전체화면 좌표로 복구 완료.")
-                    cache_data['master_box'] = None
-                    cache_data['samples'].clear()
-                    ctx['history'].clear()
-                    ctx['is_locked'] = False
-                    target_monitor = active_sct.monitors[1]
+
+        if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
+        ctx = safe_find_image.session.setdefault(img_path, {
+            'history': deque(maxlen=30), 'is_locked': False, 'found': False, 'last_fail_time': 0.0
+        })
 
         is_rechecked = False
         if active_conf > max_val >= (active_conf - 0.04):
@@ -1098,18 +1061,20 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 re_processed = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2BGR)
             else:
                 re_processed = cv2.cvtColor(np.array(sct_re), cv2.COLOR_BGRA2GRAY)
-                re_processed = cv2.normalize(re_processed, None, 0, 255, cv2.NORM_MINMAX)
                 
-            res_re = cv2.matchTemplate(re_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+            if use_mask is not None:
+                res_re = cv2.matchTemplate(re_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
+            else:
+                res_re = cv2.matchTemplate(re_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+                
             _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re)
             
-            # 재검증 시에도 핵심 UI인 경우 절대 이진화 대조 분기 가동
-            if max_val_re < active_conf and img_path in DYNAMIC_UI_LIST:
+            # 재검증 시에도 일반 이미지인 경우 기존 가우시안 적응형 이진화 가동
+            if max_val_re < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png':
                 sr_gray = re_processed
                 tr_gray = template_processed
-                # 최댓값 255 인자 오타 교정
-                _, sr_bin = cv2.threshold(sr_gray, 180, 255, cv2.THRESH_BINARY)
-                _, tr_bin = cv2.threshold(tr_gray, 180, 255, cv2.THRESH_BINARY)
+                sr_bin = cv2.adaptiveThreshold(sr_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+                tr_bin = cv2.adaptiveThreshold(tr_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
                 res_re_bin = cv2.matchTemplate(sr_bin, tr_bin, cv2.TM_CCOEFF_NORMED)
                 _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re_bin)
                 

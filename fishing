@@ -1003,6 +1003,38 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCOEFF_NORMED)
             _, max_val_f, _, max_loc_f = cv2.minMaxLoc(res_f)
             
+            # 전체화면 전이 상태에서의 이진화 대피소 작동
+            if max_val_f < active_conf and img_path in DYNAMIC_UI_LIST:
+                s_gray_f = screen_processed_f
+                t_gray_f = template_processed
+                
+                # 명도 180 기준 절대 이진화 처리 (최댓값 255 인자 오타 교정)
+                _, s_bin_f = cv2.threshold(s_gray_f, 180, 255, cv2.THRESH_BINARY)
+                _, t_bin_f = cv2.threshold(t_gray_f, 180, 255, cv2.THRESH_BINARY)
+                res_bin_f = cv2.matchTemplate(s_bin_f, t_bin_f, cv2.TM_CCOEFF_NORMED)
+                _, bin_max_val_f, _, bin_max_loc_f = cv2.minMaxLoc(res_bin_f)
+                
+                # 창모드 배율 왜곡 대응 (전체화면 스캔)
+                if bin_max_val_f < active_conf:
+                    test_scales = [0.98, 1.02, 0.96, 1.04]
+                    for sc in test_scales:
+                        tw = int(t_bin_f.shape[1] * sc)
+                        th = int(t_bin_f.shape[0] * sc)
+                        if tw < 10 or th < 10 or tw > s_bin_f.shape[1] or th > s_bin_f.shape[0]:
+                            continue
+                        t_bin_res_f = cv2.resize(t_bin_f, (tw, th), interpolation=cv2.INTER_AREA if sc < 1.0 else cv2.INTER_CUBIC)
+                        res_bin_sc_f = cv2.matchTemplate(s_bin_f, t_bin_res_f, cv2.TM_CCOEFF_NORMED)
+                        _, sc_max_val_f, _, sc_max_loc_f = cv2.minMaxLoc(res_bin_sc_f)
+                        if sc_max_val_f >= active_conf:
+                            bin_max_val_f = sc_max_val_f
+                            bin_max_loc_f = sc_max_loc_f
+                            template_processed = t_bin_res_f
+                            break
+                
+                if bin_max_val_f >= active_conf:
+                    max_val_f = bin_max_val_f
+                    max_loc_f = bin_max_loc_f
+                    
             if max_val_f >= active_conf:
                 print(f"  > 💊 [자가 치유] '{img_path}' 캐시 수명 만료 감지! 전체화면 좌표로 자가 복구 완료.")
                 cache_data['master_box'] = None
@@ -1021,9 +1053,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             s_gray = screen_processed
             t_gray = template_processed
             
-            # 명암부스팅 상태에서 밝기 180 이상의 글씨만 추출 (나머지 잔여 물결 무조건 0으로 평평화)
+            # 명암부스팅 상태에서 밝기 180 이상의 글씨만 추출 (최댓값 255 인자 오타 교정)
             _, s_bin = cv2.threshold(s_gray, 180, 255, cv2.THRESH_BINARY)
-            _, t_bin = cv2.threshold(t_gray, 180, cv2.THRESH_BINARY)
+            _, t_bin = cv2.threshold(t_gray, 180, 255, cv2.THRESH_BINARY)
             
             res_bin = cv2.matchTemplate(s_bin, t_bin, cv2.TM_CCOEFF_NORMED)
             _, bin_max_val, _, bin_max_loc = cv2.minMaxLoc(res_bin)
@@ -1075,8 +1107,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             if max_val_re < active_conf and img_path in DYNAMIC_UI_LIST:
                 sr_gray = re_processed
                 tr_gray = template_processed
+                # 최댓값 255 인자 오타 교정
                 _, sr_bin = cv2.threshold(sr_gray, 180, 255, cv2.THRESH_BINARY)
-                _, tr_bin = cv2.threshold(tr_gray, 180, cv2.THRESH_BINARY)
+                _, tr_bin = cv2.threshold(tr_gray, 180, 255, cv2.THRESH_BINARY)
                 res_re_bin = cv2.matchTemplate(sr_bin, tr_bin, cv2.TM_CCOEFF_NORMED)
                 _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re_bin)
                 

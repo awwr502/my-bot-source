@@ -316,7 +316,8 @@ FUSION_CONF = {
     'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72,
     'exit_notice.png': 0.85,
     'bug_time.png': 0.85,
-    'dis_4.png': 0.85
+    'dis_4.png': 0.85,
+    'gravity.png': 0.85
 }
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
@@ -329,7 +330,7 @@ GRAY_IMAGES = [
     '6.png', '7.png', '14.png',
     'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png',
     'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png',
-    'exit_notice.png', 'bug_time.png'
+    'exit_notice.png', 'bug_time.png', 'gravity.png'
 ]
 
 # [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
@@ -2918,10 +2919,32 @@ def force_change_character(char_key):
 
         bprint(f"✅ '{c_name}' 수동 캐릭터 변경 시퀀스가 종료되었습니다.\n")
 
+def stop_popup_monitor():
+    global bot_active, bot_mode
+    with mss.mss() as monitor_sct:
+        while True:
+            try:
+                if bot_active and bot_mode in [3, 4]:
+                    if check_img('stop_pop.png', monitor_sct, force_full=True):
+                        bprint("  > 🚨 [역별 팝업 감지] 비동기 감시기가 '역별' 확인 팝업을 감지했습니다! ESC를 1회 입력합니다.")
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        
+                        # 팝업 소멸 대기
+                        wait_t = time.time()
+                        while bot_active and time.time() - wait_t < 3.0:
+                            if not check_img('stop_pop.png', monitor_sct, force_full=True):
+                                break
+                            time.sleep(0.05)
+                        bprint("  > 🔄 [복구 완료] '역별' 확인 팝업이 해제되었습니다. 중단되었던 지점부터 작업을 계속 이어갑니다.")
+                original_sleep(0.15)
+            except Exception:
+                original_sleep(0.15)
+
 # === [시작점 및 단축키 설정] ===
 def main_bot():
     threading.Thread(target=fusion_bot_loop, daemon=True).start()
     threading.Thread(target=victory_coin_bot_loop, daemon=True).start()
+    threading.Thread(target=stop_popup_monitor, daemon=True).start()
     
     keyboard.add_hotkey('[', toggle_stop)
     keyboard.add_hotkey(']', lambda: toggle_start(1)) # 모드 1: 타이머만

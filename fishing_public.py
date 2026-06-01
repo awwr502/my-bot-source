@@ -884,8 +884,8 @@ def preload_all_images():
                     else:
                         IMAGE_COLOR_CACHE[filename] = img_unchanged
                         
-                # 3. [지정 대상 자동 마스킹] 사용자가 수동 투명화를 하지 않았더라도, 지시하신 4개 핵심 파일에 한해 글자선 마스크를 강제 추출하여 적재합니다.
-                if filename in ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png']:
+                # [인식 엔진 근본 개선] 자동 마스킹 강제 대상에서 bait_change.png를 제외합니다.
+                if filename in ['broken_rod.png', 'fishing.png', 'green_range.png']:
                     if filename not in IMAGE_MASK_CACHE and img_gray is not None:
                         median_val = np.median(img_gray)
                         diff = cv2.absdiff(img_gray, int(median_val))
@@ -927,8 +927,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     mask = IMAGE_MASK_CACHE.get(img_path)
     template_color = IMAGE_COLOR_CACHE.get(img_path)
     
-    # [지정] 사용자가 지시한 투명 마스크 매칭(TM_CCORR_NORMED + mask) 강제 가동 대상 4개 핵심 파일
-    MASK_UI_LIST = ['bait_change.png', 'broken_rod.png', 'fishing.png', 'green_range.png']
+    # [인식 엔진 근본 개선] bait_change.png를 외곽선 매칭에서 제외하여 오탐지를 원천 차단하고 인식률을 복구합니다.
+    MASK_UI_LIST = ['broken_rod.png', 'fishing.png', 'green_range.png']
     
     try:
         if template_gray is None: return None
@@ -952,8 +952,23 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         if is_fallback_scan:
             target_monitor = active_sct.monitors[1]
-            # [오탐 방지] fishing.png(거두기)의 경우 화면 가로(30%~70% 중앙), 세로(50%~100% 하단) 영역만 정밀 탐색
+            # [오탐 방지] 사용자의 인게임 실제 스크린샷 픽셀을 바탕으로 초정밀 좌표 구역 격리
             if img_path == 'fishing.png':
+                target_monitor = {
+                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
+                    "width": int(target_monitor["width"] * 0.4),
+                    "height": int(target_monitor["height"] * 0.5)
+                }
+            elif img_path == 'bait_change.png':
+                # 가로는 극좌측 25%만 확인하고, 세로는 45% ~ 68% 범위로 한정하여 하단 채팅창(745px 이후) 유입을 100% 물리 차단
+                target_monitor = {
+                    "left": int(target_monitor["left"]),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.45),
+                    "width": int(target_monitor["width"] * 0.25),
+                    "height": int(target_monitor["height"] * 0.23)
+                }
+            elif img_path == 'green_range.png':
                 target_monitor = {
                     "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
                     "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
@@ -967,8 +982,22 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             target_monitor = cache_data['master_box']
         else:
             target_monitor = active_sct.monitors[1]
-            # [오탐 방지] 캐시가 유실되었을 때도 동일한 중앙 하단 가이드를 적용합니다.
             if img_path == 'fishing.png':
+                target_monitor = {
+                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
+                    "width": int(target_monitor["width"] * 0.4),
+                    "height": int(target_monitor["height"] * 0.5)
+                }
+            elif img_path == 'bait_change.png':
+                # 가로는 극좌측 25%만 확인하고, 세로는 45% ~ 68% 범위로 한정하여 하단 채팅창(745px 이후) 유입을 100% 물리 차단
+                target_monitor = {
+                    "left": int(target_monitor["left"]),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.45),
+                    "width": int(target_monitor["width"] * 0.25),
+                    "height": int(target_monitor["height"] * 0.23)
+                }
+            elif img_path == 'green_range.png':
                 target_monitor = {
                     "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
                     "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
@@ -1100,13 +1129,15 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         if max_val >= active_conf:
             h, w = template_processed.shape[:2]
+            
             real_x = max_loc[0] + target_monitor["left"]
             real_y = max_loc[1] + target_monitor["top"]
 
             if is_fallback_scan and cache_data['master_box'] is not None:
                 mb = cache_data['master_box']
                 cx, cy = real_x + w//2, real_y + h//2
-                is_inside_roi = (mb['left'] - 10 <= cx <= mb['left'] + mb['width'] + 10) and (mb['top'] - 10 <= cy <= mb['top'] + mb['height'] + 10)
+                # [호흡/카메라 흔들림 보정] 허용 오차 범위를 10에서 100픽셀로 늘려 잦은 자가 치유 폭파를 방지합니다.
+                is_inside_roi = (mb['left'] - 100 <= cx <= mb['left'] + mb['width'] + 100) and (mb['top'] - 100 <= cy <= mb['top'] + mb['height'] + 100)
                 
                 if not is_inside_roi:
                     print(f"  > 💊 [자가 치유] '{img_path}' 실제 위치 변경 감지! 오염된 ROI를 폭파합니다.")
@@ -1192,8 +1223,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 x_variance = x_coords[-1] - x_coords[0]
                 y_variance = y_coords[-1] - y_coords[0]
                 
-                pad_x = min(30, max(5, int(x_variance * 0.8)))
-                pad_y = min(30, max(5, int(y_variance * 0.8)))
+                # [여백 최적화] 마스터 박스 생성 시의 기본 마진(여백)을 최소 50픽셀 이상으로 넉넉하게 주어 카메라 흔들림을 수용합니다.
+                pad_x = min(100, max(50, int(x_variance * 1.5)))
+                pad_y = min(100, max(50, int(y_variance * 1.5)))
 
                 p_mon = active_sct.monitors[1]
                 l_limit, t_limit = p_mon["left"], p_mon["top"]
@@ -2000,7 +2032,7 @@ def fishing_bot(max_allowed_seconds):
             
             while time.time() - wait_throw < 1.5 and bot_active:
                 if check_exit_notification(): return False
-                if safe_find_image('broken_rod.png', 0.70):
+                if safe_find_image('broken_rod.png', 0.8):
                     current_rod_state = "UNFOLDED"
                     break
                 elif safe_find_image('throw_btn.png', 0.70):
@@ -2009,7 +2041,7 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.05)
 
             if not current_rod_state and bot_active:
-                if safe_find_image('broken_rod.png', 0.70, region="FULL_SCREEN"):
+                if safe_find_image('broken_rod.png', 0.80, region="FULL_SCREEN"):
                     current_rod_state = "UNFOLDED"
                 elif safe_find_image('throw_btn.png', 0.70, region="FULL_SCREEN"):
                     current_rod_state = "HELD"
@@ -2343,6 +2375,13 @@ def fishing_bot(max_allowed_seconds):
                         if not check_exit_notification():
                              cast_fail_count += 1
                              bprint(f"  > [실패] UI 미발견 -> 낚싯대 회수 후 재투척 (연속 실패: {cast_fail_count}회)")
+
+                             # [모션 프리징 타격 해제] 미끼 변경 아이콘은 떴으나 물고기를 든 채 캐릭터가 굳어버린 버그 상태인 경우,
+                             # 연속 2회 실패 시점에 ESC를 1회 입력하여 모션 잠금을 안전하게 잠금 해제합니다.
+                             if cast_fail_count >= 2:
+                                 bprint("  > ⚠️ [연속 실패 방어] 캐릭터 동작 잠금 감지! 프리징 해제를 위해 ESC 1회 강제 타격.")
+                                 send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                                 time.sleep(1.0)
                              
                              # 연속 5회 실패 시 미끼 부족/위치 꼬임으로 판단하고 스마트 복구 강제 실행
                              if cast_fail_count >= 5:
@@ -2661,7 +2700,7 @@ def fishing_bot(max_allowed_seconds):
                                             fight_status = "RESET"
                                             break
                                         send_cmd(key); time.sleep(0.05)
-                                        # 갱신된 화면을 위해 QTE 중에는 캡처를 한 번씩 해줌
+
                                         sct_full = cctv_sct.grab(cctv_sct.monitors[1])
                                         screen_full_gray = cv2.cvtColor(np.array(sct_full), cv2.COLOR_BGRA2GRAY)
                                         
@@ -2761,8 +2800,8 @@ def fishing_bot(max_allowed_seconds):
                     if not bot_active: raise BotStopException() 
                     
                     if check_exit_notification(): state = 1; break
-                    if safe_find_image('catch_F.png', 0.75): break
-                    if time.time() - wait_f_start > 10.0: 
+                    if safe_find_image('catch_F.png', 0.70): break
+                    if time.time() - wait_f_start > 5.0: 
                         bprint("  > ⚠️ [버그 감지] 물고기 들고 멈춤 버그 감지! 강제 해제(ESC)를 1회 실행합니다.")
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         time.sleep(1.0)
@@ -2779,7 +2818,7 @@ def fishing_bot(max_allowed_seconds):
                 template_f = IMAGE_CACHE.get('catch_F.png')
                 template_ar = IMAGE_CACHE.get('auto_release.png')
 
-                # --- 1단계: F 연타 및 0.15초 초고속 소멸 검증 ---
+                # --- 1단계: F 연타 및 소멸 검증 (아이콘 소멸 시 즉시 탈출) ---
                 while True: # bot_active로 스르륵 탈출 방지
                     if not bot_active: raise BotStopException() # 즉시 폭파
                     if check_exit_notification(): state = 1; break
@@ -2791,9 +2830,11 @@ def fishing_bot(max_allowed_seconds):
                     screen_gray = fast_cv_screenshot(gray=True)
                     has_f_now = (template_f is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_gray, template_f, cv2.TM_CCOEFF_NORMED))[1] >= 0.7)
 
+                    # 낚싯줄이 완전히 회수될 때까지 대기 연타를 수행합니다.
+                    time.sleep(0.8)
                     if has_f_now:
                         send_cmd('F'); time.sleep(0.05); send_cmd('R')
-                        time.sleep(0.05) # 애니메이션 안정화 대기
+                        time.sleep(0.2) # 과도한 과속 연타로 상자가 열리는 것을 막기 위해 입력 주기를 0.2초로 안정화
                     else:
                         # F가 안 보이면 0.05초 간격으로 3회(총 0.15초) 연속 확인하여 깜빡임 완벽 차단
                         really_gone = True

@@ -1133,17 +1133,16 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             # [2차 정밀 검증] 외곽선 형태가 유사하더라도, 실제 세부 픽셀 획의 정합성을 1:1로 비교하여 오탐지를 최종 기각합니다.
             matched_sub = screen_processed[max_loc[1]:max_loc[1]+h, max_loc[0]:max_loc[0]+w]
             if use_mask is not None:
-                # 마스크(글자선 범위)가 있는 핵심 UI는 마스크 영역의 픽셀만 정밀 매칭
+                # 마스크(글자선 범위)가 존재하는 핵심 UI에 한해서만 글자 자모음 획의 픽셀 단위 검증을 실행합니다.
                 diff_vals = np.abs(matched_sub[use_mask > 0].astype(np.float32) - template_processed[use_mask > 0].astype(np.float32))
-            else:
-                # 일반 이미지는 전체 픽셀 영역 매칭
-                diff_vals = np.abs(matched_sub.astype(np.float32) - template_processed.astype(np.float32))
+                pixel_similarity = 1.0 - (np.mean(diff_vals) / 255.0)
                 
-            pixel_similarity = 1.0 - (np.mean(diff_vals) / 255.0)
-            
-            # 템플릿 매칭 점수를 통과했더라도 픽셀 대조상 한글 자모음 구조가 다르면 오탐지로 판단하여 완벽하게 걸러냅니다.
-            if pixel_similarity < 0.80:
-                return None
+                # 글씨 구조가 틀린 오탐지일 경우 기각 처리
+                if pixel_similarity < 0.80:
+                    return None
+            else:
+                # 찌, 팝업, 보관함 등 마스크가 없는 이미지는 배경색 변화 대응을 위해 2차 픽셀 대조를 무조건 생략(Bypass)합니다.
+                pass
 
             real_x = max_loc[0] + target_monitor["left"]
             real_y = max_loc[1] + target_monitor["top"]

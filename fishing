@@ -1450,18 +1450,27 @@ def afk_monitor_loop():
                         send_blynk_notification("⚠️ 잠수 방지 감지")
                         dump_blackbox_log("잠수방지_비동기_감지")
                         
-                        # [근본 해결] 전역 깃발(is_rod_casted)이나 State 조건에 의존한 맹목적인 사전 ESC 입력을 전면 폐지합니다.
-                        # 대신 알림창을 먼저 F로 지운 뒤, 남은 UI를 시각적으로 직접 확인하여 처리합니다.
-
-                        # 알림창 이미지가 화면에서 완전히 사라질 때까지 F키 반복 (ESC 절대 입력 안 함)
+                        # [연타 상자개방 방지 + 지연 보완 리트라이 융합] 
+                        # F를 1초에 단 1회씩만 안전하게 리트라이하여 보관함 강제 개방을 원천 방지하고 렉으로 인한 유실을 해결합니다.
                         while True:
-                            sct_img_check = afk_sct.grab(afk_sct.monitors[1])
-                            screen_gray_check = cv2.cvtColor(np.array(sct_img_check), cv2.COLOR_BGRA2GRAY)
-                            # [오류 수정 반영] 탈출 컷오프를 진입(0.80)보다 낮은 0.75로 유지하여 완벽히 지워지도록 보장
-                            if cv2.minMaxLoc(cv2.matchTemplate(screen_gray_check, template, cv2.TM_CCOEFF_NORMED))[1] < 0.75:
-                                break
+                            # 1. 일단 해제 신호(F)를 1회 전송
                             send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                            time.sleep(0.5)
+                            
+                            # 2. 최대 1.0초 동안 알림창이 화면에서 소멸하는지 감시
+                            is_vanished = False
+                            wait_start = time.time()
+                            while time.time() - wait_start < 1.0:
+                                sct_img_check = afk_sct.grab(afk_sct.monitors[1])
+                                screen_gray_check = cv2.cvtColor(np.array(sct_img_check), cv2.COLOR_BGRA2GRAY)
+                                if cv2.minMaxLoc(cv2.matchTemplate(screen_gray_check, template, cv2.TM_CCOEFF_NORMED))[1] < 0.75:
+                                    is_vanished = True
+                                    break
+                                time.sleep(0.1) # 감시 대기
+                            
+                            # 3. 1초 이내에 정상 소멸했다면 완전히 대기 루프 탈출
+                            if is_vanished:
+                                break
+                            # 만약 1초가 초과되었는데도 여전히 알림창이 있다면, F 입력을 무시한 것으로 판단하여 2회차 입력을 진행합니다.
                         
                         # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
                         def check_ui(img_name, conf):

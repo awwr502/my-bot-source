@@ -1418,10 +1418,26 @@ def afk_monitor_loop():
                 continue
                 
             try:
+                # 1장만 캡처하여 잠수방지(exit_notice)와 추천(recommend) 두 곳에 알뜰하게 공유 (연산량 극대화 절약)
+                sct_img = afk_sct.grab(afk_sct.monitors[1])
+                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+
+                # --- [추가] 추천/선물 증정 팝업 제거 루틴 (메인 스레드 멈춤 없이 즉각 캔슬) ---
+                template_rec = IMAGE_CACHE.get('recommend.png')
+                if template_rec is not None:
+                    res_rec = cv2.matchTemplate(screen_gray, template_rec, cv2.TM_CCOEFF_NORMED)
+                    _, max_val_rec, _, _ = cv2.minMaxLoc(res_rec)
+                    if max_val_rec >= 0.80:
+                        bprint("\n=============================================")
+                        bprint("  > 🎁 [전역 감시망] 추천/선물 팝업 감지! ESC 1회로 강제 해제합니다.")
+                        bprint("=============================================")
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        time.sleep(0.5) # 팝업 소멸 안정화 대기
+                        continue # 해제 후 루프 처음으로 이동하여 추가 연산 생략
+
+                # --- 기존 잠수방지 루틴 ---
                 template = IMAGE_CACHE.get('exit_notice.png')
                 if template is not None:
-                    sct_img = afk_sct.grab(afk_sct.monitors[1])
-                    screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                     res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
                     _, max_val, _, _ = cv2.minMaxLoc(res)
                     
@@ -2032,7 +2048,7 @@ def fishing_bot(max_allowed_seconds):
             
             while time.time() - wait_throw < 1.5 and bot_active:
                 if check_exit_notification(): return False
-                if safe_find_image('broken_rod.png', 0.8):
+                if safe_find_image('broken_rod.png', 0.78):
                     current_rod_state = "UNFOLDED"
                     break
                 elif safe_find_image('throw_btn.png', 0.70):
@@ -2041,7 +2057,7 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.05)
 
             if not current_rod_state and bot_active:
-                if safe_find_image('broken_rod.png', 0.80, region="FULL_SCREEN"):
+                if safe_find_image('broken_rod.png', 0.78, region="FULL_SCREEN"):
                     current_rod_state = "UNFOLDED"
                 elif safe_find_image('throw_btn.png', 0.70, region="FULL_SCREEN"):
                     current_rod_state = "HELD"

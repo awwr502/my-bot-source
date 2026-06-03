@@ -317,7 +317,8 @@ FUSION_CONF = {
     'exit_notice.png': 0.85,
     'bug_time.png': 0.85,
     'dis_4.png': 0.85,
-    'gravity.png': 0.85
+    'stop_pop.png': 0.85,
+    'hunt_pop.png': 0.85
 }
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
@@ -330,7 +331,7 @@ GRAY_IMAGES = [
     '6.png', '7.png', '14.png',
     'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png',
     'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png',
-    'exit_notice.png', 'bug_time.png', 'gravity.png'
+    'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png'
 ]
 
 # [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
@@ -2925,17 +2926,29 @@ def stop_popup_monitor():
         while True:
             try:
                 if bot_active and bot_mode in [3, 4]:
+                    # 1. 중단 팝업 검증
                     if check_img('stop_pop.png', monitor_sct, force_full=True):
-                        bprint("  > 🚨 [역별 팝업 감지] 비동기 감시기가 '역별' 확인 팝업을 감지했습니다! ESC를 1회 입력합니다.")
+                        bprint("  > 🚨 [중단 팝업 감지] 비동기 감시기가 '중단' 확인 팝업을 감지했습니다! ESC를 1회 입력합니다.")
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         
-                        # 팝업 소멸 대기
                         wait_t = time.time()
                         while bot_active and time.time() - wait_t < 3.0:
                             if not check_img('stop_pop.png', monitor_sct, force_full=True):
                                 break
                             time.sleep(0.05)
-                        bprint("  > 🔄 [복구 완료] '역별' 확인 팝업이 해제되었습니다. 중단되었던 지점부터 작업을 계속 이어갑니다.")
+                        bprint("  > 🔄 [복구 완료] '중단' 확인 팝업 해제 완료.")
+                        
+                    # 2. 포위 사냥 팝업 검증
+                    if check_img('hunt_pop.png', monitor_sct, force_full=True):
+                        bprint("  > 🚨 [포위 사냥 감지] 로그인 직후 우측 '포위 사냥' 알림을 감지했습니다! ESC를 1회 입력합니다.")
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        
+                        wait_t = time.time()
+                        while bot_active and time.time() - wait_t < 3.0:
+                            if not check_img('hunt_pop.png', monitor_sct, force_full=True):
+                                break
+                            time.sleep(0.05)
+                        bprint("  > 🔄 [복구 완료] '포위 사냥' 알림 해제 완료.")
                 original_sleep(0.15)
             except Exception:
                 original_sleep(0.15)

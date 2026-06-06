@@ -1009,81 +1009,81 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         
         # 1. 색상 분석 및 정합성 매치 분기 처리
         # A. 녹색 찌의 경우: 기존 특화 추출식 사용
-    if img_path == 'green_float.png' and template_color is not None:
-        screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGR2BGR)
-        sb, sg, sr = cv2.split(screen_bgr)
-        screen_processed = cv2.subtract(sg, cv2.max(sr, sb))
-        
-        tb, tg, tr = cv2.split(template_color)
-        template_processed = cv2.subtract(tg, cv2.max(tr, tb))
-        use_mask = None
-        use_color = True
-        
-    # B. 지정된 4개 이미지의 경우: 배경을 100% 생략하는 투명 마스크 매칭 강제 가동 (수동 투명화/자동 획 마스크 공용)
-    elif img_path in MASK_UI_LIST and mask is not None:
-        screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-        template_processed = template_gray
-        use_mask = mask
-        use_color = False
-        
-    # C. 그 외 모든 일반 UI/문자열: 기존의 검증된 Grayscale 매칭 사용
-    else:
-        screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-        template_processed = template_gray
-        use_mask = None
-        use_color = False
-
-    # [안전장치 추가] 검색 대상 이미지 영역이 템플릿보다 작아 OpenCV 오류가 발생하는 현상 방지
-    s_h, s_w = screen_processed.shape[:2]
-    t_h, t_w = template_processed.shape[:2]
-    if s_h < t_h or s_w < t_w:
-        # 문제가 된 ROI 캐시를 무효화하고 넓은 전체 영역으로 복원하여 재시도합니다.
-        cache_data['master_box'] = None
-        cache_data['samples'].clear()
-        ctx['history'].clear()
-        ctx['is_locked'] = False
-        
-        target_monitor = active_sct.monitors[1]
-        if img_path == 'fishing.png':
-            target_monitor = {
-                "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
-                "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
-                "width": int(target_monitor["width"] * 0.4),
-                "height": int(target_monitor["height"] * 0.5)
-            }
-        elif img_path == 'bait_change.png':
-            target_monitor = {
-                "left": int(target_monitor["left"]),
-                "top": int(target_monitor["top"] + target_monitor["height"] * 0.45),
-                "width": int(target_monitor["width"] * 0.25),
-                "height": int(target_monitor["height"] * 0.23)
-            }
-        elif img_path == 'green_range.png':
-            target_monitor = {
-                "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
-                "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
-                "width": int(target_monitor["width"] * 0.4),
-                "height": int(target_monitor["height"] * 0.5)
-            }
-            
-        sct_img = active_sct.grab(target_monitor)
         if img_path == 'green_float.png' and template_color is not None:
             screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGR2BGR)
             sb, sg, sr = cv2.split(screen_bgr)
             screen_processed = cv2.subtract(sg, cv2.max(sr, sb))
+            
+            tb, tg, tr = cv2.split(template_color)
+            template_processed = cv2.subtract(tg, cv2.max(tr, tb))
+            use_mask = None
+            use_color = True
+            
+        # B. 지정된 4개 이미지의 경우: 배경을 100% 생략하는 투명 마스크 매칭 강제 가동 (수동 투명화/자동 획 마스크 공용)
+        elif img_path in MASK_UI_LIST and mask is not None:
+            screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+            template_processed = template_gray
+            use_mask = mask
+            use_color = False
+            
+        # C. 그 외 모든 일반 UI/문자열: 기존의 검증된 Grayscale 매칭 사용
         else:
             screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-            
-        s_h, s_w = screen_processed.shape[:2]
-        if s_h < t_h or s_w < t_w:
-            return None  # 최후의 수단: 보정 이후에도 비정상 규격일 경우 매칭을 건너뛰어 크래시 완전 예방
+            template_processed = template_gray
+            use_mask = None
+            use_color = False
 
-    if use_mask is not None:
-        # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
-        res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
-    else:
-        res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+        # [안전장치 추가] 검색 대상 이미지 영역이 템플릿보다 작아 OpenCV 오류가 발생하는 현상 방지
+        s_h, s_w = screen_processed.shape[:2]
+        t_h, t_w = template_processed.shape[:2]
+        if s_h < t_h or s_w < t_w:
+            # 문제가 된 ROI 캐시를 무효화하고 넓은 전체 영역으로 복원하여 재시도합니다.
+            cache_data['master_box'] = None
+            cache_data['samples'].clear()
+            ctx['history'].clear()
+            ctx['is_locked'] = False
             
+            target_monitor = active_sct.monitors[1]
+            if img_path == 'fishing.png':
+                target_monitor = {
+                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
+                    "width": int(target_monitor["width"] * 0.4),
+                    "height": int(target_monitor["height"] * 0.5)
+                }
+            elif img_path == 'bait_change.png':
+                target_monitor = {
+                    "left": int(target_monitor["left"]),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.45),
+                    "width": int(target_monitor["width"] * 0.25),
+                    "height": int(target_monitor["height"] * 0.23)
+                }
+            elif img_path == 'green_range.png':
+                target_monitor = {
+                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
+                    "width": int(target_monitor["width"] * 0.4),
+                    "height": int(target_monitor["height"] * 0.5)
+                }
+                
+            sct_img = active_sct.grab(target_monitor)
+            if img_path == 'green_float.png' and template_color is not None:
+                screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGR2BGR)
+                sb, sg, sr = cv2.split(screen_bgr)
+                screen_processed = cv2.subtract(sg, cv2.max(sr, sb))
+            else:
+                screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                
+            s_h, s_w = screen_processed.shape[:2]
+            if s_h < t_h or s_w < t_w:
+                return None  # 최후의 수단: 보정 이후에도 비정상 규격일 경우 매칭을 건너뛰어 크래시 완전 예방
+
+        if use_mask is not None:
+            # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
+            res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
+        else:
+            res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+                
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         # 2. [실시간 자가 치유 능동 폴백]

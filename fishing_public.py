@@ -1010,7 +1010,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         # 1. 색상 분석 및 정합성 매치 분기 처리
         # A. 녹색 찌의 경우: 기존 특화 추출식 사용
         if img_path == 'green_float.png' and template_color is not None:
-            screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGR2BGR)
+            screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
             sb, sg, sr = cv2.split(screen_bgr)
             screen_processed = cv2.subtract(sg, cv2.max(sr, sb))
             
@@ -1068,7 +1068,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 
             sct_img = active_sct.grab(target_monitor)
             if img_path == 'green_float.png' and template_color is not None:
-                screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGR2BGR)
+                screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
                 sb, sg, sr = cv2.split(screen_bgr)
                 screen_processed = cv2.subtract(sg, cv2.max(sr, sb))
             else:

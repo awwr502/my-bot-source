@@ -1538,7 +1538,9 @@ def afk_monitor_loop():
                         send_blynk_notification("[완료]잠수 방지 해제") 
                         time.sleep(0.7) # [누락 복구] 메인 봇 복귀 전 0.7초 안정화 딜레이
                         
-                        state = 1 # 메인 루프가 사각지대(대기 중)에 갇혀있더라도 1단계부터 깔끔하게 다시 시작하도록 오버라이드
+                        # 원래는 무조건 state = 1로 만들었으나, 현재 봇이 '잠수방지 전용 모드(State 0)'인 상태라면 낚시로 강제 복귀하지 않고 State 0 상태를 계속 유지합니다.
+                        if state != 0:
+                            state = 1
                         is_afk_processing = False
             except Exception as e:
                 pass
@@ -2170,7 +2172,8 @@ def fishing_bot(max_allowed_seconds):
             if check_exit_notification():
                 send_cmd('U') # 혹시 모를 클릭 해제
                 send_cmd('R')
-                if safe_find_image('bait_change.png', 0.70):
+                # 잠수방지 전용 모드(State 0)였을 때는 강제 복귀(state = 1)를 하지 않고 기존 대기 상태를 유지합니다.
+                if state != 0 and safe_find_image('bait_change.png', 0.70):
                     state = 1
                 else:
                     state = 0
@@ -2297,13 +2300,8 @@ def fishing_bot(max_allowed_seconds):
 
             # --- [State 0] 잠수 방지 전용 모드 (대기 및 자가 복귀) ---
             if state == 0:
-                # 낚시 준비 상태가 확인되면 스스로 대기를 풀고 다시 낚시를 시작합니다.
-                if safe_find_image('bait_change.png', 0.70):
-                    bprint("  > [복귀] 낚시 준비 상태가 확인되었습니다. 정상 낚시 모드(State 1)로 진입합니다.")
-                    state = 1
-                    state_start_time = time.time()
-                else:
-                    time.sleep(0.5) # CPU 부하를 방지하며 다음 루프 대기
+                # 이 단계는 오직 백그라운드 스레드의 잠수방지 알림(exit_notice) 감시 및 해제 작동만 유휴 대기합니다. (자동 복귀 로직 폐기)
+                time.sleep(1.0)
                 continue
 
             # --- [State 1] 캐스팅 (좌클릭 홀딩 보강) ---

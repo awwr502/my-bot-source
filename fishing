@@ -1697,198 +1697,215 @@ def victory_coin_bot_loop():
             vprint(f"  > [승리코인 탐색 에러] {img_name} 검색 실패: {e}")
             return False
         
-    def wait_vanish(img_name, thread_sct):
-        vprint(f"  > [대기] {img_name} 사라짐 대기 중...")
-        
-        # [스마트 소멸 검증] 단 1프레임의 오탐(애니메이션, 렉)으로 루프가 깨지는 것을 막기 위해
-        # 연속 5회(약 0.25초) 동안 완전히 안 보여야 진짜 사라진 것으로 인정합니다.
-        vanish_count = 0
-        while victory_active:
-            if check_img(img_name, thread_sct):
-                vanish_count = 0 # 다시 보이면 카운터 초기화 (가짜 소멸 방지)
-            else:
-                vanish_count += 1
-                
-            if vanish_count >= 5:
-                break # 연속 5번 못 찾았을 때만 진짜 소멸로 인정하고 루프 탈출
-                
-            time.sleep(0.05)
-            
-        vprint(f"  > [완료] {img_name} 완벽 소멸 확인!")
+    def wait_vanish(img_name, thread_sct, timeout=10.0):
+            """전환 애니메이션이나 자체 로딩 완료로 인해 스스로 사라지는 이미지 전용 안전 타임아웃 대기 함수"""
+            vprint(f"  > [대기] {img_name} 사라짐 대기 중 (제한: {timeout}초)...")
+            start_t = time.time()
+            vanish_count = 0
+            while time.time() - start_t < timeout and victory_active:
+                if check_img(img_name, thread_sct):
+                    vanish_count = 0 # 다시 노출되면 카운터 초기화
+                else:
+                    vanish_count += 1
+                if vanish_count >= 5:
+                    vprint(f"  > ✅ [완료] {img_name} 소멸 확인!")
+                    return True
+                time.sleep(0.05)
+            vprint(f"  > ⚠️ [경고] {img_name} 소멸 대기 한계 시간 초과. 다음 흐름을 강제 진행합니다.")
+            return False
 
-    with mss.mss() as thread_sct:
-        victory_start_img = None # [신규] 1단계에서 찾은 사진을 기억하는 변수
-        while True:
-            try:
-                if not victory_active:
-                    time.sleep(0.1)
-                    state = 1
-                    continue
+        def send_cmd_until_vanish(img_name, key, thread_sct, timeout=6.0):
+            """키 누락(씹힘) 버그를 원천 봉쇄하기 위해 이미지가 완전히 사라질 때까지 주기적으로 입력을 계속 전송하는 능동 조작 예외 처리 함수"""
+            vprint(f"  > [능동 대기] {img_name} 사라질 때까지 {key} 키 반복 입력 시퀀스 작동 (제한: {timeout}초)...")
+            start_t = time.time()
+            last_press_t = 0.0
+            
+            while time.time() - start_t < timeout and victory_active:
+                now = time.time()
+                # 0.4초마다 반복적으로 키 신호 입력 (하드웨어 통신 씹힘 극복)
+                if now - last_press_t > 0.4:
+                    send_cmd(key); time.sleep(0.05); send_cmd('R')
+                    last_press_t = now
                 
-                if state == 1:
-                    vprint("  > [승리코인] 1단계: 1.png / 2.png 탐색 중...")
-                    found = None
-                    for _ in range(11):
-                        if check_img('1.png', thread_sct): found = '1.png'; break
-                        if check_img('2.png', thread_sct): found = '2.png'; break
-                        time.sleep(0.05)
-                        
-                    if found:
-                        victory_start_img = found # 다음 단계를 위해 발견한 이미지 기록
-                        vprint(f"  > [인식 성공] {found} 발견! F 입력")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish(found, thread_sct)
-                        state = 2
+                # 이미지 소멸 여부 더 엄격하게 실시간 이중 점검 (3회 연속 미검출 시 확실한 소멸로 간주)
+                vanish_count = 0
+                for _ in range(3):
+                    if not check_img(img_name, thread_sct):
+                        vanish_count += 1
                     else:
-                        vprint("  > [인식 실패] 1.png / 2.png 미발견. F 누르고 재탐색합니다.")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        
-                elif state == 2:
-                    vprint("  > [승리코인] 2단계: 3.png 탐색 중...")
-                    found = False
-                    for _ in range(11):
-                        if check_img('3.png', thread_sct): found = True; break
-                        time.sleep(0.05)
-                        
-                    if found:
-                        vprint("  > [인식 성공] 3.png 발견! F 입력")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish('3.png', thread_sct)
-                    else:
-                        vprint("  > [인식 실패] 3.png 미발견. 다음 단계로 넘어갑니다.")
-                    state = 3
+                        break
+                    time.sleep(0.03)
                     
-                elif state == 3:
-                    # [모드 2 전용] 모드 2일 경우 무조건 발동
-                    if victory_mode == 2:
-                        vprint("  > [승리코인] 3단계: 2초 대기 후 1.png 탐색을 시작합니다. (모드 2 전용)")
-                        
-                        time.sleep(2.0) # 1.png를 찾기 전에 2초를 먼저 대기합니다.
-                        
-                        found_1 = False
-                        # 1.png가 뜰 때까지 승리코인 스위치가 켜져 있는 한 계속 대기합니다.
-                        while victory_active:
-                            if check_img('1.png', thread_sct):
-                                found_1 = True
-                                break
-                            time.sleep(0.1) # 대기 중 CPU 부하 방지
-                            
-                        if found_1:
-                            vprint("  > [인식 성공] 1.png 발견! 9.png 탐색을 시작합니다.")
-                            found_9 = False
-                            for _ in range(11):
-                                if check_img('9.png', thread_sct): 
-                                    found_9 = True; break
-                                time.sleep(0.05)
-                                
-                            if found_9:
-                                vprint("  > [인식 성공] 9.png 발견! W 키 3초 유지 실행")
-                                send_cmd('W')
-                                time.sleep(3.0)
-                                send_cmd('R')
-                            else:
-                                vprint("  > [인식 실패] 9.png 미발견. 다음 단계로 넘어갑니다.")
-                        else:
-                            # 단축키(<)로 강제 정지하여 빠져나온 경우
-                            vprint("  > [정지] 대기 중 승리코인 가동이 중지되었습니다.")
-                    else:
-                        # 모드 1일 경우 불필요한 로그 없이 조용히 스킵
-                        pass 
-                    state = 4
-                    
-                elif state == 4:
-                    if victory_mode == 1:
-                        vprint("  > [승리코인] 4단계: 보스 처치 대기 중... (모드 1: 4.png 성공 또는 8.png 실패)")
-                        target_success = '4.png'
-                    else:
-                        vprint("  > [승리코인] 4단계: 보스 처치 대기 중... (모드 2: 6.png 성공 또는 8.png 실패)")
-                        target_success = '6.png'
-                        
-                    found_img = None
-                    
-                    while victory_active:
-                        if check_img(target_success, thread_sct): 
-                            found_img = target_success
-                            break
-                        if check_img('8.png', thread_sct):
-                            found_img = '8.png'
-                            break
-                        time.sleep(0.05) 
-                        
-                    if found_img == '4.png':
-                        vprint("  > [인식 성공] 4.png 발견! (보스 처치 완료) ESC 입력")
-                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish('4.png', thread_sct)
-                        state = 5
-                    elif found_img == '6.png':
-                        vprint("  > [인식 성공] 6.png 발견! (모드 2 클리어) F 입력 및 8단계 전이")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish('6.png', thread_sct)
-                        state = 8
-                    elif found_img == '8.png':
-                        vprint("  > [분기 전환] 8.png 발견! (클리어 실패 감지) 바로 7단계로 점프합니다.")
-                        state = 7
-                    else:
-                        vprint("  > [정지] 보스 대기 중 승리코인 가동이 중지되었습니다.")
-                        
-                elif state == 5:
-                    vprint("  > [승리코인] 5단계: 0.5초 대기")
-                    time.sleep(0.05)
-                    state = 6
-                    
-                elif state == 6:
-                    vprint("  > [승리코인] 6단계: 5.png 탐색 중...")
-                    found = False
-                    for _ in range(11):
-                        if check_img('5.png', thread_sct): found = True; break
-                        time.sleep(0.05)
-                        
-                    if found:
-                        vprint("  > [인식 성공] 5.png 발견! ESC 입력")
-                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish('5.png', thread_sct)
-                    else:
-                        vprint("  > [인식 실패] 5.png 미발견. 다음 단계로 넘어갑니다.")
-                    state = 7
-                    
-                elif state == 7:
-                    vprint("  > [승리코인] 7단계: 6.png 탐색 중...")
-                    found = False
-                    for _ in range(11):
-                        if check_img('6.png', thread_sct): found = True; break
-                        time.sleep(0.05)
-                        
-                    if found:
-                        vprint("  > [인식 성공] 6.png 발견! F 입력")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish('6.png', thread_sct)
-                    else:
-                        vprint("  > [인식 실패] 6.png 미발견. 다음 단계로 넘어갑니다.")
-                    state = 8
-                    
-                elif state == 8:
-                    vprint("  > [승리코인] 8단계: 7.png 탐색 중...")
-                    found = False
-                    for _ in range(11):
-                        if check_img('7.png', thread_sct): found = True; break
-                        time.sleep(0.05)
-                        
-                    if found:
-                        vprint("  > [인식 성공] 7.png 발견! 대기합니다.")
-                        wait_vanish('7.png', thread_sct)
-                        time.sleep(0.05)
-                        state = 1
-                    else:
-                        vprint("  > [인식 실패] 7.png 미발견. F 누르고 재탐색합니다.")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        
-            except BotStopException:
-                vprint("  > [봇 가동 정지] 작동을 중지하고 대기합니다.")
+                if vanish_count >= 3:
+                    vprint(f"  > ✅ [완료] {img_name} 소멸 확인!")
+                    return True
+                time.sleep(0.05)
+                
+            vprint(f"  > ⚠️ [경고] {img_name} 반복 입력 한계 시간 도달. 흐름 꼬임 예방을 위해 다음 단계로 전이합니다.")
+            return False
+
+        with mss.mss() as thread_sct:
+            victory_start_img = None
+            while True:
                 try:
-                    arduino.write('U'.encode()); arduino.flush()
-                    arduino.write('R'.encode()); arduino.flush()
-                except: pass
-                continue
+                    if not victory_active:
+                        time.sleep(0.1)
+                        state = 1
+                        continue
+                    
+                    if state == 1:
+                        vprint("  > [승리코인] 1단계: 1.png / 2.png 탐색 중...")
+                        found = None
+                        for _ in range(11):
+                            if check_img('1.png', thread_sct): found = '1.png'; break
+                            if check_img('2.png', thread_sct): found = '2.png'; break
+                            time.sleep(0.05)
+                            
+                        if found:
+                            victory_start_img = found
+                            # 능동 키 입력을 통해 F키가 확실하게 적용될 때까지 끝까지 전송합니다.
+                            send_cmd_until_vanish(found, 'F', thread_sct)
+                            state = 2
+                        else:
+                            vprint("  > [인식 실패] 1.png / 2.png 미발견. F 누르고 재탐색합니다.")
+                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                            
+                    elif state == 2:
+                        vprint("  > [승리코인] 2단계: 3.png 탐색 중...")
+                        found = False
+                        for _ in range(11):
+                            if check_img('3.png', thread_sct): found = True; break
+                            time.sleep(0.05)
+                            
+                        if found:
+                            # 3.png가 사라질 때까지 F 입력을 책임지고 반복 주입합니다.
+                            send_cmd_until_vanish('3.png', 'F', thread_sct)
+                        else:
+                            vprint("  > [인식 실패] 3.png 미발견. 다음 단계로 넘어갑니다.")
+                        state = 3
+                        
+                    elif state == 3:
+                        if victory_mode == 2:
+                            vprint("  > [승리코인] 3단계: 2초 대기 후 1.png 탐색을 시작합니다. (모드 2 전용)")
+                            time.sleep(2.0)
+                            found_1 = False
+                            while victory_active:
+                                if check_img('1.png', thread_sct):
+                                    found_1 = True
+                                    break
+                                time.sleep(0.1)
+                                
+                            if found_1:
+                                vprint("  > [인식 성공] 1.png 발견! 9.png 탐색을 시작합니다.")
+                                found_9 = False
+                                for _ in range(11):
+                                    if check_img('9.png', thread_sct): 
+                                        found_9 = True; break
+                                    time.sleep(0.05)
+                                    
+                                if found_9:
+                                    vprint("  > [인식 성공] 9.png 발견! W 키 3초 유지 실행")
+                                    send_cmd('W')
+                                    time.sleep(3.0)
+                                    send_cmd('R')
+                                else:
+                                    vprint("  > [인식 실패] 9.png 미발견. 다음 단계로 넘어갑니다.")
+                            else:
+                                vprint("  > [정지] 대기 중 승리코인 가동이 중지되었습니다.")
+                        else:
+                            pass 
+                        state = 4
+                        
+                    elif state == 4:
+                        if victory_mode == 1:
+                            vprint("  > [승리코인] 4단계: 보스 처치 대기 중... (모드 1: 4.png 성공 또는 8.png 실패)")
+                            target_success = '4.png'
+                        else:
+                            vprint("  > [승리코인] 4단계: 보스 처치 대기 중... (모드 2: 6.png 성공 또는 8.png 실패)")
+                            target_success = '6.png'
+                            
+                        found_img = None
+                        while victory_active:
+                            if check_img(target_success, thread_sct): 
+                                found_img = target_success
+                                break
+                            if check_img('8.png', thread_sct):
+                                found_img = '8.png'
+                                break
+                            time.sleep(0.05) 
+                            
+                        if found_img == '4.png':
+                            # ESC 입력이 게임 창에 제대로 먹힐 때까지 끝까지 전송합니다.
+                            send_cmd_until_vanish('4.png', 'E', thread_sct)
+                            state = 5
+                        elif found_img == '6.png':
+                            # F 입력이 적용되어 해당 창이 닫힐 때까지 반복 전송합니다.
+                            send_cmd_until_vanish('6.png', 'F', thread_sct)
+                            state = 8
+                        elif found_img == '8.png':
+                            vprint("  > [분기 전환] 8.png 발견! (클리어 실패 감지) 바로 7단계로 점프합니다.")
+                            state = 7
+                        else:
+                            vprint("  > [정지] 보스 대기 중 승리코인 가동이 중지되었습니다.")
+                            
+                    elif state == 5:
+                        vprint("  > [승리코인] 5단계: 0.5초 대기")
+                        # 0.05초로 지정되어 무의미하게 넘어가던 딜레이를 정석 0.5초 대기 시간으로 완벽히 복구합니다.
+                        time.sleep(0.5)
+                        state = 6
+                        
+                    elif state == 6:
+                        vprint("  > [승리코인] 6단계: 5.png 탐색 중...")
+                        found = False
+                        for _ in range(11):
+                            if check_img('5.png', thread_sct): found = True; break
+                            time.sleep(0.05)
+                            
+                        if found:
+                            # ESC(E) 입력이 정상 적용될 때까지 보장 전송합니다.
+                            send_cmd_until_vanish('5.png', 'E', thread_sct)
+                        else:
+                            vprint("  > [인식 실패] 5.png 미발견. 다음 단계로 넘어갑니다.")
+                        state = 7
+                        
+                    elif state == 7:
+                        vprint("  > [승리코인] 7단계: 6.png 탐색 중...")
+                        found = False
+                        for _ in range(11):
+                            if check_img('6.png', thread_sct): found = True; break
+                            time.sleep(0.05)
+                            
+                        if found:
+                            # F 입력 보장을 전송합니다.
+                            send_cmd_until_vanish('6.png', 'F', thread_sct)
+                        else:
+                            vprint("  > [인식 실패] 6.png 미발견. 다음 단계로 넘어갑니다.")
+                        state = 8
+                        
+                    elif state == 8:
+                        vprint("  > [승리코인] 8단계: 7.png 탐색 중...")
+                        found = False
+                        for _ in range(11):
+                            if check_img('7.png', thread_sct): found = True; break
+                            time.sleep(0.05)
+                            
+                        if found:
+                            vprint("  > [인식 성공] 7.png 발견! 대기합니다.")
+                            # 애니메이션 로딩용 7.png는 스스로 가라앉는 이미지이므로 안전 타임아웃이 포함된 대기 감시 장치로 수행합니다.
+                            wait_vanish('7.png', thread_sct, timeout=10.0)
+                            time.sleep(0.05)
+                            state = 1
+                        else:
+                            vprint("  > [인식 실패] 7.png 미발견. F 누르고 재탐색합니다.")
+                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                            
+                except BotStopException:
+                    vprint("  > [봇 가동 정지] 작동을 중지하고 대기합니다.")
+                    try:
+                        arduino.write('U'.encode()); arduino.flush()
+                        arduino.write('R'.encode()); arduino.flush()
+                    except: pass
+                    continue
 
 def animal_bot_loop():
     global animal_active

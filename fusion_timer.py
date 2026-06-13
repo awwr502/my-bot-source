@@ -789,10 +789,41 @@ def victory_coin_bot_loop():
                         if v_check_img('v_1.png', thread_sct): found = 'v_1.png'; break
                         if v_check_img('v_2.png', thread_sct): found = 'v_2.png'; break
                         time.sleep(0.05)
+                        
                     if found:
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        v_wait_vanish(found, thread_sct); state = 2
+                        vprint(f"  > [능동 대기] {found} 사라질 때까지 F 키 반복 입력 시퀀스 작동 (제한: 6초)...")
+                        start_t = time.time()
+                        last_press_t = 0.0
+                        success = False
+                        
+                        while time.time() - start_t < 6.0 and victory_active:
+                            now = time.time()
+                            if now - last_press_t > 0.4:
+                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                last_press_t = now
+                            
+                            # 3회 연속 미검출 시 완전히 사라진 것으로 조기 판정
+                            vanish_count = 0
+                            for _ in range(3):
+                                if not v_check_img(found, thread_sct):
+                                    vanish_count += 1
+                                else:
+                                    break
+                                time.sleep(0.03)
+                                
+                            if vanish_count >= 3:
+                                success = True
+                                break
+                            time.sleep(0.05)
+                            
+                        if success:
+                            vprint(f"  > ✅ [완료] {found} 소멸 확인!")
+                            state = 2
+                        else:
+                            vprint("  > ⚠️ [진입 실패] F 상호작용 씹힘 감지 (유저 차단 등). 1단계로 되돌아가 재시도합니다.")
+                            state = 1
                     else:
+                        vprint("  > [인식 실패] v_1.png / v_2.png 미발견. F 누르고 재탐색합니다.")
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
                         
                 elif state == 2:
@@ -801,10 +832,42 @@ def victory_coin_bot_loop():
                     for _ in range(11):
                         if v_check_img('v_3.png', thread_sct): found = True; break
                         time.sleep(0.05)
+                        
                     if found:
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        v_wait_vanish('v_3.png', thread_sct)
-                    state = 3
+                        vprint("  > [능동 대기] v_3.png 사라질 때까지 F 키 반복 입력 시퀀스 작동 (제한: 6초)...")
+                        start_t = time.time()
+                        last_press_t = 0.0
+                        success = False
+                        
+                        while time.time() - start_t < 6.0 and victory_active:
+                            now = time.time()
+                            if now - last_press_t > 0.4:
+                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                last_press_t = now
+                            
+                            # 3회 연속 미검출 시 완전히 사라진 것으로 조기 판정
+                            vanish_count = 0
+                            for _ in range(3):
+                                if not v_check_img('v_3.png', thread_sct):
+                                    vanish_count += 1
+                                else:
+                                    break
+                                time.sleep(0.03)
+                                
+                            if vanish_count >= 3:
+                                success = True
+                                break
+                            time.sleep(0.05)
+                            
+                        if success:
+                            vprint("  > ✅ [완료] v_3.png 소멸 확인!")
+                            state = 3
+                        else:
+                            vprint("  > ⚠️ [매치 실패] v_3.png 소멸 적용 실패. 안전을 위해 1단계로 롤백합니다.")
+                            state = 1
+                    else:
+                        vprint("  > ❌ [인식 실패] v_3.png 미발견! 1단계(F 진입단계)로 롤백하여 다시 F 입력을 수행합니다.")
+                        state = 1
                     
                 elif state == 3:
                     if victory_mode == 2:

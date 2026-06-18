@@ -2058,7 +2058,7 @@ def fusion_bot_loop():
                             
                             # 1단계: 부모 슬롯(F0 / 1짜리) 채우기
                             bprint("  > [1/2 부모 세팅] 좌측 부모 슬롯 클릭 및 감염물 창 개방...")
-                            pyautogui.moveTo(CENTER_X - 250, CENTER_Y - 200); time.sleep(0.1); send_cmd('C')
+                            pyautogui.moveTo(1150, 300); time.sleep(0.1); send_cmd('C')
                             
                             wait_inv_start = time.time()
                             while bot_active and time.time() - wait_inv_start < 3.0:
@@ -2194,7 +2194,7 @@ def fusion_bot_loop():
                                 
                                 # 2단계: 재료 슬롯(F1 / 0짜리) 채우기
                                 bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방...")
-                                pyautogui.moveTo(CENTER_X, CENTER_Y - 60); time.sleep(0.1); send_cmd('C')
+                                pyautogui.moveTo(960, 480); time.sleep(0.1); send_cmd('C')
                                 
                                 wait_inv_start = time.time()
                                 while bot_active and time.time() - wait_inv_start < 3.0:

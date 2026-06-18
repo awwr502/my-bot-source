@@ -1946,8 +1946,6 @@ def fusion_bot_loop():
                                 else:
                                     bprint("  > 😭 [실패] 결과물 가치 특성 미전수! RECOVERY 상태로 전환합니다.")
                                     char_sub_modes[char_key] = "RECOVERY"
-                                else:
-                                    send_cmd('E'); time.sleep(0.15); send_cmd('R')
                             
                             bprint("  > [수령 완료] 보상을 획득했습니다. 기계에 남은 이전 감염물을 빼기 위해 2단계로 이동합니다.")
                             is_machine_empty = False

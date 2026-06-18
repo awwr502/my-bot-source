@@ -1890,24 +1890,21 @@ def fusion_bot_loop():
                             
                             # [모드 6 결과 판독: 융합 결과물의 특성 유무에 따른 동적 상태 전이]
                             if bot_mode == 6:
-                                bprint("  > [모드 6 결과 판독] 새로 태어난 감염물의 특성 전수 여부를 검증하기 위해 슬롯을 개방합니다...")
-                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                wait_vanish('get_reward.png', thread_sct)
-                                time.sleep(0.5)
+                                bprint("  > [모드 6 결과 판독] 획득 창(get_reward.png) 감지! 즉시 수령을 유예하고 특성 상세창을 엽니다.")
                                 
-                                bprint("  > 상세 페이지 메뉴 버튼(dev_list_btn.png) 탐색 중...")
+                                # 획득 팝업 상태에서 바로 첫 번째 사진(dev_list_btn.png)을 감색하여 클릭합니다.
                                 clicked_list_btn = False
-                                
                                 while bot_active:
-                                    if check_img('dev_list_btn.png', thread_sct):
+                                    if check_img('dev_list_btn.png', thread_sct, force_full=True):
                                         cx, cy = FUSION_ROI['dev_list_btn.png']['last_pos']
                                         pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
-                                        bprint("  > 메뉴 버튼 클릭 완료! 2초간 특성 탭(dev_trait_header.png) 로딩 대기...")
+                                        bprint("  > 메뉴 버튼(dev_list_btn.png) 클릭 성공! 2초간 특성 탭(dev_trait_header.png) 검출 대기...")
                                         
+                                        # 최대 2초 동안 특성 헤더(dev_trait_header.png) 로딩 능동 대기
                                         header_found = False
                                         wait_h = time.time()
                                         while time.time() - wait_h < 2.0 and bot_active:
-                                            if check_img('dev_trait_header.png', thread_sct):
+                                            if check_img('dev_trait_header.png', thread_sct, force_full=True):
                                                 header_found = True
                                                 break
                                             time.sleep(0.05)
@@ -1924,6 +1921,7 @@ def fusion_bot_loop():
                                 matched_trait_file = None
                                 
                                 if clicked_list_btn:
+                                    # 첫 1회는 전체 화면 스캔, 이후에는 자동 캐싱된 ROI(force_full=False) 스캔 작동
                                     if not hasattr(fusion_bot_loop, 'mode6_first_scan_done'):
                                         fusion_bot_loop.mode6_first_scan_done = True
                                         is_first_scan = True
@@ -1932,18 +1930,65 @@ def fusion_bot_loop():
                                         is_first_scan = False
                                         bprint("  > ⚡ [ROI 가속] 캐싱된 가치 특성 영역 초고속 분석 가동...")
                                         
-                                    for t_idx in range(1, 8):
-                                        t_file = f"trait_{t_idx}.png"
-                                        if check_img(t_file, thread_sct, force_full=is_first_scan):
-                                            has_valuable_trait = True
-                                            matched_trait_file = t_file
-                                            break
+                                    # 어빌리티 라벨 기준점(ability_label.png) 검출 한계선을 모드 5와 동일한 0.80으로 수립합니다.
+                                    template_label = FUSION_CACHE.get('ability_label.png')
+                                    mon = thread_sct.monitors[1]
+                                    # 전체 화면 범위(0부터 끝까지)를 캡처하여 좌측 잘림 현상을 완벽히 차단합니다.
+                                    r_left = max(0, mon["left"])
+                                    tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": int(SCREEN_W - r_left), "height": mon["height"]}
+                                    
+                                    label_found = False
+                                    lx, ly = 0, 0
+                                    wait_start = time.time()
+                                    while time.time() - wait_start < 1.0 and bot_active:
+                                        hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                        res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
+                                        _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                        if mv_l >= 0.80:
+                                            label_found = True; lx, ly = ml_l[0], ml_l[1]; break
+                                        time.sleep(0.01)
+                                        
+                                    if label_found:
+                                        time.sleep(0.05)
+                                        sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                        hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                        
+                                        # 모드 5와 동일한 정밀 수직 오탐 안전 구역(ly + 30 ~ ly + 300)을 적용합니다.
+                                        trait_x1 = max(0, lx - 10)
+                                        trait_x2 = lx + 200
+                                        trait_y1 = ly + 30
+                                        trait_y2 = ly + 300
+                                        roi_trait_name_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                        
+                                        # 결과물이 가치 특성 7종 중 하나를 안전하게 상속받았는지 최종 검증
+                                        for t_idx in range(1, 8):
+                                            t_file = f"trait_{t_idx}.png"
+                                            t_template = FUSION_CACHE.get(t_file)
+                                            if t_template is None: continue
                                             
-                                bprint("  > 검증 완료. ESC를 입력하여 융합기로 안전하게 퇴출합니다.")
-                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                            t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                            if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
+                                                best_score = 0.0
+                                                for scale in [0.95, 1.0, 1.05]:
+                                                    width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
+                                                    if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_name_gray.shape[0]:
+                                                        res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                        best_score = max(best_score, np.max(res_st))
+                                                
+                                                if best_score >= 0.85:
+                                                    has_valuable_trait = True
+                                                    matched_trait_file = t_file
+                                                    break
+                                                    
+                                    fast_clear_tooltip()
+                                
+                                # 판독 완료 후, 이제 F를 눌러 수령하고 팝업창을 완전히 닫습니다.
+                                bprint("  > 상세창 분석 완료. F를 눌러 보상을 최종 수령하고 창을 닫습니다.")
+                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                wait_vanish('get_reward.png', thread_sct)
                                 
                                 if has_valuable_trait:
-                                    bprint(f"  > 🎉 [성공] 결과물 가치 특성 '{matched_trait_file}' 검출 완료! NORMAL 상태로 복사 가동합니다.")
+                                    bprint(f"  > 🎉 [성공] 결과물 가치 특성 '{matched_trait_file}' 검출 완료! NORMAL 상태로 가동합니다.")
                                     char_sub_modes[char_key] = "NORMAL"
                                 else:
                                     bprint("  > 😭 [실패] 결과물 가치 특성 미전수! RECOVERY 상태로 전환합니다.")
@@ -2091,7 +2136,8 @@ def fusion_bot_loop():
                                     hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                     res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                     _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                    if mv_l >= 0.90:
+                                    # 모드 5와 완벽하게 일치하는 0.80의 임계값으로 어빌리티 등급(기준점)을 검출합니다.
+                                    if mv_l >= 0.80:
                                         label_found = True; lx, ly = ml_l[0], ml_l[1]; break
                                     time.sleep(0.01)
                                     
@@ -2120,10 +2166,11 @@ def fusion_bot_loop():
                                 if not is_f0:
                                     fast_clear_tooltip(); continue # F0(1짜리)이 아니면 패스
                                     
-                                # 특성 유무 및 가치 판독
+                                # 특성 유무 및 가치 판독 (오탐 방지를 위해 가로 영역 마진 및 적응형 임계값 최적화)
                                 has_any_trait = False
-                                trait_x1 = max(0, lx - 10)
-                                trait_x2 = lx + 200
+                                trait_x1 = max(0, lx - 20)
+                                trait_x2 = lx + 220
+                                # 세로 영역은 모드 5와 동일한 안전 영역(ly + 30 ~ ly + 300)으로 고정하여 tier_1.png 등의 오탐을 완벽히 방지합니다.
                                 trait_y1 = ly + 30
                                 trait_y2 = ly + 300
                                 roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
@@ -2135,7 +2182,7 @@ def fusion_bot_loop():
                                         
                                 has_valuable_trait = False
                                 if has_any_trait:
-                                    trait_name_x1 = max(0, lx - 10)
+                                    trait_name_x1 = max(0, lx - 20)
                                     trait_name_x2 = lx + 360
                                     trait_name_y1 = ly + 30
                                     trait_name_y2 = ly + 300
@@ -2225,7 +2272,8 @@ def fusion_bot_loop():
                                         hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                         res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                         _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                        if mv_l >= 0.90:
+                                        # 모드 5와 완벽하게 일치하는 0.80의 임계값으로 어빌리티 등급(기준점)을 검출합니다.
+                                        if mv_l >= 0.80:
                                             label_found = True; lx, ly = ml_l[0], ml_l[1]; break
                                         time.sleep(0.01)
                                         
@@ -2254,10 +2302,11 @@ def fusion_bot_loop():
                                     if is_f0:
                                         fast_clear_tooltip(); continue # F1(0짜리)만 담아야 함
                                         
-                                    # 특성 유무 및 가치 판독
+                                    # 특성 유무 및 가치 판독 (오탐 방지를 위해 가로 영역 마진 및 적응형 임계값 최적화)
                                     has_any_trait = False
-                                    trait_x1 = max(0, lx - 10)
-                                    trait_x2 = lx + 200
+                                    trait_x1 = max(0, lx - 20)
+                                    trait_x2 = lx + 220
+                                    # 세로 영역은 모드 5와 동일한 안전 영역(ly + 30 ~ ly + 300)으로 고정하여 tier_1.png 등의 오탐을 완벽히 방지합니다.
                                     trait_y1 = ly + 30
                                     trait_y2 = ly + 300
                                     roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]

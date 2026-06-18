@@ -2066,12 +2066,11 @@ def fusion_bot_loop():
                                 time.sleep(0.05)
                                 
                             inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
-                            # 모드 6은 특정 종류(A1, B1 등)에 종속되지 않고 인벤토리 내 모든 감염물의 특성을 복사하기 위해, 
-                            # 이미지 템플릿 매칭 대신 우측 인벤토리의 고정 5x9 슬롯 그리드를 순회하여 실시간으로 판독합니다.
+                            # 모드 6은 모든 감염물을 대상으로 삼으므로 템플릿 매칭을 생략하고, 고정 5x7 인벤토리 그리드를 직접 순회합니다.
                             all_candidates = []
                             for j in range(7):
                                 for i in range(5):
-                                    cx = 1435 + i * 80
+                                    cx = 725 + i * 80
                                     cy = 160 + j * 80
                                     all_candidates.append((cx, cy))
                                         
@@ -2201,11 +2200,11 @@ def fusion_bot_loop():
                                     if check_img('select_0_3.png', thread_sct): break
                                     time.sleep(0.05)
                                     
-                                # 재료 슬롯 역시 템플릿 매칭 없이 고정 그리드 순회를 이용해 융합이 가능한 F1(남은 횟수 0)들을 수집합니다.
+                                # 재료 슬롯 역시 템플릿 매칭 없이 고정 5x7 그리드 순회를 이용해 융합이 가능한 F1들을 수집합니다.
                                 all_candidates = []
                                 for j in range(7):
                                     for i in range(5):
-                                        cx = 1435 + i * 80
+                                        cx = 725 + i * 80
                                         cy = 160 + j * 80
                                         all_candidates.append((cx, cy))
                                         

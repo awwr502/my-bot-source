@@ -1890,7 +1890,7 @@ def fusion_bot_loop():
                             
                             # [모드 6 결과 판독: 융합 결과물의 특성 유무에 따른 동적 상태 전이]
                             if bot_mode == 6:
-                                bprint("  > [모드 6 결과 판독] 획득 창(get_reward.png) 소멸 및 상세 페이지 진입...")
+                                bprint("  > [모드 6 결과 판독] 새로 태어난 감염물의 특성 전수 여부를 검증하기 위해 슬롯을 개방합니다...")
                                 send_cmd('F'); time.sleep(0.1); send_cmd('R')
                                 wait_vanish('get_reward.png', thread_sct)
                                 time.sleep(0.5)
@@ -2081,8 +2081,8 @@ def fusion_bot_loop():
                                 pyautogui.moveTo(cx, cy)
                                 template_label = FUSION_CACHE.get('ability_label.png')
                                 mon = thread_sct.monitors[1]
-                                r_left = max(mon["left"], cx - 1100)
-                                tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": 1100, "height": mon["height"]}
+                                r_left = max(0, mon["left"])
+                                tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": int(cx - r_left), "height": mon["height"]}
                                 
                                 label_found = False
                                 lx, ly = 0, 0
@@ -2215,8 +2215,8 @@ def fusion_bot_loop():
                                     pyautogui.moveTo(cx, cy)
                                     template_label = FUSION_CACHE.get('ability_label.png')
                                     mon = thread_sct.monitors[1]
-                                    r_left = max(mon["left"], cx - 1100)
-                                    tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": 1100, "height": mon["height"]}
+                                    r_left = max(0, mon["left"])
+                                    tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": int(cx - r_left), "height": mon["height"]}
                                     
                                     label_found = False
                                     lx, ly = 0, 0

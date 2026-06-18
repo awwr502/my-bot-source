@@ -310,6 +310,8 @@ FUSION_CONF = {
     'popup_main.png': 0.85,
     'popup_char.png': 0.85, 
     'inv_title.png': 0.85,
+    'dev_list_btn.png': 0.85,
+    'dev_trait_header.png': 0.85,
     'trait.png': 0.70,
     
     'item_A1.png': 0.95, 'item_B1.png': 0.95,
@@ -333,7 +335,7 @@ GRAY_IMAGES = [
     'stop_btn.png', '1.png', '2.png', '3.png', 
     '6.png', '7.png', '14.png',
     'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png', 'select_0_3.png',
-    'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png',
+    'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png', 'dev_list_btn.png',
     'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png'
 ]
 
@@ -341,7 +343,7 @@ GRAY_IMAGES = [
 GRAY_IMAGES.extend([c["img"] for c in MY_CHARACTERS])
 COLOR_IMAGES = [
     'check_mark.png', 'item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png', 
-    'level_5.png', 'fusion_start.png', 'select_3_3.png',
+    'level_5.png', 'fusion_start.png', 'select_3_3.png', 'dev_trait_header.png',
     'tier_1.png', 'tier_2.png', 'tier_3.png', 'tier_4.png', 'dis_4.png'
 ]
 target_images = GRAY_IMAGES + COLOR_IMAGES
@@ -1886,62 +1888,63 @@ def fusion_bot_loop():
                             
                             # [모드 6 결과 판독: 융합 결과물의 특성 유무에 따른 동적 상태 전이]
                             if bot_mode == 6:
-                                bprint("  > [모드 6 결과 판독] 새로 태어난 감염물의 특성 전수 여부를 검증하기 위해 슬롯을 개방합니다...")
+                                bprint("  > [모드 6 결과 판독] 획득 창(get_reward.png) 소멸 및 상세 페이지 진입...")
+                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                wait_vanish('get_reward.png', thread_sct)
                                 time.sleep(0.5)
-                                pyautogui.moveTo(CENTER_X, CENTER_Y - 60); time.sleep(0.1); send_cmd('C')
                                 
-                                wait_inv_start = time.time()
-                                while bot_active and time.time() - wait_inv_start < 3.0:
-                                    if check_img('select_0_3.png', thread_sct): break
-                                    time.sleep(0.05)
-                                    
-                                # 새로 생성되어 인벤토리에 추가된 결과물은 언제나 인벤토리의 가장 첫 번째 칸(좌상단)에 배치됩니다.
-                                # 불필요한 이미지 템플릿 매칭 없이 첫 번째 슬롯 좌표로 직행하여 검증합니다.
-                                cx, cy = 1435, 160
-                                pyautogui.moveTo(cx, cy)
+                                bprint("  > 상세 페이지 메뉴 버튼(dev_list_btn.png) 탐색 중...")
+                                clicked_list_btn = False
                                 
-                                template_label = FUSION_CACHE.get('ability_label.png')
-                                mon = thread_sct.monitors[1]
-                                r_left = max(mon["left"], cx - 1100)
-                                tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": 1100, "height": mon["height"]}
-                                
-                                label_found = False
-                                lx, ly = 0, 0
-                                wait_start = time.time()
-                                while time.time() - wait_start < 1.0 and bot_active:
-                                    hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                    res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
-                                    _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                    if mv_l >= 0.90:
-                                        label_found = True; lx, ly = ml_l[0], ml_l[1]; break
-                                    time.sleep(0.01)
-                                    
-                                has_trait = False
-                                if label_found:
-                                    time.sleep(0.05)
-                                    sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                                    hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
-                                    
-                                    trait_x1 = max(0, lx - 10)
-                                    trait_x2 = lx + 200
-                                    trait_y1 = ly + 30
-                                    trait_y2 = ly + 300
-                                    roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
-                                    if roi_trait_gray.size > 0:
-                                        res_t = cv2.matchTemplate(roi_trait_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)
-                                        if np.max(res_t) >= FUSION_CONF.get('trait.png', 0.70):
-                                            has_trait = True
+                                while bot_active:
+                                    if check_img('dev_list_btn.png', thread_sct):
+                                        cx, cy = FUSION_ROI['dev_list_btn.png']['last_pos']
+                                        pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
+                                        bprint("  > 메뉴 버튼 클릭 완료! 2초간 특성 탭(dev_trait_header.png) 로딩 대기...")
+                                        
+                                        header_found = False
+                                        wait_h = time.time()
+                                        while time.time() - wait_h < 2.0 and bot_active:
+                                            if check_img('dev_trait_header.png', thread_sct):
+                                                header_found = True
+                                                break
+                                            time.sleep(0.05)
                                             
-                                fast_clear_tooltip()
-                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
-                                wait_vanish('select_0_3.png', thread_sct)
+                                        if header_found:
+                                            clicked_list_btn = True
+                                            break
+                                        else:
+                                            bprint("  > ⚠️ [타임아웃] 2초 내에 특성 탭 인식 실패. 메뉴 버튼 재클릭 시도...")
+                                    else:
+                                        time.sleep(0.1)
+                                        
+                                has_valuable_trait = False
+                                matched_trait_file = None
                                 
-                                if has_trait:
-                                    bprint("  > 🎉 [성공] 결과물 특성 검출 완료! NORMAL 상태로 복사 가동합니다.")
+                                if clicked_list_btn:
+                                    if not hasattr(fusion_bot_loop, 'mode6_first_scan_done'):
+                                        fusion_bot_loop.mode6_first_scan_done = True
+                                        is_first_scan = True
+                                        bprint("  > 🔍 [첫 1회] 가치 특성 7종 전체 화면 정밀 탐색 시작...")
+                                    else:
+                                        is_first_scan = False
+                                        bprint("  > ⚡ [ROI 가속] 캐싱된 가치 특성 영역 초고속 분석 가동...")
+                                        
+                                    for t_idx in range(1, 8):
+                                        t_file = f"trait_{t_idx}.png"
+                                        if check_img(t_file, thread_sct, force_full=is_first_scan):
+                                            has_valuable_trait = True
+                                            matched_trait_file = t_file
+                                            break
+                                            
+                                bprint("  > 검증 완료. ESC를 입력하여 융합기로 안전하게 퇴출합니다.")
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                
+                                if has_valuable_trait:
+                                    bprint(f"  > 🎉 [성공] 결과물 가치 특성 '{matched_trait_file}' 검출 완료! NORMAL 상태로 복사 가동합니다.")
                                     char_sub_modes[char_key] = "NORMAL"
                                 else:
-                                    bprint("  > 😭 [실패] 결과물 특성 검출 누락! RECOVERY 복구 모드로 상태 전환합니다.")
+                                    bprint("  > 😭 [실패] 결과물 가치 특성 미전수! RECOVERY 상태로 전환합니다.")
                                     char_sub_modes[char_key] = "RECOVERY"
                                 else:
                                     send_cmd('E'); time.sleep(0.15); send_cmd('R')
@@ -2066,7 +2069,7 @@ def fusion_bot_loop():
                             # 모드 6은 특정 종류(A1, B1 등)에 종속되지 않고 인벤토리 내 모든 감염물의 특성을 복사하기 위해, 
                             # 이미지 템플릿 매칭 대신 우측 인벤토리의 고정 5x9 슬롯 그리드를 순회하여 실시간으로 판독합니다.
                             all_candidates = []
-                            for j in range(9):
+                            for j in range(7):
                                 for i in range(5):
                                     cx = 1435 + i * 80
                                     cy = 160 + j * 80
@@ -2118,35 +2121,61 @@ def fusion_bot_loop():
                                 if not is_f0:
                                     fast_clear_tooltip(); continue # F0(1짜리)이 아니면 패스
                                     
-                                # 특성 유무 판독
-                                has_trait = False
+                                # 특성 유무 및 가치 판독
+                                has_any_trait = False
                                 trait_x1 = max(0, lx - 10)
                                 trait_x2 = lx + 200
                                 trait_y1 = ly + 30
                                 trait_y2 = ly + 300
                                 roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGRA2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                                 if roi_trait_gray.size > 0:
                                     res_t = cv2.matchTemplate(roi_trait_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)
                                     if np.max(res_t) >= FUSION_CONF.get('trait.png', 0.70):
-                                        has_trait = True
+                                        has_any_trait = True
                                         
+                                has_valuable_trait = False
+                                if has_any_trait:
+                                    trait_name_x1 = max(0, lx - 10)
+                                    trait_name_x2 = lx + 360
+                                    trait_name_y1 = ly + 30
+                                    trait_name_y2 = ly + 300
+                                    roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
+                                    
+                                    # 1번부터 7번 특성까지만 복사 대상으로 한정 필터링
+                                    for t_idx in range(1, 8):
+                                        t_file = f"trait_{t_idx}.png"
+                                        t_template = FUSION_CACHE.get(t_file)
+                                        if t_template is None: continue
+                                        
+                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                        if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
+                                            best_score = 0.0
+                                            for scale in [0.95, 1.0, 1.05]:
+                                                width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
+                                                if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_name_gray.shape[0]:
+                                                    res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                    best_score = max(best_score, np.max(res_st))
+                                            
+                                            if best_score >= FUSION_CONF.get(t_file, 0.92):
+                                                has_valuable_trait = True
+                                                break
+                                                
                                 if current_sub == "NORMAL":
-                                    # NORMAL 상태: 특성 있는 것 1개 + 특성 없는 것 1개
-                                    already_has_trait_in_list = any(p[4] for p in target_parents)
-                                    if has_trait and not already_has_trait_in_list:
-                                        target_parents.append((real_x, real_y, cx, cy, True))
-                                        bprint("  > 🧬 [부모 채택] F0 특성 감염물 확보 완료.")
-                                    elif not has_trait:
-                                        # 특성 없는 것 채택 (최대 1개만)
-                                        already_blank_in_list = any(not p[4] for p in target_parents)
+                                    # NORMAL 상태: 1~7 가치 특성 F0 1개 + 특성 없는 순정 F0 1개
+                                    already_has_trait_in_list = any(p[2] for p in target_parents)
+                                    if has_valuable_trait and not already_has_trait_in_list:
+                                        target_parents.append((cx, cy, True))
+                                        bprint("  > 🧬 [부모 채택] F0 가치 특성 감염물 확보 완료.")
+                                    elif not has_any_trait:
+                                        already_blank_in_list = any(not p[2] for p in target_parents)
                                         if not already_blank_in_list:
-                                            target_parents.append((real_x, real_y, cx, cy, False))
+                                            target_parents.append((cx, cy, False))
                                             bprint("  > 💎 [부모 채택] F0 깡 감염물 확보 완료.")
                                 elif current_sub == "RECOVERY":
-                                    # RECOVERY 상태: 특성 없는 깡 감염물 2개
-                                    if not has_trait:
-                                        target_parents.append((real_x, real_y, cx, cy, False))
+                                    # RECOVERY 상태: 특성 없는 순정 깡 감염물 2개
+                                    if not has_any_trait:
+                                        target_parents.append((cx, cy, False))
                                         bprint("  > 💎 [부모 채택] F0 깡 감염물 확보 완료.")
                                         
                                 fast_clear_tooltip()
@@ -2158,7 +2187,7 @@ def fusion_bot_loop():
                                 # 부모 슬롯 클릭 및 채우기
                                 bprint("  > 🔄 [부모 투입] 선택된 부모 2개 클릭 중...")
                                 for pt in target_parents:
-                                    pyautogui.moveTo(pt[2], pt[3]); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
+                                    pyautogui.moveTo(pt[0], pt[1]); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
                                     fast_clear_tooltip()
                                 send_cmd('F'); time.sleep(0.1); send_cmd('R')
                                 wait_vanish('select_2_2.png', thread_sct)
@@ -2174,7 +2203,7 @@ def fusion_bot_loop():
                                     
                                 # 재료 슬롯 역시 템플릿 매칭 없이 고정 그리드 순회를 이용해 융합이 가능한 F1(남은 횟수 0)들을 수집합니다.
                                 all_candidates = []
-                                for j in range(9):
+                                for j in range(7):
                                     for i in range(5):
                                         cx = 1435 + i * 80
                                         cy = 160 + j * 80
@@ -2226,35 +2255,61 @@ def fusion_bot_loop():
                                     if is_f0:
                                         fast_clear_tooltip(); continue # F1(0짜리)만 담아야 함
                                         
-                                    # 특성 판독
-                                    has_trait = False
+                                    # 특성 유무 및 가치 판독
+                                    has_any_trait = False
                                     trait_x1 = max(0, lx - 10)
                                     trait_x2 = lx + 200
                                     trait_y1 = ly + 30
                                     trait_y2 = ly + 300
                                     roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGRA2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                                     if roi_trait_gray.size > 0:
                                         res_t = cv2.matchTemplate(roi_trait_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)
                                         if np.max(res_t) >= FUSION_CONF.get('trait.png', 0.70):
-                                            has_trait = True
+                                            has_any_trait = True
                                             
+                                    has_valuable_trait = False
+                                    if has_any_trait:
+                                        trait_name_x1 = max(0, lx - 10)
+                                        trait_name_x2 = lx + 360
+                                        trait_name_y1 = ly + 30
+                                        trait_name_y2 = ly + 300
+                                        roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
+                                        
+                                        # 1번부터 7번 특성까지만 융합 주입 대상으로 한정 필터링
+                                        for t_idx in range(1, 8):
+                                            t_file = f"trait_{t_idx}.png"
+                                            t_template = FUSION_CACHE.get(t_file)
+                                            if t_template is None: continue
+                                            
+                                            t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                            if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
+                                                best_score = 0.0
+                                                for scale in [0.95, 1.0, 1.05]:
+                                                    width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
+                                                    if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_name_gray.shape[0]:
+                                                        res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                        best_score = max(best_score, np.max(res_st))
+                                                
+                                                if best_score >= FUSION_CONF.get(t_file, 0.92):
+                                                    has_valuable_trait = True
+                                                    break
+                                                    
                                     if current_sub == "NORMAL":
-                                        # NORMAL 상태: 특성 없는 깡 F1 3개
-                                        if not has_trait:
-                                            target_materials.append((real_x, real_y, cx, cy, False))
+                                        # NORMAL 상태: 특성 없는 순정 F1 3개
+                                        if not has_any_trait:
+                                            target_materials.append((cx, cy, False))
                                             bprint("  > 💎 [재료 채택] F1 깡 감염물 확보 완료.")
                                     elif current_sub == "RECOVERY":
-                                        # RECOVERY 상태: 특성 있는 것 1개 + 특성 없는 깡 2개
-                                        already_has_trait_in_list = any(m[4] for m in target_materials)
-                                        if has_trait and not already_has_trait_in_list:
-                                            target_materials.append((real_x, real_y, cx, cy, True))
-                                            bprint("  > 🧬 [재료 채택] F1 특성 감염물 확보 완료.")
-                                        elif not has_trait:
-                                            # 특성 없는 것은 최대 2개만
-                                            blank_count = sum(1 for m in target_materials if not m[4])
+                                        # RECOVERY 상태: 1~7 가치 특성 F1 1개 + 특성 없는 순정 F1 2개
+                                        already_has_trait_in_list = any(m[2] for m in target_materials)
+                                        if has_valuable_trait and not already_has_trait_in_list:
+                                            target_materials.append((cx, cy, True))
+                                            bprint("  > 🧬 [재료 채택] F1 가치 특성 감염물 확보 완료.")
+                                        elif not has_any_trait:
+                                            blank_count = sum(1 for m in target_materials if not m[2])
                                             if blank_count < 2:
-                                                target_materials.append((real_x, real_y, cx, cy, False))
+                                                target_materials.append((cx, cy, False))
                                                 bprint("  > 💎 [재료 채택] F1 깡 감염물 확보 완료.")
                                                 
                                     fast_clear_tooltip()
@@ -2266,7 +2321,7 @@ def fusion_bot_loop():
                                     # 재료 슬롯 등록 클릭
                                     bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")
                                     for mt in target_materials:
-                                        pyautogui.moveTo(mt[2], mt[3]); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
+                                        pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
                                         fast_clear_tooltip()
                                     send_cmd('F'); time.sleep(0.1); send_cmd('R')
                                     wait_vanish('select_3_3.png', thread_sct)

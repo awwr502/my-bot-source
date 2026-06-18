@@ -979,6 +979,8 @@ def toggle_start(mode=1):
         bprint("🔥 [모드 4: 5/5 복사 모드 시작] 단축키(<) 입력 감지")
     elif mode == 5:
         bprint("🔍 [모드 5: 감염물 분별 모드 시작] 단축키(;) 입력 감지")
+    elif mode == 6:
+        bprint("🔵 [모드 6: 재료 복사 모드 시작] 단축키(>) 입력 감지")
     bprint("=============================================")
     
     # 매크로 새로 시작 시 캐릭터 인벤토리 탐색 기억 초기화
@@ -1355,8 +1357,8 @@ def fusion_bot_loop():
                 
                 # --- [State 0] 타이머 대기 및 카운트다운 ---
                 if state == 0:
-                    if bot_mode in [3, 4]:
-                        mode_name = "모드 3(깡 복사)" if bot_mode == 3 else "모드 4(5/5 복사)"
+                    if bot_mode in [3, 4, 6]:
+                        mode_name = "모드 3(깡 복사)" if bot_mode == 3 else ("모드 4(5/5 복사)" if bot_mode == 4 else "모드 6(재료 복사)")
                         anchor_img = char_images[anchor_idx] if loop_count > 0 else '5.png'
                         anchor_name = CHAR_NAMES.get(anchor_img, '앵커 캐릭')
                         bprint(f"✨ [{mode_name} 시작] 앵커({anchor_name}) 융합 보상 수령 및 세팅(State 7) 진입.")

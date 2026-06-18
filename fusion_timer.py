@@ -1895,70 +1895,54 @@ def fusion_bot_loop():
                                     if check_img('select_0_3.png', thread_sct): break
                                     time.sleep(0.05)
                                     
-                                screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
-                                all_candidates = []
-                                for item_name in search_items_mode6:
-                                    template = FUSION_CACHE.get(item_name)
-                                    if template is None: continue
-                                    res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
-                                    loc = np.where(res >= 0.90)
-                                    h, w = template.shape[:2]
-                                    for pt in zip(*loc[::-1]):
-                                        real_x, real_y = pt[0] + 960, pt[1]
-                                        if any(math.hypot(real_x-cp[0], real_y-cp[1]) < 80 for cp in all_candidates): continue
-                                        all_candidates.append((real_x, real_y, w, h, item_name))
-                                        
-                                all_candidates.sort(key=lambda c: (c[0] // 100, c[1]))
+                                # 새로 생성되어 인벤토리에 추가된 결과물은 언제나 인벤토리의 가장 첫 번째 칸(좌상단)에 배치됩니다.
+                                # 불필요한 이미지 템플릿 매칭 없이 첫 번째 슬롯 좌표로 직행하여 검증합니다.
+                                cx, cy = 1435, 160
+                                pyautogui.moveTo(cx, cy)
                                 
-                                if len(all_candidates) > 0:
-                                    # 가장 첫 번째에 있는 신규 결과물 감염물 검사
-                                    first_cand = all_candidates[0]
-                                    cx, cy = first_cand[0] + first_cand[2]//2, first_cand[1] + first_cand[3]//2
-                                    pyautogui.moveTo(cx, cy)
+                                template_label = FUSION_CACHE.get('ability_label.png')
+                                mon = thread_sct.monitors[1]
+                                r_left = max(mon["left"], cx - 1100)
+                                tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": 1100, "height": mon["height"]}
+                                
+                                label_found = False
+                                lx, ly = 0, 0
+                                wait_start = time.time()
+                                while time.time() - wait_start < 1.0 and bot_active:
+                                    hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                    res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
+                                    _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                    if mv_l >= 0.90:
+                                        label_found = True; lx, ly = ml_l[0], ml_l[1]; break
+                                    time.sleep(0.01)
                                     
-                                    template_label = FUSION_CACHE.get('ability_label.png')
-                                    mon = thread_sct.monitors[1]
-                                    r_left = max(mon["left"], cx - 1100)
-                                    tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": 1100, "height": mon["height"]}
+                                has_trait = False
+                                if label_found:
+                                    time.sleep(0.05)
+                                    sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                    hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                                     
-                                    label_found = False
-                                    lx, ly = 0, 0
-                                    wait_start = time.time()
-                                    while time.time() - wait_start < 1.0 and bot_active:
-                                        hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                        res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
-                                        _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                        if mv_l >= 0.90:
-                                            label_found = True; lx, ly = ml_l[0], ml_l[1]; break
-                                        time.sleep(0.01)
-                                        
-                                    has_trait = False
-                                    if label_found:
-                                        time.sleep(0.05)
-                                        sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                                        hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
-                                        
-                                        trait_x1 = max(0, lx - 10)
-                                        trait_x2 = lx + 200
-                                        trait_y1 = ly + 30
-                                        trait_y2 = ly + 300
-                                        roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                        t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
-                                        if roi_trait_gray.size > 0:
-                                            res_t = cv2.matchTemplate(roi_trait_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)
-                                            if np.max(res_t) >= FUSION_CONF.get('trait.png', 0.70):
-                                                has_trait = True
-                                                
-                                    fast_clear_tooltip()
-                                    send_cmd('E'); time.sleep(0.15); send_cmd('R')
-                                    wait_vanish('select_0_3.png', thread_sct)
-                                    
-                                    if has_trait:
-                                        bprint("  > 🎉 [성공] 결과물 특성 검출 완료! NORMAL 상태로 복사 가동합니다.")
-                                        char_sub_modes[char_key] = "NORMAL"
-                                    else:
-                                        bprint("  > 😭 [실패] 결과물 특성 검출 누락! RECOVERY 복구 모드로 상태 전환합니다.")
-                                        char_sub_modes[char_key] = "RECOVERY"
+                                    trait_x1 = max(0, lx - 10)
+                                    trait_x2 = lx + 200
+                                    trait_y1 = ly + 30
+                                    trait_y2 = ly + 300
+                                    roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                    if roi_trait_gray.size > 0:
+                                        res_t = cv2.matchTemplate(roi_trait_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)
+                                        if np.max(res_t) >= FUSION_CONF.get('trait.png', 0.70):
+                                            has_trait = True
+                                            
+                                fast_clear_tooltip()
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                wait_vanish('select_0_3.png', thread_sct)
+                                
+                                if has_trait:
+                                    bprint("  > 🎉 [성공] 결과물 특성 검출 완료! NORMAL 상태로 복사 가동합니다.")
+                                    char_sub_modes[char_key] = "NORMAL"
+                                else:
+                                    bprint("  > 😭 [실패] 결과물 특성 검출 누락! RECOVERY 복구 모드로 상태 전환합니다.")
+                                    char_sub_modes[char_key] = "RECOVERY"
                                 else:
                                     send_cmd('E'); time.sleep(0.15); send_cmd('R')
                             
@@ -2079,29 +2063,19 @@ def fusion_bot_loop():
                                 time.sleep(0.05)
                                 
                             inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
-                            screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
+                            # 모드 6은 특정 종류(A1, B1 등)에 종속되지 않고 인벤토리 내 모든 감염물의 특성을 복사하기 위해, 
+                            # 이미지 템플릿 매칭 대신 우측 인벤토리의 고정 5x9 슬롯 그리드를 순회하여 실시간으로 판독합니다.
                             all_candidates = []
-                            search_items_mode6 = ['item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png']
-                            
-                            for item_name in search_items_mode6:
-                                template = FUSION_CACHE.get(item_name)
-                                if template is None: continue
-                                res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
-                                loc = np.where(res >= 0.90)
-                                h, w = template.shape[:2]
-                                for pt in zip(*loc[::-1]):
-                                    real_x, real_y = pt[0] + 960, pt[1]
-                                    if any(math.hypot(real_x-cp[0], real_y-cp[1]) < 80 for cp in all_candidates): continue
-                                    all_candidates.append((real_x, real_y, w, h, item_name))
-                                    
-                            all_candidates.sort(key=lambda c: (c[0] // 100, c[1]))
-                            
+                            for j in range(9):
+                                for i in range(5):
+                                    cx = 1435 + i * 80
+                                    cy = 160 + j * 80
+                                    all_candidates.append((cx, cy))
+                                        
                             target_parents = []
-                            for pt_data in all_candidates:
+                            for cx, cy in all_candidates:
                                 if len(target_parents) >= 2: break
-                                real_x, real_y, w, h, item_name = pt_data
-                                cx, cy = real_x + w//2, real_y + h//2
-                                
+                                    
                                 pyautogui.moveTo(cx, cy)
                                 template_label = FUSION_CACHE.get('ability_label.png')
                                 mon = thread_sct.monitors[1]
@@ -2198,26 +2172,17 @@ def fusion_bot_loop():
                                     if check_img('select_0_3.png', thread_sct): break
                                     time.sleep(0.05)
                                     
-                                screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
+                                # 재료 슬롯 역시 템플릿 매칭 없이 고정 그리드 순회를 이용해 융합이 가능한 F1(남은 횟수 0)들을 수집합니다.
                                 all_candidates = []
-                                for item_name in search_items_mode6:
-                                    template = FUSION_CACHE.get(item_name)
-                                    if template is None: continue
-                                    res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
-                                    loc = np.where(res >= 0.90)
-                                    h, w = template.shape[:2]
-                                    for pt in zip(*loc[::-1]):
-                                        real_x, real_y = pt[0] + 960, pt[1]
-                                        if any(math.hypot(real_x-cp[0], real_y-cp[1]) < 80 for cp in all_candidates): continue
-                                        all_candidates.append((real_x, real_y, w, h, item_name))
+                                for j in range(9):
+                                    for i in range(5):
+                                        cx = 1435 + i * 80
+                                        cy = 160 + j * 80
+                                        all_candidates.append((cx, cy))
                                         
-                                all_candidates.sort(key=lambda c: (c[0] // 100, c[1]))
-                                
                                 target_materials = []
-                                for pt_data in all_candidates:
+                                for cx, cy in all_candidates:
                                     if len(target_materials) >= 3: break
-                                    real_x, real_y, w, h, item_name = pt_data
-                                    cx, cy = real_x + w//2, real_y + h//2
                                     
                                     pyautogui.moveTo(cx, cy)
                                     template_label = FUSION_CACHE.get('ability_label.png')

@@ -2070,8 +2070,8 @@ def fusion_bot_loop():
                             all_candidates = []
                             for j in range(7):
                                 for i in range(5):
-                                    cx = 725 + i * 80
-                                    cy = 160 + j * 80
+                                    cx = 1435 + i * 80
+                                    cy = 185 + j * 80
                                     all_candidates.append((cx, cy))
                                         
                             target_parents = []
@@ -2204,8 +2204,8 @@ def fusion_bot_loop():
                                 all_candidates = []
                                 for j in range(7):
                                     for i in range(5):
-                                        cx = 725 + i * 80
-                                        cy = 160 + j * 80
+                                        cx = 1435 + i * 80
+                                        cy = 185 + j * 80
                                         all_candidates.append((cx, cy))
                                         
                                 target_materials = []

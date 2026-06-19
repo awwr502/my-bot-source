@@ -2097,29 +2097,7 @@ def fusion_bot_loop():
                                 if check_img('select_0_2.png', thread_sct): break
                                 time.sleep(0.05)
 
-                            # [체크마크 해제 및 초기화] 부모 슬롯(0/2) 전용 체크 해제 로직 실행
-                            bprint("  > 🔄 [부모 슬롯] 기존 체크 해제 및 0/2 상태 검증 시작...")
-                            while bot_active:
-                                dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
-                                res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
-                                loc_dc = np.where(res_dc >= 0.85)
-                                pts_dc = list(zip(*loc_dc[::-1]))
-                                
-                                if len(pts_dc) > 0:
-                                    dc_unique = []
-                                    for ptd in pts_dc:
-                                        if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
-                                            dc_unique.append(ptd)
-                                    for ptd in dc_unique:
-                                        hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
-                                        pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
-                                    fast_clear_tooltip()
-                                
-                                if check_img('select_0_2.png', thread_sct):
-                                    bprint("  > ✅ [확인] 부모 슬롯 0/2 상태 진입 완료.")
-                                    break
-                                time.sleep(0.1)
-                                
+                            # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
                             inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
                             # 모드 6은 모든 감염물을 대상으로 삼으므로 템플릿 매칭을 생략하고, 고정 5x7 인벤토리 그리드를 직접 순회합니다.
                             all_candidates = []
@@ -2128,6 +2106,9 @@ def fusion_bot_loop():
                                     cx = 1400 + i * 95
                                     cy = 220 + j * 95
                                     all_candidates.append((cx, cy))
+                                        
+                            # [상->하->좌->우] 순서로 판별하기 위해 후보 좌표들을 모드 3/4와 동일하게 세밀 정렬합니다.
+                            all_candidates.sort(key=lambda c: (c[0] // 95, c[1]))
                                         
                             # 부모 슬롯 이미지 분석을 위한 인벤토리 화면(BGR)을 사전 정의 및 적재합니다.
                             inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
@@ -2143,7 +2124,9 @@ def fusion_bot_loop():
                                 ry = cy
                                 slot_roi = screen_bgr[max(0, ry - 15):min(screen_bgr.shape[0], ry + 15), max(0, rx - 15):min(screen_bgr.shape[1], rx + 15)]
                                 
-                                if slot_roi.size > 0 and np.max(slot_roi) < 120:
+                                # 일부 야광형 감염물(전기뱀장어 등)은 어두워져도 아이콘의 자체 야광 픽셀 밝기 때문에 빈 슬롯 체크(120)를 통과할 수 있습니다.
+                                # 따라서 1차적으로 80 미만의 빈 슬롯을 빠르게 스킵한 뒤, 아래 툴팁 숫자 검증을 통해 확실한 1짜리(F0)만 최종 선별합니다.
+                                if slot_roi.size > 0 and np.max(slot_roi) < 80:
                                     continue # 어둡거나 빈 슬롯은 툴팁을 열지 않고 패스
                                     
                                 pyautogui.moveTo(cx, cy)
@@ -2174,19 +2157,29 @@ def fusion_bot_loop():
                                 sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
                                 hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                                 
-                                # 융합 가능 횟수 숫자가 1인지(F0) tier_1.png로 크로스매칭 판독
+                                # 융합 가능 횟수 판독 (실측 4번째 줄 120:152 범위 크롭)
                                 label_w = template_label.shape[1]
                                 col_x_start = lx + label_w
                                 col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
                                 col_y_start = max(0, ly - 20)
                                 col_y_end = min(hover_gray.shape[0], ly + 150)
                                 roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
-                                    
+                                        
                                 # 한글 글자(가, 회 등)의 수직 획 오탐을 방지하기 위해 우측 숫자 영역(240~360px)만 정밀 커팅
-                                roi_num_gray = roi_col[90:125, 240:360]
-                                    
-                                # [부모 세팅 검증 간소화 및 오작동 원천 차단]
-                                is_f0 = True
+                                roi_num_gray = roi_col[120:152, 240:360]
+                                        
+                                # [부모 검증 원상복구] 하드코딩된 is_f0 = True를 해제하고, 실제 1짜리(F0)인지 템플릿 매칭으로 정확하게 검증합니다.
+                                # 이로써 야광 아이콘 때문에 120 필터를 통과한 어두운 0짜리(F1) 감염물도 툴팁 대조 단계에서 완벽하게 걸러집니다.
+                                is_f0 = False
+                                t1_img = FUSION_CACHE.get('tier_1.png')
+                                if t1_img is not None and roi_num_gray.size > 0:
+                                    t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
+                                    res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
+                                    _, best_score_n, _, max_loc_n = cv2.minMaxLoc(res_n)
+                                    if best_score_n >= FUSION_CONF.get('tier_1.png', 0.72):
+                                        t1_h = t1_img_g.shape[0]
+                                        if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
+                                            is_f0 = True
                                         
                                 # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                 has_any_trait = False
@@ -2254,18 +2247,20 @@ def fusion_bot_loop():
                                                 
                                 if current_sub == "NORMAL":
                                     # NORMAL 상태: 1~7 가치 특성 F0 1개 + 특성 없는 순정 F0 1개
-                                    already_has_trait_in_list = any(p[2] for p in target_parents)
-                                    if has_valuable_trait and not already_has_trait_in_list:
-                                        target_parents.append((cx, cy, True))
-                                        bprint("  > 🧬 [부모 채택] F0 가치 특성 감염물 확보 완료.")
-                                    elif not has_any_trait:
-                                        already_blank_in_list = any(not p[2] for p in target_parents)
-                                        if not already_blank_in_list:
-                                            target_parents.append((cx, cy, False))
-                                            bprint("  > 💎 [부모 채택] F0 순정 감염물 확보 완료.")
+                                    # F0(is_f0가 True)인 경우에만 부모 후보로 등록합니다.
+                                    if is_f0:
+                                        already_has_trait_in_list = any(p[2] for p in target_parents)
+                                        if has_valuable_trait and not already_has_trait_in_list:
+                                            target_parents.append((cx, cy, True))
+                                            bprint("  > 🧬 [부모 채택] F0 가치 특성 감염물 확보 완료.")
+                                        elif not has_any_trait:
+                                            already_blank_in_list = any(not p[2] for p in target_parents)
+                                            if not already_blank_in_list:
+                                                target_parents.append((cx, cy, False))
+                                                bprint("  > 💎 [부모 채택] F0 순정 감염물 확보 완료.")
                                 elif current_sub == "RECOVERY":
                                     # RECOVERY 상태: 특성 없는 순정 깡 감염물 2개
-                                    if not has_any_trait:
+                                    if is_f0 and not has_any_trait:
                                         target_parents.append((cx, cy, False))
                                         bprint("  > 💎 [부모 채택] F0 순정 감염물 확보 완료.")
                                         
@@ -2292,28 +2287,17 @@ def fusion_bot_loop():
                                     if check_img('select_0_3.png', thread_sct): break
                                     time.sleep(0.05)
 
-                                # [체크마크 해제 및 초기화] 재료 슬롯(0/3) 전용 체크 해제 로직 실행
-                                bprint("  > 🔄 [재료 슬롯] 기존 체크 해제 및 0/3 상태 검증 시작...")
-                                while bot_active:
-                                    dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
-                                    res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
-                                    loc_dc = np.where(res_dc >= 0.85)
-                                    pts_dc = list(zip(*loc_dc[::-1]))
-                                    
-                                    if len(pts_dc) > 0:
-                                        dc_unique = []
-                                        for ptd in pts_dc:
-                                            if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
-                                                dc_unique.append(ptd)
-                                        for ptd in dc_unique:
-                                            hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
-                                            pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
-                                        fast_clear_tooltip()
-                                    
-                                    if check_img('select_0_3.png', thread_sct):
-                                        bprint("  > ✅ [확인] 재료 슬롯 0/3 상태 진입 완료.")
-                                        break
-                                    time.sleep(0.1)
+                                # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
+                                # 재료 슬롯 역시 템플릿 매칭 없이 고정 5x7 그리드 순회를 이용해 융합이 가능한 F1들을 수집합니다.
+                                all_candidates = [] # [원상복구] 이전 부모 슬롯의 좌표 리스트 간섭을 막기 위해 리스트를 정상 리셋합니다.
+                                for j in range(7):
+                                    for i in range(5):
+                                        cx = 1420 + i * 95
+                                        cy = 320 + j * 95
+                                        all_candidates.append((cx, cy))
+                                        
+                                # [상->하->좌->우] 순서로 판별하기 위해 후보 좌표들을 모드 3/4와 동일하게 세밀 정렬합니다.
+                                all_candidates.sort(key=lambda c: (c[0] // 95, c[1]))
                                     
                                 # [사용자 피드백 반영] 나비 필터 아이콘(butterfly.png) 탐색 및 동적 타격
                                 bprint("  > 🦋 [필터 전환] 나비 아이콘(butterfly.png) 탐색 및 탭 전환 시도...")

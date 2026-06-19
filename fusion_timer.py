@@ -2432,7 +2432,7 @@ def fusion_bot_loop():
                                                 bprint(f"  > [디버그 오류] 스크린샷 저장 실패: {e}")
                                             break
                                         time.sleep(0.05)
-=== 수정 시작 ===
+
                                     if label_found:
                                         time.sleep(0.05)
                                         sct_frame = np.asarray(thread_sct.grab(tooltip_roi))

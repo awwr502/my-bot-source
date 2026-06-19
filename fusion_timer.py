@@ -1939,26 +1939,46 @@ def fusion_bot_loop():
                                     
                                     label_found = False
                                     lx, ly = 0, 0
-                                    wait_start = time.time()
-                                    while time.time() - wait_start < 1.0 and bot_active:
-                                        hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                        res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
-                                        _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                        if mv_l >= 0.80:
-                                            label_found = True; lx, ly = ml_l[0], ml_l[1]; break
-                                        time.sleep(0.01)
-                                        
-                                    if label_found:
-                                        time.sleep(0.05)
-                                        sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                                        hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
-                                        
-                                        # 모드 5와 동일한 정밀 수직 오탐 안전 구역(ly + 30 ~ ly + 300)을 적용합니다.
-                                        trait_x1 = max(0, lx - 10)
-                                        trait_x2 = lx + 200
-                                        trait_y1 = ly + 30
-                                        trait_y2 = ly + 300
-                                        roi_trait_name_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                wait_start = time.time()
+                                while wait_start < 1.0 and bot_active:
+                                    hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                    res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
+                                    _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                    if mv_l >= 0.80:
+                                        label_found = True; lx, ly = ml_l[0], ml_l[1]; break
+                                    time.sleep(0.01)
+                                    
+                                has_valuable_trait = False
+                                if label_found:
+                                    time.sleep(0.05)
+                                    sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                    hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                    
+                                    trait_x1 = max(0, lx - 10)
+                                    trait_x2 = lx + 200
+                                    trait_y1 = ly + 30
+                                    trait_y2 = ly + 300
+                                    roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGRA2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                    conf_trait = FUSION_CONF.get('trait.png', 0.70)
+                                    
+                                    has_any_trait = False
+                                    if roi_trait_gray.size > 0:
+                                        for scale in [0.95, 1.0, 1.05]:
+                                            width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                            if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                cur_tr = np.max(res_t)
+                                                if cur_tr >= conf_trait:
+                                                    has_any_trait = True
+                                                    break
+                                            
+                                    if has_any_trait:
+                                        trait_name_x1 = max(0, lx - 10)
+                                        trait_name_x2 = lx + 360
+                                        trait_name_y1 = ly + 30
+                                        trait_name_y2 = ly + 300
+                                        roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
                                         
                                         # 결과물이 가치 특성 7종 중 하나를 안전하게 상속받았는지 최종 검증
                                         for t_idx in range(1, 8):
@@ -1977,21 +1997,17 @@ def fusion_bot_loop():
                                                 
                                                 if best_score >= 0.85:
                                                     has_valuable_trait = True
-                                                    matched_trait_file = t_file
                                                     break
                                                     
-                                    fast_clear_tooltip()
-                                
-                                # 판독 완료 후, 이제 F를 눌러 수령하고 팝업창을 완전히 닫습니다.
-                                bprint("  > 상세창 분석 완료. F를 눌러 보상을 최종 수령하고 창을 닫습니다.")
-                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
-                                wait_vanish('get_reward.png', thread_sct)
+                                fast_clear_tooltip()
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                wait_vanish('select_0_3.png', thread_sct)
                                 
                                 if has_valuable_trait:
-                                    bprint(f"  > 🎉 [성공] 결과물 가치 특성 '{matched_trait_file}' 검출 완료! NORMAL 상태로 가동합니다.")
+                                    bprint("  > 🎉 [성공] 결과물 가치 특성 전수 완료! NORMAL 상태로 복사 가동합니다.")
                                     char_sub_modes[char_key] = "NORMAL"
                                 else:
-                                    bprint("  > 😭 [실패] 결과물 가치 특성 미전수! RECOVERY 상태로 전환합니다.")
+                                    bprint("  > 😭 [실패] 결과물 가치 특성 미전수! RECOVERY 복구 상태로 전환합니다.")
                                     char_sub_modes[char_key] = "RECOVERY"
                             
                             bprint("  > [수령 완료] 보상을 획득했습니다. 기계에 남은 이전 감염물을 빼기 위해 2단계로 이동합니다.")
@@ -2166,23 +2182,29 @@ def fusion_bot_loop():
                                 if not is_f0:
                                     fast_clear_tooltip(); continue # F0(1짜리)이 아니면 패스
                                     
-                                # 특성 유무 및 가치 판독 (오탐 방지를 위해 가로 영역 마진 및 적응형 임계값 최적화)
+                                # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                 has_any_trait = False
-                                trait_x1 = max(0, lx - 20)
-                                trait_x2 = lx + 220
-                                # 세로 영역은 모드 5와 동일한 안전 영역(ly + 30 ~ ly + 300)으로 고정하여 tier_1.png 등의 오탐을 완벽히 방지합니다.
+                                trait_x1 = max(0, lx - 10)
+                                trait_x2 = lx + 200
                                 trait_y1 = ly + 30
                                 trait_y2 = ly + 300
                                 roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
                                 t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGRA2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                conf_trait = FUSION_CONF.get('trait.png', 0.70)
+                                
                                 if roi_trait_gray.size > 0:
-                                    res_t = cv2.matchTemplate(roi_trait_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)
-                                    if np.max(res_t) >= FUSION_CONF.get('trait.png', 0.70):
-                                        has_any_trait = True
-                                        
+                                    for scale in [0.95, 1.0, 1.05]:
+                                        width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                        if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                            res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                            cur_tr = np.max(res_t)
+                                            if cur_tr >= conf_trait:
+                                                has_any_trait = True
+                                                break
+                                                
                                 has_valuable_trait = False
                                 if has_any_trait:
-                                    trait_name_x1 = max(0, lx - 20)
+                                    trait_name_x1 = max(0, lx - 10)
                                     trait_name_x2 = lx + 360
                                     trait_name_y1 = ly + 30
                                     trait_name_y2 = ly + 300
@@ -2302,19 +2324,25 @@ def fusion_bot_loop():
                                     if is_f0:
                                         fast_clear_tooltip(); continue # F1(0짜리)만 담아야 함
                                         
-                                    # 특성 유무 및 가치 판독 (오탐 방지를 위해 가로 영역 마진 및 적응형 임계값 최적화)
+                                    # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                     has_any_trait = False
-                                    trait_x1 = max(0, lx - 20)
-                                    trait_x2 = lx + 220
-                                    # 세로 영역은 모드 5와 동일한 안전 영역(ly + 30 ~ ly + 300)으로 고정하여 tier_1.png 등의 오탐을 완벽히 방지합니다.
+                                    trait_x1 = max(0, lx - 10)
+                                    trait_x2 = lx + 200
                                     trait_y1 = ly + 30
                                     trait_y2 = ly + 300
                                     roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
                                     t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGRA2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                    conf_trait = FUSION_CONF.get('trait.png', 0.70)
+                                    
                                     if roi_trait_gray.size > 0:
-                                        res_t = cv2.matchTemplate(roi_trait_gray, t_trait_g, cv2.TM_CCOEFF_NORMED)
-                                        if np.max(res_t) >= FUSION_CONF.get('trait.png', 0.70):
-                                            has_any_trait = True
+                                        for scale in [0.95, 1.0, 1.05]:
+                                            width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                            if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                cur_tr = np.max(res_t)
+                                                if cur_tr >= conf_trait:
+                                                    has_any_trait = True
+                                                    break
                                             
                                     has_valuable_trait = False
                                     if has_any_trait:

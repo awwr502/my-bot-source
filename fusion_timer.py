@@ -275,14 +275,16 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # 밑에 인접한 소개글의 하얀색 글자 픽셀 간섭을 피하기 위해,
-    # 오직 상단의 깨끗한 17픽셀 영역(0 ~ 17)만 잘라내어 분석합니다.
-    clean_roi = roi[0:17, :]
+    # 인벤토리 위치나 툴팁 오버 좌표 편차(y축 흔들림)에 구애받지 않도록,
+    # 매칭된 기둥 대가리 축(y-2 ~ y+6)을 기준으로 가변형 동적 슬라이싱을 수행합니다.
+    # 이 8픽셀의 아주 좁은 핵심 밴드는 밑에 달라붙는 소개글이나 하단 테두리를 절대 밟지 않습니다.
+    probe_y_start = max(0, y - 2)
+    probe_y_end = min(roi.shape[0], y + 6)
     
-    # 각 열의 최대 밝기를 계산합니다.
+    clean_roi = roi[probe_y_start:probe_y_end, :]
     col_maxes = np.max(clean_roi, axis=0)
     
-    # 매칭된 좌표 근처에서 실제 숫자의 가장 선명한 세로 중심축(idx_max)을 동적으로 잡습니다.
+    # 기둥의 실제 중심 축(idx_max)을 검출합니다.
     search_start = max(0, x - 2)
     search_end = min(len(col_maxes), x + 6)
     if search_start >= search_end: return True
@@ -293,13 +295,11 @@ def is_truly_tier_1(roi, x, y, h):
     left_window = col_maxes[max(0, idx_max - 5) : max(0, idx_max - 1)]
     right_window = col_maxes[min(len(col_maxes), idx_max + 2) : min(len(col_maxes), idx_max + 7)]
     
-    # 해당 공백 영역에 존재하는 가장 밝은 픽셀값(np.max)을 구합니다.
-    # - 숫자 '1'은 좌우 영역이 완벽히 비어있어야 하므로, 해당 영역의 최대 밝기(max)가 낮아야 합니다.
-    # - 숫자 '0'은 위아래 가로 획(커브선)이 이 구간을 지나가므로, 해당 영역의 최대 밝기(max)가 무조건 높게 나옵니다.
+    # 숫자 '1'은 좌우 공백에 아무런 글자 획이 없어야 하므로, 영역 내 최대 밝기(max)가 80 이하여야 합니다.
+    # 숫자 '0'은 상단 가로 곡선 획이 무조건 이 구간을 관통하므로, 공백 내 최대 밝기(max)가 80을 초과해 밝게 검출됩니다.
     left_max = np.max(left_window) if left_window.size > 0 else 0
     right_max = np.max(right_window) if right_window.size > 0 else 0
     
-    # 좌측 또는 우측 영역 중 한 곳이라도 밝은 픽셀(> 80)이 존재한다면, 이는 0의 연결선이 지나가는 것이므로 1이 아닙니다.
     if left_max > 80 or right_max > 80:
         return False
         
@@ -2609,8 +2609,8 @@ def fusion_bot_loop():
                                                         
                                             if has_popup:
                                                 bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림(2.png) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
-                                                # 1. '더 이상 표시 안 함' 체크박스 정확한 1920x1080 좌표 타격
-                                                pyautogui.moveTo(860, 618); time.sleep(0.12); send_cmd('C'); time.sleep(0.15)
+                                                # 1. 미스 클릭 방지를 위해 히트박스가 거대한 글씨 텍스트 정중앙 영역(910, 618)을 조준 타격합니다.
+                                                pyautogui.moveTo(910, 618); time.sleep(0.2); send_cmd('C'); time.sleep(0.2)
                                                 # 2. 확인 단축키 F 입력
                                                 send_cmd('F'); time.sleep(0.1); send_cmd('R')
                                                 # 3. 팝업 소멸 대기

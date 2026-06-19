@@ -2366,21 +2366,17 @@ def fusion_bot_loop():
                                         roi_num_gray = roi_col[90:125, 240:360]
                                         
                                         is_f0 = False
-                                        is_f1 = False
+                                        t1_img = FUSION_CACHE.get('tier_1.png')
+                                        score_t1 = 0.0
                                         
-                                        t0_img = FUSION_CACHE.get('tier_0.png')
-                                        score_t0 = 0.0
-                                        
-                                        if roi_num_gray.size > 0 and t0_img is not None:
-                                            t0_img_g = cv2.cvtColor(t0_img, cv2.COLOR_BGR2GRAY) if len(t0_img.shape) == 3 else t0_img
-                                            res_t0 = cv2.matchTemplate(roi_num_gray, t0_img_g, cv2.TM_CCOEFF_NORMED)
-                                            _, score_t0, _, _ = cv2.minMaxLoc(res_t0)
-                                            # [사용자 제안 반영] 오탐이 잦은 '1' 대신 형태가 아주 뚜렷한 '0'을 독립식 기준으로 세워 0짜리(F1)를 직접 선별합니다.
-                                            if score_t0 >= 0.65:
-                                                is_f1 = True
-                                            else:
-                                                # '0'이 확실히 아니라면 1짜리(F0)인 것으로 판단하여 안전하게 스킵합니다.
-                                                is_f0 = True
+                                        if roi_num_gray.size > 0 and t1_img is not None:
+                                            t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
+                                            res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
+                                            _, score_t1, _, max_loc_n = cv2.minMaxLoc(res_n)
+                                            if score_t1 >= 0.65:
+                                                t1_h = t1_img_g.shape[0]
+                                                if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
+                                                    is_f0 = True
                                                     
                                         # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                         has_any_trait = False
@@ -2454,17 +2450,18 @@ def fusion_bot_loop():
                                         # [모드 5 통합 딜레이 및 인게임 디테일 로그 출력 시스템 구현]
                                         # 1) 융합 가능 횟수가 1인 경우 (F0 - 스킵 대상)
                                         if is_f0:
-                                            bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 1짜리 감염물 발견. (0짜리 매칭 신뢰도: {score_t0:.2f})")
+                                            bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 1짜리 감염물 발견. (1짜리 신뢰도: {score_t1:.2f})")
                                             fast_clear_tooltip(); continue
                                             
                                         # 2) 융합 가능 횟수가 0인 경우 (F1 - 채택 대상)
-                                        elif is_f1:
+                                        # 모드 3/4와 동일하게 1짜리(F0)가 아닌 것은 자동적으로 0짜리(F1)로 확정 인식합니다.
+                                        else:
                                             if current_sub == "NORMAL":
                                                 if has_any_trait:
                                                     bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 0짜리 특성 감염물 스킵. 특성: '{identified_trait_name}' (신뢰도: {best_score:.2f})")
                                                     fast_clear_tooltip(); continue
                                                 else:
-                                                    bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (0짜리 매칭 신뢰도: {score_t0:.2f})")
+                                                    bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (1짜리 신뢰도: {score_t1:.2f})")
                                                     target_materials.append((cx, cy, False))
                                             elif current_sub == "RECOVERY":
                                                 already_has_trait_in_list = any(m[2] for m in target_materials)
@@ -2474,10 +2471,10 @@ def fusion_bot_loop():
                                                 elif not has_any_trait:
                                                     blank_count = sum(1 for m in target_materials if not m[2])
                                                     if blank_count < 2:
-                                                        bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (0짜리 매칭 신뢰도: {score_t0:.2f})")
+                                                        bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (1짜리 신뢰도: {score_t1:.2f})")
                                                         target_materials.append((cx, cy, False))
                                                     else:
-                                                        bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (0짜리 매칭 신뢰도: {score_t0:.2f})")
+                                                        bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (1짜리 신뢰도: {score_t1:.2f})")
                                                         fast_clear_tooltip(); continue
                                                 else:
                                                     bprint(f"  > ⏭️ [스킵] RECOVERY 조건에 맞지 않는 일반 특성 감염물. 특성: '{identified_trait_name}'")

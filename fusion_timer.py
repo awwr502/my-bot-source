@@ -289,33 +289,27 @@ def is_truly_tier_1(roi, x, y, h):
     digit_rows = np.where(roi[:, idx_max] > 100)[0]
     
     # [콜론 오탐 철벽 차단] 
-    # 실제 숫자 기둥은 최소 10픽셀 이상의 수직선으로 이루어져 있습니다.
-    # 콜론 기호(':')는 두 개의 미세한 점이라 기둥 열의 수직 픽셀 수가 극히 적습니다 (보통 6픽셀 이하).
-    # 따라서 수직 픽셀 개수가 10개 미만인 경우, 숫자가 아닌 콜론을 오탐한 것으로 보고 즉시 0(F1)으로 판정합니다.
+    # 실제 숫자 기둥은 최소 10픽셀 이상의 연속 수직선입니다.
+    # 콜론 기호(':')는 수직 픽셀 수가 극히 적으므로(보통 6픽셀 이하) 즉시 차단합니다.
     if digit_rows.size < 10:
         return False
         
     y_top = digit_rows[0]
     
-    # 진짜 최상단(y_top) 기준 5픽셀 높이만 잘라내어 바닥의 소개글 침범을 차단합니다.
-    probe_y_start = y_top
-    probe_y_end = min(roi.shape[0], y_top + 5)
+    # [글자 두께(폭) 판별 알고리즘]
+    # 소개글 등의 외부 간섭을 배제하기 위해 오직 숫자 최상단(y_top) 기준 16픽셀 높이 안에서 분석합니다.
+    digit_roi = roi[y_top : min(roi.shape[0], y_top + 16), :]
+    digit_col_maxes = np.max(digit_roi, axis=0)
     
-    clean_roi = roi[probe_y_start:probe_y_end, :]
-    clean_col_maxes = np.max(clean_roi, axis=0)
+    # 중심축(idx_max) 주변 30픽셀 범위 내에서 글자 선을 이루는 하얀색 열( Column 밝기 > 100 )의 총 개수를 카운트합니다.
+    active_cols = np.where(digit_col_maxes[max(0, idx_max - 15) : min(len(digit_col_maxes), idx_max + 15)] > 100)[0]
     
-    left_window = clean_col_maxes[max(0, idx_max - 5) : max(0, idx_max - 1)]
-    right_window = clean_col_maxes[min(len(clean_col_maxes), idx_max + 2) : min(len(clean_col_maxes), idx_max + 7)]
-    
-    # 좌우 공백 영역의 최대 밝기를 계산합니다.
-    left_max = np.max(left_window) if left_window.size > 0 else 0
-    right_max = np.max(right_window) if right_window.size > 0 else 0
-    
-    # 양쪽 영역 모두 가로 곡선선 없이 완전히 비어있어야 숫자 1입니다.
-    if left_max > 80 or right_max > 80:
+    # - 활성화된 열의 개수가 8개 이하면 극도로 날씬한 수직선 형태인 숫자 '1'(F0)로 판정합니다.
+    # - 8개를 초과해 옆으로 뚱뚱하게 퍼져있으면 몸통 획들이 검출된 숫자 '0'(F1)으로 완벽하게 판정합니다.
+    if active_cols.size <= 8:
+        return True
+    else:
         return False
-        
-    return True
 
 # === [AI 비전 엔진 및 융합 환경 설정] ===
 FUSION_CONF = {

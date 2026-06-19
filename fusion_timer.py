@@ -275,29 +275,23 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # [사용자 최적화 수식 반영]: 3번 숫자의 패인 공간 오탐 방지를 위해 전체 높이(y ~ y+h)를 수직 스캔합니다.
-    # [우측 경계 검증 추가]: 0의 좌측 획이 1로 매칭되었을 때 우측 획을 완벽히 차단하기 위해 우측도 함께 전체 높이로 수직 스캔합니다.
-    probe_x_start_l = max(0, x - 18)
-    probe_x_end_l = max(0, x - 3)
-    
-    probe_x_start_r = min(roi.shape[1], x + 10)
-    probe_x_end_r = min(roi.shape[1], x + 25)
+    # 모드 3, 4에서 사용하던 수평 검사(좌측 18픽셀 공백 검사) 로직을 사용합니다.
+    # 아래쪽 소개글("전기를 공급한다" 등)을 침범하여 오탐지되는 것을 방지하기 위해,
+    # 수직 검사 범위만 최상단에서 11픽셀 높이(y ~ y + 11)로 가두어 검사합니다.
+    probe_x_start = max(0, x - 18)
+    probe_x_end = max(0, x - 3)
     
     probe_y_start = max(0, y)
-    probe_y_end = min(roi.shape[0], y + h)
+    probe_y_end = min(roi.shape[0], y + 11)
 
-    # 1. 좌측 영역 검증 (3번 숫자의 상/하단 획 및 0의 우측 획 매칭 완벽 차단)
-    if probe_x_start_l < roi.shape[1]:
-        sample_area_l = roi[probe_y_start:probe_y_end, probe_x_start_l:probe_x_end_l]
-        if sample_area_l.size > 0 and np.max(sample_area_l) > 50:
-            return False
+    if probe_x_start >= roi.shape[1]: return True
 
-    # 2. 우측 영역 검증 (0의 좌측 획 매칭 시 반대편 우측 획 완벽 차단)
-    if probe_x_start_r < roi.shape[1]:
-        sample_area_r = roi[probe_y_start:probe_y_end, probe_x_start_r:probe_x_end_r]
-        if sample_area_r.size > 0 and np.max(sample_area_r) > 50:
-            return False
+    sample_area = roi[probe_y_start:probe_y_end, probe_x_start:probe_x_end]
+    if sample_area.size == 0: return True
 
+    # 숫자 몸통(밝은 픽셀)이 왼쪽에 감지되면 1이 아닙니다.
+    if np.max(sample_area) > 50: 
+        return False 
     return True
     
 # === [AI 비전 엔진 및 융합 환경 설정] ===
@@ -2372,8 +2366,9 @@ def fusion_bot_loop():
                                         col_y_end = min(hover_gray.shape[0], ly + 150)
                                         roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
                                         
-                                        # [정밀 조준] 융합 가능 횟수가 위치한 정확한 4번째 줄 세로 위치(116:146) 및 우측 끝 수치 좌표(280:340)
-                                        roi_num_gray = roi_col[116:146, 280:340]
+                                        # [사용자 제안 반영] 디버그 사진 분석 결과에 맞춰 숫자가 완벽히 수직 중앙에 안착하도록
+                                        # 크롭 영역을 116:146에서 120:152로 하향 조정하여 상단은 조이고 하단에 여유 패딩을 확보합니다.
+                                        roi_num_gray = roi_col[120:152, 280:340]
                                         
                                         # [디버그 스크린샷 1회 촬영] 현재 잘라낸 숫자 영역이 정상적인지 verify할 수 있도록 첫 번째 감염물만 디스크에 저장합니다.
                                         if not debug_shot_done and roi_num_gray.size > 0:

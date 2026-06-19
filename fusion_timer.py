@@ -2360,7 +2360,7 @@ def fusion_bot_loop():
                                 for j in range(7):
                                     for i in range(5):
                                         cx = 1400 + i * 95
-                                        cy = 220 + j * 95
+                                        cy = 265 + j * 95
                                         all_candidates.append((cx, cy))
                                         
                                 target_materials = []

@@ -275,27 +275,22 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # 각 열의 수직 최대 밝기를 구합니다.
-    col_maxes = np.max(roi, axis=0)
+    # 숫자 바닥면(가장 아래쪽 4픽셀 범위)만 타겟으로 지정합니다.
+    # 이 높이는 중간에 위치한 콜론(':')이나 우측 위의 '회' 자의 간섭을 완전히 피해 갑니다.
+    probe_y_start = max(0, y + h - 4)
+    probe_y_end = min(roi.shape[0], y + h)
     
-    # 매칭된 좌표 근처에서 실제 숫자의 가장 밝은 중심 축(idx_max)을 동적으로 정밀 탐색합니다.
-    search_start = max(0, x - 2)
-    search_end = min(len(col_maxes), x + 6)
-    if search_start >= search_end: return True
+    # 매칭된 수직 기둥 기준 좌측 하단과 우측 하단을 좁게 슬라이싱합니다.
+    left_bottom = roi[probe_y_start:probe_y_end, max(0, x - 8):max(0, x - 2)]
+    right_bottom = roi[probe_y_start:probe_y_end, min(roi.shape[1], x + 5):min(roi.shape[1], x + 11)]
     
-    idx_max = search_start + np.argmax(col_maxes[search_start:search_end])
-    
-    # 1. 좌측 갭 검사 (콜론 기호와의 사이 공백 열 찾기)
-    left_window = col_maxes[max(0, idx_max - 5) : max(0, idx_max - 1)]
-    # 2. 우측 갭 검사 ("회" 자와의 사이 공백 열 찾기)
-    right_window = col_maxes[min(len(col_maxes), idx_max + 2) : min(len(col_maxes), idx_max + 7)]
-    
-    left_min = np.min(left_window) if left_window.size > 0 else 0
-    right_min = np.min(right_window) if right_window.size > 0 else 0
-    
-    # 숫자 '1'의 경우 좌우 경계면에 반드시 완전히 어두운 공백 열(밝기 < 60)이 양쪽 다 존재해야 합니다.
-    # 숫자 '0'의 몸통은 위아래가 가로 획으로 이어져 있어 공백 열이 존재할 수 없으므로 이 필터에서 확실히 걸러집니다.
-    if left_min > 60 or right_min > 60:
+    # - 숫자 '0'의 좌측 획에 매칭된 경우: 우측 하단에 '0'의 바닥 가로 연결선이 감지됩니다.
+    # - 숫자 '0'의 우측 획에 매칭된 경우: 좌측 하단에 '0'의 바닥 가로 연결선이 감지됩니다.
+    # - 숫자 '1'은 양쪽 하단 모두에 가로로 이어지는 어떠한 획도 없어야 합니다.
+    if left_bottom.size > 0 and np.max(left_bottom) > 60:
+        return False
+        
+    if right_bottom.size > 0 and np.max(right_bottom) > 60:
         return False
         
     return True  

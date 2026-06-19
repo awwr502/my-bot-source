@@ -320,7 +320,7 @@ FUSION_CONF = {
     'item_A2.png': 0.95, 'item_B2.png': 0.95,
     
     'ability_label.png': 0.92,
-    'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72,
+    'tier_0.png': 0.72, 'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72,
     'exit_notice.png': 0.85,
     'bug_time.png': 0.85,
     'dis_4.png': 0.85,
@@ -348,7 +348,7 @@ GRAY_IMAGES.extend([c["img"] for c in MY_CHARACTERS])
 COLOR_IMAGES = [
     'check_mark.png', 'item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png', 
     'level_5.png', 'fusion_start.png', 'select_3_3.png', 'dev_trait_header.png',
-    'tier_1.png', 'tier_2.png', 'tier_3.png', 'tier_4.png', 'dis_4.png'
+    'tier_0.png', 'tier_1.png', 'tier_2.png', 'tier_3.png', 'tier_4.png', 'dis_4.png'
 ]
 target_images = GRAY_IMAGES + COLOR_IMAGES
 
@@ -2319,6 +2319,7 @@ def fusion_bot_loop():
                                     bprint("  > ⚠️ [필터 실패] 나비 아이콘을 검출하지 못했습니다. 기본 탭에서 분석을 진행합니다.")
                                     
                                 # 재료 슬롯 역시 템플릿 매칭 없이 고정 5x7 그리드 순회를 이용해 융합이 가능한 F1들을 수집합니다.
+                                all_candidates = [] # [원상복구] 이전 부모 슬롯의 좌표 리스트 간섭을 막기 위해 리스트를 정상 리셋합니다.
                                 for j in range(7):
                                     for i in range(5):
                                         cx = 1420 + i * 95
@@ -2368,13 +2369,28 @@ def fusion_bot_loop():
                                         
                                         is_f0 = False
                                         t1_img = FUSION_CACHE.get('tier_1.png')
-                                        if t1_img is not None and roi_num_gray.size > 0:
-                                            t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
-                                            res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                            _, best_score_n, _, max_loc_n = cv2.minMaxLoc(res_n)
-                                            if best_score_n >= 0.65:
-                                                t1_h = t1_img_g.shape[0]
-                                                if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
+                                        t0_img = FUSION_CACHE.get('tier_0.png')
+                                        
+                                        score_t1 = 0.0
+                                        score_t0 = 0.0
+                                        
+                                        if roi_num_gray.size > 0:
+                                            # 1) tier_1.png 템플릿 매칭 수행
+                                            if t1_img is not None:
+                                                t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
+                                                res_t1 = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
+                                                _, score_t1, _, max_loc_t1 = cv2.minMaxLoc(res_t1)
+                                                
+                                            # 2) tier_0.png 템플릿 매칭 수행
+                                            if t0_img is not None:
+                                                t0_img_g = cv2.cvtColor(t0_img, cv2.COLOR_BGR2GRAY) if len(t0_img.shape) == 3 else t0_img
+                                                res_t0 = cv2.matchTemplate(roi_num_gray, t0_img_g, cv2.TM_CCOEFF_NORMED)
+                                                _, score_t0, _, _ = cv2.minMaxLoc(res_t0)
+                                                
+                                            # 3) [원상복구/개선] 양쪽 템플릿 신뢰도 비교식으로 0과 1을 정확하게 분별
+                                            if score_t1 > score_t0 and score_t1 >= 0.65:
+                                                t1_h = t1_img_g.shape[0] if t1_img is not None else 24
+                                                if is_truly_tier_1(roi_num_gray, max_loc_t1[0], max_loc_t1[1], t1_h):
                                                     is_f0 = True
                                                     
                                         if is_f0:

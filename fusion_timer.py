@@ -2157,9 +2157,9 @@ def fusion_bot_loop():
                                 pyautogui.moveTo(cx, cy)
                                 template_label = FUSION_CACHE.get('ability_label.png')
                                 mon = thread_sct.monitors[1]
-                                r_left = mon["left"]
+                                r_left = max(mon["left"], cx - 1100) # 모드 3/4와 동일하게 마우스 가로 위치에 연동되어 캡처 시작점이 유동적으로 이동합니다.
                                 r_top = mon["top"]
-                                r_width = 1300
+                                r_width = 1100 # 동적 범위 추적을 위해 가로폭을 1100px로 재조정합니다.
                                 r_height = mon["height"]
                                 tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                 
@@ -2333,9 +2333,9 @@ def fusion_bot_loop():
                                     pyautogui.moveTo(cx, cy)
                                     template_label = FUSION_CACHE.get('ability_label.png')
                                     mon = thread_sct.monitors[1]
-                                    r_left = mon["left"]
+                                    r_left = max(mon["left"], cx - 1100) # 모드 3/4와 동일하게 마우스 가로 위치에 연동되어 캡처 시작점이 유동적으로 이동합니다.
                                     r_top = mon["top"]
-                                    r_width = 1300
+                                    r_width = 1100 # 동적 범위 추적을 위해 가로폭을 1100px로 재조정합니다.
                                     r_height = mon["height"]
                                     tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                     
@@ -2387,8 +2387,7 @@ def fusion_bot_loop():
                                                 res_t0 = cv2.matchTemplate(roi_num_gray, t0_img_g, cv2.TM_CCOEFF_NORMED)
                                                 _, score_t0, _, _ = cv2.minMaxLoc(res_t0)
                                                 
-                                            # 3) [원상복구/개선] 양쪽 템플릿 신뢰도 비교식으로 0과 1을 정확하게 분별
-                                            # 슬래시나 콜론의 간섭 우려가 있는 수평 픽셀 검증기 대신, 이미지 형태 신뢰도 대조법으로 오인식을 원천 차단합니다.
+                                            # 3) 양쪽 템플릿 신뢰도 비교식으로 0과 1을 정확하게 분별
                                             if score_t1 > score_t0 and score_t1 >= 0.65:
                                                 is_f0 = True
                                                     

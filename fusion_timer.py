@@ -2126,7 +2126,7 @@ def fusion_bot_loop():
                                 
                                 # 일부 야광형 감염물(전기뱀장어 등)은 어두워져도 아이콘의 자체 야광 픽셀 밝기 때문에 빈 슬롯 체크(120)를 통과할 수 있습니다.
                                 # 따라서 1차적으로 80 미만의 빈 슬롯을 빠르게 스킵한 뒤, 아래 툴팁 숫자 검증을 통해 확실한 1짜리(F0)만 최종 선별합니다.
-                                if slot_roi.size > 0 and np.max(slot_roi) < 80:
+                                if slot_roi.size > 0 and np.max(slot_roi) < 120:
                                     continue # 어둡거나 빈 슬롯은 툴팁을 열지 않고 패스
                                     
                                 pyautogui.moveTo(cx, cy)

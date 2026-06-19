@@ -2254,38 +2254,66 @@ def fusion_bot_loop():
                                     trait_name_x2 = lx + 360
                                     trait_name_y1 = ly + 30
                                     trait_name_y2 = ly + 300
-                                    roi_trait_name_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                    roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
                                     
+                                    try:
+                                        trait_debug_path = os.path.join(base_dir, "debug_mode6_parent_trait_slice.png")
+                                        is_success, im_buf_arr = cv2.imencode(".png", roi_trait_gray)
+                                        if is_success:
+                                            with open(trait_debug_path, "wb") as f:
+                                                f.write(im_buf_arr.tobytes())
+                                            bprint(f"  > [디버그] Parent 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
+                                    except Exception as e: pass
+                                    
+                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                    conf_trait = FUSION_CONF.get('trait.png', 0.70)
+                                    
+                                    temp_scores = []
+                                    if roi_trait_gray.size > 0:
+                                        for scale in [0.95, 1.0, 1.05]:
+                                            width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                            if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                cur_tr = np.max(res_t)
+                                                if cur_tr >= conf_trait:
+                                                    # 1번부터 7번 가치 특성 정밀 대조 시작
+                                                    for t_idx in range(1, 8):
+                                                        t_file = f"trait_{t_idx}.png"
+                                                        t_template = FUSION_CACHE.get(t_file)
+                                                        if t_template is None: continue
+                                                        
+                                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                                        if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
+                                                            best_score = 0.0
+                                                            for t_scale in [0.95, 1.0, 1.05]:
+                                                                t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
+                                                                if t_w <= roi_trait_name_gray.shape[1] and t_h <= roi_trait_gray.shape[0]:
+                                                                    res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (t_w, t_h)), cv2.TM_CCOEFF_NORMED)
+                                                                    best_score = max(best_score, np.max(res_st))
+                                                            
+                                                            temp_scores.append((t_file, best_score))
+                                                    break
+                                                    
+                                    # 점수순 내림차순 정렬 및 스마트 갭 판독
+                                    temp_scores.sort(key=lambda x: x[1], reverse=True)
                                     best_valuable_score = 0.0
                                     best_matched_file = None
+                                    top2_score = 0.0
                                     
-                                    # 1번부터 7번 특성까지만 복사 대상으로 한정 필터링
-                                    for t_idx in range(1, 8):
-                                        t_file = f"trait_{t_idx}.png"
-                                        t_template = FUSION_CACHE.get(t_file)
-                                        if t_template is None: continue
+                                    if len(temp_scores) >= 1:
+                                        top1_file, top1_score = temp_scores[0]
+                                        top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
+                                        best_valuable_score = top1_score
+                                        best_matched_file = top1_file
                                         
-                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                        if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
-                                            best_score = 0.0
-                                            for scale in [0.95, 1.0, 1.05]:
-                                                width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
-                                                if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_gray.shape[0]:
-                                                    res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                                                    best_score = max(best_score, np.max(res_st))
+                                        # 모드 5의 스마트 판독 알고리즘 (배경 왜곡 보정 하한선 0.60 및 격차 0.1 검증)
+                                        if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
+                                            has_valuable_trait = True
                                             
-                                            if best_score > best_valuable_score:
-                                                best_valuable_score = best_score
-                                                best_matched_file = t_file
-                                                
-                                            if best_score >= 0.80:
-                                                has_valuable_trait = True
-                                                break
-                                                
                                     if has_valuable_trait:
-                                        bprint(f"  > [디버그] Parent 가치 특성 매칭 성공! 파일명: {best_matched_file}, 점수: {best_valuable_score:.4f} (목표: >= 0.80)")
+                                        bprint(f"  > [디버그] Parent 가치 특성 판독 성공! 파일명: {best_matched_file}, 점수: {best_valuable_score:.4f} (2등 격차: {(best_valuable_score - top2_score):.4f})")
                                     else:
-                                        bprint(f"  > [디버그] Parent 가치 특성 매칭 미달. 최고 매칭 파일: {best_matched_file}, 점수: {best_valuable_score:.4f} (목표: >= 0.80)")
+                                        bprint(f"  > [디버그] Parent 가치 특성 매칭 미달. 최고 매칭 파일: {best_matched_file}, 점수: {best_valuable_score:.4f} (2등 격차: {(best_valuable_score - top2_score):.4f})")
                                                 
                                 if current_sub == "NORMAL":
                                     # NORMAL 상태: 1~7 가치 특성 F0 1개 + 특성 없는 순정 F0 1개
@@ -2451,38 +2479,66 @@ def fusion_bot_loop():
                                         trait_name_x2 = lx + 360
                                         trait_name_y1 = ly + 30
                                         trait_name_y2 = ly + 300
-                                        roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
+                                        roi_trait_name_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
                                         
+                                        try:
+                                            trait_debug_path = os.path.join(base_dir, "debug_mode6_material_trait_slice.png")
+                                            is_success, im_buf_arr = cv2.imencode(".png", roi_trait_gray)
+                                            if is_success:
+                                                with open(trait_debug_path, "wb") as f:
+                                                    f.write(im_buf_arr.tobytes())
+                                                bprint(f"  > [디버그] Material 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
+                                        except Exception as e: pass
+                                        
+                                        t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                        conf_trait = FUSION_CONF.get('trait.png', 0.70)
+                                        
+                                        temp_scores = []
+                                        if roi_trait_gray.size > 0:
+                                            for scale in [0.95, 1.0, 1.05]:
+                                                width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                                if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                    res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                    cur_tr = np.max(res_t)
+                                                    if cur_tr >= conf_trait:
+                                                        # 1번부터 7번 가치 특성 정밀 대조 시작
+                                                        for t_idx in range(1, 8):
+                                                            t_file = f"trait_{t_idx}.png"
+                                                            t_template = FUSION_CACHE.get(t_file)
+                                                            if t_template is None: continue
+                                                            
+                                                            t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                                            if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
+                                                                best_score = 0.0
+                                                                for t_scale in [0.95, 1.0, 1.05]:
+                                                                    t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
+                                                                    if t_w <= roi_trait_name_gray.shape[1] and t_h <= roi_trait_gray.shape[0]:
+                                                                        res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (t_w, t_h)), cv2.TM_CCOEFF_NORMED)
+                                                                        best_score = max(best_score, np.max(res_st))
+                                                                
+                                                                temp_scores.append((t_file, best_score))
+                                                        break
+                                                        
+                                        # 점수순 내림차순 정렬 및 스마트 갭 판독
+                                        temp_scores.sort(key=lambda x: x[1], reverse=True)
                                         best_valuable_score = 0.0
                                         best_matched_file = None
+                                        top2_score = 0.0
                                         
-                                        # 1번부터 7번 특성까지만 융합 주입 대상으로 한정 필터링
-                                        for t_idx in range(1, 8):
-                                            t_file = f"trait_{t_idx}.png"
-                                            t_template = FUSION_CACHE.get(t_file)
-                                            if t_template is None: continue
+                                        if len(temp_scores) >= 1:
+                                            top1_file, top1_score = temp_scores[0]
+                                            top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
+                                            best_valuable_score = top1_score
+                                            best_matched_file = top1_file
                                             
-                                            t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                            if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
-                                                best_score = 0.0
-                                                for scale in [0.95, 1.0, 1.05]:
-                                                    width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
-                                                    if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_gray.shape[0]:
-                                                        res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                                                        best_score = max(best_score, np.max(res_st))
+                                            # 모드 5의 스마트 판독 알고리즘 (배경 왜곡 보정 하한선 0.6 및 격차 0.1 검증)
+                                            if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
+                                                has_valuable_trait = True
                                                 
-                                                if best_score > best_valuable_score:
-                                                    best_valuable_score = best_score
-                                                    best_matched_file = t_file
-                                                    
-                                                if best_score >= 0.80:
-                                                    has_valuable_trait = True
-                                                    break
-                                                    
                                         if has_valuable_trait:
-                                            bprint(f"  > [디버그] Material 가치 특성 매칭 성공! 파일명: {best_matched_file}, 점수: {best_valuable_score:.4f} (목표: >= 0.80)")
+                                            bprint(f"  > [디버그] Material 가치 특성 판독 성공! 파일명: {best_matched_file}, 점수: {best_valuable_score:.4f} (2등 격차: {(best_valuable_score - top2_score):.4f})")
                                         else:
-                                            bprint(f"  > [디버그] Material 가치 특성 매칭 미달. 최고 매칭 파일: {best_matched_file}, 점수: {best_valuable_score:.4f} (목표: >= 0.80)")
+                                            bprint(f"  > [디버그] Material 가치 특성 매칭 미달. 최고 매칭 파일: {best_matched_file}, 점수: {best_valuable_score:.4f} (2등 격차: {(best_valuable_score - top2_score):.4f})")
                                                     
                                     if current_sub == "NORMAL":
                                         # NORMAL 상태: 특성 없는 순정 F1 3개

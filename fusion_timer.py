@@ -2151,7 +2151,7 @@ def fusion_bot_loop():
                                 ry = cy
                                 slot_roi = screen_bgr[max(0, ry - 15):min(screen_bgr.shape[0], ry + 15), max(0, rx - 15):min(screen_bgr.shape[1], rx + 15)]
                                 
-                                if slot_roi.size > 0 and np.max(slot_roi) < 80:
+                                if slot_roi.size > 0 and np.max(slot_roi) < 120:
                                     continue # 어둡거나 빈 슬롯은 툴팁을 열지 않고 패스
                                     
                                 pyautogui.moveTo(cx, cy)

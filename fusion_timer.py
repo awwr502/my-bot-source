@@ -2144,7 +2144,7 @@ def fusion_bot_loop():
                                 mon = thread_sct.monitors[1]
                                 r_left = mon["left"] + 200
                                 r_top = mon["top"]
-                                r_width = 550
+                                r_width = 800
                                 r_height = mon["height"]
                                 tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                     

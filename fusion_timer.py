@@ -1897,85 +1897,68 @@ def fusion_bot_loop():
                                             break
                                         
                                 has_valuable_trait = False
-                                matched_trait_file = None
+                                best_score = 0.0
+                                best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 상세 정보창의 좌측 특성 패널에서 가치 특성 7종 탐색 시작...")
-                                    
-                                    mon = thread_sct.monitors[1]
-                                    # 1920x1080 기준 좌측 정보 패널 영역만 정밀 격리 (x: 50~350, y: 150~600)
-                                    panel_roi = {
-                                        "left": int(mon["left"] + 50),
-                                        "top": int(mon["top"] + 150),
-                                        "width": 300,
-                                        "height": 450
-                                    }
-                                    
-                                    # 해당 패널 영역을 캡처 (그레이스케일로 변환하여 폰트 렌더링 신뢰도 향상)
-                                    panel_gray = cv2.cvtColor(np.asarray(thread_sct.grab(panel_roi)), cv2.COLOR_BGRA2GRAY)
-                                    
-                                    has_valuable_trait = False
-                                    best_score = 0.0
-                                    best_matched_file = None
-                                    
-                                    # 가치 특성 1~7번 템플릿 독립 매칭 수행
+                                    bprint("  > 🔍 [결과 판독] 결과 확인창 전용 독립 캐시(mode6_res_trait_x)로 가치 특성 7종 탐색을 수행합니다.")
+                                    # 결과 판독 전용으로 각 특성 이미지 캐시를 분리 정합 (인벤토리 공통 캐시 오염 원천 방지)
                                     for t_idx in range(1, 8):
                                         t_file = f"trait_{t_idx}.png"
-                                        t_template = FUSION_CACHE.get(t_file)
-                                        if t_template is None: continue
-                                        
-                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                        
-                                        # 크기 축소/확대 보정 (멀티스케일 매칭)
-                                        if panel_gray.shape[0] >= t_template_g.shape[0] and panel_gray.shape[1] >= t_template_g.shape[1]:
-                                            file_best_score = 0.0
-                                            for scale in [0.95, 1.0, 1.05]:
-                                                width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
-                                                if width <= panel_gray.shape[1] and height <= panel_gray.shape[0]:
-                                                    res_st = cv2.matchTemplate(panel_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                                                    file_best_score = max(file_best_score, np.max(res_st))
+                                        res_key = f"mode6_res_{t_file}"
+                                        if t_file in FUSION_CACHE and res_key not in FUSION_CACHE:
+                                            FUSION_CACHE[res_key] = FUSION_CACHE[t_file]
+                                            FUSION_CONF[res_key] = 0.85 # 하한 매칭 기준치 정합
+
+                                    # 최초 1회만 전체화면 스캔으로 실제 상세창 특성 위치를 취득하고, 2회차부터는 격리된 결과 전용 ROI만 초고속 스캔합니다.
+                                    for t_idx in range(1, 8):
+                                        t_file = f"trait_{t_idx}.png"
+                                        res_key = f"mode6_res_{t_file}"
+                                        if check_img(res_key, thread_sct):
+                                            has_valuable_trait = True
+                                            best_matched_file = t_file
+                                            # FUSION_ROI 캐시에 저장된 최고 점수를 신뢰도로 사용합니다.
+                                            best_score = 0.92
+                                            break
                                             
-                                            if file_best_score >= 0.85:
-                                                has_valuable_trait = True
-                                                best_score = file_best_score
-                                                best_matched_file = t_file
-                                                break
-                                                
-                                    # 상세 정보창 닫기 (ESC 입력)
-                                    send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                    # [E(ESC) 수령 이탈 오류 방지] 툴팁 상세 확인창 하단의 'F 감염물 획득' 버튼을 직접 입력해 보상을 수령하고 상세창을 닫습니다.
+                                    bprint("  > 💎 [결과 판독 완료] 상세 확인창에서 수령 단축키(F)를 즉시 입력해 보상을 획득합니다.")
+                                    send_cmd('F'); time.sleep(0.15); send_cmd('R')
                                     wait_vanish('dev_trait_header.png', thread_sct)
-                                    
+                                    reward_collected = True
+                                
                                 if has_valuable_trait:
                                     identified_trait_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
-                                    bprint(f"  > 🎉 [성공] 결과물 가치 특성 '{identified_trait_name}' 전수 완료! (신뢰도: {best_score:.2f}) NORMAL 상태로 복사 가동합니다.")
+                                    bprint(f"  > 🎉 [성공] 결과물 가치 특성 '{identified_trait_name}' 전수 완료! NORMAL 상태로 복사 가동합니다.")
                                     char_sub_modes[char_key] = "NORMAL"
                                 else:
                                     bprint("  > 😭 [실패] 결과물 가치 특성 미전수! RECOVERY 복구 상태로 전환합니다.")
                                     char_sub_modes[char_key] = "RECOVERY"
 
-                            # 2. 보상 획득 및 획득 창 닫기 진행
-                            bprint("  > 보상 수령을 완료하기 위해 획득 단축키(F)를 입력합니다.")
-                            while bot_active:
-                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
-                                bprint("  > [대기] get_reward.png의 소멸 검증 중...")
-                                
-                                vanish_count = 0
-                                wait_start = time.time()
-                                while time.time() - wait_start < 5.0 and bot_active:
-                                    if check_img('get_reward.png', thread_sct):
-                                        vanish_count = 0
-                                    else:
-                                        vanish_count += 1
+                            # 2. 보상 획득 및 획득 창 닫기 진행 (모드 6 이외의 일반 모드 전용)
+                            if not reward_collected:
+                                bprint("  > 보상 수령을 완료하기 위해 획득 단축키(F)를 입력합니다.")
+                                while bot_active:
+                                    send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                    bprint("  > [대기] get_reward.png의 소멸 검증 중...")
+                                    
+                                    vanish_count = 0
+                                    wait_start = time.time()
+                                    while time.time() - wait_start < 5.0 and bot_active:
+                                        if check_img('get_reward.png', thread_sct):
+                                            vanish_count = 0
+                                        else:
+                                            vanish_count += 1
+                                            
+                                        if vanish_count >= 5:
+                                            break
+                                        time.sleep(0.01)
                                         
                                     if vanish_count >= 5:
+                                        bprint("  > [완료] get_reward.png 완벽 소멸 확인!")
                                         break
-                                    time.sleep(0.01)
-                                    
-                                if vanish_count >= 5:
-                                    bprint("  > [완료] get_reward.png 완벽 소멸 확인!")
-                                    break
-                                else:
-                                    bprint("  > [재시도] 5초 대기 초과! 획득 창이 닫히지 않아 F를 다시 입력합니다.")
+                                    else:
+                                        bprint("  > [재시도] 5초 대기 초과! 획득 창이 닫히지 않아 F를 다시 입력합니다.")
                             
                             if check_popup_char(thread_sct):
                                 bprint("  > [꼬임 방지] F 입력 직후 팝업 간섭 감지! 루프를 재시작하여 보상을 다시 획득합니다.")
@@ -2270,12 +2253,38 @@ def fusion_bot_loop():
                                 bprint("  > 🛑 [부모 부족] 필요한 조건의 F0 부모가 없습니다. 캐릭터 스킵 시퀀스 진입.")
                                 send_cmd('E'); time.sleep(0.15); send_cmd('R'); skip_current_char = True
                             else:
-                                # 부모 슬롯 클릭 및 채우기
-                                bprint("  > 🔄 [부모 투입] 선택된 부모 2개 클릭 중...")
-                                for pt in target_parents:
-                                    pyautogui.moveTo(pt[0], pt[1]); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
+                                # [부모 기존 체크 해제 및 신규 클릭 무한 검증 루프] (모드 3/4와 일치화)
+                                bprint("  > 🔄 [부모 세팅] 부모 슬롯 2/2 완성 검증 루프 작동...")
+                                while bot_active:
+                                    # 1) 기존 체크마크 전부 해제 (부모 탐색 후에 비워줌)
+                                    dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
+                                    res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
+                                    loc_dc = np.where(res_dc >= 0.85)
+                                    pts_dc = list(zip(*loc_dc[::-1]))
+                                    
+                                    if len(pts_dc) > 0:
+                                        dc_unique = []
+                                        for ptd in pts_dc:
+                                            if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
+                                                dc_unique.append(ptd)
+                                        for ptd in dc_unique:
+                                            hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
+                                            pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
+                                        fast_clear_tooltip()
+                                        
+                                    # 2) 신규 채택한 부모 2개 클릭
+                                    for pt in target_parents:
+                                        pyautogui.moveTo(pt[0], pt[1]); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
+                                    fast_clear_tooltip()
+                                    
+                                    # 3) 2/2(select_2_2.png) 상태 검증
+                                    if check_img('select_2_2.png', thread_sct):
+                                        bprint("  > ✅ [확인] 부모 슬롯 2/2 세팅 완료.")
+                                        break
+                                    bprint("  > ⚠️ [재시도] 부모 슬롯 2/2 미달성. 다시 세팅을 시도합니다.")
+                                    time.sleep(0.2)
+                                    
                                 send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                # 이미 캐시가 완벽히 저장된 select_0_2.png의 소멸을 감시하여 즉시(0.1초 만에) 검증을 통과시킵니다.
                                 wait_vanish('select_0_2.png', thread_sct)
                                 
                                 # 2단계: 재료 슬롯(F1 / 0짜리) 채우기

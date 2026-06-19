@@ -296,16 +296,16 @@ def is_truly_tier_1(roi, x, y, h):
         
     y_top = digit_rows[0]
     
-    # [글자 두께(폭) 판별 알고리즘]
-    # 우측 "회" 글자의 간섭을 철저하게 회피하기 위해 탐색 창 범위를 양옆 5픽셀(idx_max-5 ~ idx_max+5, 총 폭 11픽셀)로 압축합니다.
-    digit_roi = roi[y_top : min(roi.shape[0], y_top + 16), :]
+    # [설명글 간섭 100% 회피형 글자 폭 판별 알고리즘]
+    # 아래쪽 라인의 소개글 텍스트를 절대로 밟지 않도록, 수직 검사 범위를 최상단 기둥(y_top ~ y_top + 10)으로 극도로 압축합니다.
+    digit_roi = roi[y_top : min(roi.shape[0], y_top + 10), :]
     digit_col_maxes = np.max(digit_roi, axis=0)
     
-    # 압축된 11픽셀 범위 내에서 글자 선을 이루는 하얀색 열( Column 밝기 > 100 )의 총 개수를 카운트합니다.
+    # 최상단 기둥 10픽셀 영역 내에서 글자 두께를 이루는 하얀색 열( Column 밝기 > 100 )의 총 개수를 카운트합니다.
     active_cols = np.where(digit_col_maxes[max(0, idx_max - 5) : min(len(digit_col_maxes), idx_max + 5)] > 100)[0]
     
     # - 활성화된 열의 개수가 5개 이하면 극도로 날씬한 수직선 형태인 숫자 '1'(F0)로 판정합니다.
-    # - 5개를 초과해 옆으로 넓게 퍼져있으면 상하단 곡선 획이 함께 검출된 숫자 '0'(F1)으로 판정합니다.
+    # - 5개를 초과해 옆으로 넓게 퍼져있으면 몸통 획들이 함께 검출된 숫자 '0'(F1)으로 판정합니다.
     if active_cols.size <= 5:
         return True
     else:

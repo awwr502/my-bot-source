@@ -2142,12 +2142,12 @@ def fusion_bot_loop():
                                 pyautogui.moveTo(cx, cy)
                                 template_label = FUSION_CACHE.get('ability_label.png')
                                 mon = thread_sct.monitors[1]
-                                r_left = max(mon["left"], cx - 1100)
+                                r_left = mon["left"] + 200
                                 r_top = mon["top"]
-                                r_width = 1100
+                                r_width = 550
                                 r_height = mon["height"]
                                 tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
-                                
+                                    
                                 label_found = False
                                 lx, ly = 0, 0
                                 wait_start = time.time()
@@ -2155,9 +2155,21 @@ def fusion_bot_loop():
                                     hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                     res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                     _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                    
+                                        
+                                    bprint(f"  > [디버그] Material 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.80)")
+                                        
                                     if mv_l >= 0.80:
-                                        label_found = True; lx, ly = ml_l[0], ml_l[1]; break
+                                        label_found = True; lx, ly = ml_l[0], ml_l[1]
+                                        try:
+                                            debug_path = os.path.join(base_dir, "debug_mode6_material_roi.png")
+                                            is_success, im_buf_arr = cv2.imencode(".png", hover_gray)
+                                            if is_success:
+                                                with open(debug_path, "wb") as f:
+                                                    f.write(im_buf_arr.tobytes())
+                                                bprint(f"  > [디버그] Material 매칭 성공 시점 ROI 스크린샷 저장 완료 -> {debug_path}")
+                                        except Exception as e:
+                                            bprint(f"  > [디버그 오류] 스크린샷 저장 실패: {e}")
+                                        break
                                     time.sleep(0.05)
                                     
                                 if not label_found:
@@ -2170,8 +2182,8 @@ def fusion_bot_loop():
                                 # 융합 가능 횟수 숫자가 1인지(F0) tier_1.png로 크로스매칭 판독
                                 num_y1 = max(0, ly + 72)
                                 num_y2 = min(hover_gray.shape[0], ly + 102)
-                                num_x1 = max(0, lx + 260)
-                                num_x2 = min(hover_gray.shape[1], lx + 390)
+                                num_x1 = max(0, lx + 200)
+                                num_x2 = min(hover_gray.shape[1], lx + 260)
                                 roi_num_gray = hover_gray[num_y1:num_y2, num_x1:num_x2]
                                 
                                 try:
@@ -2189,8 +2201,8 @@ def fusion_bot_loop():
                                     t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                     res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
                                     best_score_n = np.max(res_n)
-                                    bprint(f"  > [디버그] Parent F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.80)")
-                                    if best_score_n >= 0.80:
+                                    bprint(f"  > [디버그] Parent F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.70)")
+                                    if best_score_n >= 0.70:
                                         is_f0 = True
                                         
                                 if not is_f0:
@@ -2327,8 +2339,8 @@ def fusion_bot_loop():
                                     # 융합 가능 횟수 판독
                                     num_y1 = max(0, ly + 72)
                                     num_y2 = min(hover_gray.shape[0], ly + 102)
-                                    num_x1 = max(0, lx + 260)
-                                    num_x2 = min(hover_gray.shape[1], lx + 390)
+                                    num_x1 = max(0, lx + 200)
+                                    num_x2 = min(hover_gray.shape[1], lx + 260)
                                     roi_num_gray = hover_gray[num_y1:num_y2, num_x1:num_x2]
                                     
                                     try:
@@ -2346,8 +2358,8 @@ def fusion_bot_loop():
                                         t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                         res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
                                         best_score_n = np.max(res_n)
-                                        bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.80)")
-                                        if best_score_n >= 0.80:
+                                        bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.70)")
+                                        if best_score_n >= 0.70:
                                             is_f0 = True
                                             
                                     if is_f0:

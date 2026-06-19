@@ -1908,18 +1908,22 @@ def fusion_bot_loop():
                                         res_key = f"mode6_res_{t_file}"
                                         if t_file in FUSION_CACHE and res_key not in FUSION_CACHE:
                                             FUSION_CACHE[res_key] = FUSION_CACHE[t_file]
-                                            FUSION_CONF[res_key] = 0.85 # 하한 매칭 기준치 정합
-
-                                    # 최초 1회만 전체화면 스캔으로 실제 상세창 특성 위치를 취득하고, 2회차부터는 격리된 결과 전용 ROI만 초고속 스캔합니다.
-                                    for t_idx in range(1, 8):
-                                        t_file = f"trait_{t_idx}.png"
-                                        res_key = f"mode6_res_{t_file}"
-                                        if check_img(res_key, thread_sct):
-                                            has_valuable_trait = True
-                                            best_matched_file = t_file
-                                            # FUSION_ROI 캐시에 저장된 최고 점수를 신뢰도로 사용합니다.
-                                            best_score = 0.92
+                                            FUSION_CONF[res_key] = 0.85 # 원본과 동일하게 0.85 유지
+                                            
+                                    # [모드 5 완벽 이식] 임의의 대기 시간을 주는 대신, 모드 5의 방식과 완전히 동일하게
+                                    # 최대 0.35초 동안 화면을 반복 매칭하여 글자가 페이드인 완료되어 나타나는 그 즉시 스캔 성공으로 루프를 탈출합니다.
+                                    scan_start = time.time()
+                                    while time.time() - scan_start < 0.35 and bot_active:
+                                        for t_idx in range(1, 8):
+                                            res_key = f"mode6_res_trait_{t_idx}.png"
+                                            if check_img(res_key, thread_sct):
+                                                has_valuable_trait = True
+                                                best_score = 0.92
+                                                best_matched_file = f"trait_{t_idx}.png"
+                                                break
+                                        if has_valuable_trait:
                                             break
+                                        time.sleep(0.01)
                                             
                                     # [E(ESC) 수령 이탈 오류 방지] 툴팁 상세 확인창 하단의 'F 감염물 획득' 버튼을 직접 입력해 보상을 수령하고 상세창을 닫습니다.
                                     bprint("  > 💎 [결과 판독 완료] 상세 확인창에서 수령 단축키(F)를 즉시 입력해 보상을 획득합니다.")

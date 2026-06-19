@@ -2591,7 +2591,7 @@ def fusion_bot_loop():
                                             orig_exit = FUSION_CONF.get('exit_notice.png', 0.85)
                                             orig_stop = FUSION_CONF.get('stop_pop.png', 0.85)
                                             FUSION_CONF['exit_notice.png'] = 0.70
-                                             FUSION_CONF['stop_pop.png'] = 0.70
+                                            FUSION_CONF['stop_pop.png'] = 0.70
                                                     
                                             if check_img('exit_notice.png', thread_sct, force_full=True):
                                                 has_popup = True

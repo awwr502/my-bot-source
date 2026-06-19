@@ -2182,8 +2182,8 @@ def fusion_bot_loop():
                                 # 융합 가능 횟수 숫자가 1인지(F0) tier_1.png로 크로스매칭 판독
                                 num_y1 = max(0, ly + 72)
                                 num_y2 = min(hover_gray.shape[0], ly + 102)
-                                num_x1 = max(0, lx + 200)
-                                num_x2 = min(hover_gray.shape[1], lx + 260)
+                                num_x1 = max(0, lx + 270)
+                                num_x2 = min(hover_gray.shape[1], lx + 370)
                                 roi_num_gray = hover_gray[num_y1:num_y2, num_x1:num_x2]
                                 
                                 try:
@@ -2339,8 +2339,8 @@ def fusion_bot_loop():
                                     # 융합 가능 횟수 판독
                                     num_y1 = max(0, ly + 72)
                                     num_y2 = min(hover_gray.shape[0], ly + 102)
-                                    num_x1 = max(0, lx + 200)
-                                    num_x2 = min(hover_gray.shape[1], lx + 260)
+                                    num_x1 = max(0, lx + 270)
+                                    num_x2 = min(hover_gray.shape[1], lx + 370)
                                     roi_num_gray = hover_gray[num_y1:num_y2, num_x1:num_x2]
                                     
                                     try:

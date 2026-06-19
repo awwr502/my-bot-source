@@ -2348,7 +2348,7 @@ def fusion_bot_loop():
                                 
                                 # 2단계: 재료 슬롯(F1 / 0짜리) 채우기
                                 bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방...")
-                                pyautogui.moveTo(960, 480); time.sleep(0.1); send_cmd('C')
+                                pyautogui.moveTo(1270, 385); time.sleep(0.1); send_cmd('C')
                                 
                                 wait_inv_start = time.time()
                                 while bot_active and time.time() - wait_inv_start < 3.0:
@@ -2565,9 +2565,31 @@ def fusion_bot_loop():
                                 else:
                                     # 재료 슬롯 등록 클릭
                                     bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")
-                                    for mt in target_materials:
-                                        pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
-                                        fast_clear_tooltip()
+                                            for mt in target_materials:
+                                                pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
+                                                
+                                                # [핵심 추가] 재료 소비 경고 팝업 (시스템 알림) 감지 및 자동 해제 로직
+                                                has_popup = False
+                                                popup_name = None
+                                                if check_img('exit_notice.png', thread_sct, force_full=True):
+                                                    has_popup = True
+                                                    popup_name = 'exit_notice.png'
+                                                elif check_img('stop_pop.png', thread_sct, force_full=True):
+                                                    has_popup = True
+                                                    popup_name = 'stop_pop.png'
+                                                    
+                                                if has_popup:
+                                                    bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림({popup_name}) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
+                                                    # 1. '더 이상 표시 안 함' 체크박스 클릭
+                                                    pyautogui.moveTo(840, 635); time.sleep(0.1); send_cmd('C'); time.sleep(0.15)
+                                                    # 2. 확인 단축키 F 입력
+                                                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                                    # 3. 팝업 소멸 대기
+                                                    wait_vanish(popup_name, thread_sct)
+                                                    # 4. 마우스를 원래 위치로 돌려놓고 대기
+                                                    pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.1)
+                                                    
+                                                fast_clear_tooltip()
                                     send_cmd('F'); time.sleep(0.1); send_cmd('R')
                                     wait_vanish('select_3_3.png', thread_sct)
                                     

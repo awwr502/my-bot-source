@@ -2370,8 +2370,9 @@ def fusion_bot_loop():
                                         col_y_end = min(hover_gray.shape[0], ly + 150)
                                         roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
                                         
-                                        # 한글 글자(가, 회 등)의 수직 획 오탐을 방지하기 위해 우측 숫자 영역(240~360px)만 정밀 커팅
-                                        roi_num_gray = roi_col[90:125, 240:360]
+                                        # [핵심 수정] 아래쪽 소개글("영지에서 일하며...")의 픽셀 침범을 원천 차단하기 위해
+                                        # 세로 범위를 80:108로 정밀 제한하고, 가로 영역도 숫자가 위치한 우측 끝(280:340)으로 완벽하게 고정 격리합니다.
+                                        roi_num_gray = roi_col[80:108, 280:340]
                                         
                                         is_f0 = False
                                         is_f1 = False
@@ -2384,7 +2385,7 @@ def fusion_bot_loop():
                                             thresh_val = max(40, int(max_pixel_val * 0.5)) # 최대 밝기의 50%를 기준으로 동적 처리
                                             _, thresh = cv2.threshold(roi_num_gray, thresh_val, 255, cv2.THRESH_BINARY)
                                             
-                                            # 2) [사용자 제안 반영] 첫 번째 숫자의 가로막대 개수 판독 알고리즘
+                                            # 2) 첫 번째 숫자의 가로막대 개수 판독 알고리즘
                                             h_roi, w_roi = thresh.shape
                                             in_stroke = False
                                             

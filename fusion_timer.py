@@ -2204,8 +2204,8 @@ def fusion_bot_loop():
                                     t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                     res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
                                     best_score_n = np.max(res_n)
-                                    bprint(f"  > [디버그] Parent F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.70)")
-                                    if best_score_n >= 0.70:
+                                    bprint(f"  > [디버그] Parent F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.65)")
+                                    if best_score_n >= 0.65:
                                         is_f0 = True
                                         
                                 if not is_f0:
@@ -2388,8 +2388,8 @@ def fusion_bot_loop():
                                         t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                         res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
                                         best_score_n = np.max(res_n)
-                                        bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.70)")
-                                        if best_score_n >= 0.70:
+                                        bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.65)")
+                                        if best_score_n >= 0.65:
                                             is_f0 = True
                                             
                                     if is_f0:

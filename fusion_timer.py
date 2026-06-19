@@ -2162,6 +2162,10 @@ def fusion_bot_loop():
                                     cy = 220 + j * 95
                                     all_candidates.append((cx, cy))
                                         
+                            # 부모 슬롯 이미지 분석을 위한 인벤토리 화면(BGR)을 사전 정의 및 적재합니다.
+                            inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
+                            screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
+                                        
                             target_parents = []
                             for cx, cy in all_candidates:
                                 if len(target_parents) >= 2: break

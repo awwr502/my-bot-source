@@ -2578,45 +2578,45 @@ def fusion_bot_loop():
                                 else:
                                     # 재료 슬롯 등록 클릭
                                     bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")
-                                            for idx, mt in enumerate(target_materials):
-                                                pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05); send_cmd('C')
+                                    for idx, mt in enumerate(target_materials):
+                                        pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05); send_cmd('C')
                                                 
-                                                # 첫 번째 재료 클릭 후에만 경고 팝업이 노출되므로, 클릭 후 0.5초 확정 대기 후 정밀 감시 진행
-                                                if idx == 0:
-                                                    time.sleep(0.5)
-                                                    has_popup = False
-                                                    popup_name = None
+                                        # 첫 번째 재료 클릭 후에만 경고 팝업이 노출되므로, 클릭 후 0.5초 확정 대기 후 정밀 감시 진행
+                                        if idx == 0:
+                                            time.sleep(0.5)
+                                            has_popup = False
+                                            popup_name = None
                                                     
-                                                    # 배경 투명도 간섭 방지를 위해 매칭 임계값을 0.70으로 대폭 완화하여 검사
-                                                    orig_exit = FUSION_CONF.get('exit_notice.png', 0.85)
-                                                    orig_stop = FUSION_CONF.get('stop_pop.png', 0.85)
-                                                    FUSION_CONF['exit_notice.png'] = 0.70
-                                                    FUSION_CONF['stop_pop.png'] = 0.70
+                                            # 배경 투명도 간섭 방지를 위해 매칭 임계값을 0.70으로 대폭 완화하여 검사
+                                            orig_exit = FUSION_CONF.get('exit_notice.png', 0.85)
+                                            orig_stop = FUSION_CONF.get('stop_pop.png', 0.85)
+                                            FUSION_CONF['exit_notice.png'] = 0.70
+                                             FUSION_CONF['stop_pop.png'] = 0.70
                                                     
-                                                    if check_img('exit_notice.png', thread_sct, force_full=True):
-                                                        has_popup = True
-                                                        popup_name = 'exit_notice.png'
-                                                    elif check_img('stop_pop.png', thread_sct, force_full=True):
-                                                        has_popup = True
-                                                        popup_name = 'stop_pop.png'
+                                            if check_img('exit_notice.png', thread_sct, force_full=True):
+                                                has_popup = True
+                                                popup_name = 'exit_notice.png'
+                                            elif check_img('stop_pop.png', thread_sct, force_full=True):
+                                                has_popup = True
+                                                popup_name = 'stop_pop.png'
                                                         
-                                                    # 임계값 원상 복구
-                                                    FUSION_CONF['exit_notice.png'] = orig_exit
-                                                    FUSION_CONF['stop_pop.png'] = orig_stop
+                                            # 임계값 원상 복구
+                                            FUSION_CONF['exit_notice.png'] = orig_exit
+                                            FUSION_CONF['stop_pop.png'] = orig_stop
                                                     
-                                                    if has_popup:
-                                                        bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림({popup_name}) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
-                                                        # 1. '더 이상 표시 안 함' 체크박스 클릭
-                                                        pyautogui.moveTo(840, 635); time.sleep(0.1); send_cmd('C'); time.sleep(0.15)
-                                                        # 2. 확인 단축키 F 입력
-                                                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                                        # 3. 팝업 소멸 대기
-                                                        wait_vanish(popup_name, thread_sct)
-                                                        # 4. 마우스를 다시 원래 재료 감염물 자리로 원위치
-                                                        pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.1)
+                                            if has_popup:
+                                                bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림({popup_name}) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
+                                                # 1. '더 이상 표시 안 함' 체크박스 클릭
+                                                pyautogui.moveTo(840, 635); time.sleep(0.1); send_cmd('C'); time.sleep(0.15)
+                                                # 2. 확인 단축키 F 입력
+                                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                                # 3. 팝업 소멸 대기
+                                                wait_vanish(popup_name, thread_sct)
+                                                # 4. 마우스를 다시 원래 재료 감염물 자리로 원위치
+                                                pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.1)
                                                         
-                                                time.sleep(0.1)
-                                                fast_clear_tooltip()
+                                        time.sleep(0.1)
+                                        fast_clear_tooltip()
                                     send_cmd('F'); time.sleep(0.1); send_cmd('R')
                                     wait_vanish('select_3_3.png', thread_sct)
                                     

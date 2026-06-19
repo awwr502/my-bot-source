@@ -2348,7 +2348,7 @@ def fusion_bot_loop():
                                 
                                 # 2단계: 재료 슬롯(F1 / 0짜리) 채우기
                                 bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방...")
-                                pyautogui.moveTo(1550, 550); time.sleep(0.1); send_cmd('C')
+                                pyautogui.moveTo(1400, 650); time.sleep(0.1); send_cmd('C')
                                 
                                 wait_inv_start = time.time()
                                 while bot_active and time.time() - wait_inv_start < 3.0:

@@ -2174,12 +2174,23 @@ def fusion_bot_loop():
                                 num_x2 = min(hover_gray.shape[1], lx + 390)
                                 roi_num_gray = hover_gray[num_y1:num_y2, num_x1:num_x2]
                                 
+                                try:
+                                    num_debug_path = os.path.join(base_dir, "debug_mode6_parent_num_slice.png")
+                                    is_success, im_buf_arr = cv2.imencode(".png", roi_num_gray)
+                                    if is_success:
+                                        with open(num_debug_path, "wb") as f:
+                                            f.write(im_buf_arr.tobytes())
+                                        bprint(f"  > [디버그] Parent 숫자 슬라이스 이미지 저장 완료 -> {num_debug_path}")
+                                except Exception as e: pass
+                                
                                 is_f0 = False
                                 t1_img = FUSION_CACHE.get('tier_1.png')
                                 if t1_img is not None and roi_num_gray.size > 0:
                                     t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                     res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                    if np.max(res_n) >= 0.70:
+                                    best_score_n = np.max(res_n)
+                                    bprint(f"  > [디버그] Parent F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.80)")
+                                    if best_score_n >= 0.80:
                                         is_f0 = True
                                         
                                 if not is_f0:
@@ -2320,12 +2331,23 @@ def fusion_bot_loop():
                                     num_x2 = min(hover_gray.shape[1], lx + 390)
                                     roi_num_gray = hover_gray[num_y1:num_y2, num_x1:num_x2]
                                     
+                                    try:
+                                        num_debug_path = os.path.join(base_dir, "debug_mode6_material_num_slice.png")
+                                        is_success, im_buf_arr = cv2.imencode(".png", roi_num_gray)
+                                        if is_success:
+                                            with open(num_debug_path, "wb") as f:
+                                                f.write(im_buf_arr.tobytes())
+                                            bprint(f"  > [디버그] Material 숫자 슬라이스 이미지 저장 완료 -> {num_debug_path}")
+                                    except Exception as e: pass
+                                    
                                     is_f0 = False
                                     t1_img = FUSION_CACHE.get('tier_1.png')
                                     if t1_img is not None and roi_num_gray.size > 0:
                                         t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                         res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                        if np.max(res_n) >= 0.70:
+                                        best_score_n = np.max(res_n)
+                                        bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.80)")
+                                        if best_score_n >= 0.80:
                                             is_f0 = True
                                             
                                     if is_f0:

@@ -2142,8 +2142,11 @@ def fusion_bot_loop():
                                 pyautogui.moveTo(cx, cy)
                                 template_label = FUSION_CACHE.get('ability_label.png')
                                 mon = thread_sct.monitors[1]
-                                r_left = max(0, mon["left"])
-                                tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": int(cx - r_left), "height": mon["height"]}
+                                r_left = max(mon["left"], cx - 1100)
+                                r_top = mon["top"]
+                                r_width = 1100
+                                r_height = mon["height"]
+                                tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                 
                                 label_found = False
                                 lx, ly = 0, 0
@@ -2152,8 +2155,7 @@ def fusion_bot_loop():
                                     hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                     res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                     _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                    # 모드 5와 완벽하게 일치하는 0.80의 임계값으로 어빌리티 등급(기준점)을 검출합니다.
-                                    if mv_l >= 0.80:
+                                    if mv_l >= 0.90:
                                         label_found = True; lx, ly = ml_l[0], ml_l[1]; break
                                     time.sleep(0.01)
                                     
@@ -2284,8 +2286,11 @@ def fusion_bot_loop():
                                     pyautogui.moveTo(cx, cy)
                                     template_label = FUSION_CACHE.get('ability_label.png')
                                     mon = thread_sct.monitors[1]
-                                    r_left = max(0, mon["left"])
-                                    tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": int(cx - r_left), "height": mon["height"]}
+                                    r_left = max(mon["left"], cx - 1100)
+                                    r_top = mon["top"]
+                                    r_width = 1100
+                                    r_height = mon["height"]
+                                    tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                     
                                     label_found = False
                                     lx, ly = 0, 0
@@ -2294,8 +2299,7 @@ def fusion_bot_loop():
                                         hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                         res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                         _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                        # 모드 5와 완벽하게 일치하는 0.80의 임계값으로 어빌리티 등급(기준점)을 검출합니다.
-                                        if mv_l >= 0.80:
+                                        if mv_l >= 0.90:
                                             label_found = True; lx, ly = ml_l[0], ml_l[1]; break
                                         time.sleep(0.01)
                                         

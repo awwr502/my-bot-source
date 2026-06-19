@@ -275,31 +275,26 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # 1. 좌측 영역 검사: 매칭 지점 왼쪽에 다른 숫자 획이 존재하는지 확인 (예: 0의 우측 획에 매칭된 경우 방지)
+    # 1. 좌측 영역 검사: 매칭 지점 왼쪽에 다른 숫자 획이 존재하는지 확인 (전체 높이 검사)
+    # - 만약 0의 우측 획에 매칭된 경우, 좌측에 0의 좌측 획이 검출됩니다.
     probe_left_x_start = max(0, x - 18)
     probe_left_x_end = max(0, x - 3)
     
-    # 2. 우측 근접 갭(Gap) 영역 검사: 매칭 지점 바로 우측(x + 6 ~ x + 9)에 글자 획이 존재하는지 확인
-    # - 숫자 '1'의 경우 이 구간은 다음 글자인 '회'가 나오기 전의 완전히 비어있는 어두운 공백 구간입니다.
-    # - '0'의 좌측 획에 매칭된 경우, 이 구간은 '0'의 위/아래를 연결하는 가로 곡선 획이 지나가므로 밝은 픽셀이 검출됩니다.
-    # - 이 방식은 우측 '회' 글자의 위치에 간섭받지 않고 숫자 자체의 기하학적 구조만으로 '0'과 '1'을 안전하게 분별합니다.
-    probe_right_gap_start = min(roi.shape[1], x + 6)
+    # 2. 우측 근접 갭(Gap) 영역 검사: 매칭 지점 바로 우측(x + 5 ~ x + 9)에 0의 위/아래 연결선이 존재하는지 확인
+    # - 세로 범위를 y ~ y+h로 제한하면 0의 상/하단 커브 획이 잘릴 수 있으므로, 
+    # - 이미 상하가 35픽셀로 좁게 잘려있는 roi의 전체 높이(0 ~ roi.shape[0])를 검사하여 검출 확률을 극대화합니다.
+    probe_right_gap_start = min(roi.shape[1], x + 5)
     probe_right_gap_end = min(roi.shape[1], x + 9)
-    
-    probe_y_start = max(0, y)
-    probe_y_end = min(roi.shape[0], y + h)
 
-    if probe_left_x_start >= roi.shape[1]: return True
-
-    left_area = roi[probe_y_start:probe_y_end, probe_left_x_start:probe_left_x_end]
-    right_gap_area = roi[probe_y_start:probe_y_end, probe_right_gap_start:probe_right_gap_end]
+    left_area = roi[:, probe_left_x_start:probe_left_x_end]
+    right_gap_area = roi[:, probe_right_gap_start:probe_right_gap_end]
 
     # 좌측 영역에 다른 획(밝은 픽셀)이 감지되면 1이 아닙니다.
-    if left_area.size > 0 and np.max(left_area) > 50: 
+    if left_area.size > 0 and np.max(left_area) > 60: 
         return False 
         
-    # 우측 근접 갭 영역에 획(밝은 픽셀)이 감지되면 1이 아닙니다. (0의 가로 곡선 획)
-    if right_gap_area.size > 0 and np.max(right_gap_area) > 50:
+    # 우측 근접 갭 영역에 획(밝은 픽셀)이 감지되면 '0'의 상/하단 곡선 획이 지나가는 것이므로 1이 아닙니다.
+    if right_gap_area.size > 0 and np.max(right_gap_area) > 60:
         return False
 
     return True  
@@ -2593,43 +2588,29 @@ def fusion_bot_loop():
                                     for idx, mt in enumerate(target_materials):
                                         pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05); send_cmd('C')
                                                 
-                                        # 첫 번째 재료 클릭 시 노출될 수 있는 경고 팝업을 최대 1.2초 동안 동적으로 추적합니다.
+                                        # 첫 번째 재료 클릭 시 노출되는 경고 팝업을 '2.png' (알림 이미지)를 사용해 최대 1.2초 동안 실시간으로 안전 추적합니다.
                                         if idx == 0:
                                             has_popup = False
                                             popup_name = None
                                                     
-                                            # 배경 반투명 실시간 변화에 대응하기 위해 임계값을 0.58로 유연하게 설정
-                                            orig_exit = FUSION_CONF.get('exit_notice.png', 0.85)
-                                            orig_stop = FUSION_CONF.get('stop_pop.png', 0.85)
-                                            FUSION_CONF['exit_notice.png'] = 0.58
-                                            FUSION_CONF['stop_pop.png'] = 0.58
-                                                    
                                             start_wait = time.time()
                                             while time.time() - start_wait < 1.2 and bot_active:
-                                                if check_img('exit_notice.png', thread_sct, force_full=True):
+                                                if check_img('2.png', thread_sct, force_full=True):
                                                     has_popup = True
-                                                    popup_name = 'exit_notice.png'
-                                                    break
-                                                if check_img('stop_pop.png', thread_sct, force_full=True):
-                                                    has_popup = True
-                                                    popup_name = 'stop_pop.png'
+                                                    popup_name = '2.png'
                                                     break
                                                 time.sleep(0.05)
                                                         
                                             if has_popup:
-                                                bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림({popup_name}) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
+                                                bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림(2.png) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
                                                 # 1. '더 이상 표시 안 함' 체크박스 정확한 1920x1080 좌표 타격
                                                 pyautogui.moveTo(860, 618); time.sleep(0.12); send_cmd('C'); time.sleep(0.15)
                                                 # 2. 확인 단축키 F 입력
                                                 send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                                # 3. 임계값이 낮춰진 상태를 확실하게 유지한 뒤 팝업 소멸을 검증합니다.
+                                                # 3. 팝업 소멸 대기
                                                 wait_vanish(popup_name, thread_sct)
                                                 # 4. 마우스를 다시 원래 재료 감염물 자리로 정교하게 복귀
                                                 pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.1)
-                                            
-                                            # 모든 소멸 처리가 완료된 시점에 임계값 원상 복구 진행
-                                            FUSION_CONF['exit_notice.png'] = orig_exit
-                                            FUSION_CONF['stop_pop.png'] = orig_stop
                                                     
                                         time.sleep(0.1)
                                         fast_clear_tooltip()

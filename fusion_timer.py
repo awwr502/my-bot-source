@@ -2361,8 +2361,7 @@ def fusion_bot_loop():
                                 # 부모 슬롯 클릭 및 채우기
                                 bprint("  > 🔄 [부모 투입] 선택된 부모 2개 클릭 중...")
                                 for pt in target_parents:
-                                    pyautogui.moveTo(pt[0], pt[1]); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
-                                    fast_clear_tooltip()
+                                    pyautogui.moveTo(pt[0], pt[1]); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
                                 send_cmd('F'); time.sleep(0.1); send_cmd('R')
                                 wait_vanish('select_2_2.png', thread_sct)
                                 
@@ -2598,13 +2597,13 @@ def fusion_bot_loop():
                                     # 재료 슬롯 등록 클릭
                                     bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")
                                     for idx, mt in enumerate(target_materials):
-                                        pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05); send_cmd('C')
+                                        pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
                                                 
                                         # 첫 번째 재료 클릭 시 노출되는 경고 팝업을 '2.png'를 사용해 최대 0.5초간 능동 대기합니다.
                                         if idx == 0:
                                             has_popup = False
                                             popup_name = None
-                                                
+                                                    
                                             start_wait = time.time()
                                             while time.time() - start_wait < 0.5 and bot_active:
                                                 if check_img('2.png', thread_sct, force_full=True):
@@ -2612,7 +2611,7 @@ def fusion_bot_loop():
                                                     popup_name = '2.png'
                                                     break
                                                 time.sleep(0.03)
-                                                    
+                                                        
                                             if has_popup:
                                                 bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림(2.png) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
                                                 # 1. 'empty_checkbox.png' 이미지를 검출하여 정확히 중심을 조준 타격합니다.
@@ -2634,9 +2633,7 @@ def fusion_bot_loop():
                                                     time.sleep(0.03)
                                                 # 4. 마우스를 다시 원래 재료 감염물 자리로 정교하게 복귀
                                                 pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05)
-                                                
-                                        time.sleep(0.1)
-                                        fast_clear_tooltip()
+                                                    
                                     send_cmd('F'); time.sleep(0.1); send_cmd('R')
                                     wait_vanish('select_3_3.png', thread_sct)
                                     

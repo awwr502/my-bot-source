@@ -275,28 +275,36 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # 인벤토리 위치나 툴팁 오버 좌표 편차(y축 흔들림)에 구애받지 않도록,
-    # 매칭된 기둥 대가리 축(y-2 ~ y+6)을 기준으로 가변형 동적 슬라이싱을 수행합니다.
-    # 이 8픽셀의 아주 좁은 핵심 밴드는 밑에 달라붙는 소개글이나 하단 테두리를 절대 밟지 않습니다.
-    probe_y_start = max(0, y - 2)
-    probe_y_end = min(roi.shape[0], y + 6)
-    
-    clean_roi = roi[probe_y_start:probe_y_end, :]
-    col_maxes = np.max(clean_roi, axis=0)
-    
-    # 기둥의 실제 중심 축(idx_max)을 검출합니다.
+    # [콜론 오탐 차단] 융합 가능 횟수 0일 때, 템플릿 매칭이 우측의 숫자 영역이 아닌 
+    # 좌측의 콜론 기호(':')를 매칭점으로 잡은 경우(X < 60)를 즉각 차단하여 숫자 0(F1)으로 인식하게 합니다.
+    if x < 60:
+        return False
+        
+    # 매칭된 중심 기둥 열(idx_max)을 수직으로 스캔해 실제 숫자의 최상단 물리 좌표(y_top)를 구합니다.
+    col_maxes = np.max(roi, axis=0)
     search_start = max(0, x - 2)
     search_end = min(len(col_maxes), x + 6)
     if search_start >= search_end: return True
     
     idx_max = search_start + np.argmax(col_maxes[search_start:search_end])
     
-    # 숫자 좌우 경계면의 공백 갭 영역을 슬라이싱합니다.
-    left_window = col_maxes[max(0, idx_max - 5) : max(0, idx_max - 1)]
-    right_window = col_maxes[min(len(col_maxes), idx_max + 2) : min(len(col_maxes), idx_max + 7)]
+    digit_rows = np.where(roi[:, idx_max] > 100)[0]
+    if digit_rows.size == 0:
+        return False
+        
+    y_top = digit_rows[0]
     
-    # 숫자 '1'은 좌우 공백에 아무런 글자 획이 없어야 하므로, 영역 내 최대 밝기(max)가 80 이하여야 합니다.
-    # 숫자 '0'은 상단 가로 곡선 획이 무조건 이 구간을 관통하므로, 공백 내 최대 밝기(max)가 80을 초과해 밝게 검출됩니다.
+    # 진짜 최상단(y_top) 기준 5픽셀 높이만 잘라내어 바닥의 소개글 침범을 완전 방지합니다.
+    probe_y_start = y_top
+    probe_y_end = min(roi.shape[0], y_top + 5)
+    
+    clean_roi = roi[probe_y_start:probe_y_end, :]
+    clean_col_maxes = np.max(clean_roi, axis=0)
+    
+    left_window = clean_col_maxes[max(0, idx_max - 5) : max(0, idx_max - 1)]
+    right_window = clean_col_maxes[min(len(clean_col_maxes), idx_max + 2) : min(len(clean_col_maxes), idx_max + 7)]
+    
+    # 각 공백 갭 영역의 최대 밝기(max)를 검사하여 가로 연결선이 검출되는지 대조합니다.
     left_max = np.max(left_window) if left_window.size > 0 else 0
     right_max = np.max(right_window) if right_window.size > 0 else 0
     
@@ -336,7 +344,8 @@ FUSION_CONF = {
     'bug_time.png': 0.85,
     'dis_4.png': 0.85,
     'stop_pop.png': 0.85,
-    'hunt_pop.png': 0.85
+    'hunt_pop.png': 0.85,
+    'empty_checkbox.png': 0.90
 }
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
@@ -349,7 +358,7 @@ GRAY_IMAGES = [
     '6.png', '7.png', '14.png',
     'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png', 'select_0_3.png',
     'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png', 'dev_list_btn.png',
-    'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png'
+    'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png', 'empty_checkbox.png'
 ]
 
 # [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
@@ -2609,8 +2618,15 @@ def fusion_bot_loop():
                                                         
                                             if has_popup:
                                                 bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림(2.png) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
-                                                # 1. 미스 클릭 방지를 위해 히트박스가 거대한 글씨 텍스트 정중앙 영역(910, 618)을 조준 타격합니다.
-                                                pyautogui.moveTo(910, 618); time.sleep(0.2); send_cmd('C'); time.sleep(0.2)
+                                                # 1. 'empty_checkbox.png' 이미지를 화면 전체에서 검출하여 정중앙 좌표를 정확히 조준 타격합니다.
+                                                if check_img('empty_checkbox.png', thread_sct, force_full=True):
+                                                    cx, cy = FUSION_ROI['empty_checkbox.png']['last_pos']
+                                                    pyautogui.moveTo(cx, cy, duration=0.15); time.sleep(0.15)
+                                                    send_cmd('C'); time.sleep(0.2)
+                                                else:
+                                                    bprint("  > ❌ [경고] 'empty_checkbox.png' 이미지를 검출하지 못해 임시 기본 글씨 좌표(910, 618)로 클릭을 우회합니다.")
+                                                    pyautogui.moveTo(910, 618, duration=0.15); time.sleep(0.15)
+                                                    send_cmd('C'); time.sleep(0.2)
                                                 # 2. 확인 단축키 F 입력
                                                 send_cmd('F'); time.sleep(0.1); send_cmd('R')
                                                 # 3. 팝업 소멸 대기

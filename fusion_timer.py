@@ -2251,41 +2251,41 @@ def fusion_bot_loop():
                                 has_valuable_trait = False
                                 if has_any_trait:
                                     trait_name_x1 = max(0, lx - 10)
-                                        trait_name_x2 = lx + 360
-                                        trait_name_y1 = ly + 30
-                                        trait_name_y2 = ly + 300
-                                        roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
+                                    trait_name_x2 = lx + 360
+                                    trait_name_y1 = ly + 30
+                                    trait_name_y2 = ly + 300
+                                    roi_trait_name_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                    
+                                    best_valuable_score = 0.0
+                                    best_matched_file = None
+                                    
+                                    # 1번부터 7번 특성까지만 복사 대상으로 한정 필터링
+                                    for t_idx in range(1, 8):
+                                        t_file = f"trait_{t_idx}.png"
+                                        t_template = FUSION_CACHE.get(t_file)
+                                        if t_template is None: continue
                                         
-                                        best_valuable_score = 0.0
-                                        best_matched_file = None
-                                        
-                                        # 1번부터 7번 특성까지만 복사 대상으로 한정 필터링
-                                        for t_idx in range(1, 8):
-                                            t_file = f"trait_{t_idx}.png"
-                                            t_template = FUSION_CACHE.get(t_file)
-                                            if t_template is None: continue
+                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                        if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
+                                            best_score = 0.0
+                                            for scale in [0.95, 1.0, 1.05]:
+                                                width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
+                                                if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                    res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                    best_score = max(best_score, np.max(res_st))
                                             
-                                            t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                            if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
-                                                best_score = 0.0
-                                                for scale in [0.95, 1.0, 1.05]:
-                                                    width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
-                                                    if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_gray.shape[0]:
-                                                        res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                                                        best_score = max(best_score, np.max(res_st))
+                                            if best_score > best_valuable_score:
+                                                best_valuable_score = best_score
+                                                best_matched_file = t_file
                                                 
-                                                if best_score > best_valuable_score:
-                                                    best_valuable_score = best_score
-                                                    best_matched_file = t_file
-                                                    
-                                                if best_score >= 0.80:
-                                                    has_valuable_trait = True
-                                                    break
-                                                    
-                                        if has_valuable_trait:
-                                            bprint(f"  > [디버그] Parent 가치 특성 매칭 성공! 파일명: {best_matched_file}, 점수: {best_valuable_score:.4f} (목표: >= 0.80)")
-                                        else:
-                                            bprint(f"  > [디버그] Parent 가치 특성 매칭 미달. 최고 매칭 파일: {best_matched_file}, 점수: {best_valuable_score:.4f} (목표: >= 0.80)")
+                                            if best_score >= 0.80:
+                                                has_valuable_trait = True
+                                                break
+                                                
+                                    if has_valuable_trait:
+                                        bprint(f"  > [디버그] Parent 가치 특성 매칭 성공! 파일명: {best_matched_file}, 점수: {best_valuable_score:.4f} (목표: >= 0.80)")
+                                    else:
+                                        bprint(f"  > [디버그] Parent 가치 특성 매칭 미달. 최고 매칭 파일: {best_matched_file}, 점수: {best_valuable_score:.4f} (목표: >= 0.80)")
                                                 
                                 if current_sub == "NORMAL":
                                     # NORMAL 상태: 1~7 가치 특성 F0 1개 + 특성 없는 순정 F0 1개

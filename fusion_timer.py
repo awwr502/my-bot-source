@@ -2111,6 +2111,7 @@ def fusion_bot_loop():
                         char_key = char_images[char_index]
                         if char_key not in char_sub_modes:
                             char_sub_modes[char_key] = "NORMAL"
+                        skip_current_char = False
                         
                         # [모드 6: 재료 복사 세팅 로직 진입]
                         if bot_mode == 6:
@@ -2208,10 +2209,15 @@ def fusion_bot_loop():
                                 if t1_img is not None and roi_num_gray.size > 0:
                                     t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                     res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                    best_score_n = np.max(res_n)
+                                    _, best_score_n, _, max_loc_n = cv2.minMaxLoc(res_n)
                                     bprint(f"  > [디버그] Parent F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.65)")
                                     if best_score_n >= 0.65:
-                                        is_f0 = True
+                                        t1_h = t1_img_g.shape[0]
+                                        # 숫자 0의 좌측 획 오탐지를 필터링하기 위해 스크립트 고유의 is_truly_tier_1 검증 적용
+                                        if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
+                                            is_f0 = True
+                                        else:
+                                            bprint("  > [디버그] Parent 숫자 1 감지했으나 좌측 픽셀 존재로 인해 숫자 0(F1)으로 최종 판정.")
                                         
                                 if not is_f0:
                                     fast_clear_tooltip(); continue # F0(1짜리)이 아니면 패스
@@ -2434,10 +2440,15 @@ def fusion_bot_loop():
                                     if t1_img is not None and roi_num_gray.size > 0:
                                         t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                         res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                        best_score_n = np.max(res_n)
+                                        _, best_score_n, _, max_loc_n = cv2.minMaxLoc(res_n)
                                         bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.65)")
                                         if best_score_n >= 0.65:
-                                            is_f0 = True
+                                            t1_h = t1_img_g.shape[0]
+                                            # 숫자 0의 좌측 획 오탐지를 필터링하기 위해 스크립트 고유의 is_truly_tier_1 검증 적용
+                                            if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
+                                                is_f0 = True
+                                            else:
+                                                bprint("  > [디버그] Material 숫자 1 감지했으나 좌측 픽셀 존재로 인해 숫자 0(F1)으로 최종 판정.")
                                             
                                     if is_f0:
                                         fast_clear_tooltip(); continue # F1(0짜리)만 담아야 함

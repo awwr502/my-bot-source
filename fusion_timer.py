@@ -1914,19 +1914,18 @@ def fusion_bot_loop():
                             if bot_mode == 6:
                                 bprint("  > [모드 6 결과 판독] 획득 창(get_reward.png) 감지! 즉시 수령을 유예하고 특성 상세창을 엽니다.")
                                 
-                                # 획득 팝업 상태에서 바로 첫 번째 사진(dev_list_btn.png)을 감색하여 클릭합니다.
+                                # 최초 1회 전체 화면 스캔 후 ROI를 자동 기억하여 이후에는 초고속으로 판정합니다.
                                 clicked_list_btn = False
                                 while bot_active:
-                                    if check_img('dev_list_btn.png', thread_sct, force_full=True):
+                                    if check_img('dev_list_btn.png', thread_sct):
                                         cx, cy = FUSION_ROI['dev_list_btn.png']['last_pos']
                                         pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                                         bprint("  > 메뉴 버튼(dev_list_btn.png) 클릭 성공! 2초간 특성 탭(dev_trait_header.png) 검출 대기...")
                                         
-                                        # 최대 2초 동안 특성 헤더(dev_trait_header.png) 로딩 능동 대기
                                         header_found = False
                                         wait_h = time.time()
                                         while time.time() - wait_h < 2.0 and bot_active:
-                                            if check_img('dev_trait_header.png', thread_sct, force_full=True):
+                                            if check_img('dev_trait_header.png', thread_sct):
                                                 header_found = True
                                                 break
                                             time.sleep(0.05)
@@ -2363,7 +2362,8 @@ def fusion_bot_loop():
                                 for pt in target_parents:
                                     pyautogui.moveTo(pt[0], pt[1]); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
                                 send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                wait_vanish('select_2_2.png', thread_sct)
+                                # 이미 캐시가 완벽히 저장된 select_0_2.png의 소멸을 감시하여 즉시(0.1초 만에) 검증을 통과시킵니다.
+                                wait_vanish('select_0_2.png', thread_sct)
                                 
                                 # 2단계: 재료 슬롯(F1 / 0짜리) 채우기
                                 bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방...")
@@ -2614,15 +2614,17 @@ def fusion_bot_loop():
                                                         
                                             if has_popup:
                                                 bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림(2.png) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
-                                                # 1. 'empty_checkbox.png' 이미지를 검출하여 정확히 중심을 조준 타격합니다.
-                                                if check_img('empty_checkbox.png', thread_sct, force_full=True):
+                                                
+                                                # 1. 최초 1회 전체 화면 매칭 성공 후, 두 번째 캐릭터부터는 캐시 범위(ROI) 조준 타격으로 초고속 클릭합니다.
+                                                if check_img('empty_checkbox.png', thread_sct):
                                                     cx, cy = FUSION_ROI['empty_checkbox.png']['last_pos']
                                                     pyautogui.moveTo(cx, cy, duration=0.1); time.sleep(0.05)
                                                     send_cmd('C'); time.sleep(0.1)
                                                 else:
-                                                    bprint("  > ❌ [경고] 'empty_checkbox.png' 이미지를 검출하지 못해 임시 글씨 좌표(910, 618)로 클릭을 우회합니다.")
+                                                    bprint("  > ❌ [경고] 'empty_checkbox.png' 이미지를 검출하지 못해 임시 기본 글씨 좌표(910, 618)로 클릭을 우회합니다.")
                                                     pyautogui.moveTo(910, 618, duration=0.1); time.sleep(0.05)
                                                     send_cmd('C'); time.sleep(0.1)
+                                                    
                                                 # 2. 확인 단축키 F 입력
                                                 send_cmd('F'); time.sleep(0.05); send_cmd('R')
                                                 # 3. 팝업이 사라질 때까지 최대 0.5초 동안 초고속 실시간 능동 대기합니다.
@@ -2635,7 +2637,11 @@ def fusion_bot_loop():
                                                 pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05)
                                                     
                                     send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                    wait_vanish('select_3_3.png', thread_sct)
+                                    # [모드 3/4와 완전히 동일한 초고속 소멸 방식 적용]
+                                    # select_3_3.png는 사전에 매칭된 캐시(ROI)가 없어 소멸 검증에 2초가 걸렸습니다.
+                                    # 창이 열릴 때 이미 매칭되어 캐시(ROI)가 완벽히 저장되어 있는 'select_0_3.png'를 대상으로 소멸 검증을 지시하면
+                                    # 모드 3, 4와 완전히 똑같이 즉시(0.1초 만에) 소멸 처리를 끝내고 다음 단계로 광속 진입합니다!
+                                    wait_vanish('select_0_3.png', thread_sct)
                                     
                         else:
                             # [기존 모드 3, 4 세팅 진입]

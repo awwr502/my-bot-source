@@ -2180,11 +2180,14 @@ def fusion_bot_loop():
                                 hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                                 
                                 # 융합 가능 횟수 숫자가 1인지(F0) tier_1.png로 크로스매칭 판독
-                                num_y1 = max(0, ly + 72)
-                                num_y2 = min(hover_gray.shape[0], ly + 102)
-                                num_x1 = max(0, lx + 270)
-                                num_x2 = min(hover_gray.shape[1], lx + 370)
-                                roi_num_gray = hover_gray[num_y1:num_y2, num_x1:num_x2]
+                                label_w = template_label.shape[1]
+                                col_x_start = lx + label_w
+                                col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
+                                col_y_start = max(0, ly - 20)
+                                col_y_end = min(hover_gray.shape[0], ly + 150)
+                                roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
+                                
+                                roi_num_gray = roi_col[90:125, :]
                                 
                                 try:
                                     num_debug_path = os.path.join(base_dir, "debug_mode6_parent_num_slice.png")
@@ -2349,11 +2352,14 @@ def fusion_bot_loop():
                                     hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                                     
                                     # 융합 가능 횟수 판독
-                                    num_y1 = max(0, ly + 72)
-                                    num_y2 = min(hover_gray.shape[0], ly + 102)
-                                    num_x1 = max(0, lx + 270)
-                                    num_x2 = min(hover_gray.shape[1], lx + 370)
-                                    roi_num_gray = hover_gray[num_y1:num_y2, num_x1:num_x2]
+                                    label_w = template_label.shape[1]
+                                    col_x_start = lx + label_w
+                                    col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
+                                    col_y_start = max(0, ly - 20)
+                                    col_y_end = min(hover_gray.shape[0], ly + 150)
+                                    roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
+                                    
+                                    roi_num_gray = roi_col[90:125, :]
                                     
                                     try:
                                         num_debug_path = os.path.join(base_dir, "debug_mode6_material_num_slice.png")

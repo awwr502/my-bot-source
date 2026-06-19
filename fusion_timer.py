@@ -2588,50 +2588,50 @@ def fusion_bot_loop():
                                     # 재료 슬롯 등록 클릭
                                     bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")
                                     for idx, mt in enumerate(target_materials):
-                                            pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05); send_cmd('C')
-                                                    
-                                            # 첫 번째 재료 클릭 시 노출될 수 있는 경고 팝업을 최대 1.2초 동안 동적으로 추적합니다.
-                                            if idx == 0:
-                                                has_popup = False
-                                                popup_name = None
-                                                        
-                                                # 투명도 및 배경 왜곡을 무시하고 정밀 감지하기 위해 임계값을 일시적으로 0.58로 낮춥니다.
-                                                orig_exit = FUSION_CONF.get('exit_notice.png', 0.85)
-                                                orig_stop = FUSION_CONF.get('stop_pop.png', 0.85)
-                                                FUSION_CONF['exit_notice.png'] = 0.58
-                                                FUSION_CONF['stop_pop.png'] = 0.58
-                                                        
-                                                start_wait = time.time()
-                                                while time.time() - start_wait < 1.2 and bot_active:
-                                                    if check_img('exit_notice.png', thread_sct, force_full=True):
-                                                        has_popup = True
-                                                        popup_name = 'exit_notice.png'
-                                                        break
-                                                    if check_img('stop_pop.png', thread_sct, force_full=True):
-                                                        has_popup = True
-                                                        popup_name = 'stop_pop.png'
-                                                        break
-                                                    time.sleep(0.05)
-                                                            
-                                                if has_popup:
-                                                    bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림({popup_name}) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
-                                                    # 1. '더 이상 표시 안 함' 체크박스 중심 좌표 클릭 (1920x1080 최적화)
-                                                    pyautogui.moveTo(860, 618); time.sleep(0.12); send_cmd('C'); time.sleep(0.15)
-                                                    # 2. 확인 단축키 F 입력
-                                                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                                    # 3. 팝업이 확실하게 사라질 때까지 수렴 대기 (낮아진 임계값 유지 상태에서 소멸을 확인해야 렉으로 인한 오류를 방지합니다.)
-                                                    wait_vanish(popup_name, thread_sct)
-                                                    # 4. 마우스 포인터를 다시 원래 재료 감염물 자리로 되돌려놓음
-                                                    pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.1)
+                                        pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05); send_cmd('C')
                                                 
-                                                # 팝업 완전 제거 작업이 완료되었으므로 임계값 설정을 원래대로 정상 복구합니다.
-                                                FUSION_CONF['exit_notice.png'] = orig_exit
-                                                FUSION_CONF['stop_pop.png'] = orig_stop
+                                        # 첫 번째 재료 클릭 시 노출될 수 있는 경고 팝업을 최대 1.2초 동안 동적으로 추적합니다.
+                                        if idx == 0:
+                                            has_popup = False
+                                            popup_name = None
+                                                    
+                                            # 배경 반투명 실시간 변화에 대응하기 위해 임계값을 0.58로 유연하게 설정
+                                            orig_exit = FUSION_CONF.get('exit_notice.png', 0.85)
+                                            orig_stop = FUSION_CONF.get('stop_pop.png', 0.85)
+                                            FUSION_CONF['exit_notice.png'] = 0.58
+                                            FUSION_CONF['stop_pop.png'] = 0.58
+                                                    
+                                            start_wait = time.time()
+                                            while time.time() - start_wait < 1.2 and bot_active:
+                                                if check_img('exit_notice.png', thread_sct, force_full=True):
+                                                    has_popup = True
+                                                    popup_name = 'exit_notice.png'
+                                                    break
+                                                if check_img('stop_pop.png', thread_sct, force_full=True):
+                                                    has_popup = True
+                                                    popup_name = 'stop_pop.png'
+                                                    break
+                                                time.sleep(0.05)
                                                         
-                                            time.sleep(0.1)
-                                            fast_clear_tooltip()
-                                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                        wait_vanish('select_3_3.png', thread_sct)
+                                            if has_popup:
+                                                bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림({popup_name}) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
+                                                # 1. '더 이상 표시 안 함' 체크박스 정확한 1920x1080 좌표 타격
+                                                pyautogui.moveTo(860, 618); time.sleep(0.12); send_cmd('C'); time.sleep(0.15)
+                                                # 2. 확인 단축키 F 입력
+                                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                                # 3. 임계값이 낮춰진 상태를 확실하게 유지한 뒤 팝업 소멸을 검증합니다.
+                                                wait_vanish(popup_name, thread_sct)
+                                                # 4. 마우스를 다시 원래 재료 감염물 자리로 정교하게 복귀
+                                                pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.1)
+                                            
+                                            # 모든 소멸 처리가 완료된 시점에 임계값 원상 복구 진행
+                                            FUSION_CONF['exit_notice.png'] = orig_exit
+                                            FUSION_CONF['stop_pop.png'] = orig_stop
+                                                    
+                                        time.sleep(0.1)
+                                        fast_clear_tooltip()
+                                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                    wait_vanish('select_3_3.png', thread_sct)
                                     
                         else:
                             # [기존 모드 3, 4 세팅 진입]

@@ -275,28 +275,29 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # 1. 좌측 영역 검사: 매칭 지점 왼쪽에 다른 숫자 획이 존재하는지 확인 (전체 높이 검사)
-    # - 만약 0의 우측 획에 매칭된 경우, 좌측에 0의 좌측 획이 검출됩니다.
-    probe_left_x_start = max(0, x - 18)
-    probe_left_x_end = max(0, x - 3)
+    # 각 열의 수직 최대 밝기를 구합니다.
+    col_maxes = np.max(roi, axis=0)
     
-    # 2. 우측 근접 갭(Gap) 영역 검사: 매칭 지점 바로 우측(x + 5 ~ x + 9)에 0의 위/아래 연결선이 존재하는지 확인
-    # - 세로 범위를 y ~ y+h로 제한하면 0의 상/하단 커브 획이 잘릴 수 있으므로, 
-    # - 이미 상하가 35픽셀로 좁게 잘려있는 roi의 전체 높이(0 ~ roi.shape[0])를 검사하여 검출 확률을 극대화합니다.
-    probe_right_gap_start = min(roi.shape[1], x + 5)
-    probe_right_gap_end = min(roi.shape[1], x + 9)
-
-    left_area = roi[:, probe_left_x_start:probe_left_x_end]
-    right_gap_area = roi[:, probe_right_gap_start:probe_right_gap_end]
-
-    # 좌측 영역에 다른 획(밝은 픽셀)이 감지되면 1이 아닙니다.
-    if left_area.size > 0 and np.max(left_area) > 60: 
-        return False 
-        
-    # 우측 근접 갭 영역에 획(밝은 픽셀)이 감지되면 '0'의 상/하단 곡선 획이 지나가는 것이므로 1이 아닙니다.
-    if right_gap_area.size > 0 and np.max(right_gap_area) > 60:
+    # 매칭된 좌표 근처에서 실제 숫자의 가장 밝은 중심 축(idx_max)을 동적으로 정밀 탐색합니다.
+    search_start = max(0, x - 2)
+    search_end = min(len(col_maxes), x + 6)
+    if search_start >= search_end: return True
+    
+    idx_max = search_start + np.argmax(col_maxes[search_start:search_end])
+    
+    # 1. 좌측 갭 검사 (콜론 기호와의 사이 공백 열 찾기)
+    left_window = col_maxes[max(0, idx_max - 5) : max(0, idx_max - 1)]
+    # 2. 우측 갭 검사 ("회" 자와의 사이 공백 열 찾기)
+    right_window = col_maxes[min(len(col_maxes), idx_max + 2) : min(len(col_maxes), idx_max + 7)]
+    
+    left_min = np.min(left_window) if left_window.size > 0 else 0
+    right_min = np.min(right_window) if right_window.size > 0 else 0
+    
+    # 숫자 '1'의 경우 좌우 경계면에 반드시 완전히 어두운 공백 열(밝기 < 60)이 양쪽 다 존재해야 합니다.
+    # 숫자 '0'의 몸통은 위아래가 가로 획으로 이어져 있어 공백 열이 존재할 수 없으므로 이 필터에서 확실히 걸러집니다.
+    if left_min > 60 or right_min > 60:
         return False
-
+        
     return True  
 
 # === [AI 비전 엔진 및 융합 환경 설정] ===

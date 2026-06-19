@@ -2218,15 +2218,27 @@ def fusion_bot_loop():
                                 trait_y1 = ly + 30
                                 trait_y2 = ly + 300
                                 roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                
+                                try:
+                                    trait_debug_path = os.path.join(base_dir, "debug_mode6_parent_trait_slice.png")
+                                    is_success, im_buf_arr = cv2.imencode(".png", roi_trait_gray)
+                                    if is_success:
+                                        with open(trait_debug_path, "wb") as f:
+                                            f.write(im_buf_arr.tobytes())
+                                        bprint(f"  > [디버그] Parent 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
+                                except Exception as e: pass
+                                
                                 t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                                 conf_trait = FUSION_CONF.get('trait.png', 0.70)
                                 
+                                max_trait_score = 0.0
                                 if roi_trait_gray.size > 0:
                                     for scale in [0.95, 1.0, 1.05]:
                                         width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
                                         if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
                                             res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
                                             cur_tr = np.max(res_t)
+                                            max_trait_score = max(max_trait_score, cur_tr)
                                             if cur_tr >= conf_trait:
                                                 has_any_trait = True
                                                 break
@@ -2390,15 +2402,27 @@ def fusion_bot_loop():
                                     trait_y1 = ly + 30
                                     trait_y2 = ly + 300
                                     roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                    
+                                    try:
+                                        trait_debug_path = os.path.join(base_dir, "debug_mode6_material_trait_slice.png")
+                                        is_success, im_buf_arr = cv2.imencode(".png", roi_trait_gray)
+                                        if is_success:
+                                            with open(trait_debug_path, "wb") as f:
+                                                f.write(im_buf_arr.tobytes())
+                                            bprint(f"  > [디버그] Material 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
+                                    except Exception as e: pass
+                                    
                                     t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                                     conf_trait = FUSION_CONF.get('trait.png', 0.70)
                                     
+                                    max_trait_score = 0.0
                                     if roi_trait_gray.size > 0:
                                         for scale in [0.95, 1.0, 1.05]:
                                             width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
                                             if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
                                                 res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
                                                 cur_tr = np.max(res_t)
+                                                max_trait_score = max(max_trait_score, cur_tr)
                                                 if cur_tr >= conf_trait:
                                                     has_any_trait = True
                                                     break

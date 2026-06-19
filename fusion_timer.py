@@ -1925,26 +1925,24 @@ def fusion_bot_loop():
                                 matched_trait_file = None
                                 
                                 if clicked_list_btn:
-                                    # 첫 1회는 전체 화면 스캔, 이후에는 자동 캐싱된 ROI(force_full=False) 스캔 작동
-                                    if not hasattr(fusion_bot_loop, 'mode6_first_scan_done'):
-                                        fusion_bot_loop.mode6_first_scan_done = True
-                                        is_first_scan = True
-                                        bprint("  > 🔍 [첫 1회] 가치 특성 7종 전체 화면 정밀 탐색 시작...")
-                                    else:
-                                        is_first_scan = False
-                                        bprint("  > ⚡ [ROI 가속] 캐싱된 가치 특성 영역 초고속 분석 가동...")
-                                        
-                                    # 어빌리티 라벨 기준점(ability_label.png) 검출 한계선을 모드 5와 동일한 0.80으로 수립합니다.
-                                    template_label = FUSION_CACHE.get('ability_label.png')
-                                    mon = thread_sct.monitors[1]
-                                    # 전체 화면 범위(0부터 끝까지)를 캡처하여 좌측 잘림 현상을 완벽히 차단합니다.
-                                    r_left = max(0, mon["left"])
-                                    tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": int(SCREEN_W - r_left), "height": mon["height"]}
+                                # 첫 1회는 전체 화면 스캔, 이후에는 자동 캐싱된 ROI(force_full=False) 스캔 작동
+                                if not hasattr(fusion_bot_loop, 'mode6_first_scan_done'):
+                                    fusion_bot_loop.mode6_first_scan_done = True
+                                    bprint("  > 🔍 [결과 판독] 가치 특성 7종 전체 화면 정밀 탐색 시작...")
+                                else:
+                                    bprint("  > ⚡ [결과 판독] 캐싱된 가치 특성 영역 분석 가동...")
                                     
-                                    label_found = False
-                                    lx, ly = 0, 0
+                                # 어빌리티 라벨 기준점(ability_label.png) 검출 한계선을 모드 5와 동일한 0.80으로 수립합니다.
+                                template_label = FUSION_CACHE.get('ability_label.png')
+                                mon = thread_sct.monitors[1]
+                                # 전체 화면 범위(0부터 끝까지)를 캡처하여 좌측 잘림 현상을 완벽히 차단합니다.
+                                r_left = max(0, mon["left"])
+                                tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": int(SCREEN_W - r_left), "height": mon["height"]}
+                                
+                                label_found = False
+                                lx, ly = 0, 0
                                 wait_start = time.time()
-                                while wait_start < 1.0 and bot_active:
+                                while time.time() - wait_start < 1.0 and bot_active:
                                     hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                     res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                     _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
@@ -2168,31 +2166,15 @@ def fusion_bot_loop():
                                 label_found = False
                                 lx, ly = 0, 0
                                 wait_start = time.time()
-                                max_mv_l = 0.0
                                 while time.time() - wait_start < 1.0 and bot_active:
                                     hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                     res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                     _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                    
-                                    max_mv_l = max(max_mv_l, mv_l)
-                                    
                                     if mv_l >= 0.80:
                                         label_found = True; lx, ly = ml_l[0], ml_l[1]
-                                        try:
-                                            debug_path = os.path.join(base_dir, "debug_mode6_parent_roi.png")
-                                            is_success, im_buf_arr = cv2.imencode(".png", hover_gray)
-                                            if is_success:
-                                                with open(debug_path, "wb") as f:
-                                                    f.write(im_buf_arr.tobytes())
-                                        except: pass
                                         break
                                     time.sleep(0.05)
-                                
-                                if label_found:
-                                    bprint(f"  > [성공] Parent 어빌리티 라벨 감지 성공! 점수: {max_mv_l:.4f} (목표: >= 0.80)")
-                                else:
-                                    bprint(f"  > [실패] Parent 어빌리티 라벨 감지 시간초과. 최고 점수: {max_mv_l:.4f} (목표: >= 0.80)")
-                                    
+                            
                                 if not label_found:
                                     fast_clear_tooltip(); continue
                                     
@@ -2212,9 +2194,6 @@ def fusion_bot_loop():
                                 roi_num_gray = roi_col[90:125, 240:360]
                                     
                                 # [부모 세팅 검증 간소화 및 오작동 원천 차단]
-                                # 부모 선택 창에서는 융합 횟수가 0인 감염물들이 명암 흑색(비활성)으로 자동 처리됩니다.
-                                # 이미 그리드 필터링을 통해 비활성 대상을 완벽히 패스했으므로, 마우스가 도달한 이 감염물은 100% 1(F0)입니다.
-                                # 불필요하고 오작동 위험이 있는 툴팁의 0 vs 1 숫자 검출 과정을 완전히 배제하고 즉시 통과시킵니다.
                                 is_f0 = True
                                         
                                 # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
@@ -2225,30 +2204,18 @@ def fusion_bot_loop():
                                 trait_y2 = ly + 300
                                 roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
                                 
-                                try:
-                                    trait_debug_path = os.path.join(base_dir, "debug_mode6_parent_trait_slice.png")
-                                    is_success, im_buf_arr = cv2.imencode(".png", roi_trait_gray)
-                                    if is_success:
-                                        with open(trait_debug_path, "wb") as f:
-                                            f.write(im_buf_arr.tobytes())
-                                        bprint(f"  > [디버그] Parent 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
-                                except Exception as e: pass
-                                
                                 t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                                 conf_trait = FUSION_CONF.get('trait.png', 0.70)
                                 
-                                max_trait_score = 0.0
                                 if roi_trait_gray.size > 0:
                                     for scale in [0.95, 1.0, 1.05]:
                                         width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
                                         if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
                                             res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
                                             cur_tr = np.max(res_t)
-                                            max_trait_score = max(max_trait_score, cur_tr)
                                             if cur_tr >= conf_trait:
                                                 has_any_trait = True
                                                 break
-                                bprint(f"  > [디버그] Parent 특성(trait.png) 최고 매칭 점수: {max_trait_score:.4f} (목표: >= {conf_trait:.2f})")
                                                 
                                 has_valuable_trait = False
                                 if has_any_trait:
@@ -2257,18 +2224,6 @@ def fusion_bot_loop():
                                     trait_name_y1 = ly + 30
                                     trait_name_y2 = ly + 300
                                     roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
-                                    
-                                    try:
-                                        trait_debug_path = os.path.join(base_dir, "debug_mode6_parent_trait_slice.png")
-                                        is_success, im_buf_arr = cv2.imencode(".png", roi_trait_gray)
-                                        if is_success:
-                                            with open(trait_debug_path, "wb") as f:
-                                                f.write(im_buf_arr.tobytes())
-                                            bprint(f"  > [디버그] Parent 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
-                                    except Exception as e: pass
-                                    
-                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
-                                    conf_trait = FUSION_CONF.get('trait.png', 0.70)
                                     
                                     temp_scores = []
                                     if roi_trait_gray.size > 0:
@@ -2298,25 +2253,13 @@ def fusion_bot_loop():
                                                     
                                     # 점수순 내림차순 정렬 및 스마트 갭 판독
                                     temp_scores.sort(key=lambda x: x[1], reverse=True)
-                                    best_valuable_score = 0.0
-                                    best_matched_file = None
-                                    top2_score = 0.0
-                                    
                                     if len(temp_scores) >= 1:
                                         top1_file, top1_score = temp_scores[0]
                                         top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
-                                        best_valuable_score = top1_score
-                                        best_matched_file = top1_file
                                         
-                                        # 모드 5의 스마트 판독 알고리즘 (배경 왜곡 보정 하한선 0.60 및 격차 0.1 검증)
                                         if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
                                             has_valuable_trait = True
-                                            
-                                    if has_valuable_trait:
-                                        bprint(f"  > [디버그] Parent 가치 특성 판독 성공! 파일명: {best_matched_file}, 점수: {best_valuable_score:.4f} (2등 격차: {(best_valuable_score - top2_score):.4f})")
-                                    else:
-                                        bprint(f"  > [디버그] Parent 가치 특성 매칭 미달. 최고 매칭 파일: {best_matched_file}, 점수: {best_valuable_score:.4f} (2등 격차: {(best_valuable_score - top2_score):.4f})")
-                                                
+                                                    
                                 if current_sub == "NORMAL":
                                     # NORMAL 상태: 1~7 가치 특성 F0 1개 + 특성 없는 순정 F0 1개
                                     already_has_trait_in_list = any(p[2] for p in target_parents)
@@ -2327,12 +2270,12 @@ def fusion_bot_loop():
                                         already_blank_in_list = any(not p[2] for p in target_parents)
                                         if not already_blank_in_list:
                                             target_parents.append((cx, cy, False))
-                                            bprint("  > 💎 [부모 채택] F0 깡 감염물 확보 완료.")
+                                            bprint("  > 💎 [부모 채택] F0 순정 감염물 확보 완료.")
                                 elif current_sub == "RECOVERY":
                                     # RECOVERY 상태: 특성 없는 순정 깡 감염물 2개
                                     if not has_any_trait:
                                         target_parents.append((cx, cy, False))
-                                        bprint("  > 💎 [부모 채택] F0 깡 감염물 확보 완료.")
+                                        bprint("  > 💎 [부모 채택] F0 순정 감염물 확보 완료.")
                                         
                                 fast_clear_tooltip()
                                 
@@ -2384,195 +2327,142 @@ def fusion_bot_loop():
                                         all_candidates.append((cx, cy))
                                         
                                 target_materials = []
-                                for cx, cy in all_candidates:
-                                    if len(target_materials) >= 3: break
-                                    
-                                    pyautogui.moveTo(cx, cy)
-                                    template_label = FUSION_CACHE.get('ability_label.png')
-                                    mon = thread_sct.monitors[1]
-                                    r_left = mon["left"]
-                                    r_top = mon["top"]
-                                    r_width = 1300
-                                    r_height = mon["height"]
-                                    tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
-                                    
-                                    label_found = False
-                                    lx, ly = 0, 0
-                                    wait_start = time.time()
-                                    max_mv_l = 0.0
-                                    while time.time() - wait_start < 1.0 and bot_active:
-                                        hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                        res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
-                                        _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                        
-                                        max_mv_l = max(max_mv_l, mv_l)
-                                        
-                                        if mv_l >= 0.80:
-                                            label_found = True; lx, ly = ml_l[0], ml_l[1]
-                                            try:
-                                                debug_path = os.path.join(base_dir, "debug_mode6_material_roi.png")
-                                                is_success, im_buf_arr = cv2.imencode(".png", hover_gray)
-                                                if is_success:
-                                                    with open(debug_path, "wb") as f:
-                                                        f.write(im_buf_arr.tobytes())
-                                                    bprint(f"  > [디버그] Material 매칭 성공 시점 ROI 스크린샷 저장 완료 -> {debug_path}")
-                                            except Exception as e:
-                                                bprint(f"  > [디버그 오류] 스크린샷 저장 실패: {e}")
-                                            break
-                                        time.sleep(0.05)
+                            for cx, cy in all_candidates:
+                                if len(target_materials) >= 3: break
+                                
+                                pyautogui.moveTo(cx, cy)
+                                template_label = FUSION_CACHE.get('ability_label.png')
+                                mon = thread_sct.monitors[1]
+                                r_left = mon["left"]
+                                r_top = mon["top"]
+                                r_width = 1300
+                                r_height = mon["height"]
+                                tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
+                                
+                                label_found = False
+                                lx, ly = 0, 0
+                                wait_start = time.time()
+                                while time.time() - wait_start < 1.0 and bot_active:
+                                    hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                    res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
+                                    _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                    if mv_l >= 0.80:
+                                        label_found = True; lx, ly = ml_l[0], ml_l[1]
+                                        break
+                                    time.sleep(0.05)
 
-                                    if label_found:
-                                        time.sleep(0.05)
-                                        sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                                        hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                if label_found:
+                                    time.sleep(0.05)
+                                    sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                    hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                    
+                                    # 융합 가능 횟수 판독
+                                    label_w = template_label.shape[1]
+                                    col_x_start = lx + label_w
+                                    col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
+                                    col_y_start = max(0, ly - 20)
+                                    col_y_end = min(hover_gray.shape[0], ly + 150)
+                                    roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
+                                    
+                                    # 한글 글자(가, 회 등)의 수직 획 오탐을 방지하기 위해 우측 숫자 영역(240~360px)만 정밀 커팅
+                                    roi_num_gray = roi_col[90:125, 240:360]
+                                    
+                                    is_f0 = False
+                                    t1_img = FUSION_CACHE.get('tier_1.png')
+                                    if t1_img is not None and roi_num_gray.size > 0:
+                                        t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
+                                        res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
+                                        _, best_score_n, _, max_loc_n = cv2.minMaxLoc(res_n)
+                                        if best_score_n >= 0.65:
+                                            t1_h = t1_img_g.shape[0]
+                                            if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
+                                                is_f0 = True
+                                                
+                                    if is_f0:
+                                        fast_clear_tooltip(); continue # 융합 가능 횟수가 1인 감염물(F0)은 즉시 스킵 후 다음 칸 검색
                                         
-                                        # 융합 가능 횟수 판독
-                                        label_w = template_label.shape[1]
-                                        col_x_start = lx + label_w
-                                        col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
-                                        col_y_start = max(0, ly - 20)
-                                        col_y_end = min(hover_gray.shape[0], ly + 150)
-                                        roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
-                                        
-                                        # 한글 글자(가, 회 등)의 수직 획 오탐을 방지하기 위해 우측 숫자 영역(240~360px)만 정밀 커팅
-                                        roi_num_gray = roi_col[90:125, 240:360]
-                                        
-                                        is_f0 = False
-                                        t1_img = FUSION_CACHE.get('tier_1.png')
-                                        if t1_img is not None and roi_num_gray.size > 0:
-                                            t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
-                                            res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                            _, best_score_n, _, max_loc_n = cv2.minMaxLoc(res_n)
-                                            bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.65)")
-                                            if best_score_n >= 0.65:
-                                                t1_h = t1_img_g.shape[0]
-                                                # 모드 3, 4와 동일한 수평 검증기(is_truly_tier_1)를 복원하되 세로 범위만 가둬 간섭을 피합니다.
-                                                if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
-                                                    is_f0 = True
-                                                else:
-                                                    bprint("  > [디버그] Material 숫자 1 감지했으나 좌측 픽셀 존재로 인해 숫자 0(F1)으로 최종 판정.")
-                                                    
-                                        if is_f0:
-                                            fast_clear_tooltip(); continue # 융합 가능 횟수가 1인 감염물(F0)은 즉시 스킵 후 다음 칸 검색
+                                    # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
+                                    has_any_trait = False
+                                    trait_x1 = max(0, lx - 10)
+                                    trait_x2 = lx + 200
+                                    trait_y1 = ly + 30
+                                    trait_y2 = ly + 300
+                                    roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                    
+                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                    conf_trait = FUSION_CONF.get('trait.png', 0.70)
+                                    
+                                    if roi_trait_gray.size > 0:
+                                        for scale in [0.95, 1.0, 1.05]:
+                                            width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                            if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                cur_tr = np.max(res_t)
+                                                if cur_tr >= conf_trait:
+                                                    has_any_trait = True
+                                                    break
                                             
-                                        # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
-                                        has_any_trait = False
-                                        trait_x1 = max(0, lx - 10)
-                                        trait_x2 = lx + 200
-                                        trait_y1 = ly + 30
-                                        trait_y2 = ly + 300
-                                        roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                    has_valuable_trait = False
+                                    if has_any_trait:
+                                        trait_name_x1 = max(0, lx - 10)
+                                        trait_name_x2 = lx + 360
+                                        trait_name_y1 = ly + 30
+                                        trait_name_y2 = ly + 300
+                                        roi_trait_name_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
                                         
-                                        try:
-                                            trait_debug_path = os.path.join(base_dir, "debug_mode6_material_trait_slice.png")
-                                            is_success, im_buf_arr = cv2.imencode(".png", roi_trait_gray)
-                                            if is_success:
-                                                with open(trait_debug_path, "wb") as f:
-                                                    f.write(im_buf_arr.tobytes())
-                                                bprint(f"  > [디버그] Material 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
-                                        except Exception as e: pass
-                                        
-                                        t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
-                                        conf_trait = FUSION_CONF.get('trait.png', 0.70)
-                                        
-                                        max_trait_score = 0.0
+                                        temp_scores = []
                                         if roi_trait_gray.size > 0:
                                             for scale in [0.95, 1.0, 1.05]:
                                                 width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
-                                                if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_gray.shape[0]:
                                                     res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
                                                     cur_tr = np.max(res_t)
-                                                    max_trait_score = max(max_trait_score, cur_tr)
                                                     if cur_tr >= conf_trait:
-                                                        has_any_trait = True
-                                                        break
-                                        bprint(f"  > [디버그] Material 특성(trait.png) 최고 매칭 점수: {max_trait_score:.4f} (목표: >= {conf_trait:.2f})")
-                                                
-                                        has_valuable_trait = False
-                                        if has_any_trait:
-                                            trait_name_x1 = max(0, lx - 10)
-                                            trait_name_x2 = lx + 360
-                                            trait_name_y1 = ly + 30
-                                            trait_name_y2 = ly + 300
-                                            roi_trait_name_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                            
-                                            try:
-                                                trait_debug_path = os.path.join(base_dir, "debug_mode6_material_trait_slice.png")
-                                                is_success, im_buf_arr = cv2.imencode(".png", roi_trait_gray)
-                                                if is_success:
-                                                    with open(trait_debug_path, "wb") as f:
-                                                        f.write(im_buf_arr.tobytes())
-                                                    bprint(f"  > [디버그] Material 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
-                                            except Exception as e: pass
-                                            
-                                            t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
-                                            conf_trait = FUSION_CONF.get('trait.png', 0.70)
-                                            
-                                            temp_scores = []
-                                            if roi_trait_gray.size > 0:
-                                                for scale in [0.95, 1.0, 1.05]:
-                                                    width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
-                                                    if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_gray.shape[0]:
-                                                        res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                                                        cur_tr = np.max(res_t)
-                                                        if cur_tr >= conf_trait:
-                                                            # 1번부터 7번 가치 특성 정밀 대조 시작
-                                                            for t_idx in range(1, 8):
-                                                                t_file = f"trait_{t_idx}.png"
-                                                                t_template = FUSION_CACHE.get(t_file)
-                                                                if t_template is None: continue
-                                                                
-                                                                t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                                                if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
-                                                                    best_score = 0.0
-                                                                    for t_scale in [0.95, 1.0, 1.05]:
-                                                                        t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
-                                                                        if t_w <= roi_trait_name_gray.shape[1] and t_h <= roi_trait_gray.shape[0]:
-                                                                            res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (t_w, t_h)), cv2.TM_CCOEFF_NORMED)
-                                                                            best_score = max(best_score, np.max(res_st))
-                                                                    
-                                                                    temp_scores.append((t_file, best_score))
-                                                            break
+                                                        # 1번부터 7번 가치 특성 정밀 대조 시작
+                                                        for t_idx in range(1, 8):
+                                                            t_file = f"trait_{t_idx}.png"
+                                                            t_template = FUSION_CACHE.get(t_file)
+                                                            if t_template is None: continue
                                                             
-                                            # 점수순 내림차순 정렬 및 스마트 갭 판독
-                                            temp_scores.sort(key=lambda x: x[1], reverse=True)
-                                            best_valuable_score = 0.0
-                                            best_matched_file = None
-                                            top2_score = 0.0
-                                            
-                                            if len(temp_scores) >= 1:
-                                                top1_file, top1_score = temp_scores[0]
-                                                top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
-                                                best_valuable_score = top1_score
-                                                best_matched_file = top1_file
-                                                
-                                                # 모드 5의 스마트 판독 알고리즘 (배경 왜곡 보정 하한선 0.6 및 격차 0.1 검증)
-                                                if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
-                                                    has_valuable_trait = True
-                                                    
-                                            if has_valuable_trait:
-                                                bprint(f"  > [디버그] Material 가치 특성 판독 성공! 파일명: {best_matched_file}, 점수: {best_valuable_score:.4f} (2등 격차: {(best_valuable_score - top2_score):.4f})")
-                                            else:
-                                                bprint(f"  > [디버그] Material 가치 특성 매칭 미달. 최고 매칭 파일: {best_matched_file}, 점수: {best_valuable_score:.4f} (2등 격차: {(best_valuable_score - top2_score):.4f})")
+                                                            t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                                            if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
+                                                                best_score = 0.0
+                                                                for t_scale in [0.95, 1.0, 1.05]:
+                                                                    t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
+                                                                    if t_w <= roi_trait_name_gray.shape[1] and t_h <= roi_trait_gray.shape[0]:
+                                                                        res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (t_w, t_h)), cv2.TM_CCOEFF_NORMED)
+                                                                        best_score = max(best_score, np.max(res_st))
+                                                                
+                                                                temp_scores.append((t_file, best_score))
+                                                        break
                                                         
-                                        if current_sub == "NORMAL":
-                                            # NORMAL 상태: 특성 없는 순정 F1 3개 (not is_f0 검증기 활성화)
-                                            if not is_f0 and not has_any_trait:
-                                                target_materials.append((cx, cy, False))
-                                                bprint("  > 💎 [재료 채택] F1 깡 감염물 확보 완료.")
-                                        elif current_sub == "RECOVERY":
-                                            # RECOVERY 상태: 1~7 가치 특성 F1 1개 + 특성 없는 순정 F1 2개 (not is_f0 검증기 활성화)
-                                            already_has_trait_in_list = any(m[2] for m in target_materials)
-                                            if not is_f0 and has_valuable_trait and not already_has_trait_in_list:
-                                                target_materials.append((cx, cy, True))
-                                                bprint("  > 🧬 [재료 채택] F1 가치 특성 감염물 확보 완료.")
-                                            elif not is_f0 and not has_any_trait:
-                                                blank_count = sum(1 for m in target_materials if not m[2])
-                                                if blank_count < 2:
-                                                    target_materials.append((cx, cy, False))
-                                                    bprint("  > 💎 [재료 채택] F1 깡 감염물 확보 완료.")
+                                        # 점수순 내림차순 정렬 및 스마트 갭 판독
+                                        temp_scores.sort(key=lambda x: x[1], reverse=True)
+                                        if len(temp_scores) >= 1:
+                                            top1_file, top1_score = temp_scores[0]
+                                            top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
+                                            
+                                            if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
+                                                has_valuable_trait = True
                                                     
-                                        fast_clear_tooltip()
+                                    if current_sub == "NORMAL":
+                                        # NORMAL 상태: 특성 없는 순정 F1 3개 (not is_f0 검증기 활성화)
+                                        if not is_f0 and not has_any_trait:
+                                            target_materials.append((cx, cy, False))
+                                            bprint("  > 💎 [재료 채택] F1 순정 감염물 확보 완료.")
+                                    elif current_sub == "RECOVERY":
+                                        # RECOVERY 상태: 1~7 가치 특성 F1 1개 + 특성 없는 순정 F1 2개 (not is_f0 검증기 활성화)
+                                        already_has_trait_in_list = any(m[2] for m in target_materials)
+                                        if not is_f0 and has_valuable_trait and not already_has_trait_in_list:
+                                            target_materials.append((cx, cy, True))
+                                            bprint("  > 🧬 [재료 채택] F1 가치 특성 감염물 확보 완료.")
+                                        elif not is_f0 and not has_any_trait:
+                                            blank_count = sum(1 for m in target_materials if not m[2])
+                                            if blank_count < 2:
+                                                target_materials.append((cx, cy, False))
+                                                bprint("  > 💎 [재료 채택] F1 순정 감염물 확보 완료.")
+                                                
+                                    fast_clear_tooltip()
                                     
                                 if len(target_materials) < 3:
                                     bprint("  > 🛑 [재료 부족] 필요한 조건의 F1 재료가 부족합니다. 캐릭터 스킵 시퀀스 진입.")

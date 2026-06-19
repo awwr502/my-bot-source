@@ -2151,12 +2151,13 @@ def fusion_bot_loop():
                                 label_found = False
                                 lx, ly = 0, 0
                                 wait_start = time.time()
+                                max_mv_l = 0.0
                                 while time.time() - wait_start < 1.0 and bot_active:
                                     hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                     res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                     _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
                                     
-                                    bprint(f"  > [디버그] Parent 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.80)")
+                                    max_mv_l = max(max_mv_l, mv_l)
                                     
                                     if mv_l >= 0.80:
                                         label_found = True; lx, ly = ml_l[0], ml_l[1]
@@ -2166,11 +2167,14 @@ def fusion_bot_loop():
                                             if is_success:
                                                 with open(debug_path, "wb") as f:
                                                     f.write(im_buf_arr.tobytes())
-                                                bprint(f"  > [디버그] Parent 매칭 성공 시점 ROI 스크린샷 저장 완료 -> {debug_path}")
-                                        except Exception as e:
-                                            bprint(f"  > [디버그 오류] 스크린샷 저장 실패: {e}")
+                                        except: pass
                                         break
                                     time.sleep(0.05)
+                                
+                                if label_found:
+                                    bprint(f"  > [성공] Parent 어빌리티 라벨 감지 성공! 점수: {max_mv_l:.4f} (목표: >= 0.80)")
+                                else:
+                                    bprint(f"  > [실패] Parent 어빌리티 라벨 감지 시간초과. 최고 점수: {max_mv_l:.4f} (목표: >= 0.80)")
                                     
                                 if not label_found:
                                     fast_clear_tooltip(); continue
@@ -2335,12 +2339,13 @@ def fusion_bot_loop():
                                     label_found = False
                                     lx, ly = 0, 0
                                     wait_start = time.time()
+                                    max_mv_l = 0.0
                                     while time.time() - wait_start < 1.0 and bot_active:
                                         hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                         res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                         _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
                                         
-                                        bprint(f"  > [디버그] Material 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.80)")
+                                        max_mv_l = max(max_mv_l, mv_l)
                                         
                                         if mv_l >= 0.80:
                                             label_found = True; lx, ly = ml_l[0], ml_l[1]

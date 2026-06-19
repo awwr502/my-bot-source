@@ -2234,32 +2234,11 @@ def fusion_bot_loop():
                                 # 한글 글자(가, 회 등)의 수직 획 오탐을 방지하기 위해 우측 숫자 영역(240~360px)만 정밀 커팅
                                 roi_num_gray = roi_col[90:125, 240:360]
                                 
-                                try:
-                                    num_debug_path = os.path.join(base_dir, "debug_mode6_parent_num_slice.png")
-                                    is_success, im_buf_arr = cv2.imencode(".png", roi_num_gray)
-                                    if is_success:
-                                        with open(num_debug_path, "wb") as f:
-                                            f.write(im_buf_arr.tobytes())
-                                        bprint(f"  > [디버그] Parent 숫자 슬라이스 이미지 저장 완료 -> {num_debug_path}")
-                                except Exception as e: pass
-                                
-                                is_f0 = False
-                                t1_img = FUSION_CACHE.get('tier_1.png')
-                                if t1_img is not None and roi_num_gray.size > 0:
-                                    t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
-                                    res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                    _, best_score_n, _, max_loc_n = cv2.minMaxLoc(res_n)
-                                    bprint(f"  > [디버그] Parent F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.65)")
-                                    if best_score_n >= 0.65:
-                                        t1_h = t1_img_g.shape[0]
-                                        # 숫자 0의 좌측 획 오탐지를 필터링하기 위해 스크립트 고유의 is_truly_tier_1 검증 적용
-                                        if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
-                                            is_f0 = True
-                                        else:
-                                            bprint("  > [디버그] Parent 숫자 1 감지했으나 좌측 픽셀 존재로 인해 숫자 0(F1)으로 최종 판정.")
-                                        
-                                if not is_f0:
-                                    fast_clear_tooltip(); continue # F0(1짜리)이 아니면 패스
+                                # [부모 세팅 검증 간소화 및 오작동 원천 차단]
+                                # 부모 선택 창에서는 융합 횟수가 0인 감염물들이 명암 흑색(비활성)으로 자동 처리됩니다.
+                                # 이미 그리드 필터링을 통해 비활성 대상을 완벽히 패스했으므로, 마우스가 도달한 이 감염물은 100% 1(F0)입니다.
+                                # 불필요하고 오작동 위험이 있는 툴팁의 0 vs 1 숫자 검출 과정을 완전히 배제하고 즉시 통과시킵니다.
+                                is_f0 = True
                                     
                                 # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                 has_any_trait = False
@@ -2465,11 +2444,20 @@ def fusion_bot_loop():
                                     # 한글 글자(가, 회 등)의 수직 획 오탐을 방지하기 위해 우측 숫자 영역(240~360px)만 정밀 커팅
                                     roi_num_gray = roi_col[90:125, 240:360]
                                     
-                                    # [사용자 피드백 완벽 반영] 
-                                    # 어차피 앞서 그리드 필터링을 통해 어둡게 표시된 0짜리(F1) 및 빈 칸들을 완벽하게 사전 차단했으므로,
-                                    # 활성 상태(밝은 명암)로 도달한 이 감염물은 100% 확정적인 1(F0) 부모 후보군입니다.
-                                    # 불필요하고 오작동 여지가 있는 툴팁의 0 vs 1 숫자 검증 코드를 완전히 생략하고 무조건 통과시킵니다.
-                                    is_f0 = True
+                                    is_f0 = False
+                                    t1_img = FUSION_CACHE.get('tier_1.png')
+                                    if t1_img is not None and roi_num_gray.size > 0:
+                                        t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
+                                        res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
+                                        _, best_score_n, _, max_loc_n = cv2.minMaxLoc(res_n)
+                                        bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.65)")
+                                        if best_score_n >= 0.65:
+                                            t1_h = t1_img_g.shape[0]
+                                            # 숫자 0의 좌측 획 오탐지를 필터링하기 위해 스크립트 고유의 is_truly_tier_1 검증 적용
+                                            if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
+                                                is_f0 = True
+                                            else:
+                                                bprint("  > [디버그] Material 숫자 1 감지했으나 좌측 픽셀 존재로 인해 숫자 0(F1)으로 최종 판정.")
                                         
                                     # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                     has_any_trait = False

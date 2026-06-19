@@ -2333,15 +2333,17 @@ def fusion_bot_loop():
                                         all_candidates.append((cx, cy))
                                         
                                 target_materials = []
+                                debug_shot_done = False # [디버그] 첫 번째 감염물의 융합 횟수 캡처 저장을 위한 플래그
+                                
                                 for cx, cy in all_candidates:
                                     if len(target_materials) >= 3: break
                                     
                                     pyautogui.moveTo(cx, cy)
                                     template_label = FUSION_CACHE.get('ability_label.png')
                                     mon = thread_sct.monitors[1]
-                                    r_left = max(mon["left"], cx - 1100) # 모드 3/4와 동일하게 마우스 가로 위치에 연동되어 캡처 시작점이 유동적으로 이동합니다.
+                                    r_left = max(mon["left"], cx - 1100) # [동적 캡처 적용] 모드 3/4와 동일하게 마우스 위치 기준 좌측 1100px을 동적 캡처합니다.
                                     r_top = mon["top"]
-                                    r_width = 1100 # 동적 범위 추적을 위해 가로폭을 1100px로 재조정합니다.
+                                    r_width = 1100
                                     r_height = mon["height"]
                                     tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                     
@@ -2370,56 +2372,52 @@ def fusion_bot_loop():
                                         col_y_end = min(hover_gray.shape[0], ly + 150)
                                         roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
                                         
-                                        # [핵심 수정] 하단 설명글("영지에서 일하며...")의 픽셀 침범을 원천 차단하기 위해
-                                        # 세로 범위를 80:108로 정밀 제한하고, 가로 영역도 숫자가 위치한 우측 끝(280:340)으로 완벽하게 고정 격리합니다.
-                                        roi_num_gray = roi_col[80:108, 280:340]
+                                        # [정밀 조준] 융합 가능 횟수가 위치한 정확한 4번째 줄 세로 위치(116:146) 및 우측 끝 수치 좌표(280:340)
+                                        roi_num_gray = roi_col[116:146, 280:340]
+                                        
+                                        # [디버그 스크린샷 1회 촬영] 현재 잘라낸 숫자 영역이 정상적인지 verify할 수 있도록 첫 번째 감염물만 디스크에 저장합니다.
+                                        if not debug_shot_done and roi_num_gray.size > 0:
+                                            debug_shot_done = True
+                                            try:
+                                                debug_path = os.path.join(base_dir, "debug_mode6_num_crop.png")
+                                                is_success, im_buf_arr = cv2.imencode(".png", roi_num_gray)
+                                                if is_success:
+                                                    with open(debug_path, "wb") as f:
+                                                        f.write(im_buf_arr.tobytes())
+                                                    bprint(f"  > 📸 [디버그 1회] 첫 번째 감염물의 숫자 크롭 영역을 디스크에 저장했습니다 -> {debug_path}")
+                                            except Exception as e:
+                                                bprint(f"  > ❌ [디버그] 스크린샷 저장 실패: {e}")
                                         
                                         is_f0 = False
                                         is_f1 = False
-                                        stroke_count = 0
-                                        thresh_val = 0
+                                        
+                                        t1_img = FUSION_CACHE.get('tier_1.png')
+                                        t0_img = FUSION_CACHE.get('tier_0.png')
+                                        
+                                        score_t1 = 0.0
+                                        score_t0 = 0.0
                                         
                                         if roi_num_gray.size > 0:
-                                            # 1) 동적 임계값 처리 (현재 화면의 숫자 밝기에 따라 유동적으로 임계점을 적용하여 판독 누락 차단)
-                                            max_pixel_val = np.max(roi_num_gray)
-                                            # 비활성화된 어두운 '0'의 구멍 내 회색 노이즈가 통째로 메워져 막대 1개로 합쳐지는 현상을 원천 방지하기 위해
-                                            # 임계 비율을 기존 50%에서 80%로 대폭 상향하여 글자의 순수 세로선 뼈대만 분리해 냅니다.
-                                            thresh_val = max(35, int(max_pixel_val * 0.80))
-                                            _, thresh = cv2.threshold(roi_num_gray, thresh_val, 255, cv2.THRESH_BINARY)
-                                            
-                                            # 2) [상하단 간섭 해결] 숫자 '0'의 상/하단 가로 연결부(루프)를 잘라내고 순수 세로 벽면만 분석하도록 세로 중간 50% 영역만 크롭합니다.
-                                            h_roi, w_roi = thresh.shape
-                                            mid_start = int(h_roi * 0.25)
-                                            mid_end = int(h_roi * 0.75)
-                                            middle_thresh = thresh[mid_start:mid_end, :]
-                                            
-                                            # 3) 가로막대 개수 판독 알고리즘 수행
-                                            in_stroke = False
-                                            for x_pos in range(w_roi):
-                                                col_slice = middle_thresh[:, x_pos]
-                                                has_white = np.max(col_slice) > 0
+                                            # 1) tier_1.png 매칭
+                                            if t1_img is not None:
+                                                t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
+                                                res_t1 = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
+                                                _, score_t1, _, max_loc_t1 = cv2.minMaxLoc(res_t1)
                                                 
-                                                if not in_stroke:
-                                                    if has_white:
-                                                        in_stroke = True
-                                                        stroke_count += 1
-                                                else:
-                                                    # 노이즈를 걸러내고 안전하게 획의 끝부분을 감지하기 위한 공백 검사
-                                                    if not has_white:
-                                                        is_real_gap = True
-                                                        for look_ahead in range(1, 3):
-                                                            if x_pos + look_ahead < w_roi:
-                                                                if np.max(middle_thresh[:, x_pos + look_ahead]) > 0:
-                                                                    is_real_gap = False
-                                                                    break
-                                                        if is_real_gap:
-                                                            in_stroke = False
-                                                            
-                                            # 4) 막대기(세로선) 개수에 따른 융합 가능 횟수 분기
-                                            if stroke_count == 1:
-                                                is_f0 = True # 1짜리(F0)로 확정
-                                            elif stroke_count == 2:
-                                                is_f1 = True # 0짜리(F1)로 확정
+                                            # 2) tier_0.png 매칭
+                                            if t0_img is not None:
+                                                t0_img_g = cv2.cvtColor(t0_img, cv2.COLOR_BGR2GRAY) if len(t0_img.shape) == 3 else t0_img
+                                                res_t0 = cv2.matchTemplate(roi_num_gray, t0_img_g, cv2.TM_CCOEFF_NORMED)
+                                                _, score_t0, _, _ = cv2.minMaxLoc(res_t0)
+                                                
+                                            # 3) 상호 신뢰도 대조법을 통해 확실한 1짜리(F0)와 0짜리(F1)를 판정
+                                            if score_t1 > score_t0 and score_t1 >= 0.65:
+                                                t1_h = t1_img_g.shape[0] if t1_img is not None else 24
+                                                # 양방향 수직 경계 검증으로 오탐을 최종 방어합니다.
+                                                if is_truly_tier_1(roi_num_gray, max_loc_t1[0], max_loc_t1[1], t1_h):
+                                                    is_f0 = True
+                                            elif score_t0 >= 0.65:
+                                                is_f1 = True
                                                     
                                         # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                         has_any_trait = False
@@ -2493,7 +2491,7 @@ def fusion_bot_loop():
                                         # [모드 5 통합 딜레이 및 인게임 디테일 로그 출력 시스템 구현]
                                         # 1) 융합 가능 횟수가 1인 경우 (F0 - 스킵 대상)
                                         if is_f0:
-                                            bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 1짜리 감염물 발견. (감지된 세로 막대: {stroke_count}개)")
+                                            bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 1짜리 감염물 발견. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                             fast_clear_tooltip(); continue
                                             
                                         # 2) 융합 가능 횟수가 0인 경우 (F1 - 채택 대상)
@@ -2503,7 +2501,7 @@ def fusion_bot_loop():
                                                     bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 0짜리 특성 감염물 스킵. 특성: '{identified_trait_name}' (신뢰도: {best_score:.2f})")
                                                     fast_clear_tooltip(); continue
                                                 else:
-                                                    bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (감지된 세로 막대: {stroke_count}개)")
+                                                    bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                                     target_materials.append((cx, cy, False))
                                             elif current_sub == "RECOVERY":
                                                 already_has_trait_in_list = any(m[2] for m in target_materials)
@@ -2513,10 +2511,10 @@ def fusion_bot_loop():
                                                 elif not has_any_trait:
                                                     blank_count = sum(1 for m in target_materials if not m[2])
                                                     if blank_count < 2:
-                                                        bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (감지된 세로 막대: {stroke_count}개)")
+                                                        bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                                         target_materials.append((cx, cy, False))
                                                     else:
-                                                        bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (감지된 세로 막대: {stroke_count}개)")
+                                                        bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                                         fast_clear_tooltip(); continue
                                                 else:
                                                     bprint(f"  > ⏭️ [스킵] RECOVERY 조건에 맞지 않는 일반 특성 감염물. 특성: '{identified_trait_name}'")
@@ -2524,7 +2522,7 @@ def fusion_bot_loop():
                                             
                                         # 3) 판독 불가 상태인 경우 (예외 회피용 자동 스킵)
                                         else:
-                                            bprint(f"  > ⚠️ [판독 실패] 융합 가능 횟수 인식 불가. (감지된 막대: {stroke_count}개 / 동적 임계값: {thresh_val})")
+                                            bprint(f"  > ⚠️ [판독 실패] 융합 가능 횟수 인식 불가. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                             fast_clear_tooltip(); continue
                                             
                                         fast_clear_tooltip()

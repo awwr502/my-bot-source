@@ -2159,17 +2159,20 @@ def fusion_bot_loop():
                                         first_grab_done = True
                                         try:
                                             debug_path = os.path.join(base_dir, "debug_mode6_parent_roi.png")
-                                            cv2.imwrite(debug_path, hover_gray)
-                                            bprint(f"  > [디버그] Parent 첫 감염물 ROI 스크린샷 저장 완료 -> {debug_path}")
+                                            is_success, im_buf_arr = cv2.imencode(".png", hover_gray)
+                                            if is_success:
+                                                with open(debug_path, "wb") as f:
+                                                    f.write(im_buf_arr.tobytes())
+                                                bprint(f"  > [디버그] Parent 첫 감염물 ROI 스크린샷 저장 완료 -> {debug_path}")
                                         except Exception as e:
                                             bprint(f"  > [디버그 오류] 스크린샷 저장 실패: {e}")
                                             
                                     res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                     _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
                                     
-                                    bprint(f"  > [디버그] Parent 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.90)")
+                                    bprint(f"  > [디버그] Parent 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.80)")
                                     
-                                    if mv_l >= 0.90:
+                                    if mv_l >= 0.80:
                                         label_found = True; lx, ly = ml_l[0], ml_l[1]; break
                                     time.sleep(0.05)
                                     
@@ -2187,12 +2190,23 @@ def fusion_bot_loop():
                                 num_x2 = min(hover_gray.shape[1], lx + 250)
                                 roi_num_gray = hover_gray[num_y1:num_y2, num_x1:num_x2]
                                 
+                                try:
+                                    num_debug_path = os.path.join(base_dir, "debug_mode6_parent_num_slice.png")
+                                    is_success, im_buf_arr = cv2.imencode(".png", roi_num_gray)
+                                    if is_success:
+                                        with open(num_debug_path, "wb") as f:
+                                            f.write(im_buf_arr.tobytes())
+                                        bprint(f"  > [디버그] Parent 숫자 슬라이스 이미지 저장 완료 -> {num_debug_path}")
+                                except Exception as e: pass
+                                
                                 is_f0 = False
                                 t1_img = FUSION_CACHE.get('tier_1.png')
                                 if t1_img is not None and roi_num_gray.size > 0:
                                     t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                     res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                    if np.max(res_n) >= 0.70:
+                                    best_score_n = np.max(res_n)
+                                    bprint(f"  > [디버그] Parent F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.70)")
+                                    if best_score_n >= 0.70:
                                         is_f0 = True
                                         
                                 if not is_f0:
@@ -2208,8 +2222,11 @@ def fusion_bot_loop():
                                 
                                 try:
                                     trait_debug_path = os.path.join(base_dir, "debug_mode6_parent_trait_slice.png")
-                                    cv2.imwrite(trait_debug_path, roi_trait_gray)
-                                    bprint(f"  > [디버그] Parent 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
+                                    is_success, im_buf_arr = cv2.imencode(".png", roi_trait_gray)
+                                    if is_success:
+                                        with open(trait_debug_path, "wb") as f:
+                                            f.write(im_buf_arr.tobytes())
+                                        bprint(f"  > [디버그] Parent 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
                                 except Exception as e: pass
                                 
                                 t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
@@ -2327,17 +2344,20 @@ def fusion_bot_loop():
                                             first_grab_done = True
                                             try:
                                                 debug_path = os.path.join(base_dir, "debug_mode6_material_roi.png")
-                                                cv2.imwrite(debug_path, hover_gray)
-                                                bprint(f"  > [디버그] Material 첫 감염물 ROI 스크린샷 저장 완료 -> {debug_path}")
+                                                is_success, im_buf_arr = cv2.imencode(".png", hover_gray)
+                                                if is_success:
+                                                    with open(debug_path, "wb") as f:
+                                                        f.write(im_buf_arr.tobytes())
+                                                    bprint(f"  > [디버그] Material 첫 감염물 ROI 스크린샷 저장 완료 -> {debug_path}")
                                             except Exception as e:
                                                 bprint(f"  > [디버그 오류] 스크린샷 저장 실패: {e}")
                                                 
                                         res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                         _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
                                         
-                                        bprint(f"  > [디버그] Material 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.90)")
+                                        bprint(f"  > [디버그] Material 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.85)")
                                         
-                                        if mv_l >= 0.90:
+                                        if mv_l >= 0.85:
                                             label_found = True; lx, ly = ml_l[0], ml_l[1]; break
                                         time.sleep(0.05)
                                         
@@ -2355,12 +2375,23 @@ def fusion_bot_loop():
                                     num_x2 = min(hover_gray.shape[1], lx + 250)
                                     roi_num_gray = hover_gray[num_y1:num_y2, num_x1:num_x2]
                                     
+                                    try:
+                                        num_debug_path = os.path.join(base_dir, "debug_mode6_material_num_slice.png")
+                                        is_success, im_buf_arr = cv2.imencode(".png", roi_num_gray)
+                                        if is_success:
+                                            with open(num_debug_path, "wb") as f:
+                                                f.write(im_buf_arr.tobytes())
+                                            bprint(f"  > [디버그] Material 숫자 슬라이스 이미지 저장 완료 -> {num_debug_path}")
+                                    except Exception as e: pass
+                                    
                                     is_f0 = False
                                     t1_img = FUSION_CACHE.get('tier_1.png')
                                     if t1_img is not None and roi_num_gray.size > 0:
                                         t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                         res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                        if np.max(res_n) >= 0.70:
+                                        best_score_n = np.max(res_n)
+                                        bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.75)")
+                                        if best_score_n >= 0.75:
                                             is_f0 = True
                                             
                                     if is_f0:
@@ -2376,8 +2407,11 @@ def fusion_bot_loop():
                                     
                                     try:
                                         trait_debug_path = os.path.join(base_dir, "debug_mode6_material_trait_slice.png")
-                                        cv2.imwrite(trait_debug_path, roi_trait_gray)
-                                        bprint(f"  > [디버그] Material 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
+                                        is_success, im_buf_arr = cv2.imencode(".png", roi_trait_gray)
+                                        if is_success:
+                                            with open(trait_debug_path, "wb") as f:
+                                                f.write(im_buf_arr.tobytes())
+                                            bprint(f"  > [디버그] Material 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
                                     except Exception as e: pass
                                     
                                     t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']

@@ -2382,7 +2382,9 @@ def fusion_bot_loop():
                                         if roi_num_gray.size > 0:
                                             # 1) 동적 임계값 처리 (현재 화면의 숫자 밝기에 따라 유동적으로 임계점을 적용하여 판독 누락 차단)
                                             max_pixel_val = np.max(roi_num_gray)
-                                            thresh_val = max(40, int(max_pixel_val * 0.5)) # 최대 밝기의 50%를 기준으로 동적 처리
+                                            # 비활성화된 어두운 '0'의 구멍 내 회색 노이즈가 통째로 메워져 막대 1개로 합쳐지는 현상을 원천 방지하기 위해
+                                            # 임계 비율을 기존 50%에서 80%로 대폭 상향하여 글자의 순수 세로선 뼈대만 분리해 냅니다.
+                                            thresh_val = max(35, int(max_pixel_val * 0.80))
                                             _, thresh = cv2.threshold(roi_num_gray, thresh_val, 255, cv2.THRESH_BINARY)
                                             
                                             # 2) [상하단 간섭 해결] 숫자 '0'의 상/하단 가로 연결부(루프)를 잘라내고 순수 세로 벽면만 분석하도록 세로 중간 50% 영역만 크롭합니다.

@@ -2151,13 +2151,27 @@ def fusion_bot_loop():
                                 label_found = False
                                 lx, ly = 0, 0
                                 wait_start = time.time()
+                                first_grab_done = False
                                 while time.time() - wait_start < 1.0 and bot_active:
                                     hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                    
+                                    if not first_grab_done:
+                                        first_grab_done = True
+                                        try:
+                                            debug_path = os.path.join(base_dir, "debug_mode6_parent_roi.png")
+                                            cv2.imwrite(debug_path, hover_gray)
+                                            bprint(f"  > [디버그] Parent 첫 감염물 ROI 스크린샷 저장 완료 -> {debug_path}")
+                                        except Exception as e:
+                                            bprint(f"  > [디버그 오류] 스크린샷 저장 실패: {e}")
+                                            
                                     res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                     _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                    
+                                    bprint(f"  > [디버그] Parent 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.90)")
+                                    
                                     if mv_l >= 0.90:
                                         label_found = True; lx, ly = ml_l[0], ml_l[1]; break
-                                    time.sleep(0.01)
+                                    time.sleep(0.05)
                                     
                                 if not label_found:
                                     fast_clear_tooltip(); continue
@@ -2191,18 +2205,28 @@ def fusion_bot_loop():
                                 trait_y1 = ly + 30
                                 trait_y2 = ly + 300
                                 roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGRA2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                
+                                try:
+                                    trait_debug_path = os.path.join(base_dir, "debug_mode6_parent_trait_slice.png")
+                                    cv2.imwrite(trait_debug_path, roi_trait_gray)
+                                    bprint(f"  > [디버그] Parent 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
+                                except Exception as e: pass
+                                
+                                t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                                 conf_trait = FUSION_CONF.get('trait.png', 0.70)
                                 
+                                max_trait_score = 0.0
                                 if roi_trait_gray.size > 0:
                                     for scale in [0.95, 1.0, 1.05]:
                                         width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
                                         if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
                                             res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
                                             cur_tr = np.max(res_t)
+                                            max_trait_score = max(max_trait_score, cur_tr)
                                             if cur_tr >= conf_trait:
                                                 has_any_trait = True
                                                 break
+                                bprint(f"  > [디버그] Parent 특성(trait.png) 최고 매칭 점수: {max_trait_score:.4f} (목표: >= {conf_trait:.2f})")
                                                 
                                 has_valuable_trait = False
                                 if has_any_trait:
@@ -2295,13 +2319,27 @@ def fusion_bot_loop():
                                     label_found = False
                                     lx, ly = 0, 0
                                     wait_start = time.time()
+                                    first_grab_done = False
                                     while time.time() - wait_start < 1.0 and bot_active:
                                         hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                        
+                                        if not first_grab_done:
+                                            first_grab_done = True
+                                            try:
+                                                debug_path = os.path.join(base_dir, "debug_mode6_material_roi.png")
+                                                cv2.imwrite(debug_path, hover_gray)
+                                                bprint(f"  > [디버그] Material 첫 감염물 ROI 스크린샷 저장 완료 -> {debug_path}")
+                                            except Exception as e:
+                                                bprint(f"  > [디버그 오류] 스크린샷 저장 실패: {e}")
+                                                
                                         res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                         _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                        
+                                        bprint(f"  > [디버그] Material 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.90)")
+                                        
                                         if mv_l >= 0.90:
                                             label_found = True; lx, ly = ml_l[0], ml_l[1]; break
-                                        time.sleep(0.01)
+                                        time.sleep(0.05)
                                         
                                     if not label_found:
                                         fast_clear_tooltip(); continue
@@ -2335,18 +2373,28 @@ def fusion_bot_loop():
                                     trait_y1 = ly + 30
                                     trait_y2 = ly + 300
                                     roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGRA2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                    
+                                    try:
+                                        trait_debug_path = os.path.join(base_dir, "debug_mode6_material_trait_slice.png")
+                                        cv2.imwrite(trait_debug_path, roi_trait_gray)
+                                        bprint(f"  > [디버그] Material 특성 슬라이스 영역 저장 완료 -> {trait_debug_path}")
+                                    except Exception as e: pass
+                                    
+                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                                     conf_trait = FUSION_CONF.get('trait.png', 0.70)
                                     
+                                    max_trait_score = 0.0
                                     if roi_trait_gray.size > 0:
                                         for scale in [0.95, 1.0, 1.05]:
                                             width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
                                             if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
                                                 res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
                                                 cur_tr = np.max(res_t)
+                                                max_trait_score = max(max_trait_score, cur_tr)
                                                 if cur_tr >= conf_trait:
                                                     has_any_trait = True
                                                     break
+                                    bprint(f"  > [디버그] Material 특성(trait.png) 최고 매칭 점수: {max_trait_score:.4f} (목표: >= {conf_trait:.2f})")
                                             
                                     has_valuable_trait = False
                                     if has_any_trait:

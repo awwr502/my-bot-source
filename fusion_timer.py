@@ -2373,51 +2373,30 @@ def fusion_bot_loop():
                                         t1_img = FUSION_CACHE.get('tier_1.png')
                                         t0_img = FUSION_CACHE.get('tier_0.png')
                                         
+                                        score_t1 = 0.0
+                                        score_t0 = 0.0
+                                        
                                         if roi_num_gray.size > 0:
-                                            # 1) tier_1.png 매칭 (모드 3/4와 완전히 동일한 독립식 검증 적용)
+                                            # 1) tier_1.png 매칭 (모드 3/4와 완전히 동일한 독립식 판정 적용)
                                             if t1_img is not None:
                                                 t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                                 res_t1 = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
                                                 _, score_t1, _, max_loc_t1 = cv2.minMaxLoc(res_t1)
-                                                if score_t1 >= FUSION_CONF.get('tier_1.png', 0.72):
+                                                # 배경 투명도 왜곡 극복을 위해 매칭 하한선을 0.62로 적용하여 안정적으로 판독합니다.
+                                                if score_t1 >= 0.62:
                                                     t1_h = t1_img_g.shape[0]
                                                     if is_truly_tier_1(roi_num_gray, max_loc_t1[0], max_loc_t1[1], t1_h):
                                                         is_f0 = True
                                                         
-                                            # 2) tier_0.png 매칭 (모드 3/4와 완전히 동일한 독립식 검증 적용)
+                                            # 2) tier_0.png 매칭 (모드 3/4와 완전히 동일한 독립식 판정 적용)
                                             if t0_img is not None:
                                                 t0_img_g = cv2.cvtColor(t0_img, cv2.COLOR_BGR2GRAY) if len(t0_img.shape) == 3 else t0_img
                                                 res_t0 = cv2.matchTemplate(roi_num_gray, t0_img_g, cv2.TM_CCOEFF_NORMED)
                                                 _, score_t0, _, _ = cv2.minMaxLoc(res_t0)
-                                                if score_t0 >= FUSION_CONF.get('tier_0.png', 0.72):
+                                                # 배경 투명도 왜곡 극복을 위해 매칭 하한선을 0.62로 적용하여 안정적으로 판독합니다.
+                                                if score_t0 >= 0.62:
                                                     is_f1 = True
                                                     
-                                        # [원상복구/수정] f0(1)이면 재료가 아니므로 즉시 스킵
-                                        if is_f0:
-                                            fast_clear_tooltip(); continue
-                                            
-                                        # f1(0)인 것이 독립형 템플릿 매칭으로 명확하게 검증된 경우에만 재료 투입 진행
-                                        if is_f1:
-                                            if current_sub == "NORMAL":
-                                                # NORMAL 상태: 특성 없는 순정 F1 3개 (not is_f0 검증기 활성화)
-                                                if not has_any_trait:
-                                                    target_materials.append((cx, cy, False))
-                                                    bprint("  > 💎 [재료 채택] F1 순정 감염물 확보 완료.")
-                                            elif current_sub == "RECOVERY":
-                                                # RECOVERY 상태: 1~7 가치 특성 F1 1개 + 특성 없는 순정 F1 2개 (not is_f0 검증기 활성화)
-                                                already_has_trait_in_list = any(m[2] for m in target_materials)
-                                                if has_valuable_trait and not already_has_trait_in_list:
-                                                    target_materials.append((cx, cy, True))
-                                                    bprint("  > 🧬 [재료 채택] F1 가치 특성 감염물 확보 완료.")
-                                                elif not has_any_trait:
-                                                    blank_count = sum(1 for m in target_materials if not m[2])
-                                                    if blank_count < 2:
-                                                        target_materials.append((cx, cy, False))
-                                                        bprint("  > 💎 [재료 채택] F1 순정 감염물 확보 완료.")
-                                        else:
-                                            # '0'과 '1' 둘 다 매칭되지 않은 임의의 상태는 오류 방지를 위해 대기 후 패스시킵니다.
-                                            fast_clear_tooltip(); continue
-                                            
                                         # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                         has_any_trait = False
                                         trait_x1 = max(0, lx - 10)
@@ -2440,6 +2419,9 @@ def fusion_bot_loop():
                                                         break
                                                 
                                         has_valuable_trait = False
+                                        identified_trait_name = "미등록 특성"
+                                        best_score = 0.0
+                                        
                                         if has_any_trait:
                                             trait_name_x1 = max(0, lx - 10)
                                             trait_name_x2 = lx + 360
@@ -2463,14 +2445,14 @@ def fusion_bot_loop():
                                                                 
                                                                 t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
                                                                 if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
-                                                                    best_score = 0.0
+                                                                    file_best_score = 0.0
                                                                     for t_scale in [0.95, 1.0, 1.05]:
                                                                         t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
                                                                         if t_w <= roi_trait_name_gray.shape[1] and t_h <= roi_trait_gray.shape[0]:
                                                                             res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (t_w, t_h)), cv2.TM_CCOEFF_NORMED)
-                                                                            best_score = max(best_score, np.max(res_st))
+                                                                            file_best_score = max(file_best_score, np.max(res_st))
                                                                     
-                                                                    temp_scores.append((t_file, best_score))
+                                                                    temp_scores.append((t_file, file_best_score))
                                                             break
                                                             
                                             # 점수순 내림차순 정렬 및 스마트 갭 판독
@@ -2478,27 +2460,49 @@ def fusion_bot_loop():
                                             if len(temp_scores) >= 1:
                                                 top1_file, top1_score = temp_scores[0]
                                                 top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
+                                                best_score = top1_score
                                                 
                                                 if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
                                                     has_valuable_trait = True
-                                                        
-                                        if current_sub == "NORMAL":
-                                            # NORMAL 상태: 특성 없는 순정 F1 3개 (not is_f0 검증기 활성화)
-                                            if not is_f0 and not has_any_trait:
-                                                target_materials.append((cx, cy, False))
-                                                bprint("  > 💎 [재료 채택] F1 순정 감염물 확보 완료.")
-                                        elif current_sub == "RECOVERY":
-                                            # RECOVERY 상태: 1~7 가치 특성 F1 1개 + 특성 없는 순정 F1 2개 (not is_f0 검증기 활성화)
-                                            already_has_trait_in_list = any(m[2] for m in target_materials)
-                                            if not is_f0 and has_valuable_trait and not already_has_trait_in_list:
-                                                target_materials.append((cx, cy, True))
-                                                bprint("  > 🧬 [재료 채택] F1 가치 특성 감염물 확보 완료.")
-                                            elif not is_f0 and not has_any_trait:
-                                                blank_count = sum(1 for m in target_materials if not m[2])
-                                                if blank_count < 2:
-                                                    target_materials.append((cx, cy, False))
-                                                    bprint("  > 💎 [재료 채택] F1 순정 감염물 확보 완료.")
+                                                    identified_trait_name = TRAIT_NAMES.get(top1_file, top1_file)
                                                     
+                                        # [모드 5 통합 딜레이 및 인게임 디테일 로그 출력 시스템 구현]
+                                        # 1) F0 (1-tier) 감염물인 경우
+                                        if is_f0:
+                                            bprint(f"  > ⏭️ [스킵] 1레벨(F0) 감염물 발견. (F0 신뢰도: {score_t1:.2f} / F1 신뢰도: {score_t0:.2f})")
+                                            fast_clear_tooltip(); continue
+                                            
+                                        # 2) F1 (0-tier) 감염물인 경우
+                                        elif is_f1:
+                                            if current_sub == "NORMAL":
+                                                if has_any_trait:
+                                                    bprint(f"  > ⏭️ [스킵] F1 특성 감염물 감지. 특성: '{identified_trait_name}' (신뢰도: {best_score:.2f})")
+                                                    fast_clear_tooltip(); continue
+                                                else:
+                                                    bprint(f"  > 💎 [재료 채택] 0레벨(F1) 순정 감염물 확보! (F1 신뢰도: {score_t0:.2f})")
+                                                    target_materials.append((cx, cy, False))
+                                            elif current_sub == "RECOVERY":
+                                                already_has_trait_in_list = any(m[2] for m in target_materials)
+                                                if has_valuable_trait and not already_has_trait_in_list:
+                                                    bprint(f"  > 🧬 [재료 채택] 0레벨(F1) 가치 특성 '{identified_trait_name}' 확보! (신뢰도: {best_score:.2f})")
+                                                    target_materials.append((cx, cy, True))
+                                                elif not has_any_trait:
+                                                    blank_count = sum(1 for m in target_materials if not m[2])
+                                                    if blank_count < 2:
+                                                        bprint(f"  > 💎 [재료 채택] 0레벨(F1) 순정 감염물 확보! (F1 신뢰도: {score_t0:.2f})")
+                                                        target_materials.append((cx, cy, False))
+                                                    else:
+                                                        bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (F1 신뢰도: {score_t0:.2f})")
+                                                        fast_clear_tooltip(); continue
+                                                else:
+                                                    bprint(f"  > ⏭️ [스킵] RECOVERY 조건에 맞지 않는 일반 특성 감염물. 특성: '{identified_trait_name}'")
+                                                    fast_clear_tooltip(); continue
+                                                    
+                                        # 3) 판독 불가 상태인 경우 (예외 회피용 자동 스킵)
+                                        else:
+                                            bprint(f"  > ⚠️ [판독 실패] 융합 횟수 인식 불가. (F0 신뢰도: {score_t1:.2f} / F1 신뢰도: {score_t0:.2f})")
+                                            fast_clear_tooltip(); continue
+                                            
                                         fast_clear_tooltip()
                                     
                                 if len(target_materials) < 3:

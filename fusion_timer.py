@@ -2142,12 +2142,12 @@ def fusion_bot_loop():
                                 pyautogui.moveTo(cx, cy)
                                 template_label = FUSION_CACHE.get('ability_label.png')
                                 mon = thread_sct.monitors[1]
-                                r_left = mon["left"] + 200
+                                r_left = mon["left"]
                                 r_top = mon["top"]
-                                r_width = 800
+                                r_width = 1300
                                 r_height = mon["height"]
                                 tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
-                                    
+                                
                                 label_found = False
                                 lx, ly = 0, 0
                                 wait_start = time.time()
@@ -2155,18 +2155,18 @@ def fusion_bot_loop():
                                     hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                     res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                     _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                        
-                                    bprint(f"  > [디버그] Material 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.80)")
-                                        
+                                    
+                                    bprint(f"  > [디버그] Parent 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.80)")
+                                    
                                     if mv_l >= 0.80:
                                         label_found = True; lx, ly = ml_l[0], ml_l[1]
                                         try:
-                                            debug_path = os.path.join(base_dir, "debug_mode6_material_roi.png")
+                                            debug_path = os.path.join(base_dir, "debug_mode6_parent_roi.png")
                                             is_success, im_buf_arr = cv2.imencode(".png", hover_gray)
                                             if is_success:
                                                 with open(debug_path, "wb") as f:
                                                     f.write(im_buf_arr.tobytes())
-                                                bprint(f"  > [디버그] Material 매칭 성공 시점 ROI 스크린샷 저장 완료 -> {debug_path}")
+                                                bprint(f"  > [디버그] Parent 매칭 성공 시점 ROI 스크린샷 저장 완료 -> {debug_path}")
                                         except Exception as e:
                                             bprint(f"  > [디버그 오류] 스크린샷 저장 실패: {e}")
                                         break
@@ -2311,9 +2311,9 @@ def fusion_bot_loop():
                                     pyautogui.moveTo(cx, cy)
                                     template_label = FUSION_CACHE.get('ability_label.png')
                                     mon = thread_sct.monitors[1]
-                                    r_left = max(mon["left"], cx - 1100)
+                                    r_left = mon["left"]
                                     r_top = mon["top"]
-                                    r_width = 1100
+                                    r_width = 1300
                                     r_height = mon["height"]
                                     tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                     
@@ -2325,8 +2325,20 @@ def fusion_bot_loop():
                                         res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                         _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
                                         
+                                        bprint(f"  > [디버그] Material 어빌리티 라벨 매칭 점수: {mv_l:.4f} (목표: >= 0.80)")
+                                        
                                         if mv_l >= 0.80:
-                                            label_found = True; lx, ly = ml_l[0], ml_l[1]; break
+                                            label_found = True; lx, ly = ml_l[0], ml_l[1]
+                                            try:
+                                                debug_path = os.path.join(base_dir, "debug_mode6_material_roi.png")
+                                                is_success, im_buf_arr = cv2.imencode(".png", hover_gray)
+                                                if is_success:
+                                                    with open(debug_path, "wb") as f:
+                                                        f.write(im_buf_arr.tobytes())
+                                                    bprint(f"  > [디버그] Material 매칭 성공 시점 ROI 스크린샷 저장 완료 -> {debug_path}")
+                                            except Exception as e:
+                                                bprint(f"  > [디버그 오류] 스크린샷 저장 실패: {e}")
+                                            break
                                         time.sleep(0.05)
                                         
                                     if not label_found:

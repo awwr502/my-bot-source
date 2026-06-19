@@ -275,22 +275,30 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # 숫자 바닥면(가장 아래쪽 4픽셀 범위)만 타겟으로 지정합니다.
-    # 이 높이는 중간에 위치한 콜론(':')이나 우측 위의 '회' 자의 간섭을 완전히 피해 갑니다.
-    probe_y_start = max(0, y + h - 4)
-    probe_y_end = min(roi.shape[0], y + h)
+    # 특성이 없을 때 밑으로 바로 달라붙는 소개글("전기를 공급한다" 등)의 픽셀 간섭을 완전히 제거하기 위해,
+    # 오직 상단의 깨끗한 17픽셀 영역(0 ~ 17)만 잘라내어 분석용 데이터로 사용합니다.
+    clean_roi = roi[0:17, :]
     
-    # 매칭된 수직 기둥 기준 좌측 하단과 우측 하단을 좁게 슬라이싱합니다.
-    left_bottom = roi[probe_y_start:probe_y_end, max(0, x - 8):max(0, x - 2)]
-    right_bottom = roi[probe_y_start:probe_y_end, min(roi.shape[1], x + 5):min(roi.shape[1], x + 11)]
+    # 각 열의 최대 밝기를 계산합니다.
+    col_maxes = np.max(clean_roi, axis=0)
     
-    # - 숫자 '0'의 좌측 획에 매칭된 경우: 우측 하단에 '0'의 바닥 가로 연결선이 감지됩니다.
-    # - 숫자 '0'의 우측 획에 매칭된 경우: 좌측 하단에 '0'의 바닥 가로 연결선이 감지됩니다.
-    # - 숫자 '1'은 양쪽 하단 모두에 가로로 이어지는 어떠한 획도 없어야 합니다.
-    if left_bottom.size > 0 and np.max(left_bottom) > 60:
-        return False
-        
-    if right_bottom.size > 0 and np.max(right_bottom) > 60:
+    # 매칭 지점 주변에서 실제 숫자의 가장 선명한 세로 중심축(idx_max)을 동적으로 잡습니다.
+    search_start = max(0, x - 2)
+    search_end = min(len(col_maxes), x + 6)
+    if search_start >= search_end: return True
+    
+    idx_max = search_start + np.argmax(col_maxes[search_start:search_end])
+    
+    # 숫자 좌우 경계면의 공백 갭 영역의 최소 밝기를 검사합니다.
+    left_window = col_maxes[max(0, idx_max - 5) : max(0, idx_max - 1)]
+    right_window = col_maxes[min(len(col_maxes), idx_max + 2) : min(len(col_maxes), idx_max + 7)]
+    
+    left_min = np.min(left_window) if left_window.size > 0 else 0
+    right_min = np.min(right_window) if right_window.size > 0 else 0
+    
+    # 기둥 양옆에 어두운 검은색 공백 열(밝기 < 60)이 완벽히 존재해야만 숫자 1입니다.
+    # 숫자 0은 위쪽 가로 곡선이 이 구간을 지나가므로 양쪽 모두 공백 열이 생길 수 없어 0으로 걸러집니다.
+    if left_min > 60 or right_min > 60:
         return False
         
     return True  

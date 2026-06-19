@@ -2374,17 +2374,50 @@ def fusion_bot_loop():
                                         roi_num_gray = roi_col[90:125, 240:360]
                                         
                                         is_f0 = False
-                                        t1_img = FUSION_CACHE.get('tier_1.png')
-                                        score_t1 = 0.0
+                                        is_f1 = False
+                                        digit_width = 0
                                         
-                                        if roi_num_gray.size > 0 and t1_img is not None:
-                                            t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
-                                            res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                            _, score_t1, _, max_loc_n = cv2.minMaxLoc(res_n)
-                                            if score_t1 >= 0.65:
-                                                t1_h = t1_img_g.shape[0]
-                                                if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
-                                                    is_f0 = True
+                                        if roi_num_gray.size > 0:
+                                            # 1) 이진화 처리 (배경 노이즈 차단, 순수 텍스트 픽셀 추출)
+                                            _, thresh = cv2.threshold(roi_num_gray, 120, 255, cv2.THRESH_BINARY)
+                                            
+                                            # 2) 첫 번째 숫자의 가로폭(width) 정밀 측정
+                                            h_roi, w_roi = thresh.shape
+                                            x_start = -1
+                                            x_end = -1
+                                            
+                                            for x_pos in range(w_roi):
+                                                col_slice = thresh[:, x_pos]
+                                                has_white = np.max(col_slice) > 0
+                                                
+                                                if x_start == -1:
+                                                    if has_white:
+                                                        x_start = x_pos
+                                                else:
+                                                    # 숫자 영역이 지나가고 우측 여백이 시작되는 지점을 끝 경계로 탐색
+                                                    if not has_white:
+                                                        is_gap = True
+                                                        for look_ahead in range(1, 5):
+                                                            if x_pos + look_ahead < w_roi:
+                                                                if np.max(thresh[:, x_pos + look_ahead]) > 0:
+                                                                    is_gap = False
+                                                                    break
+                                                        if is_gap:
+                                                            x_end = x_pos
+                                                            break
+                                                            
+                                            if x_start != -1 and x_end == -1:
+                                                x_end = w_roi
+                                                
+                                            if x_start != -1 and x_end != -1:
+                                                digit_width = x_end - x_start
+                                                
+                                                # [물리적 두께 대조 판정]
+                                                # 단일 숫자 1은 3~7픽셀 두께, 0은 가운데가 빈 타원형으로 10~24픽셀 두께를 가집니다.
+                                                if 1 <= digit_width <= 7:
+                                                    is_f0 = True # 확실한 1짜리(F0)로 판정
+                                                elif 10 <= digit_width <= 24:
+                                                    is_f1 = True # 확실한 0짜리(F1)로 판정
                                                     
                                         # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                         has_any_trait = False
@@ -2458,18 +2491,17 @@ def fusion_bot_loop():
                                         # [모드 5 통합 딜레이 및 인게임 디테일 로그 출력 시스템 구현]
                                         # 1) 융합 가능 횟수가 1인 경우 (F0 - 스킵 대상)
                                         if is_f0:
-                                            bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 1짜리 감염물 발견. (1짜리 신뢰도: {score_t1:.2f})")
+                                            bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 1짜리 감염물 발견. (두께: {digit_width}px)")
                                             fast_clear_tooltip(); continue
                                             
                                         # 2) 융합 가능 횟수가 0인 경우 (F1 - 채택 대상)
-                                        # 모드 3/4와 동일하게 1짜리(F0)가 아닌 것은 자동적으로 0짜리(F1)로 확정 인식합니다.
-                                        else:
+                                        elif is_f1:
                                             if current_sub == "NORMAL":
                                                 if has_any_trait:
                                                     bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 0짜리 특성 감염물 스킵. 특성: '{identified_trait_name}' (신뢰도: {best_score:.2f})")
                                                     fast_clear_tooltip(); continue
                                                 else:
-                                                    bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (1짜리 신뢰도: {score_t1:.2f})")
+                                                    bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (두께: {digit_width}px)")
                                                     target_materials.append((cx, cy, False))
                                             elif current_sub == "RECOVERY":
                                                 already_has_trait_in_list = any(m[2] for m in target_materials)
@@ -2479,14 +2511,19 @@ def fusion_bot_loop():
                                                 elif not has_any_trait:
                                                     blank_count = sum(1 for m in target_materials if not m[2])
                                                     if blank_count < 2:
-                                                        bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (1짜리 신뢰도: {score_t1:.2f})")
+                                                        bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (두께: {digit_width}px)")
                                                         target_materials.append((cx, cy, False))
                                                     else:
-                                                        bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (1짜리 신뢰도: {score_t1:.2f})")
+                                                        bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (두께: {digit_width}px)")
                                                         fast_clear_tooltip(); continue
                                                 else:
                                                     bprint(f"  > ⏭️ [스킵] RECOVERY 조건에 맞지 않는 일반 특성 감염물. 특성: '{identified_trait_name}'")
                                                     fast_clear_tooltip(); continue
+                                                    
+                                        # 3) 판독 불가 상태인 경우 (예외 회피용 자동 스킵)
+                                        else:
+                                            bprint(f"  > ⚠️ [판독 실패] 융합 가능 횟수 인식 불가. 스킵 처리합니다.")
+                                            fast_clear_tooltip(); continue
                                             
                                         fast_clear_tooltip()
                                     

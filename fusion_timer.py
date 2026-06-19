@@ -2191,7 +2191,8 @@ def fusion_bot_loop():
                                 col_y_end = min(hover_gray.shape[0], ly + 150)
                                 roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
                                 
-                                roi_num_gray = roi_col[90:125, :]
+                                # 한글 글자(가, 회 등)의 수직 획 오탐을 방지하기 위해 우측 숫자 영역(240~360px)만 정밀 커팅
+                                roi_num_gray = roi_col[90:125, 240:360]
                                 
                                 try:
                                     num_debug_path = os.path.join(base_dir, "debug_mode6_parent_num_slice.png")
@@ -2416,7 +2417,8 @@ def fusion_bot_loop():
                                     col_y_end = min(hover_gray.shape[0], ly + 150)
                                     roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
                                     
-                                    roi_num_gray = roi_col[90:125, :]
+                                    # 한글 글자(가, 회 등)의 수직 획 오탐을 방지하기 위해 우측 숫자 영역(240~360px)만 정밀 커팅
+                                    roi_num_gray = roi_col[90:125, 240:360]
                                     
                                     try:
                                         num_debug_path = os.path.join(base_dir, "debug_mode6_material_num_slice.png")

@@ -275,33 +275,35 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # 특성이 없을 때 밑으로 바로 달라붙는 소개글("전기를 공급한다" 등)의 픽셀 간섭을 완전히 제거하기 위해,
-    # 오직 상단의 깨끗한 17픽셀 영역(0 ~ 17)만 잘라내어 분석용 데이터로 사용합니다.
+    # 밑에 인접한 소개글의 하얀색 글자 픽셀 간섭을 피하기 위해,
+    # 오직 상단의 깨끗한 17픽셀 영역(0 ~ 17)만 잘라내어 분석합니다.
     clean_roi = roi[0:17, :]
     
     # 각 열의 최대 밝기를 계산합니다.
     col_maxes = np.max(clean_roi, axis=0)
     
-    # 매칭 지점 주변에서 실제 숫자의 가장 선명한 세로 중심축(idx_max)을 동적으로 잡습니다.
+    # 매칭된 좌표 근처에서 실제 숫자의 가장 선명한 세로 중심축(idx_max)을 동적으로 잡습니다.
     search_start = max(0, x - 2)
     search_end = min(len(col_maxes), x + 6)
     if search_start >= search_end: return True
     
     idx_max = search_start + np.argmax(col_maxes[search_start:search_end])
     
-    # 숫자 좌우 경계면의 공백 갭 영역의 최소 밝기를 검사합니다.
+    # 숫자 좌우 경계면의 공백 갭 영역을 슬라이싱합니다.
     left_window = col_maxes[max(0, idx_max - 5) : max(0, idx_max - 1)]
     right_window = col_maxes[min(len(col_maxes), idx_max + 2) : min(len(col_maxes), idx_max + 7)]
     
-    left_min = np.min(left_window) if left_window.size > 0 else 0
-    right_min = np.min(right_window) if right_window.size > 0 else 0
+    # 해당 공백 영역에 존재하는 가장 밝은 픽셀값(np.max)을 구합니다.
+    # - 숫자 '1'은 좌우 영역이 완벽히 비어있어야 하므로, 해당 영역의 최대 밝기(max)가 낮아야 합니다.
+    # - 숫자 '0'은 위아래 가로 획(커브선)이 이 구간을 지나가므로, 해당 영역의 최대 밝기(max)가 무조건 높게 나옵니다.
+    left_max = np.max(left_window) if left_window.size > 0 else 0
+    right_max = np.max(right_window) if right_window.size > 0 else 0
     
-    # 기둥 양옆에 어두운 검은색 공백 열(밝기 < 60)이 완벽히 존재해야만 숫자 1입니다.
-    # 숫자 0은 위쪽 가로 곡선이 이 구간을 지나가므로 양쪽 모두 공백 열이 생길 수 없어 0으로 걸러집니다.
-    if left_min > 60 or right_min > 60:
+    # 좌측 또는 우측 영역 중 한 곳이라도 밝은 픽셀(> 80)이 존재한다면, 이는 0의 연결선이 지나가는 것이므로 1이 아닙니다.
+    if left_max > 80 or right_max > 80:
         return False
         
-    return True  
+    return True
 
 # === [AI 비전 엔진 및 융합 환경 설정] ===
 FUSION_CONF = {

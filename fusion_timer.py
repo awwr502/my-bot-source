@@ -2228,11 +2228,18 @@ def fusion_bot_loop():
                                 # 한글 글자(가, 회 등)의 수직 획 오탐을 방지하기 위해 우측 숫자 영역(240~360px)만 정밀 커팅
                                 roi_num_gray = roi_col[90:125, 240:360]
                                 
-                                # [부모 세팅 검증 간소화 및 오작동 원천 차단]
-                                # 부모 선택 창에서는 융합 횟수가 0인 감염물들이 명암 흑색(비활성)으로 자동 처리됩니다.
-                                # 이미 그리드 필터링을 통해 비활성 대상을 완벽히 패스했으므로, 마우스가 도달한 이 감염물은 100% 1(F0)입니다.
-                                # 불필요하고 오작동 위험이 있는 툴팁의 0 vs 1 숫자 검출 과정을 완전히 배제하고 즉시 통과시킵니다.
-                                is_f0 = True
+                                is_f0 = False
+                                t1_img = FUSION_CACHE.get('tier_1.png')
+                                if t1_img is not None and roi_num_gray.size > 0:
+                                    t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
+                                    res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
+                                    _, best_score_n, _, max_loc_n = cv2.minMaxLoc(res_n)
+                                    bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.70)")
+                                    # 사용자님의 제안대로 복잡한 필터를 전부 삭제하고, 직관적으로 임계값(0.70) 기준으로만 판별합니다.
+                                    if best_score_n >= 0.70:
+                                        is_f0 = True
+                                    else:
+                                        is_f0 = False
                                     
                                 # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                 has_any_trait = False

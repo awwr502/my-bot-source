@@ -2319,7 +2319,6 @@ def fusion_bot_loop():
                                     bprint("  > ⚠️ [필터 실패] 나비 아이콘을 검출하지 못했습니다. 기본 탭에서 분석을 진행합니다.")
                                     
                                 # 재료 슬롯 역시 템플릿 매칭 없이 고정 5x7 그리드 순회를 이용해 융합이 가능한 F1들을 수집합니다.
-                                all_candidates = []
                                 for j in range(7):
                                     for i in range(5):
                                         cx = 1420 + i * 95
@@ -2408,7 +2407,7 @@ def fusion_bot_loop():
                                             trait_name_x2 = lx + 360
                                             trait_name_y1 = ly + 30
                                             trait_name_y2 = ly + 300
-                                            roi_trait_name_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                            roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
                                             
                                             temp_scores = []
                                             if roi_trait_gray.size > 0:

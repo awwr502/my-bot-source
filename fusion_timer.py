@@ -1900,79 +1900,54 @@ def fusion_bot_loop():
                                 matched_trait_file = None
                                 
                                 if clicked_list_btn:
-                                    template_label = FUSION_CACHE.get('ability_label.png')
+                                    bprint("  > 🔍 [결과 판독] 상세 정보창의 좌측 특성 패널에서 가치 특성 7종 탐색 시작...")
+                                    
                                     mon = thread_sct.monitors[1]
-                                    r_left = max(0, mon["left"])
-                                    tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": int(SCREEN_W - r_left), "height": mon["height"]}
+                                    # 1920x1080 기준 좌측 정보 패널 영역만 정밀 격리 (x: 50~350, y: 150~600)
+                                    panel_roi = {
+                                        "left": int(mon["left"] + 50),
+                                        "top": int(mon["top"] + 150),
+                                        "width": 300,
+                                        "height": 450
+                                    }
                                     
-                                    label_found = False
-                                    lx, ly = 0, 0
-                                    wait_start = time.time()
-                                    while time.time() - wait_start < 1.0 and bot_active:
-                                        hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                        res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
-                                        _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                        if mv_l >= 0.80:
-                                            label_found = True; lx, ly = ml_l[0], ml_l[1]; break
-                                        time.sleep(0.01)
+                                    # 해당 패널 영역을 캡처 (그레이스케일로 변환하여 폰트 렌더링 신뢰도 향상)
+                                    panel_gray = cv2.cvtColor(np.asarray(thread_sct.grab(panel_roi)), cv2.COLOR_BGRA2GRAY)
+                                    
+                                    has_valuable_trait = False
+                                    best_score = 0.0
+                                    best_matched_file = None
+                                    
+                                    # 가치 특성 1~7번 템플릿 독립 매칭 수행
+                                    for t_idx in range(1, 8):
+                                        t_file = f"trait_{t_idx}.png"
+                                        t_template = FUSION_CACHE.get(t_file)
+                                        if t_template is None: continue
                                         
-                                if label_found:
-                                    time.sleep(0.05)
-                                    sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                                    hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
-                                    
-                                    trait_x1 = max(0, lx - 10)
-                                    trait_x2 = lx + 200
-                                    trait_y1 = ly + 30
-                                    trait_y2 = ly + 300
-                                    roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
-                                    conf_trait = FUSION_CONF.get('trait.png', 0.70)
-                                    
-                                    has_any_trait = False
-                                    if roi_trait_gray.size > 0:
-                                        for scale in [0.95, 1.0, 1.05]:
-                                            width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
-                                            if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
-                                                res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                                                cur_tr = np.max(res_t)
-                                                if cur_tr >= conf_trait:
-                                                    has_any_trait = True
-                                                    break
-                                            
-                                    if has_any_trait:
-                                        trait_name_x1 = max(0, lx - 10)
-                                        trait_name_x2 = lx + 360
-                                        trait_name_y1 = ly + 30
-                                        trait_name_y2 = ly + 300
-                                        roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
+                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
                                         
-                                        # 결과물이 가치 특성 7종 중 하나를 안전하게 상속받았는지 최종 검증
-                                        for t_idx in range(1, 8):
-                                            t_file = f"trait_{t_idx}.png"
-                                            t_template = FUSION_CACHE.get(t_file)
-                                            if t_template is None: continue
+                                        # 크기 축소/확대 보정 (멀티스케일 매칭)
+                                        if panel_gray.shape[0] >= t_template_g.shape[0] and panel_gray.shape[1] >= t_template_g.shape[1]:
+                                            file_best_score = 0.0
+                                            for scale in [0.95, 1.0, 1.05]:
+                                                width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
+                                                if width <= panel_gray.shape[1] and height <= panel_gray.shape[0]:
+                                                    res_st = cv2.matchTemplate(panel_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                    file_best_score = max(file_best_score, np.max(res_st))
                                             
-                                            t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                            if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
-                                                best_score = 0.0
-                                                for scale in [0.95, 1.0, 1.05]:
-                                                    width, height = int(t_template_g.shape[1]*scale), int(t_template_g.shape[0]*scale)
-                                                    if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_name_gray.shape[0]:
-                                                        res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                                                        best_score = max(best_score, np.max(res_st))
+                                            if file_best_score >= 0.85:
+                                                has_valuable_trait = True
+                                                best_score = file_best_score
+                                                best_matched_file = t_file
+                                                break
                                                 
-                                                if best_score >= 0.85:
-                                                    has_valuable_trait = True
-                                                    break
-                                                    
-                                    fast_clear_tooltip()
                                     # 상세 정보창 닫기 (ESC 입력)
                                     send_cmd('E'); time.sleep(0.15); send_cmd('R')
                                     wait_vanish('dev_trait_header.png', thread_sct)
-                                
+                                    
                                 if has_valuable_trait:
-                                    bprint("  > 🎉 [성공] 결과물 가치 특성 전수 완료! NORMAL 상태로 복사 가동합니다.")
+                                    identified_trait_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
+                                    bprint(f"  > 🎉 [성공] 결과물 가치 특성 '{identified_trait_name}' 전수 완료! (신뢰도: {best_score:.2f}) NORMAL 상태로 복사 가동합니다.")
                                     char_sub_modes[char_key] = "NORMAL"
                                 else:
                                     bprint("  > 😭 [실패] 결과물 가치 특성 미전수! RECOVERY 복구 상태로 전환합니다.")

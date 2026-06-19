@@ -349,7 +349,8 @@ FUSION_CONF = {
     'dis_4.png': 0.85,
     'stop_pop.png': 0.85,
     'hunt_pop.png': 0.85,
-    'empty_checkbox.png': 0.90
+    'empty_checkbox.png': 0.90,
+    'butterfly.png': 0.85
 }
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
@@ -362,7 +363,7 @@ GRAY_IMAGES = [
     '6.png', '7.png', '14.png',
     'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png', 'select_0_3.png',
     'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png', 'dev_list_btn.png',
-    'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png', 'empty_checkbox.png'
+    'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png', 'empty_checkbox.png', 'butterfly.png'
 ]
 
 # [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
@@ -2380,6 +2381,24 @@ def fusion_bot_loop():
                                     if check_img('select_0_3.png', thread_sct): break
                                     time.sleep(0.05)
                                     
+                                # [사용자 피드백 반영] 나비 필터 아이콘(butterfly.png) 탐색 및 동적 타격
+                                bprint("  > 🦋 [필터 전환] 나비 아이콘(butterfly.png) 탐색 및 탭 전환 시도...")
+                                found_butterfly = False
+                                wait_bf = time.time()
+                                # 최초 1회는 전체화면 스캔으로 ROI를 생성하고, 이후에는 캐시 범위 초고속 타격을 수행합니다.
+                                while time.time() - wait_bf < 1.5 and bot_active:
+                                    if check_img('butterfly.png', thread_sct):
+                                        found_butterfly = True
+                                        cx, cy = FUSION_ROI['butterfly.png']['last_pos']
+                                        pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
+                                        bprint("  > 🦋 [필터 성공] 나비 아이콘 클릭 완료! 감염물 리스트 전환 성공.")
+                                        time.sleep(0.12) # 탭 전환 렌더링 딜레이 헷지
+                                        break
+                                    time.sleep(0.05)
+                                    
+                                if not found_butterfly:
+                                    bprint("  > ⚠️ [필터 실패] 나비 아이콘을 검출하지 못했습니다. 기본 탭에서 분석을 진행합니다.")
+                                    
                                 # 재료 슬롯 역시 템플릿 매칭 없이 고정 5x7 그리드 순회를 이용해 융합이 가능한 F1들을 수집합니다.
                                 all_candidates = []
                                 for j in range(7):
@@ -2587,37 +2606,41 @@ def fusion_bot_loop():
                                     for idx, mt in enumerate(target_materials):
                                         pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05); send_cmd('C')
                                                 
-                                        # 첫 번째 재료 클릭 시 노출되는 경고 팝업을 '2.png' (알림 이미지)를 사용해 최대 1.2초 동안 실시간으로 안전 추적합니다.
+                                        # 첫 번째 재료 클릭 시 노출되는 경고 팝업을 '2.png'를 사용해 최대 0.5초간 능동 대기합니다.
                                         if idx == 0:
                                             has_popup = False
                                             popup_name = None
-                                                    
+                                                
                                             start_wait = time.time()
-                                            while time.time() - start_wait < 1.2 and bot_active:
+                                            while time.time() - start_wait < 0.5 and bot_active:
                                                 if check_img('2.png', thread_sct, force_full=True):
                                                     has_popup = True
                                                     popup_name = '2.png'
                                                     break
-                                                time.sleep(0.05)
-                                                        
+                                                time.sleep(0.03)
+                                                    
                                             if has_popup:
                                                 bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림(2.png) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
-                                                # 1. 'empty_checkbox.png' 이미지를 화면 전체에서 검출하여 정중앙 좌표를 정확히 조준 타격합니다.
+                                                # 1. 'empty_checkbox.png' 이미지를 검출하여 정확히 중심을 조준 타격합니다.
                                                 if check_img('empty_checkbox.png', thread_sct, force_full=True):
                                                     cx, cy = FUSION_ROI['empty_checkbox.png']['last_pos']
-                                                    pyautogui.moveTo(cx, cy, duration=0.15); time.sleep(0.15)
-                                                    send_cmd('C'); time.sleep(0.2)
+                                                    pyautogui.moveTo(cx, cy, duration=0.1); time.sleep(0.05)
+                                                    send_cmd('C'); time.sleep(0.1)
                                                 else:
-                                                    bprint("  > ❌ [경고] 'empty_checkbox.png' 이미지를 검출하지 못해 임시 기본 글씨 좌표(910, 618)로 클릭을 우회합니다.")
-                                                    pyautogui.moveTo(910, 618, duration=0.15); time.sleep(0.15)
-                                                    send_cmd('C'); time.sleep(0.2)
+                                                    bprint("  > ❌ [경고] 'empty_checkbox.png' 이미지를 검출하지 못해 임시 글씨 좌표(910, 618)로 클릭을 우회합니다.")
+                                                    pyautogui.moveTo(910, 618, duration=0.1); time.sleep(0.05)
+                                                    send_cmd('C'); time.sleep(0.1)
                                                 # 2. 확인 단축키 F 입력
-                                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                                # 3. 팝업 소멸 대기
-                                                wait_vanish(popup_name, thread_sct)
+                                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                                # 3. 팝업이 사라질 때까지 최대 0.5초 동안 초고속 실시간 능동 대기합니다.
+                                                wait_vanish_start = time.time()
+                                                while time.time() - wait_vanish_start < 0.5 and bot_active:
+                                                    if not check_img(popup_name, thread_sct, force_full=True):
+                                                        break
+                                                    time.sleep(0.03)
                                                 # 4. 마우스를 다시 원래 재료 감염물 자리로 정교하게 복귀
-                                                pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.1)
-                                                    
+                                                pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05)
+                                                
                                         time.sleep(0.1)
                                         fast_clear_tooltip()
                                     send_cmd('F'); time.sleep(0.1); send_cmd('R')

@@ -2096,6 +2096,29 @@ def fusion_bot_loop():
                             while bot_active and time.time() - wait_inv_start < 3.0:
                                 if check_img('select_0_2.png', thread_sct): break
                                 time.sleep(0.05)
+
+                            # [체크마크 해제 및 초기화] 부모 슬롯(0/2) 전용 체크 해제 로직 실행
+                            bprint("  > 🔄 [부모 슬롯] 기존 체크 해제 및 0/2 상태 검증 시작...")
+                            while bot_active:
+                                dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
+                                res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
+                                loc_dc = np.where(res_dc >= 0.85)
+                                pts_dc = list(zip(*loc_dc[::-1]))
+                                
+                                if len(pts_dc) > 0:
+                                    dc_unique = []
+                                    for ptd in pts_dc:
+                                        if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
+                                            dc_unique.append(ptd)
+                                    for ptd in dc_unique:
+                                        hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
+                                        pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
+                                    fast_clear_tooltip()
+                                
+                                if check_img('select_0_2.png', thread_sct):
+                                    bprint("  > ✅ [확인] 부모 슬롯 0/2 상태 진입 완료.")
+                                    break
+                                time.sleep(0.1)
                                 
                             inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
                             # 모드 6은 모든 감염물을 대상으로 삼으므로 템플릿 매칭을 생략하고, 고정 5x7 인벤토리 그리드를 직접 순회합니다.
@@ -2268,6 +2291,29 @@ def fusion_bot_loop():
                                 while bot_active and time.time() - wait_inv_start < 3.0:
                                     if check_img('select_0_3.png', thread_sct): break
                                     time.sleep(0.05)
+
+                                # [체크마크 해제 및 초기화] 재료 슬롯(0/3) 전용 체크 해제 로직 실행
+                                bprint("  > 🔄 [재료 슬롯] 기존 체크 해제 및 0/3 상태 검증 시작...")
+                                while bot_active:
+                                    dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
+                                    res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
+                                    loc_dc = np.where(res_dc >= 0.85)
+                                    pts_dc = list(zip(*loc_dc[::-1]))
+                                    
+                                    if len(pts_dc) > 0:
+                                        dc_unique = []
+                                        for ptd in pts_dc:
+                                            if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
+                                                dc_unique.append(ptd)
+                                        for ptd in dc_unique:
+                                            hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
+                                            pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
+                                        fast_clear_tooltip()
+                                    
+                                    if check_img('select_0_3.png', thread_sct):
+                                        bprint("  > ✅ [확인] 재료 슬롯 0/3 상태 진입 완료.")
+                                        break
+                                    time.sleep(0.1)
                                     
                                 # [사용자 피드백 반영] 나비 필터 아이콘(butterfly.png) 탐색 및 동적 타격
                                 bprint("  > 🦋 [필터 전환] 나비 아이콘(butterfly.png) 탐색 및 탭 전환 시도...")

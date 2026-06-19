@@ -2097,7 +2097,29 @@ def fusion_bot_loop():
                                 if check_img('select_0_2.png', thread_sct): break
                                 time.sleep(0.05)
 
-                            # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
+                            # [체크마크 해제 및 초기화] 부모 슬롯(0/2) 전용 체크 해제 로직 실행
+                            bprint("  > 🔄 [부모 슬롯] 기존 체크 해제 및 0/2 상태 검증 시작...")
+                            while bot_active:
+                                dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
+                                res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
+                                loc_dc = np.where(res_dc >= 0.85)
+                                pts_dc = list(zip(*loc_dc[::-1]))
+                                
+                                if len(pts_dc) > 0:
+                                    dc_unique = []
+                                    for ptd in pts_dc:
+                                        if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
+                                            dc_unique.append(ptd)
+                                    for ptd in dc_unique:
+                                        hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
+                                        pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
+                                    fast_clear_tooltip()
+                                
+                                if check_img('select_0_2.png', thread_sct):
+                                    bprint("  > ✅ [확인] 부모 슬롯 0/2 상태 진입 완료.")
+                                    break
+                                time.sleep(0.1)
+                                
                             inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
                             # 모드 6은 모든 감염물을 대상으로 삼으므로 템플릿 매칭을 생략하고, 고정 5x7 인벤토리 그리드를 직접 순회합니다.
                             all_candidates = []
@@ -2106,129 +2128,6 @@ def fusion_bot_loop():
                                     cx = 1400 + i * 95
                                     cy = 220 + j * 95
                                     all_candidates.append((cx, cy))
-                                        
-                            # 부모 슬롯 이미지 분석을 위한 인벤토리 화면(BGR)을 사전 정의 및 적재합니다.
-                            inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
-                            screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
-                                        
-                            target_parents = []
-                            for cx, cy in all_candidates:
-                                if len(target_parents) >= 2: break
-                                    
-                                # [사용자 피드백 반영] 마우스를 올리기 전에 인벤토리 그리드의 밝기를 검사합니다.
-                                # 비활성화된 0짜리 감염물(흑색 명암) 및 빈 슬롯은 화면 분석 및 조준 대상에서 원천 배제하고 즉시 스킵합니다.
-                                rx = cx - 960
-                                ry = cy
-                                slot_roi = screen_bgr[max(0, ry - 15):min(screen_bgr.shape[0], ry + 15), max(0, rx - 15):min(screen_bgr.shape[1], rx + 15)]
-                                
-                                if slot_roi.size > 0 and np.max(slot_roi) < 120:
-                                    continue # 어둡거나 빈 슬롯은 툴팁을 열지 않고 패스
-                                    
-                                pyautogui.moveTo(cx, cy)
-                                template_label = FUSION_CACHE.get('ability_label.png')
-                                mon = thread_sct.monitors[1]
-                                r_left = max(mon["left"], cx - 1100) # [동적 캡처 적용] 모드 3/4와 완전히 동일하게 마우스 위치 기준 좌측 1100px을 동적 캡처합니다.
-                                r_top = mon["top"]
-                                r_width = 1100
-                                r_height = mon["height"]
-                                tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
-                                
-                                label_found = False
-                                lx, ly = 0, 0
-                                wait_start = time.time()
-                                while time.time() - wait_start < 1.0 and bot_active:
-                                    hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
-                                    res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
-                                    _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                    if mv_l >= 0.80:
-                                        label_found = True; lx, ly = ml_l[0], ml_l[1]
-                                        break
-                                    time.sleep(0.05)
-                            
-                                if not label_found:
-                                    fast_clear_tooltip(); continue
-                                    
-                                time.sleep(0.05)
-                                sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
-                                hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
-                                
-                                # 융합 가능 횟수 숫자가 1인지(F0) tier_1.png로 크로스매칭 판독
-                                label_w = template_label.shape[1]
-                                col_x_start = lx + label_w
-                                col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
-                                col_y_start = max(0, ly - 20)
-                                col_y_end = min(hover_gray.shape[0], ly + 150)
-                                roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
-                                        
-                                # 한글 글자(가, 회 등)의 수직 획 오탐을 방지하기 위해 우측 숫자 영역(240~360px)만 정밀 커팅
-                                roi_num_gray = roi_col[90:125, 240:360]
-                                        
-                                # [부모 세팅 검증 간소화 및 오작동 원천 차단]
-                                is_f0 = True
-                                        
-                                # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
-                                has_any_trait = False
-                                trait_x1 = max(0, lx - 10)
-                                trait_x2 = lx + 200
-                                trait_y1 = ly + 30
-                                trait_y2 = ly + 300
-                                roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                
-                                t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
-                                conf_trait = FUSION_CONF.get('trait.png', 0.70)
-                                
-                                if roi_trait_gray.size > 0:
-                                    for scale in [0.95, 1.0, 1.05]:
-                                        width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
-                                        if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
-                                            res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                                            cur_tr = np.max(res_t)
-                                            if cur_tr >= conf_trait:
-                                                has_any_trait = True
-                                                break
-                                                
-                                has_valuable_trait = False
-                                if has_any_trait:
-                                    trait_name_x1 = max(0, lx - 10)
-                                    trait_name_x2 = lx + 360
-                                    trait_name_y1 = ly + 30
-                                    trait_name_y2 = ly + 300
-                                    roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
-                                    
-                                    temp_scores = []
-                                    if roi_trait_gray.size > 0:
-                                        for scale in [0.95, 1.0, 1.05]:
-                                            width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
-                                            if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_gray.shape[0]:
-                                                res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
-                                                cur_tr = np.max(res_t)
-                                                if cur_tr >= conf_trait:
-                                                    # 1번부터 7번 가치 특성 정밀 대조 시작
-                                                    for t_idx in range(1, 8):
-                                                        t_file = f"trait_{t_idx}.png"
-                                                        t_template = FUSION_CACHE.get(t_file)
-                                                        if t_template is None: continue
-                                                        
-                                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                                        if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
-                                                            best_score = 0.0
-                                                            for t_scale in [0.95, 1.0, 1.05]:
-                                                                t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
-                                                                if t_w <= roi_trait_name_gray.shape[1] and t_h <= roi_trait_gray.shape[0]:
-                                                                    res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (t_w, t_h)), cv2.TM_CCOEFF_NORMED)
-                                                                    best_score = max(best_score, np.max(res_st))
-                                                            
-                                                            temp_scores.append((t_file, best_score))
-                                                    break
-                                                    
-                                    # 점수순 내림차순 정렬 및 스마트 갭 판독
-                                    temp_scores.sort(key=lambda x: x[1], reverse=True)
-                                    if len(temp_scores) >= 1:
-                                        top1_file, top1_score = temp_scores[0]
-                                        top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
-                                        
-                                        if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
-                                            has_valuable_trait = True
                                         
                             # 부모 슬롯 이미지 분석을 위한 인벤토리 화면(BGR)을 사전 정의 및 적재합니다.
                             inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
@@ -2376,10 +2275,26 @@ def fusion_bot_loop():
                                 bprint("  > 🛑 [부모 부족] 필요한 조건의 F0 부모가 없습니다. 캐릭터 스킵 시퀀스 진입.")
                                 send_cmd('E'); time.sleep(0.15); send_cmd('R'); skip_current_char = True
                             else:
-                                # [부모 기존 체크 해제 및 신규 클릭 무한 검증 루프]
-                                bprint("  > 🔄 [부모 세팅] 부모 슬롯 2/2 완성 검증 루프 작동...")
+                                # 부모 슬롯 클릭 및 채우기
+                                bprint("  > 🔄 [부모 투입] 선택된 부모 2개 클릭 중...")
+                                for pt in target_parents:
+                                    pyautogui.moveTo(pt[0], pt[1]); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
+                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                # 이미 캐시가 완벽히 저장된 select_0_2.png의 소멸을 감시하여 즉시(0.1초 만에) 검증을 통과시킵니다.
+                                wait_vanish('select_0_2.png', thread_sct)
+                                
+                                # 2단계: 재료 슬롯(F1 / 0짜리) 채우기
+                                bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방...")
+                                pyautogui.moveTo(1400, 450); time.sleep(0.1); send_cmd('C')
+                                
+                                wait_inv_start = time.time()
+                                while bot_active and time.time() - wait_inv_start < 3.0:
+                                    if check_img('select_0_3.png', thread_sct): break
+                                    time.sleep(0.05)
+
+                                # [체크마크 해제 및 초기화] 재료 슬롯(0/3) 전용 체크 해제 로직 실행
+                                bprint("  > 🔄 [재료 슬롯] 기존 체크 해제 및 0/3 상태 검증 시작...")
                                 while bot_active:
-                                    # 1) 기존 체크마크 전부 해제 (부모 탐색 후에 비워줌)
                                     dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
                                     res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
                                     loc_dc = np.where(res_dc >= 0.85)
@@ -2394,32 +2309,11 @@ def fusion_bot_loop():
                                             hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
                                             pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
                                         fast_clear_tooltip()
-                                        
-                                    # 2) 신규 채택한 부모 2개 클릭
-                                    for pt in target_parents:
-                                        pyautogui.moveTo(pt[0], pt[1]); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
-                                    fast_clear_tooltip()
                                     
-                                    # 3) 2/2(select_2_2.png) 상태 검증
-                                    if check_img('select_2_2.png', thread_sct):
-                                        bprint("  > ✅ [확인] 부모 슬롯 2/2 세팅 완료.")
+                                    if check_img('select_0_3.png', thread_sct):
+                                        bprint("  > ✅ [확인] 재료 슬롯 0/3 상태 진입 완료.")
                                         break
-                                    bprint("  > ⚠️ [재시도] 부모 슬롯 2/2 미달성. 다시 세팅을 시도합니다.")
-                                    time.sleep(0.2)
-                                    
-                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                wait_vanish('select_0_2.png', thread_sct)
-                                
-                                # 2단계: 재료 슬롯(F1 / 0짜리) 채우기
-                                bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방...")
-                                pyautogui.moveTo(1400, 450); time.sleep(0.1); send_cmd('C')
-                                
-                                wait_inv_start = time.time()
-                                while bot_active and time.time() - wait_inv_start < 3.0:
-                                    if check_img('select_0_3.png', thread_sct): break
-                                    time.sleep(0.05)
-
-                                # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
+                                    time.sleep(0.1)
                                     
                                 # [사용자 피드백 반영] 나비 필터 아이콘(butterfly.png) 탐색 및 동적 타격
                                 bprint("  > 🦋 [필터 전환] 나비 아이콘(butterfly.png) 탐색 및 탭 전환 시도...")
@@ -2647,67 +2541,53 @@ def fusion_bot_loop():
                                     bprint("  > 🛑 [재료 부족] 필요한 조건의 F1 재료가 부족합니다. 캐릭터 스킵 시퀀스 진입.")
                                     send_cmd('E'); time.sleep(0.15); send_cmd('R'); skip_current_char = True
                                 else:
-                                    # [재료 기존 체크 해제 및 신규 클릭 무한 검증 루프]
-                                    bprint("  > 🔄 [재료 세팅] 재료 슬롯 3/3 완성 검증 루프 작동...")
-                                    while bot_active:
-                                        # 1) 기존 체크마크 전부 해제 (재료 탐색 후에 비워줌)
-                                        dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
-                                        res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
-                                        loc_dc = np.where(res_dc >= 0.85)
-                                        pts_dc = list(zip(*loc_dc[::-1]))
-                                        
-                                        if len(pts_dc) > 0:
-                                            dc_unique = []
-                                            for ptd in pts_dc:
-                                                if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
-                                                    dc_unique.append(ptd)
-                                            for ptd in dc_unique:
-                                                hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
-                                                pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
-                                            fast_clear_tooltip()
-                                            
-                                        # 2) 신규 채택한 재료 3개 클릭
-                                        for idx, mt in enumerate(target_materials):
-                                            pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
-                                            
-                                            # 첫 번째 재료 클릭 시 경고 팝업 우회
-                                            if idx == 0:
-                                                has_popup = False
-                                                popup_name = None
-                                                start_wait = time.time()
-                                                while time.time() - start_wait < 0.5 and bot_active:
-                                                    if check_img('2.png', thread_sct, force_full=True):
-                                                        has_popup = True
-                                                        popup_name = '2.png'
+                                    # 재료 슬롯 등록 클릭
+                                    bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")
+                                    for idx, mt in enumerate(target_materials):
+                                        pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
+                                                
+                                        # 첫 번째 재료 클릭 시 노출되는 경고 팝업을 '2.png'를 사용해 최대 0.5초간 능동 대기합니다.
+                                        if idx == 0:
+                                            has_popup = False
+                                            popup_name = None
+                                                    
+                                            start_wait = time.time()
+                                            while time.time() - start_wait < 0.5 and bot_active:
+                                                if check_img('2.png', thread_sct, force_full=True):
+                                                    has_popup = True
+                                                    popup_name = '2.png'
+                                                    break
+                                                time.sleep(0.03)
+                                                        
+                                            if has_popup:
+                                                bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림(2.png) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
+                                                
+                                                # 1. 최초 1회 전체 화면 매칭 성공 후, 두 번째 캐릭터부터는 캐시 범위(ROI) 조준 타격으로 초고속 클릭합니다.
+                                                if check_img('empty_checkbox.png', thread_sct):
+                                                    cx, cy = FUSION_ROI['empty_checkbox.png']['last_pos']
+                                                    pyautogui.moveTo(cx, cy, duration=0.1); time.sleep(0.05)
+                                                    send_cmd('C'); time.sleep(0.1)
+                                                else:
+                                                    bprint("  > ❌ [경고] 'empty_checkbox.png' 이미지를 검출하지 못해 임시 기본 글씨 좌표(910, 618)로 클릭을 우회합니다.")
+                                                    pyautogui.moveTo(910, 618, duration=0.1); time.sleep(0.05)
+                                                    send_cmd('C'); time.sleep(0.1)
+                                                    
+                                                # 2. 확인 단축키 F 입력
+                                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                                # 3. 팝업이 사라질 때까지 최대 0.5초 동안 초고속 실시간 능동 대기합니다.
+                                                wait_vanish_start = time.time()
+                                                while time.time() - wait_vanish_start < 0.5 and bot_active:
+                                                    if not check_img(popup_name, thread_sct, force_full=True):
                                                         break
                                                     time.sleep(0.03)
-                                                            
-                                                if has_popup:
-                                                    bprint(f"  > ⚠️ [경고 팝업 감지] 재료 소모 알림(2.png) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
-                                                    if check_img('empty_checkbox.png', thread_sct):
-                                                        cx_chk, cy_chk = FUSION_ROI['empty_checkbox.png']['last_pos']
-                                                        pyautogui.moveTo(cx_chk, cy_chk, duration=0.1); time.sleep(0.05)
-                                                        send_cmd('C'); time.sleep(0.1)
-                                                    else:
-                                                        pyautogui.moveTo(910, 618, duration=0.1); time.sleep(0.05)
-                                                        send_cmd('C'); time.sleep(0.1)
-                                                    send_cmd('F'); time.sleep(0.05); send_cmd('R')
-                                                    wait_vanish_start = time.time()
-                                                    while time.time() - wait_vanish_start < 0.5 and bot_active:
-                                                        if not check_img(popup_name, thread_sct, force_full=True):
-                                                            break
-                                                        time.sleep(0.03)
-                                                    pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05)
-                                        fast_clear_tooltip()
-                                        
-                                        # 3) 3/3(select_3_3.png) 상태 검증
-                                        if check_img('select_3_3.png', thread_sct):
-                                            bprint("  > ✅ [확인] 재료 슬롯 3/3 세팅 완료.")
-                                            break
-                                        bprint("  > ⚠️ [재시도] 재료 슬롯 3/3 미달성. 다시 세팅을 시도합니다.")
-                                        time.sleep(0.2)
-                                        
+                                                # 4. 마우스를 다시 원래 재료 감염물 자리로 정교하게 복귀
+                                                pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05)
+                                                    
                                     send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                    # [모드 3/4와 완전히 동일한 초고속 소멸 방식 적용]
+                                    # select_3_3.png는 사전에 매칭된 캐시(ROI)가 없어 소멸 검증에 2초가 걸렸습니다.
+                                    # 창이 열릴 때 이미 매칭되어 캐시(ROI)가 완벽히 저장되어 있는 'select_0_3.png'를 대상으로 소멸 검증을 지시하면
+                                    # 모드 3, 4와 완전히 똑같이 즉시(0.1초 만에) 소멸 처리를 끝내고 다음 단계로 광속 진입합니다!
                                     wait_vanish('select_0_3.png', thread_sct)
                                     
                         else:

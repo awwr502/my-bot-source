@@ -2370,7 +2370,7 @@ def fusion_bot_loop():
                                         col_y_end = min(hover_gray.shape[0], ly + 150)
                                         roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
                                         
-                                        # [핵심 수정] 아래쪽 소개글("영지에서 일하며...")의 픽셀 침범을 원천 차단하기 위해
+                                        # [핵심 수정] 하단 설명글("영지에서 일하며...")의 픽셀 침범을 원천 차단하기 위해
                                         # 세로 범위를 80:108로 정밀 제한하고, 가로 영역도 숫자가 위치한 우측 끝(280:340)으로 완벽하게 고정 격리합니다.
                                         roi_num_gray = roi_col[80:108, 280:340]
                                         
@@ -2385,12 +2385,16 @@ def fusion_bot_loop():
                                             thresh_val = max(40, int(max_pixel_val * 0.5)) # 최대 밝기의 50%를 기준으로 동적 처리
                                             _, thresh = cv2.threshold(roi_num_gray, thresh_val, 255, cv2.THRESH_BINARY)
                                             
-                                            # 2) 첫 번째 숫자의 가로막대 개수 판독 알고리즘
+                                            # 2) [상하단 간섭 해결] 숫자 '0'의 상/하단 가로 연결부(루프)를 잘라내고 순수 세로 벽면만 분석하도록 세로 중간 50% 영역만 크롭합니다.
                                             h_roi, w_roi = thresh.shape
-                                            in_stroke = False
+                                            mid_start = int(h_roi * 0.25)
+                                            mid_end = int(h_roi * 0.75)
+                                            middle_thresh = thresh[mid_start:mid_end, :]
                                             
+                                            # 3) 가로막대 개수 판독 알고리즘 수행
+                                            in_stroke = False
                                             for x_pos in range(w_roi):
-                                                col_slice = thresh[:, x_pos]
+                                                col_slice = middle_thresh[:, x_pos]
                                                 has_white = np.max(col_slice) > 0
                                                 
                                                 if not in_stroke:
@@ -2403,13 +2407,13 @@ def fusion_bot_loop():
                                                         is_real_gap = True
                                                         for look_ahead in range(1, 3):
                                                             if x_pos + look_ahead < w_roi:
-                                                                if np.max(thresh[:, x_pos + look_ahead]) > 0:
+                                                                if np.max(middle_thresh[:, x_pos + look_ahead]) > 0:
                                                                     is_real_gap = False
                                                                     break
                                                         if is_real_gap:
                                                             in_stroke = False
                                                             
-                                            # 3) 막대기(세로선) 개수에 따른 융합 가능 횟수 분기
+                                            # 4) 막대기(세로선) 개수에 따른 융합 가능 횟수 분기
                                             if stroke_count == 1:
                                                 is_f0 = True # 1짜리(F0)로 확정
                                             elif stroke_count == 2:

@@ -1863,41 +1863,13 @@ def fusion_bot_loop():
                         
                         if reward_found:
                             print() # 줄바꿈 복구
-                            bprint("  > [보상 있음] '획득' 창 확인 완료! F를 입력합니다.")
+                            bprint("  > [보상 있음] '획득' 창 확인 완료!")
                             
-                            while bot_active:
-                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
-                                bprint("  > [대기] get_reward.png 초고속 소멸 검증 중...")
-                                
-                                vanish_count = 0
-                                wait_start = time.time()
-                                while time.time() - wait_start < 5.0 and bot_active:
-                                    # [초가속 핵심 1] force_full=True 제거! 메모리에 저장된 좁은 구역(ROI)만 0.001초 만에 스캔합니다.
-                                    if check_img('get_reward.png', thread_sct):
-                                        vanish_count = 0
-                                    else:
-                                        vanish_count += 1
-                                        
-                                    # [초가속 핵심 2] 20회 -> 5회 연속 안 보이면 즉시 소멸 확정 (약 0.05초 소요)
-                                    if vanish_count >= 5:
-                                        break
-                                    time.sleep(0.01)
-                                    
-                                if vanish_count >= 5:
-                                    bprint("  > [완료] get_reward.png 완벽 소멸 확인!")
-                                    break
-                                else:
-                                    bprint("  > [재시도] 5초 대기 초과! 획득 창이 닫히지 않아 F를 다시 입력합니다.")
-                            
-                            if check_popup_char(thread_sct):
-                                bprint("  > [꼬임 방지] F 입력 직후 팝업 간섭 감지! 루프를 재시작하여 보상을 다시 획득합니다.")
-                                continue 
-                            
-                            # [모드 6 결과 판독: 융합 결과물의 특성 유무에 따른 동적 상태 전이]
+                            # [모드 6 결과 판독: F 입력 전 즉시 수령을 유예하고 특성 상세창을 엽니다]
                             if bot_mode == 6:
-                                bprint("  > [모드 6 결과 판독] 획득 창(get_reward.png) 감지! 즉시 수령을 유예하고 특성 상세창을 엽니다.")
+                                char_key = char_images[char_index]
+                                bprint("  > [모드 6 결과 판독] 보상 수령 전 특성 복사 여부를 먼저 정밀 판독합니다.")
                                 
-                                # 최초 1회 전체 화면 스캔 후 ROI를 자동 기억하여 이후에는 초고속으로 판정합니다.
                                 clicked_list_btn = False
                                 while bot_active:
                                     if check_img('dev_list_btn.png', thread_sct):
@@ -1920,22 +1892,16 @@ def fusion_bot_loop():
                                             bprint("  > ⚠️ [타임아웃] 2초 내에 특성 탭 인식 실패. 메뉴 버튼 재클릭 시도...")
                                     else:
                                         time.sleep(0.1)
+                                        # 예외 처리: 획득 창 자체가 닫힌 상태라면 무한 대기 방지 탈출
+                                        if not check_img('get_reward.png', thread_sct):
+                                            break
                                         
                                 has_valuable_trait = False
                                 matched_trait_file = None
                                 
                                 if clicked_list_btn:
-                                    # 첫 1회는 전체 화면 스캔, 이후에는 자동 캐싱된 ROI(force_full=False) 스캔 작동
-                                    if not hasattr(fusion_bot_loop, 'mode6_first_scan_done'):
-                                        fusion_bot_loop.mode6_first_scan_done = True
-                                        bprint("  > 🔍 [결과 판독] 가치 특성 7종 전체 화면 정밀 탐색 시작...")
-                                    else:
-                                        bprint("  > ⚡ [결과 판독] 캐싱된 가치 특성 영역 분석 가동...")
-                                        
-                                    # 어빌리티 라벨 기준점(ability_label.png) 검출 한계선을 모드 5와 동일한 0.80으로 수립합니다.
                                     template_label = FUSION_CACHE.get('ability_label.png')
                                     mon = thread_sct.monitors[1]
-                                    # 전체 화면 범위(0부터 끝까지)를 캡처하여 좌측 잘림 현상을 완벽히 차단합니다.
                                     r_left = max(0, mon["left"])
                                     tooltip_roi = {"left": int(r_left), "top": mon["top"], "width": int(SCREEN_W - r_left), "height": mon["height"]}
                                     
@@ -1950,7 +1916,6 @@ def fusion_bot_loop():
                                             label_found = True; lx, ly = ml_l[0], ml_l[1]; break
                                         time.sleep(0.01)
                                         
-                                    has_valuable_trait = False
                                 if label_found:
                                     time.sleep(0.05)
                                     sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
@@ -1961,7 +1926,7 @@ def fusion_bot_loop():
                                     trait_y1 = ly + 30
                                     trait_y2 = ly + 300
                                     roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
-                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGRA2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
                                     conf_trait = FUSION_CONF.get('trait.png', 0.70)
                                     
                                     has_any_trait = False
@@ -2001,9 +1966,10 @@ def fusion_bot_loop():
                                                     has_valuable_trait = True
                                                     break
                                                     
-                                fast_clear_tooltip()
-                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
-                                wait_vanish('select_0_3.png', thread_sct)
+                                    fast_clear_tooltip()
+                                    # 상세 정보창 닫기 (ESC 입력)
+                                    send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                    wait_vanish('dev_trait_header.png', thread_sct)
                                 
                                 if has_valuable_trait:
                                     bprint("  > 🎉 [성공] 결과물 가치 특성 전수 완료! NORMAL 상태로 복사 가동합니다.")
@@ -2011,6 +1977,34 @@ def fusion_bot_loop():
                                 else:
                                     bprint("  > 😭 [실패] 결과물 가치 특성 미전수! RECOVERY 복구 상태로 전환합니다.")
                                     char_sub_modes[char_key] = "RECOVERY"
+
+                            # 2. 보상 획득 및 획득 창 닫기 진행
+                            bprint("  > 보상 수령을 완료하기 위해 획득 단축키(F)를 입력합니다.")
+                            while bot_active:
+                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                bprint("  > [대기] get_reward.png의 소멸 검증 중...")
+                                
+                                vanish_count = 0
+                                wait_start = time.time()
+                                while time.time() - wait_start < 5.0 and bot_active:
+                                    if check_img('get_reward.png', thread_sct):
+                                        vanish_count = 0
+                                    else:
+                                        vanish_count += 1
+                                        
+                                    if vanish_count >= 5:
+                                        break
+                                    time.sleep(0.01)
+                                    
+                                if vanish_count >= 5:
+                                    bprint("  > [완료] get_reward.png 완벽 소멸 확인!")
+                                    break
+                                else:
+                                    bprint("  > [재시도] 5초 대기 초과! 획득 창이 닫히지 않아 F를 다시 입력합니다.")
+                            
+                            if check_popup_char(thread_sct):
+                                bprint("  > [꼬임 방지] F 입력 직후 팝업 간섭 감지! 루프를 재시작하여 보상을 다시 획득합니다.")
+                                continue 
                             
                             bprint("  > [수령 완료] 보상을 획득했습니다. 기계에 남은 이전 감염물을 빼기 위해 2단계로 이동합니다.")
                             is_machine_empty = False

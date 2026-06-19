@@ -2379,7 +2379,7 @@ def fusion_bot_loop():
                                             if t1_img is not None:
                                                 t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                                 res_t1 = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                                _, score_t1, _, max_loc_t1 = cv2.minMaxLoc(res_t1)
+                                                _, score_t1, _, _ = cv2.minMaxLoc(res_t1)
                                                 
                                             # 2) tier_0.png 템플릿 매칭 수행
                                             if t0_img is not None:
@@ -2388,10 +2388,9 @@ def fusion_bot_loop():
                                                 _, score_t0, _, _ = cv2.minMaxLoc(res_t0)
                                                 
                                             # 3) [원상복구/개선] 양쪽 템플릿 신뢰도 비교식으로 0과 1을 정확하게 분별
+                                            # 슬래시나 콜론의 간섭 우려가 있는 수평 픽셀 검증기 대신, 이미지 형태 신뢰도 대조법으로 오인식을 원천 차단합니다.
                                             if score_t1 > score_t0 and score_t1 >= 0.65:
-                                                t1_h = t1_img_g.shape[0] if t1_img is not None else 24
-                                                if is_truly_tier_1(roi_num_gray, max_loc_t1[0], max_loc_t1[1], t1_h):
-                                                    is_f0 = True
+                                                is_f0 = True
                                                     
                                         if is_f0:
                                             fast_clear_tooltip(); continue # 융합 가능 횟수가 1인 감염물(F0)은 즉시 스킵 후 다음 칸 검색

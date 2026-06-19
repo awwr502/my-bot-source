@@ -275,41 +275,24 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # 각 열의 최대 밝기를 계산합니다.
-    col_maxes = np.max(roi, axis=0)
+    # 모드 3, 4에서 사용하던 100% 검증된 수평 검사(좌측 18픽셀 공백 검사) 로직을 그대로 사용합니다.
+    # 단, 아래쪽 소개글("전기를 공급한다" 등)을 침범하여 오탐지되는 것을 방지하기 위해,
+    # 수직 검사 범위만 최상단에서 11픽셀 높이(y ~ y + 11)로 가두어 안전하게 오려냅니다.
+    probe_x_start = max(0, x - 18)
+    probe_x_end = max(0, x - 3)
     
-    # 템플릿 매칭 지점 주변에서 실제 숫자의 가장 선명한 세로 중심축(idx_max)을 동적으로 잡습니다.
-    search_start = max(0, x - 2)
-    search_end = min(len(col_maxes), x + 6)
-    if search_start >= search_end: return True
-    
-    idx_max = search_start + np.argmax(col_maxes[search_start:search_end])
-    
-    # 기둥 열에서 하얀색 픽셀(>100)이 있는 수직 행들을 검출합니다.
-    digit_rows = np.where(roi[:, idx_max] > 100)[0]
-    
-    # [콜론 오탐 철벽 차단] 
-    # 실제 숫자 기둥은 최소 10픽셀 이상의 연속 수직선입니다.
-    # 콜론 기호(':')는 수직 픽셀 수가 극히 적으므로(보통 6픽셀 이하) 즉시 차단합니다.
-    if digit_rows.size < 10:
-        return False
-        
-    y_top = digit_rows[0]
-    
-    # [설명글 간섭 100% 회피형 글자 폭 판별 알고리즘]
-    # 아래쪽 라인의 소개글 텍스트를 절대로 밟지 않도록, 수직 검사 범위를 최상단 기둥(y_top ~ y_top + 10)으로 극도로 압축합니다.
-    digit_roi = roi[y_top : min(roi.shape[0], y_top + 10), :]
-    digit_col_maxes = np.max(digit_roi, axis=0)
-    
-    # 최상단 기둥 10픽셀 영역 내에서 글자 두께를 이루는 하얀색 열( Column 밝기 > 100 )의 총 개수를 카운트합니다.
-    active_cols = np.where(digit_col_maxes[max(0, idx_max - 5) : min(len(digit_col_maxes), idx_max + 5)] > 100)[0]
-    
-    # - 활성화된 열의 개수가 5개 이하면 극도로 날씬한 수직선 형태인 숫자 '1'(F0)로 판정합니다.
-    # - 5개를 초과해 옆으로 넓게 퍼져있으면 몸통 획들이 함께 검출된 숫자 '0'(F1)으로 판정합니다.
-    if active_cols.size <= 5:
-        return True
-    else:
-        return False
+    probe_y_start = max(0, y)
+    probe_y_end = min(roi.shape[0], y + 11)
+
+    if probe_x_start >= roi.shape[1]: return True
+
+    sample_area = roi[probe_y_start:probe_y_end, probe_x_start:probe_x_end]
+    if sample_area.size == 0: return True
+
+    # 숫자 몸통(밝은 픽셀)이 왼쪽에 감지되면 1이 아닙니다.
+    if np.max(sample_area) > 60: 
+        return False 
+    return True
 
 # === [AI 비전 엔진 및 융합 환경 설정] ===
 FUSION_CONF = {
@@ -2462,12 +2445,14 @@ def fusion_bot_loop():
                                         t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                         res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
                                         _, best_score_n, _, max_loc_n = cv2.minMaxLoc(res_n)
-                                        bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.71)")
-                                        # 사용자님의 제안대로 복잡한 필터를 전부 삭제하고, 직관적으로 임계값(0.71) 기준으로만 판별합니다.
-                                        if best_score_n >= 0.71:
-                                            is_f0 = True
-                                        else:
-                                            is_f0 = False
+                                        bprint(f"  > [디버그] Material F0 (tier_1) 숫자 매칭 점수: {best_score_n:.4f} (목표: >= 0.65)")
+                                        if best_score_n >= 0.65:
+                                            t1_h = t1_img_g.shape[0]
+                                            # 모드 3, 4와 동일한 수평 검증기(is_truly_tier_1)를 복원하되 세로 범위만 가둬 간섭을 피합니다.
+                                            if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
+                                                is_f0 = True
+                                            else:
+                                                bprint("  > [디버그] Material 숫자 1 감지했으나 좌측 픽셀 존재로 인해 숫자 0(F1)으로 최종 판정.")
                                         
                                     # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                     has_any_trait = False

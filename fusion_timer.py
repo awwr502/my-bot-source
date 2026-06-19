@@ -2157,9 +2157,9 @@ def fusion_bot_loop():
                                 pyautogui.moveTo(cx, cy)
                                 template_label = FUSION_CACHE.get('ability_label.png')
                                 mon = thread_sct.monitors[1]
-                                r_left = max(mon["left"], cx - 1100) # 모드 3/4와 동일하게 마우스 가로 위치에 연동되어 캡처 시작점이 유동적으로 이동합니다.
+                                r_left = max(mon["left"], cx - 1100) # [동적 캡처 적용] 모드 3/4와 완전히 동일하게 마우스 위치 기준 좌측 1100px을 동적 캡처합니다.
                                 r_top = mon["top"]
-                                r_width = 1100 # 동적 범위 추적을 위해 가로폭을 1100px로 재조정합니다.
+                                r_width = 1100
                                 r_height = mon["height"]
                                 tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
                                 
@@ -2368,31 +2368,55 @@ def fusion_bot_loop():
                                         roi_num_gray = roi_col[90:125, 240:360]
                                         
                                         is_f0 = False
+                                        is_f1 = False
+                                        
                                         t1_img = FUSION_CACHE.get('tier_1.png')
                                         t0_img = FUSION_CACHE.get('tier_0.png')
                                         
-                                        score_t1 = 0.0
-                                        score_t0 = 0.0
-                                        
                                         if roi_num_gray.size > 0:
-                                            # 1) tier_1.png 템플릿 매칭 수행
+                                            # 1) tier_1.png 매칭 (모드 3/4와 완전히 동일한 독립식 검증 적용)
                                             if t1_img is not None:
                                                 t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                                 res_t1 = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
-                                                _, score_t1, _, _ = cv2.minMaxLoc(res_t1)
-                                                
-                                            # 2) tier_0.png 템플릿 매칭 수행
+                                                _, score_t1, _, max_loc_t1 = cv2.minMaxLoc(res_t1)
+                                                if score_t1 >= FUSION_CONF.get('tier_1.png', 0.72):
+                                                    t1_h = t1_img_g.shape[0]
+                                                    if is_truly_tier_1(roi_num_gray, max_loc_t1[0], max_loc_t1[1], t1_h):
+                                                        is_f0 = True
+                                                        
+                                            # 2) tier_0.png 매칭 (모드 3/4와 완전히 동일한 독립식 검증 적용)
                                             if t0_img is not None:
                                                 t0_img_g = cv2.cvtColor(t0_img, cv2.COLOR_BGR2GRAY) if len(t0_img.shape) == 3 else t0_img
                                                 res_t0 = cv2.matchTemplate(roi_num_gray, t0_img_g, cv2.TM_CCOEFF_NORMED)
                                                 _, score_t0, _, _ = cv2.minMaxLoc(res_t0)
-                                                
-                                            # 3) 양쪽 템플릿 신뢰도 비교식으로 0과 1을 정확하게 분별
-                                            if score_t1 > score_t0 and score_t1 >= 0.65:
-                                                is_f0 = True
+                                                if score_t0 >= FUSION_CONF.get('tier_0.png', 0.72):
+                                                    is_f1 = True
                                                     
+                                        # [원상복구/수정] f0(1)이면 재료가 아니므로 즉시 스킵
                                         if is_f0:
-                                            fast_clear_tooltip(); continue # 융합 가능 횟수가 1인 감염물(F0)은 즉시 스킵 후 다음 칸 검색
+                                            fast_clear_tooltip(); continue
+                                            
+                                        # f1(0)인 것이 독립형 템플릿 매칭으로 명확하게 검증된 경우에만 재료 투입 진행
+                                        if is_f1:
+                                            if current_sub == "NORMAL":
+                                                # NORMAL 상태: 특성 없는 순정 F1 3개 (not is_f0 검증기 활성화)
+                                                if not has_any_trait:
+                                                    target_materials.append((cx, cy, False))
+                                                    bprint("  > 💎 [재료 채택] F1 순정 감염물 확보 완료.")
+                                            elif current_sub == "RECOVERY":
+                                                # RECOVERY 상태: 1~7 가치 특성 F1 1개 + 특성 없는 순정 F1 2개 (not is_f0 검증기 활성화)
+                                                already_has_trait_in_list = any(m[2] for m in target_materials)
+                                                if has_valuable_trait and not already_has_trait_in_list:
+                                                    target_materials.append((cx, cy, True))
+                                                    bprint("  > 🧬 [재료 채택] F1 가치 특성 감염물 확보 완료.")
+                                                elif not has_any_trait:
+                                                    blank_count = sum(1 for m in target_materials if not m[2])
+                                                    if blank_count < 2:
+                                                        target_materials.append((cx, cy, False))
+                                                        bprint("  > 💎 [재료 채택] F1 순정 감염물 확보 완료.")
+                                        else:
+                                            # '0'과 '1' 둘 다 매칭되지 않은 임의의 상태는 오류 방지를 위해 대기 후 패스시킵니다.
+                                            fast_clear_tooltip(); continue
                                             
                                         # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                         has_any_trait = False

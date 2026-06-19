@@ -1908,12 +1908,12 @@ def fusion_bot_loop():
                                         res_key = f"mode6_res_{t_file}"
                                         if t_file in FUSION_CACHE and res_key not in FUSION_CACHE:
                                             FUSION_CACHE[res_key] = FUSION_CACHE[t_file]
-                                            FUSION_CONF[res_key] = 0.85 # 원본과 동일하게 0.85 유지
+                                            FUSION_CONF[res_key] = 0.75 # 원본과 동일하게 0.75 유지
                                             
                                     # [모드 5 완벽 이식] 임의의 대기 시간을 주는 대신, 모드 5의 방식과 완전히 동일하게
-                                    # 최대 0.35초 동안 화면을 반복 매칭하여 글자가 페이드인 완료되어 나타나는 그 즉시 스캔 성공으로 루프를 탈출합니다.
+                                    # 최대 0.6초 동안 화면을 반복 매칭하여 글자가 페이드인 완료되어 나타나는 그 즉시 스캔 성공으로 루프를 탈출합니다.
                                     scan_start = time.time()
-                                    while time.time() - scan_start < 0.35 and bot_active:
+                                    while time.time() - scan_start < 0.6 and bot_active:
                                         for t_idx in range(1, 8):
                                             res_key = f"mode6_res_trait_{t_idx}.png"
                                             if check_img(res_key, thread_sct):

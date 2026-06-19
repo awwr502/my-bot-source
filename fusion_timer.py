@@ -275,23 +275,31 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # [수정] 중앙(center_y)만 검사하면 3번 숫자의 패인 공간(빈틈)을 만나 1로 오탐할 수 있습니다.
-    # 전체 높이(y 부터 y+h 까지)를 모두 스캔하여 왼쪽에 픽셀이 하나라도 있으면 즉시 차단합니다!
-    probe_x_start = max(0, x - 18)
-    probe_x_end = max(0, x - 3)
+    # [사용자 최적화 수식 반영]: 3번 숫자의 패인 공간 오탐 방지를 위해 전체 높이(y ~ y+h)를 수직 스캔합니다.
+    # [우측 경계 검증 추가]: 0의 좌측 획이 1로 매칭되었을 때 우측 획을 완벽히 차단하기 위해 우측도 함께 전체 높이로 수직 스캔합니다.
+    probe_x_start_l = max(0, x - 18)
+    probe_x_end_l = max(0, x - 3)
+    
+    probe_x_start_r = min(roi.shape[1], x + 10)
+    probe_x_end_r = min(roi.shape[1], x + 25)
+    
     probe_y_start = max(0, y)
     probe_y_end = min(roi.shape[0], y + h)
 
-    if probe_x_start >= roi.shape[1]: return True
+    # 1. 좌측 영역 검증 (3번 숫자의 상/하단 획 및 0의 우측 획 매칭 완벽 차단)
+    if probe_x_start_l < roi.shape[1]:
+        sample_area_l = roi[probe_y_start:probe_y_end, probe_x_start_l:probe_x_end_l]
+        if sample_area_l.size > 0 and np.max(sample_area_l) > 50:
+            return False
 
-    sample_area = roi[probe_y_start:probe_y_end, probe_x_start:probe_x_end]
-    if sample_area.size == 0: return True
+    # 2. 우측 영역 검증 (0의 좌측 획 매칭 시 반대편 우측 획 완벽 차단)
+    if probe_x_start_r < roi.shape[1]:
+        sample_area_r = roi[probe_y_start:probe_y_end, probe_x_start_r:probe_x_end_r]
+        if sample_area_r.size > 0 and np.max(sample_area_r) > 50:
+            return False
 
-    # 숫자 몸통(밝은 픽셀)이 왼쪽에 감지되면 1이 아닙니다. 허용치를 40에서 50으로 살짝 조절하여 노이즈 대비.
-    if np.max(sample_area) > 50: 
-        return False 
     return True
-
+    
 # === [AI 비전 엔진 및 융합 환경 설정] ===
 FUSION_CONF = {
     'stop_btn.png': 0.85,

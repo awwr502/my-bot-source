@@ -275,26 +275,29 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # [콜론 오탐 차단] 융합 가능 횟수 0일 때, 템플릿 매칭이 우측의 숫자 영역이 아닌 
-    # 좌측의 콜론 기호(':')를 매칭점으로 잡은 경우(X < 60)를 즉각 차단하여 숫자 0(F1)으로 인식하게 합니다.
-    if x < 60:
-        return False
-        
-    # 매칭된 중심 기둥 열(idx_max)을 수직으로 스캔해 실제 숫자의 최상단 물리 좌표(y_top)를 구합니다.
+    # 각 열의 최대 밝기를 계산합니다.
     col_maxes = np.max(roi, axis=0)
+    
+    # 템플릿 매칭 지점 주변에서 실제 숫자의 가장 선명한 세로 중심축(idx_max)을 동적으로 잡습니다.
     search_start = max(0, x - 2)
     search_end = min(len(col_maxes), x + 6)
     if search_start >= search_end: return True
     
     idx_max = search_start + np.argmax(col_maxes[search_start:search_end])
     
+    # 기둥 열에서 하얀색 픽셀(>100)이 있는 수직 행들을 검출합니다.
     digit_rows = np.where(roi[:, idx_max] > 100)[0]
-    if digit_rows.size == 0:
+    
+    # [콜론 오탐 철벽 차단] 
+    # 실제 숫자 기둥은 최소 10픽셀 이상의 수직선으로 이루어져 있습니다.
+    # 콜론 기호(':')는 두 개의 미세한 점이라 기둥 열의 수직 픽셀 수가 극히 적습니다 (보통 6픽셀 이하).
+    # 따라서 수직 픽셀 개수가 10개 미만인 경우, 숫자가 아닌 콜론을 오탐한 것으로 보고 즉시 0(F1)으로 판정합니다.
+    if digit_rows.size < 10:
         return False
         
     y_top = digit_rows[0]
     
-    # 진짜 최상단(y_top) 기준 5픽셀 높이만 잘라내어 바닥의 소개글 침범을 완전 방지합니다.
+    # 진짜 최상단(y_top) 기준 5픽셀 높이만 잘라내어 바닥의 소개글 침범을 차단합니다.
     probe_y_start = y_top
     probe_y_end = min(roi.shape[0], y_top + 5)
     
@@ -304,10 +307,11 @@ def is_truly_tier_1(roi, x, y, h):
     left_window = clean_col_maxes[max(0, idx_max - 5) : max(0, idx_max - 1)]
     right_window = clean_col_maxes[min(len(clean_col_maxes), idx_max + 2) : min(len(clean_col_maxes), idx_max + 7)]
     
-    # 각 공백 갭 영역의 최대 밝기(max)를 검사하여 가로 연결선이 검출되는지 대조합니다.
+    # 좌우 공백 영역의 최대 밝기를 계산합니다.
     left_max = np.max(left_window) if left_window.size > 0 else 0
     right_max = np.max(right_window) if right_window.size > 0 else 0
     
+    # 양쪽 영역 모두 가로 곡선선 없이 완전히 비어있어야 숫자 1입니다.
     if left_max > 80 or right_max > 80:
         return False
         
@@ -2161,6 +2165,15 @@ def fusion_bot_loop():
                             target_parents = []
                             for cx, cy in all_candidates:
                                 if len(target_parents) >= 2: break
+                                    
+                                # [사용자 피드백 반영] 마우스를 올리기 전에 인벤토리 그리드의 밝기를 검사합니다.
+                                # 비활성화된 0짜리 감염물(흑색 명암) 및 빈 슬롯은 화면 분석 및 조준 대상에서 원천 배제하고 즉시 스킵합니다.
+                                rx = cx - 960
+                                ry = cy
+                                slot_roi = screen_bgr[max(0, ry - 15):min(screen_bgr.shape[0], ry + 15), max(0, rx - 15):min(screen_bgr.shape[1], rx + 15)]
+                                
+                                if slot_roi.size > 0 and np.max(slot_roi) < 80:
+                                    continue # 어둡거나 빈 슬롯은 툴팁을 열지 않고 패스
                                     
                                 pyautogui.moveTo(cx, cy)
                                 template_label = FUSION_CACHE.get('ability_label.png')

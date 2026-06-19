@@ -1903,79 +1903,85 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] '특성 없음' 문구 감지 및 가치 특성 7종 동시 스캔을 수행합니다.")
+                                    bprint("  > 🔍 [결과 판독] 가우시안 이진화 필터링 및 이중 교차 분석 엔진을 가동합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
                                     scan_start = time.time()
                                     
-                                    # 페이드인 시간 지연을 고려해 1.5초간 화면 분석을 유지합니다.
+                                    # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 정밀하게 화면을 훑습니다.
                                     while time.time() - scan_start < 1.5 and bot_active:
                                         sct_img = thread_sct.grab(thread_sct.monitors[1])
                                         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                                         
-                                        # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 실시간 매칭
+                                        # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행 (기본 텍스트 매칭)
                                         no_trait_template = FUSION_CACHE.get('no_trait.png')
                                         if no_trait_template is not None:
                                             res_nt = cv2.matchTemplate(screen_gray, no_trait_template, cv2.TM_CCOEFF_NORMED)
                                             _, max_val_nt, _, _ = cv2.minMaxLoc(res_nt)
                                             no_trait_score = max(no_trait_score, max_val_nt)
                                             
-                                        # 2. 가치 특성 7종 실시간 매칭
+                                        # [가우시안 적응형 이진화] 반투명 배경을 소거하고 글자 외곽선 뼈대만 화이트로 추출합니다.
+                                        screen_bin = cv2.adaptiveThreshold(screen_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+                                        
+                                        # 2. 가치 특성 7종 매칭 진행
                                         for t_idx in range(1, 8):
                                             t_file = f"trait_{t_idx}.png"
                                             template = FUSION_CACHE.get(t_file)
                                             if template is None: continue
                                             
                                             template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
-                                            res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCOEFF_NORMED)
+                                            template_bin = cv2.adaptiveThreshold(template_g, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+                                            
+                                            # 이진화 처리된 뼈대 이미지끼리 매칭을 진행하여 배경의 명암 차이를 완전히 상쇄합니다.
+                                            res = cv2.matchTemplate(screen_bin, template_bin, cv2.TM_CCOEFF_NORMED)
                                             _, max_val, _, _ = cv2.minMaxLoc(res)
                                             
                                             if max_val > best_debug_scores[t_idx]:
                                                 best_debug_scores[t_idx] = max_val
                                                 
+                                            # 전처리 적용으로 일치도가 크게 높아지므로, 감지 요구치를 0.70으로 선언하여 완벽한 검출을 지향합니다.
                                             if max_val >= 0.70:
                                                 has_valuable_trait = True
                                                 best_score = max_val
                                                 best_matched_file = t_file
                                                 
-                                        # 가치 특성 7종 중 하나라도 완벽 매칭되었다면 즉시 탐색 조기 종료
                                         if has_valuable_trait:
                                             break
                                         time.sleep(0.02)
                                         
-                                    # 3. 소거법 기반 최종 교차 검증 (Dual-Layer Decision Engine)
-                                    bprint("  > 📊 [결과 판독 이중 검증 리포트]")
-                                    bprint(f"    └ '특성 없음' 일치율: {no_trait_score:.4f} (인식 커트라인: 0.80)")
+                                    # 3. 최종 이중 교차 판정 분석 (소거법 판단 적용)
+                                    bprint("  > 📊 [결과 판독 이중 교차 검증 리포트]")
+                                    bprint(f"    └ [특성 없음] '이 감염물은 특성이 없습니다' 일치율: {no_trait_score:.4f} (기준값: 0.80)")
                                     
-                                    # 문구가 정확하게 잡혔다면 전수 실패 확정
                                     if no_trait_score >= 0.80:
-                                        bprint("    └ ❌ [판정 완료] '특성 없음' 문구가 확정 감지되었습니다. 전수 실패(RECOVERY)로 이동합니다.")
+                                        bprint("    └ ❌ [판독 결과] '특성 없음' 문구가 명확히 감지되어 전수 실패로 판정합니다.")
                                         has_valuable_trait = False
                                     else:
-                                        # '특성이 없습니다' 문구가 전혀 보이지 않는 성공 상태
                                         if has_valuable_trait:
                                             t_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
-                                            bprint(f"    └ ✅ [판정 완료] 가치 특성 '{t_name}' 매칭 성공! (일치율: {best_score:.4f})")
+                                            bprint(f"    └ ✅ [판독 결과] 가치 특성 '{t_name}' 매칭 성공! (매칭율: {best_score:.4f})")
                                         else:
-                                            # '특성이 없습니다'도 없는데, 7종 매칭 점수만 아깝게 낮게 나온 경우 (인식 구제책 작동)
-                                            bprint("    └ ⚠️ [인식 오차 구제] '특성 없음' 문구가 없으므로, 정상 전수(임의 특성 획득)로 간호 처리합니다!")
+                                            # 구제 작동 기준선을 0.35에서 0.50으로 올려 신뢰도를 확보합니다.
+                                            bprint("    └ ⚠️ [인식 오차 구제] '특성 없음' 문구가 없으므로, 정상 전수(임의 특성 획득)로 간주 처리합니다!")
                                             has_valuable_trait = True
                                             best_score = 0.75
                                             
-                                            # 가장 점수가 근접했던 이미지로 이름 할당
                                             best_idx = max(best_debug_scores, key=best_debug_scores.get)
-                                            if best_debug_scores[best_idx] >= 0.35:
+                                            if best_debug_scores[best_idx] >= 0.50:
                                                 best_matched_file = f"trait_{best_idx}.png"
+                                                t_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
+                                                bprint(f"      └ 가장 근접한 가치 특성 '{t_name}' 구제 성공! (매칭율: {best_debug_scores[best_idx]:.4f})")
                                             else:
                                                 best_matched_file = "trait_1.png"
+                                                bprint("      └ 매칭율 0.50을 넘는 유력 가치 특성이 없어 기본 폴백(trait_1.png) 처리합니다.")
                                                 
-                                    # 특성별 매칭 스코어 모니터링 로그 출력
+                                    # 상세 매칭 점수 출력
                                     for t_idx in range(1, 8):
                                         t_file = f"trait_{t_idx}.png"
                                         t_name = TRAIT_NAMES.get(t_file, "이름 미등록")
                                         if t_file in FUSION_CACHE:
-                                            bprint(f"      - {t_file} ({t_name}) 최고 매칭 스코어: {best_debug_scores[t_idx]:.4f}")
+                                            bprint(f"      - {t_file} ({t_name}) 최고 매칭율: {best_debug_scores[t_idx]:.4f}")
                                             
                                     # [E(ESC) 수령 이탈 오류 방지] 툴팁 상세 확인창 하단의 'F 감염물 획득' 버튼을 직접 입력해 보상을 수령하고 상세창을 닫습니다.
                                     bprint("  > 💎 [결과 판독 완료] 상세 확인창에서 수령 단축키(F)를 즉시 입력해 보상을 획득합니다.")

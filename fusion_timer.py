@@ -275,13 +275,16 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # 숫자 1은 단독 세로선이므로 좌측과 우측이 모두 깨끗한 배경이어야 합니다.
-    # 숫자 0의 좌측 획 혹은 우측 획에 잘못 정렬 매칭되는 경우를 양방향 검증으로 걸러냅니다.
+    # 1. 좌측 영역 검사: 매칭 지점 왼쪽에 다른 숫자 획이 존재하는지 확인 (예: 0의 우측 획에 매칭된 경우 방지)
     probe_left_x_start = max(0, x - 18)
     probe_left_x_end = max(0, x - 3)
     
-    probe_right_x_start = min(roi.shape[1], x + 10)
-    probe_right_x_end = min(roi.shape[1], x + 25)
+    # 2. 우측 근접 갭(Gap) 영역 검사: 매칭 지점 바로 우측(x + 6 ~ x + 9)에 글자 획이 존재하는지 확인
+    # - 숫자 '1'의 경우 이 구간은 다음 글자인 '회'가 나오기 전의 완전히 비어있는 어두운 공백 구간입니다.
+    # - '0'의 좌측 획에 매칭된 경우, 이 구간은 '0'의 위/아래를 연결하는 가로 곡선 획이 지나가므로 밝은 픽셀이 검출됩니다.
+    # - 이 방식은 우측 '회' 글자의 위치에 간섭받지 않고 숫자 자체의 기하학적 구조만으로 '0'과 '1'을 안전하게 분별합니다.
+    probe_right_gap_start = min(roi.shape[1], x + 6)
+    probe_right_gap_end = min(roi.shape[1], x + 9)
     
     probe_y_start = max(0, y)
     probe_y_end = min(roi.shape[0], y + h)
@@ -289,14 +292,14 @@ def is_truly_tier_1(roi, x, y, h):
     if probe_left_x_start >= roi.shape[1]: return True
 
     left_area = roi[probe_y_start:probe_y_end, probe_left_x_start:probe_left_x_end]
-    right_area = roi[probe_y_start:probe_y_end, probe_right_x_start:probe_right_x_end]
+    right_gap_area = roi[probe_y_start:probe_y_end, probe_right_gap_start:probe_right_gap_end]
 
-    # 좌측 영역에 잔여 획이 감지되면 1이 아닙니다.
+    # 좌측 영역에 다른 획(밝은 픽셀)이 감지되면 1이 아닙니다.
     if left_area.size > 0 and np.max(left_area) > 50: 
         return False 
         
-    # 우측 영역에 잔여 획이 감지되면 1이 아닙니다.
-    if right_area.size > 0 and np.max(right_area) > 50:
+    # 우측 근접 갭 영역에 획(밝은 픽셀)이 감지되면 1이 아닙니다. (0의 가로 곡선 획)
+    if right_gap_area.size > 0 and np.max(right_gap_area) > 50:
         return False
 
     return True  

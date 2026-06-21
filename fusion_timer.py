@@ -2433,10 +2433,10 @@ def fusion_bot_loop():
                                         pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                                         bprint("  > 🦋 [필터 성공] 나비 아이콘 클릭 완료! 감염물 리스트 전환 성공.")
                                         
-                                        # 필터 전환 성공 후, 상단의 '감염물' 타이틀(inv_title.png)이 선명하게 감지될 때까지 탐색 대기
+                                        # 필터 전환 성공 후, 상단의 '감염물' 타이틀(parent_title.png)이 선명하게 감지될 때까지 탐색 대기
                                         wait_title = time.time()
                                         while bot_active and time.time() - wait_title < 1.5:
-                                            if check_img('inv_title.png', thread_sct):
+                                            if check_img('parent_title.png', thread_sct):
                                                 break
                                             time.sleep(0.03)
                                             

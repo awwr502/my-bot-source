@@ -1908,7 +1908,7 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 오츠 마스크 기반 명암 분석을 시작합니다.")
+                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 오츠 이진화 기반 형태 대조를 시작합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
@@ -1929,7 +1929,11 @@ def fusion_bot_loop():
                                             _, max_val_nt, _, _ = cv2.minMaxLoc(res_nt)
                                             no_trait_score = max(no_trait_score, max_val_nt)
                                             
-                                        # 2. 가치 특성 7종 동적 오츠 마스크 기반 명암 대조 진행 (조기 탈출 없이 전체 특성을 조사합니다.)
+                                        # [실시간 오츠 이진화 필터] 
+                                        # 배경색 노이즈를 100% 원천 차단하기 위해, 화면을 오츠 알고리즘으로 이진화하여 글자 형태만 화이트(255)로 추출하고 배경은 블랙(0)으로 채웁니다.
+                                        _, screen_bin = cv2.threshold(screen_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                                        
+                                        # 2. 가치 특성 7종 이진화 명암 대조 진행 (배경 무시 및 계수 차감 정밀 매칭 가동)
                                         for t_idx in range(1, 8):
                                             t_file = f"trait_{t_idx}.png"
                                             template = FUSION_CACHE.get(t_file)
@@ -1937,11 +1941,11 @@ def fusion_bot_loop():
                                             
                                             template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
                                             
-                                            # [동적 오츠 마스크] 글자 밝기 분포를 수학적으로 이분화하여 뼈대 마스크를 생성합니다 (빈 마스크 생성 오류 제로화).
-                                            _, mask = cv2.threshold(template_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                                            # 템플릿 역시 오츠 알고리즘으로 동일하게 이진화하여 글자 모양만 화이트(255)로 추출하고 배경은 블랙(0)으로 맞춥니다.
+                                            _, template_bin = cv2.threshold(template_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                                             
-                                            # mask 매개변수를 전달해 배경 픽셀 오차는 100% 소거하고 오직 글자 형태만 비교합니다.
-                                            res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCORR_NORMED, mask=mask)
+                                            # 이진화 처리된 이미지끼리 명암 계수(TM_CCOEFF_NORMED) 매칭을 돌려 배경색 간섭을 원천 배제하고 오직 글자 형태만 정교하게 대조합니다.
+                                            res = cv2.matchTemplate(screen_bin, template_bin, cv2.TM_CCOEFF_NORMED)
                                             _, max_val, _, _ = cv2.minMaxLoc(res)
                                             
                                             if max_val > best_debug_scores[t_idx]:

@@ -1908,7 +1908,7 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 빨간 박스 영역 실시간 절대 편차 대조 및 오리지널 실패 문구 검증을 시작합니다.")
+                                    bprint("  > 🔍 [결과 판독] 빨간 박스 영역 한정 실시간 양방향 절대 편차 대조를 시작합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
@@ -1917,56 +1917,70 @@ def fusion_bot_loop():
                                     # [빨간 박스 규격 반영] 잡특성 동시 발현을 감안하면서 노이즈를 배제하는 최적의 영역(X: 0~400, Y: 110~440)을 캡처합니다.
                                     result_roi = {"left": 0, "top": 110, "width": 400, "height": 330}
                                     
-                                    # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 모든 특성의 점수를 끝까지 누적합니다.
-                                    while time.time() - scan_start < 1.5 and bot_active:
-                                        # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행 (유저님의 오리지널 100% 검증된 check_img 방식 활용)
-                                        # 렉 없이 안정적으로 검출을 끝내며, 감지 성공 시 기준선(0.80)을 가뿐히 넘기도록 처리합니다.
-                                        if check_img('no_trait.png', thread_sct):
-                                            no_trait_score = 0.95
-                                        else:
-                                            no_trait_score = 0.20
+                                    # [초고속 사전 연산] 루프 외부에서 가치 특성 7종의 7단계 스케일별 절대 편차 템플릿을 딱 한 번만 사전 생성하여 RAM 캐시에 적재합니다.
+                                    # 이로써 루프 내부에서의 무거운 리사이즈(cv2.resize) 및 중간값 연산 부하가 100% 제거됩니다!
+                                    precalculated_templates = {}
+                                    for t_idx in range(1, 8):
+                                        t_file = f"trait_{t_idx}.png"
+                                        template = FUSION_CACHE.get(t_file)
+                                        if template is None: continue
                                         
-                                        # 2. 가치 특성 7종 절대 편차 매칭 진행 (상단 빨간 박스 영역에서만 오탐지 배제 스캔 가동)
-                                        sct_img = thread_sct.grab(result_roi)
-                                        screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                                        template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
+                                        template_median = np.median(template_g)
+                                        template_diff = cv2.absdiff(template_g, int(template_median))
                                         
-                                        # 실시간 화면 배경 소멸 연산
-                                        screen_median = np.median(screen_gray)
-                                        screen_diff = cv2.absdiff(screen_gray, int(screen_median))
-                                        
-                                        for t_idx in range(1, 8):
-                                            t_file = f"trait_{t_idx}.png"
-                                            template = FUSION_CACHE.get(t_file)
-                                            if template is None: continue
+                                        precalculated_templates[t_idx] = []
+                                        for scale in [0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15]:
+                                            w = int(template_diff.shape[1] * scale)
+                                            h = int(template_diff.shape[0] * scale)
+                                            resized_t = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                            precalculated_templates[t_idx].append(resized_t)
                                             
-                                            template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
+                                    # [병렬 스레드 풀 고용] 프레임마다 스레드를 파괴/생성하는 오버헤드를 막기 위해 루프 외부에서 딱 한 번만 풀을 고용합니다.
+                                    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as executor:
+                                        # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 모든 특성의 점수를 끝까지 누적합니다.
+                                        while time.time() - scan_start < 1.5 and bot_active:
+                                            # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행 (유저님의 오리지널 100% 검증된 check_img 방식 활용)
+                                            # 만약 특성 없음이 포착되면, 다른 특성을 훑어볼 필요가 전혀 없으므로 즉시 복구 모드로 직행(Break)합니다!
+                                            if check_img('no_trait.png', thread_sct):
+                                                no_trait_score = 0.92
+                                                bprint("  > ⚠️ [특성 없음] '특성이 없습니다' 문구가 조기 감지되었습니다. 불필요한 스캔을 생략하고 즉시 탈출합니다.")
+                                                break
+                                            else:
+                                                no_trait_score = 0.20
                                             
-                                            # 템플릿 역시 중간값 편차 감쇄를 수행해 템플릿 배경만 깨끗한 0(블랙)으로 소멸시킵니다.
-                                            template_median = np.median(template_g)
-                                            template_diff = cv2.absdiff(template_g, int(template_median))
+                                            # 2. 가치 특성 7종 절대 편차 매칭 진행 (상단 빨간 박스 영역에서만 오탐지 배제 스캔 가동)
+                                            sct_img = thread_sct.grab(result_roi)
+                                            screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                                             
-                                            file_best_score = 0.0
-                                            # 글씨 크기의 동적 편차(0.85배에서 1.15배까지)를 폭넓고 조밀하게 커버하여 정밀 대조합니다.
-                                            for scale in [0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15]:
-                                                w = int(template_diff.shape[1] * scale)
-                                                h = int(template_diff.shape[0] * scale)
+                                            # 실시간 화면 배경 소멸 연산
+                                            screen_median = np.median(screen_gray)
+                                            screen_diff = cv2.absdiff(screen_gray, int(screen_median))
+                                            
+                                            # 병렬로 연산을 처리할 개별 특성 연산관 스레드 함수를 정의합니다.
+                                            def scan_worker(t_idx):
+                                                if t_idx not in precalculated_templates: return
                                                 
-                                                if w > screen_diff.shape[1] or h > screen_diff.shape[0]:
-                                                    continue
+                                                file_best_score = 0.0
+                                                for resized_template in precalculated_templates[t_idx]:
+                                                    if resized_template.shape[1] > screen_diff.shape[1] or resized_template.shape[0] > screen_diff.shape[0]:
+                                                        continue
+                                                        
+                                                    # 양방향 배경이 0으로 완전 동기화된 상태이므로, mask 없이 정규화 상관계수(TM_CCOEFF_NORMED)를 적용해 글자 뼈대 형태만 정밀 매칭합니다.
+                                                    res = cv2.matchTemplate(screen_diff, resized_template, cv2.TM_CCOEFF_NORMED)
+                                                    _, max_val, _, _ = cv2.minMaxLoc(res)
                                                     
-                                                resized_template = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
-                                                
-                                                # 양방향 배경이 0으로 완전 동기화된 상태이므로, 정규화 상관계수(TM_CCOEFF_NORMED)를 적용해 글자 뼈대 형태만 정밀 매칭합니다.
-                                                res = cv2.matchTemplate(screen_diff, resized_template, cv2.TM_CCOEFF_NORMED)
-                                                _, max_val, _, _ = cv2.minMaxLoc(res)
-                                                
-                                                if max_val > file_best_score:
-                                                    file_best_score = max_val
-                                                    
-                                            if file_best_score > best_debug_scores[t_idx]:
-                                                best_debug_scores[t_idx] = file_best_score
-                                                
-                                        time.sleep(0.02)
+                                                    if max_val > file_best_score:
+                                                        file_best_score = max_val
+                                                        
+                                                if file_best_score > best_debug_scores[t_idx]:
+                                                    best_debug_scores[t_idx] = file_best_score
+
+                                            # 7종 특성 분석 스레드 병렬 일괄 투입!
+                                            futures = [executor.submit(scan_worker, t_idx) for t_idx in range(1, 8)]
+                                            concurrent.futures.wait(futures)
+                                            
+                                            time.sleep(0.02)
                                         
                                     # 3. 최종 정밀 가치 판정 분석 (절대 편차 감쇄 기반 엄격 형태 판정)
                                     bprint("  > 📊 [결과 판독 실시간 정밀 검증 리포트]")

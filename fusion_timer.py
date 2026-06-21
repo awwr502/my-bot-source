@@ -1908,7 +1908,7 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 고해상도 명암 분석을 시작합니다.")
+                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 오츠 마스크 기반 명암 분석을 시작합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
@@ -1929,14 +1929,19 @@ def fusion_bot_loop():
                                             _, max_val_nt, _, _ = cv2.minMaxLoc(res_nt)
                                             no_trait_score = max(no_trait_score, max_val_nt)
                                             
-                                        # 2. 가치 특성 7종 원본 명암 대조 진행 (조기 탈출 없이 모든 이미지의 스코어를 균등하게 수집합니다.)
+                                        # 2. 가치 특성 7종 동적 오츠 마스크 기반 명암 대조 진행 (조기 탈출 없이 전체 특성을 조사합니다.)
                                         for t_idx in range(1, 8):
                                             t_file = f"trait_{t_idx}.png"
                                             template = FUSION_CACHE.get(t_file)
                                             if template is None: continue
                                             
                                             template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
-                                            res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCOEFF_NORMED)
+                                            
+                                            # [동적 오츠 마스크] 글자 밝기 분포를 수학적으로 이분화하여 뼈대 마스크를 생성합니다 (빈 마스크 생성 오류 제로화).
+                                            _, mask = cv2.threshold(template_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                                            
+                                            # mask 매개변수를 전달해 배경 픽셀 오차는 100% 소거하고 오직 글자 형태만 비교합니다.
+                                            res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCORR_NORMED, mask=mask)
                                             _, max_val, _, _ = cv2.minMaxLoc(res)
                                             
                                             if max_val > best_debug_scores[t_idx]:
@@ -1948,8 +1953,8 @@ def fusion_bot_loop():
                                     best_idx = max(best_debug_scores, key=best_debug_scores.get)
                                     best_val = best_debug_scores[best_idx]
                                     
-                                    # 격리 영역 매칭 시 실제 화면에 존재하는 올바른 특성은 최소 0.58 이상의 확실한 상관관계 수치를 가집니다.
-                                    if best_val >= 0.6:
+                                    # 배경 픽셀 오차가 완전히 제거되었으므로, 실시간 정합 성공 가이드라인 임계값을 0.85로 안정되게 설정합니다.
+                                    if best_val >= 0.85:
                                         has_valuable_trait = True
                                         best_score = best_val
                                         best_matched_file = f"trait_{best_idx}.png"

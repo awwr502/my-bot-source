@@ -2382,30 +2382,30 @@ def fusion_bot_loop():
                                 bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방...")
                                 pyautogui.moveTo(1400, 450); time.sleep(0.1); send_cmd('C')
                                 
-                                # 최대 1초간 '감염물' 타이틀(inv_title.png)이 인식될 때까지 대기
+                                # 최대 1초간 '선택 종류: 0/3' 표시(select_0_3.png)가 인식될 때까지 대기
                                 wait_inv_start = time.time()
                                 opened_mat = False
                                 while bot_active and time.time() - wait_inv_start < 1.0:
-                                    if check_img('inv_title.png', thread_sct):
+                                    if check_img('select_0_3.png', thread_sct):
                                         opened_mat = True
                                         break
                                     time.sleep(0.05)
                                     
                                 # 1초 내에 인식되지 않은 경우 보정 재클릭 수행 후 속행
                                 if not opened_mat and bot_active:
-                                    bprint("  > ⚠️ [개방 지연] '감염물' 타이틀 미인식. 보정 재클릭을 수행합니다.")
+                                    bprint("  > ⚠️ [개방 지연] '선택 종류: 0/3' 표시 미인식. 보정 재클릭을 수행합니다.")
                                     pyautogui.moveTo(1400, 450); time.sleep(0.05); send_cmd('C')
                                     
                                     # 재클릭 후 2차 검출 대기
                                     wait_inv_start = time.time()
                                     while bot_active and time.time() - wait_inv_start < 1.0:
-                                        if check_img('inv_title.png', thread_sct):
+                                        if check_img('select_0_3.png', thread_sct):
                                             opened_mat = True
                                             break
                                         time.sleep(0.05)
                                         
                                 if opened_mat:
-                                    bprint("  > ✅ [확인] '감염물' 인벤토리 창 개방 확인! 0.1초 안정화 대기 후 탐색을 개시합니다.")
+                                    bprint("  > ✅ [확인] 재료 인벤토리 창 개방 확인! 0.1초 안정화 대기 후 필터 전환을 시도합니다.")
                                     time.sleep(0.1)
 
                                 # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
@@ -2432,7 +2432,7 @@ def fusion_bot_loop():
                                         pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                                         bprint("  > 🦋 [필터 성공] 나비 아이콘 클릭 완료! 감염물 리스트 전환 성공.")
                                         
-                                        # 필터 전환 성공 후, 하단의 '선택 종류: 0/3' 표시(select_0_3.png)가 완전히 활성화될 때까지 탐색 대기
+                                        # 필터 전환 성공 후, 상단의 '감염물' 타이틀(inv_title.png)이 선명하게 감지될 때까지 탐색 대기
                                         wait_title = time.time()
                                         while bot_active and time.time() - wait_title < 1.5:
                                             if check_img('inv_title.png', thread_sct):

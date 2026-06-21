@@ -2407,7 +2407,7 @@ def fusion_bot_loop():
                                         cx, cy = FUSION_ROI['butterfly.png']['last_pos']
                                         pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                                         bprint("  > 🦋 [필터 성공] 나비 아이콘 클릭 완료! 감염물 리스트 전환 성공.")
-                                        time.sleep(0.12) # 탭 전환 렌더링 딜레이 헷지
+                                        time.sleep(0.5) # 탭 전환 렌더링 딜레이 헷지
                                         break
                                     time.sleep(0.05)
                                     

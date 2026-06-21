@@ -2366,31 +2366,23 @@ def fusion_bot_loop():
                                 wait_vanish('select_0_2.png', thread_sct)
                                 
                                 # 2단계: 재료 슬롯(F1 / 0짜리) 채우기
-                                bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방 시도...")
-                                
-                                opened_mat = False
+                                bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방...")
                                 pyautogui.moveTo(1400, 450); time.sleep(0.1); send_cmd('C')
                                 
+                                # 최대 1초간 재료 슬롯 창(select_0_3.png)이 열릴 때까지 실시간 검사 대기
                                 wait_inv_start = time.time()
-                                while bot_active and time.time() - wait_inv_start < 0.5:
+                                opened_mat = False
+                                while bot_active and time.time() - wait_inv_start < 1.0:
                                     if check_img('select_0_3.png', thread_sct):
                                         opened_mat = True
                                         break
                                     time.sleep(0.05)
                                     
+                                # 1초 내에 인식되지 않은 경우 보정 재클릭 수행 후 속행
                                 if not opened_mat and bot_active:
-                                    bprint("  > ⚠️ [개방 지연] 재료 창 개방 지연 감지. 재클릭을 시도합니다.")
+                                    bprint("  > ⚠️ [개방 지연] 재료 창 미인식. 보정 재클릭을 수행합니다.")
                                     pyautogui.moveTo(1400, 450); time.sleep(0.05); send_cmd('C')
-                                    
-                                    wait_inv_start = time.time()
-                                    while time.time() - wait_inv_start < 1.5 and bot_active:
-                                        if check_img('select_0_3.png', thread_sct):
-                                            opened_mat = True
-                                            break
-                                        time.sleep(0.05)
-                                        
-                                if not opened_mat and bot_active:
-                                    bprint("  > ❌ [치명적 오류] 재료 창이 정상적으로 개방되지 않았습니다. 강제 속행을 유도합니다.")
+                                    time.sleep(0.3)
 
                                 # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
                                 # 재료 슬롯 역시 템플릿 매칭 없이 고정 5x7 그리드 순회를 이용해 융합이 가능한 F1들을 수집합니다.

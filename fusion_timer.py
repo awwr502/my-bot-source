@@ -2137,10 +2137,20 @@ def fusion_bot_loop():
                             bprint("  > [1/2 부모 세팅] 좌측 부모 슬롯 클릭 및 감염물 창 개방...")
                             pyautogui.moveTo(1150, 300); time.sleep(0.1); send_cmd('C')
                             
+                            # 최대 1초간 부모 슬롯 창(select_0_2.png)이 열릴 때까지 실시간 검사 대기
                             wait_inv_start = time.time()
-                            while bot_active and time.time() - wait_inv_start < 3.0:
-                                if check_img('select_0_2.png', thread_sct): break
+                            opened = False
+                            while bot_active and time.time() - wait_inv_start < 1.0:
+                                if check_img('select_0_2.png', thread_sct):
+                                    opened = True
+                                    break
                                 time.sleep(0.05)
+                                
+                            # 1초 내에 인식되지 않은 경우 보정 재클릭 수행 후 속행
+                            if not opened and bot_active:
+                                bprint("  > ⚠️ [개방 지연] 부모 창 미인식. 보정 재클릭을 수행합니다.")
+                                pyautogui.moveTo(1150, 300); time.sleep(0.05); send_cmd('C')
+                                time.sleep(0.3)
 
                             # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
                             inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
@@ -2169,10 +2179,16 @@ def fusion_bot_loop():
                                 ry = cy
                                 slot_roi = screen_bgr[max(0, ry - 15):min(screen_bgr.shape[0], ry + 15), max(0, rx - 15):min(screen_bgr.shape[1], rx + 15)]
                                 
-                                # 일부 야광형 감염물(전기뱀장어 등)은 어두워져도 아이콘의 자체 야광 픽셀 밝기 때문에 빈 슬롯 체크(120)를 통과할 수 있습니다.
-                                # 따라서 1차적으로 80 미만의 빈 슬롯을 빠르게 스킵한 뒤, 아래 툴팁 숫자 검증을 통해 확실한 1짜리(F0)만 최종 선별합니다.
-                                if slot_roi.size > 0 and np.max(slot_roi) < 120:
-                                    continue # 어둡거나 빈 슬롯은 툴팁을 열지 않고 패스
+                                # 0짜리 야광형 아이콘 오인식을 원천 차단하기 위해 평균 밝기와 표준편차(대비)를 함께 분석합니다.
+                                # 비활성화되거나 비어있는 슬롯은 대비 수준이 12 미만으로 강력하게 억제됩니다.
+                                if slot_roi.size > 0:
+                                    slot_gray = cv2.cvtColor(slot_roi, cv2.COLOR_BGR2GRAY)
+                                    mean_val = np.mean(slot_gray)
+                                    std_val = np.std(slot_gray)
+                                    
+                                    # 활성화된 슬롯의 최소 대비 기준(std >= 12.0) 및 최소 평균 밝기(mean >= 30.0) 검증
+                                    if mean_val < 30.0 or std_val < 12.0:
+                                        continue # 어둡거나 빈 슬롯은 마우스 호버 없이 무조건 패스
                                     
                                 pyautogui.moveTo(cx, cy)
                                 template_label = FUSION_CACHE.get('ability_label.png')
@@ -2350,13 +2366,31 @@ def fusion_bot_loop():
                                 wait_vanish('select_0_2.png', thread_sct)
                                 
                                 # 2단계: 재료 슬롯(F1 / 0짜리) 채우기
-                                bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방...")
+                                bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방 시도...")
+                                
+                                opened_mat = False
                                 pyautogui.moveTo(1400, 450); time.sleep(0.1); send_cmd('C')
                                 
                                 wait_inv_start = time.time()
-                                while bot_active and time.time() - wait_inv_start < 3.0:
-                                    if check_img('select_0_3.png', thread_sct): break
+                                while bot_active and time.time() - wait_inv_start < 0.5:
+                                    if check_img('select_0_3.png', thread_sct):
+                                        opened_mat = True
+                                        break
                                     time.sleep(0.05)
+                                    
+                                if not opened_mat and bot_active:
+                                    bprint("  > ⚠️ [개방 지연] 재료 창 개방 지연 감지. 재클릭을 시도합니다.")
+                                    pyautogui.moveTo(1400, 450); time.sleep(0.05); send_cmd('C')
+                                    
+                                    wait_inv_start = time.time()
+                                    while time.time() - wait_inv_start < 1.5 and bot_active:
+                                        if check_img('select_0_3.png', thread_sct):
+                                            opened_mat = True
+                                            break
+                                        time.sleep(0.05)
+                                        
+                                if not opened_mat and bot_active:
+                                    bprint("  > ❌ [치명적 오류] 재료 창이 정상적으로 개방되지 않았습니다. 강제 속행을 유도합니다.")
 
                                 # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
                                 # 재료 슬롯 역시 템플릿 매칭 없이 고정 5x7 그리드 순회를 이용해 융합이 가능한 F1들을 수집합니다.
@@ -2399,9 +2433,25 @@ def fusion_bot_loop():
                                 target_materials = []
                                 debug_shot_done = False # [디버그] 첫 번째 감염물의 융합 횟수 캡처 저장을 위한 플래그
                                 
+                                # 재료 인벤토리 화면을 사전 스캔하여 슬롯의 색상 상태를 한 차례 미리 확보합니다.
+                                screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
+                                
                                 for cx, cy in all_candidates:
                                     if len(target_materials) >= 3: break
                                     
+                                    # 마우스를 가져가기 전에 재료 인벤토리의 어두운 감염물과 빈 영역을 선제적으로 거릅니다.
+                                    rx = cx - 960
+                                    ry = cy
+                                    slot_roi = screen_bgr[max(0, ry - 15):min(screen_bgr.shape[0], ry + 15), max(0, rx - 15):min(screen_bgr.shape[1], rx + 15)]
+                                    
+                                    if slot_roi.size > 0:
+                                        slot_gray = cv2.cvtColor(slot_roi, cv2.COLOR_BGR2GRAY)
+                                        mean_val = np.mean(slot_gray)
+                                        std_val = np.std(slot_gray)
+                                        
+                                        if mean_val < 30.0 or std_val < 12.0:
+                                            continue # 어둡거나 빈 슬롯은 툴팁 분석 자체를 건너뛰고 신속 패스
+                                            
                                     pyautogui.moveTo(cx, cy)
                                     template_label = FUSION_CACHE.get('ability_label.png')
                                     mon = thread_sct.monitors[1]

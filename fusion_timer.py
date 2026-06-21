@@ -1908,7 +1908,7 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 캐니 에지(Canny Edge) 기반 형태 매칭을 시작합니다.")
+                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 절대 편차 가치 분석을 시작합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
@@ -1917,7 +1917,7 @@ def fusion_bot_loop():
                                     # 우측 인벤토리 및 정보 카드를 물리적으로 100% 격리하기 위해 좌측 패널 영역만 캡처합니다.
                                     result_roi = {"left": 0, "top": 150, "width": 600, "height": 750}
                                     
-                                    # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 모든 특성의 에지 점수를 누적합니다.
+                                    # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 모든 특성의 점수를 끝까지 누적합니다.
                                     while time.time() - scan_start < 1.5 and bot_active:
                                         sct_img = thread_sct.grab(result_roi)
                                         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
@@ -1929,31 +1929,40 @@ def fusion_bot_loop():
                                             _, max_val_nt, _, _ = cv2.minMaxLoc(res_nt)
                                             no_trait_score = max(no_trait_score, max_val_nt)
                                             
-                                        # [캐니 에지 필터] 
-                                        # 배경색 변화에 절대적으로 영향을 받지 않도록 화면의 텍스트 윤곽선(에지)만 추출하고 배경은 100% 블랙(0)으로 평탄화합니다.
-                                        screen_edges = cv2.Canny(screen_gray, 50, 150)
+                                        # [실시간 화면 절대 편차 감쇄]
+                                        # 낚시 봇과 100% 동일하게 화면의 배경 중간값을 계산하여 빼줌으로써 화면 배경을 강제로 0(블랙)으로 감쇄시킵니다.
+                                        screen_median = np.median(screen_gray)
+                                        screen_diff = cv2.absdiff(screen_gray, int(screen_median))
                                         
-                                        # 2. 가치 특성 7종 에지 윤곽 매칭 진행
+                                        # 2. 가치 특성 7종 절대 편차 및 동적 마스킹 매칭 진행
                                         for t_idx in range(1, 8):
                                             t_file = f"trait_{t_idx}.png"
                                             template = FUSION_CACHE.get(t_file)
                                             if template is None: continue
                                             
                                             template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
-                                            # 템플릿 역시 에지만 남기고 배경을 무조건 0으로 소멸시킵니다.
-                                            template_edges = cv2.Canny(template_g, 50, 150)
+                                            
+                                            # 템플릿 역시 중간값 편차 감쇄를 수행해 템플릿 배경을 0(블랙)으로 소멸시킵니다.
+                                            template_median = np.median(template_g)
+                                            template_diff = cv2.absdiff(template_g, int(template_median))
+                                            
+                                            # 낚시 봇 특화 수식: 절대 편차에서 획(글씨)에 해당하는 영역만 마스크로 추출 (임계치 15 적용)
+                                            _, auto_mask = cv2.threshold(template_diff, 15, 255, cv2.THRESH_BINARY)
                                             
                                             file_best_score = 0.0
                                             # 미세한 글씨 크기 편차(95% ~ 105%)를 보정하기 위해 배율을 동적으로 축소/확대하여 대조합니다.
                                             for scale in [0.95, 1.0, 1.05]:
-                                                w = int(template_edges.shape[1] * scale)
-                                                h = int(template_edges.shape[0] * scale)
+                                                w = int(template_diff.shape[1] * scale)
+                                                h = int(template_diff.shape[0] * scale)
                                                 
-                                                if w > screen_edges.shape[1] or h > screen_edges.shape[0]:
+                                                if w > screen_diff.shape[1] or h > screen_diff.shape[0]:
                                                     continue
                                                     
-                                                resized_template = cv2.resize(template_edges, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
-                                                res = cv2.matchTemplate(screen_edges, resized_template, cv2.TM_CCOEFF_NORMED)
+                                                resized_template = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                                resized_mask = cv2.resize(auto_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+                                                
+                                                # 양방향 배경이 0으로 완전 동기화된 상태에서 마스크를 전달해 배경 오차를 100% 소거하고 글자 형태만 비교합니다.
+                                                res = cv2.matchTemplate(screen_diff, resized_template, cv2.TM_CCORR_NORMED, mask=resized_mask)
                                                 _, max_val, _, _ = cv2.minMaxLoc(res)
                                                 
                                                 if max_val > file_best_score:
@@ -1964,15 +1973,15 @@ def fusion_bot_loop():
                                                 
                                         time.sleep(0.02)
                                         
-                                    # 3. 최종 정밀 가치 판정 분석 (캐니 에지 기반 엄격 형태 판정)
+                                    # 3. 최종 정밀 가치 판정 분석 (절대 편차 감쇄 기반 엄격 형태 판정)
                                     bprint("  > 📊 [결과 판독 실시간 정밀 검증 리포트]")
                                     bprint(f"    └ [특성 없음] '이 감염물은 특성이 없습니다' 일치율: {no_trait_score:.4f} (기준값: 0.80)")
                                     
-                                    # 3-1) 최고 에지 일치율 특성 선별
+                                    # 3-1) 최고 정합 일치율 특성 선별
                                     best_idx = max(best_debug_scores, key=best_debug_scores.get)
                                     best_val = best_debug_scores[best_idx]
                                     
-                                    if best_val >= 0.70:
+                                    if best_val >= 0.80:
                                         has_valuable_trait = True
                                         best_score = best_val
                                         best_matched_file = f"trait_{best_idx}.png"
@@ -1982,14 +1991,14 @@ def fusion_bot_loop():
                                         bprint("    └ ❌ [판독 결과] '특성 없음' 문구가 명확히 감지되어 전수 실패로 판정합니다.")
                                         has_valuable_trait = False
                                     else:
-                                        # 2) 7종 가치 특성 중 하나라도 실시간 윤곽 일치율이 0.70 이상으로 검출된 경우 -> 전수 성공! (NORMAL)
+                                        # 2) 7종 가치 특성 중 하나라도 실시간 일치율이 0.80 이상으로 검출된 경우 -> 전수 성공! (NORMAL)
                                         if has_valuable_trait:
                                             t_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
-                                            bprint(f"    └ ✅ [판독 결과] 우리가 원하는 가치 특성 '{t_name}'이 정상 전수되었습니다! (윤곽 매칭율: {best_score:.4f} >= 0.70)")
+                                            bprint(f"    └ ✅ [판독 결과] 우리가 원하는 가치 특성 '{t_name}'이 정상 전수되었습니다! (편차 매칭율: {best_score:.4f} >= 0.80)")
                                         else:
                                             # 3) 특성은 있으나(이로치 등 잡특성), 우리가 원하지 않는 버리는 특성만 붙은 경우 -> 전수 실패! (RECOVERY)
                                             bprint("    └ ❌ [판독 결과] 특성이 존재하지만, 우리가 원치 않는 잡특성/이로치 특성만 전수되었습니다.")
-                                            bprint("      (가치 특성 7종 중 어떤 것도 에지 매칭 기준선인 0.70을 넘지 못해 전수 실패로 판정하고 RECOVERY 모드를 가동합니다.)")
+                                            bprint("      (가치 특성 7종 중 어떤 것도 매칭 기준선인 0.80을 넘지 못해 전수 실패로 판정하고 RECOVERY 모드를 가동합니다.)")
                                             has_valuable_trait = False
                                             
                                     # 상세 스코어 투명하게 리포트 출력
@@ -1997,7 +2006,7 @@ def fusion_bot_loop():
                                         t_file = f"trait_{t_idx}.png"
                                         t_name = TRAIT_NAMES.get(t_file, "이름 미등록")
                                         if t_file in FUSION_CACHE:
-                                            match_status = "⭐합격" if best_debug_scores[t_idx] >= 0.70 else "❌미달"
+                                            match_status = "⭐합격" if best_debug_scores[t_idx] >= 0.80 else "❌미달"
                                             bprint(f"      - [{match_status}] {t_file} ({t_name}) 최고 매칭율: {best_debug_scores[t_idx]:.4f}")
                                             
                                     # [E(ESC) 수령 이탈 오류 방지] 툴팁 상세 확인창 하단의 'F 감염물 획득' 버튼을 직접 입력해 보상을 수령하고 상세창을 닫습니다.

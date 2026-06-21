@@ -2382,20 +2382,31 @@ def fusion_bot_loop():
                                 bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방...")
                                 pyautogui.moveTo(1400, 450); time.sleep(0.1); send_cmd('C')
                                 
-                                # 최대 1초간 재료 슬롯 창(select_0_3.png)이 열릴 때까지 실시간 검사 대기
+                                # 최대 1초간 '감염물' 타이틀(inv_title.png)이 인식될 때까지 대기
                                 wait_inv_start = time.time()
                                 opened_mat = False
                                 while bot_active and time.time() - wait_inv_start < 1.0:
-                                    if check_img('select_0_3.png', thread_sct):
+                                    if check_img('inv_title.png', thread_sct):
                                         opened_mat = True
                                         break
                                     time.sleep(0.05)
                                     
                                 # 1초 내에 인식되지 않은 경우 보정 재클릭 수행 후 속행
                                 if not opened_mat and bot_active:
-                                    bprint("  > ⚠️ [개방 지연] 재료 창 미인식. 보정 재클릭을 수행합니다.")
+                                    bprint("  > ⚠️ [개방 지연] '감염물' 타이틀 미인식. 보정 재클릭을 수행합니다.")
                                     pyautogui.moveTo(1400, 450); time.sleep(0.05); send_cmd('C')
-                                    time.sleep(0.3)
+                                    
+                                    # 재클릭 후 2차 검출 대기
+                                    wait_inv_start = time.time()
+                                    while bot_active and time.time() - wait_inv_start < 1.0:
+                                        if check_img('inv_title.png', thread_sct):
+                                            opened_mat = True
+                                            break
+                                        time.sleep(0.05)
+                                        
+                                if opened_mat:
+                                    bprint("  > ✅ [확인] '감염물' 인벤토리 창 개방 확인! 0.1초 안정화 대기 후 탐색을 개시합니다.")
+                                    time.sleep(0.1)
 
                                 # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
                                 # 재료 슬롯 역시 템플릿 매칭 없이 고정 5x7 그리드 순회를 이용해 융합이 가능한 F1들을 수집합니다.
@@ -2445,7 +2456,6 @@ def fusion_bot_loop():
                                         all_candidates.append((cx, cy))
                                         
                                 target_materials = []
-                                debug_shot_done = False # [디버그] 첫 번째 감염물의 융합 횟수 캡처 저장을 위한 플래그
                                 
                                 # 재료 인벤토리 화면을 사전 스캔하여 슬롯의 색상 상태를 한 차례 미리 확보합니다.
                                 screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
@@ -2503,19 +2513,6 @@ def fusion_bot_loop():
                                         # [사용자 제안 반영] 디버그 사진 분석 결과에 맞춰 숫자가 완벽히 수직 중앙에 안착하도록
                                         # 크롭 영역을 116:146에서 120:152로 하향 조정하여 상단은 조이고 하단에 여유 패딩을 확보합니다.
                                         roi_num_gray = roi_col[120:152, 280:340]
-                                        
-                                        # [디버그 스크린샷 1회 촬영] 현재 잘라낸 숫자 영역이 정상적인지 verify할 수 있도록 첫 번째 감염물만 디스크에 저장합니다.
-                                        if not debug_shot_done and roi_num_gray.size > 0:
-                                            debug_shot_done = True
-                                            try:
-                                                debug_path = os.path.join(base_dir, "debug_mode6_num_crop.png")
-                                                is_success, im_buf_arr = cv2.imencode(".png", roi_num_gray)
-                                                if is_success:
-                                                    with open(debug_path, "wb") as f:
-                                                        f.write(im_buf_arr.tobytes())
-                                                    bprint(f"  > 📸 [디버그 1회] 첫 번째 감염물의 숫자 크롭 영역을 디스크에 저장했습니다 -> {debug_path}")
-                                            except Exception as e:
-                                                bprint(f"  > ❌ [디버그] 스크린샷 저장 실패: {e}")
                                         
                                         is_f0 = False
                                         is_f1 = False

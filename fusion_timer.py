@@ -1908,26 +1908,29 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 모드 6 전용 실시간 초정밀 컬러(BGR) 매칭 및 이중 교차 분석 엔진을 가동합니다.")
+                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 명암/컬러 이중 교차 분석을 시작합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
                                     scan_start = time.time()
                                     
+                                    # 우측 인벤토리의 노이즈 유입을 원천 예방하기 위해 좌측 결과 패널 부위만 물리적으로 격리하여 캡처합니다.
+                                    result_roi = {"left": 0, "top": 150, "width": 600, "height": 750}
+                                    
                                     # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 정밀하게 화면을 훑습니다.
                                     while time.time() - scan_start < 1.5 and bot_active:
-                                        sct_img = thread_sct.grab(thread_sct.monitors[1])
+                                        sct_img = thread_sct.grab(result_roi)
                                         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                                         screen_color = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
                                         
-                                        # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행 (단일 채널 흑백 매칭)
+                                        # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행 (격리 구역 흑백 매칭)
                                         no_trait_template = FUSION_CACHE.get('no_trait.png')
                                         if no_trait_template is not None:
                                             res_nt = cv2.matchTemplate(screen_gray, no_trait_template, cv2.TM_CCOEFF_NORMED)
                                             _, max_val_nt, _, _ = cv2.minMaxLoc(res_nt)
                                             no_trait_score = max(no_trait_score, max_val_nt)
                                             
-                                        # 2. 가치 특성 7종 컬러 매칭 진행 (모드 5 흑백과의 완벽 분리를 위해 color_ 접두사가 붙은 캐시 원본 사용)
+                                        # 2. 가치 특성 7종 컬러 매칭 진행 (인벤토리 및 정보 카드가 차단되어 오탐이 완벽히 방지됩니다.)
                                         for t_idx in range(1, 8):
                                             color_key = f"color_trait_{t_idx}.png"
                                             template_color = FUSION_CACHE.get(color_key)
@@ -1939,7 +1942,7 @@ def fusion_bot_loop():
                                             if max_val > best_debug_scores[t_idx]:
                                                 best_debug_scores[t_idx] = max_val
                                                 
-                                            # 오탐지 제로를 위한 초정밀 0.85 컬러 임계값 적용
+                                            # 우측 노이즈가 원천 배제되었으므로 임계 요구 정확도를 강력한 0.85로 설정해 오탐을 원천 차단합니다.
                                             if max_val >= 0.85:
                                                 has_valuable_trait = True
                                                 best_score = max_val

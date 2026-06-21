@@ -2000,7 +2000,7 @@ def fusion_bot_loop():
                                         t_file = f"trait_{t_idx}.png"
                                         t_name = TRAIT_NAMES.get(t_file, "이름 미등록")
                                         if t_file in FUSION_CACHE:
-                                            match_status = "⭐합격" if best_debug_scores[t_idx] >= 0.80 else "❌미달"
+                                            match_status = "🎉합격" if best_debug_scores[t_idx] >= 0.80 else "❌미달"
                                             bprint(f"      - [{match_status}] {t_file} ({t_name}) 최고 매칭율: {best_debug_scores[t_idx]:.4f}")
                                             
                                     # [E(ESC) 수령 이탈 오류 방지] 툴팁 상세 확인창 하단의 'F 감염물 획득' 버튼을 직접 입력해 보상을 수령하고 상세창을 닫습니다.

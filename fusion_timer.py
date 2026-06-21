@@ -1948,8 +1948,8 @@ def fusion_bot_loop():
                                             if max_val > best_debug_scores[t_idx]:
                                                 best_debug_scores[t_idx] = max_val
                                                 
-                                            # 배경 잡음이 완벽히 마스킹 소거되었으므로 극도로 신뢰성 높은 0.85 철벽 임계점을 가동합니다.
-                                            if max_val >= 0.85:
+                                            # 잡특성/이로치 전수 유출을 완전 방지하기 위해 엄격한 0.80 가치 판단 기준선을 작동합니다.
+                                            if max_val >= 0.80:
                                                 has_valuable_trait = True
                                                 best_score = max_val
                                                 best_matched_file = f"trait_{t_idx}.png"
@@ -1959,38 +1959,32 @@ def fusion_bot_loop():
                                             break
                                         time.sleep(0.02)
                                         
-                                    # 3. 최종 이중 교차 판정 분석 (소거법 판단 적용)
-                                    bprint("  > 📊 [결과 판독 이중 교차 검증 리포트]")
+                                    # 3. 최종 정밀 가치 판정 분석 (마스크 기반 엄격 매칭 판정)
+                                    bprint("  > 📊 [결과 판독 실시간 정밀 검증 리포트]")
                                     bprint(f"    └ [특성 없음] '이 감염물은 특성이 없습니다' 일치율: {no_trait_score:.4f} (기준값: 0.80)")
                                     
+                                    # 1) '이 감염물은 특성이 없습니다' 문구가 감지된 경우 -> 100% 무조건 전수 실패 (RECOVERY)
                                     if no_trait_score >= 0.80:
                                         bprint("    └ ❌ [판독 결과] '특성 없음' 문구가 명확히 감지되어 전수 실패로 판정합니다.")
                                         has_valuable_trait = False
                                     else:
+                                        # 2) 7종 가치 특성 중 하나라도 실시간 마스크 매칭률이 0.80 이상으로 검출된 경우 -> 전수 성공! (NORMAL)
                                         if has_valuable_trait:
                                             t_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
-                                            bprint(f"    └ ✅ [판독 결과] 가치 특성 '{t_name}' 매칭 성공! (매칭율: {best_score:.4f})")
+                                            bprint(f"    └ ✅ [판독 결과] 우리가 원하는 가치 특성 '{t_name}'이 정상 전수되었습니다! (매칭율: {best_score:.4f} >= 0.80)")
                                         else:
-                                            # 구제 작동 기준선을 0.35에서 0.50으로 올려 신뢰도를 확보합니다.
-                                            bprint("    └ ⚠️ [인식 오차 구제] '특성 없음' 문구가 없으므로, 정상 전수(임의 특성 획득)로 간주 처리합니다!")
-                                            has_valuable_trait = True
-                                            best_score = 0.75
+                                            # 3) 특성은 있으나(이로치 등 잡특성), 우리가 원하지 않는 버리는 특성만 붙은 경우 -> 전수 실패! (RECOVERY)
+                                            bprint("    └ ❌ [판독 결과] 특성이 존재하지만, 우리가 원치 않는 잡특성/이로치 특성만 전수되었습니다.")
+                                            bprint("      (가치 특성 7종 중 어떤 것도 매칭 기준선인 0.80을 넘지 못해 전수 실패로 판정하고 RECOVERY 모드를 가동합니다.)")
+                                            has_valuable_trait = False
                                             
-                                            best_idx = max(best_debug_scores, key=best_debug_scores.get)
-                                            if best_debug_scores[best_idx] >= 0.50:
-                                                best_matched_file = f"trait_{best_idx}.png"
-                                                t_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
-                                                bprint(f"      └ 가장 근접한 가치 특성 '{t_name}' 구제 성공! (매칭율: {best_debug_scores[best_idx]:.4f})")
-                                            else:
-                                                best_matched_file = "trait_1.png"
-                                                bprint("      └ 매칭율 0.50을 넘는 유력 가치 특성이 없어 기본 폴백(trait_1.png) 처리합니다.")
-                                                
-                                    # 상세 매칭 점수 출력
+                                    # 상세 스코어 투명하게 리포트 출력
                                     for t_idx in range(1, 8):
                                         t_file = f"trait_{t_idx}.png"
                                         t_name = TRAIT_NAMES.get(t_file, "이름 미등록")
                                         if t_file in FUSION_CACHE:
-                                            bprint(f"      - {t_file} ({t_name}) 최고 매칭율: {best_debug_scores[t_idx]:.4f}")
+                                            match_status = "⭐합격" if best_debug_scores[t_idx] >= 0.80 else "❌미달"
+                                            bprint(f"      - [{match_status}] {t_file} ({t_name}) 최고 매칭율: {best_debug_scores[t_idx]:.4f}")
                                             
                                     # [E(ESC) 수령 이탈 오류 방지] 툴팁 상세 확인창 하단의 'F 감염물 획득' 버튼을 직접 입력해 보상을 수령하고 상세창을 닫습니다.
                                     bprint("  > 💎 [결과 판독 완료] 상세 확인창에서 수령 단축키(F)를 즉시 입력해 보상을 획득합니다.")

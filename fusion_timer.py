@@ -2435,7 +2435,7 @@ def fusion_bot_loop():
                                         # 필터 전환 성공 후, 하단의 '선택 종류: 0/3' 표시(select_0_3.png)가 완전히 활성화될 때까지 탐색 대기
                                         wait_title = time.time()
                                         while bot_active and time.time() - wait_title < 1.5:
-                                            if check_img('select_0_3.png', thread_sct):
+                                            if check_img('inv_title.png', thread_sct):
                                                 break
                                             time.sleep(0.03)
                                             

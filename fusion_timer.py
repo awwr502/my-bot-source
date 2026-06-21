@@ -2142,28 +2142,6 @@ def fusion_bot_loop():
                                 if check_img('select_0_2.png', thread_sct): break
                                 time.sleep(0.05)
 
-                            # [지연 클릭 보완] 창이 완벽히 열렸는지 실시간 이중 점검하며 리클릭을 유도합니다.
-                            opened = False
-                            for attempt in range(5):
-                                if not bot_active: break
-                                pyautogui.moveTo(1150, 300); time.sleep(0.05); send_cmd('C')
-                                
-                                wait_inv_start = time.time()
-                                while time.time() - wait_inv_start < 1.5 and bot_active:
-                                    if check_img('select_0_2.png', thread_sct): 
-                                        opened = True
-                                        break
-                                    time.sleep(0.05)
-                                if opened:
-                                    break
-                                bprint(f"  > ⚠️ [개방 지연] 부모 창 개방 누락 감지 (시도 {attempt+1}/5). 다시 열기 시도...")
-                                time.sleep(0.3)
-                                
-                            if not opened:
-                                bprint("  > ❌ [치명적 오류] 부모 창 개방에 최종 실패했습니다. 세팅 시퀀스를 우회합니다.")
-                                skip_current_char = True
-                                continue
-
                             # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
                             inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
                             # 모드 6은 모든 감염물을 대상으로 삼으므로 템플릿 매칭을 생략하고, 고정 5x7 인벤토리 그리드를 직접 순회합니다.
@@ -2191,13 +2169,10 @@ def fusion_bot_loop():
                                 ry = cy
                                 slot_roi = screen_bgr[max(0, ry - 15):min(screen_bgr.shape[0], ry + 15), max(0, rx - 15):min(screen_bgr.shape[1], rx + 15)]
                                 
-                                # 일부 야광형 감염물(전기뱀장어 등)은 어두워져도 자체 야광 픽셀 때문에 단순 120 체크를 무력화할 수 있습니다.
-                                # 평균 밝기(mean)와 피크 밝기(max)를 동시에 대조하여 어둡게 가라앉은 0짜리 비활성 칸을 완벽하게 소거합니다.
-                                if slot_roi.size > 0:
-                                    mean_val = np.mean(slot_roi)
-                                    max_val = np.max(slot_roi)
-                                    if mean_val < 50 or max_val < 115:
-                                        continue # 어둡거나 빈 슬롯은 툴팁을 열지 않고 즉각 패스
+                                # 일부 야광형 감염물(전기뱀장어 등)은 어두워져도 아이콘의 자체 야광 픽셀 밝기 때문에 빈 슬롯 체크(120)를 통과할 수 있습니다.
+                                # 따라서 1차적으로 80 미만의 빈 슬롯을 빠르게 스킵한 뒤, 아래 툴팁 숫자 검증을 통해 확실한 1짜리(F0)만 최종 선별합니다.
+                                if slot_roi.size > 0 and np.max(slot_roi) < 120:
+                                    continue # 어둡거나 빈 슬롯은 툴팁을 열지 않고 패스
                                     
                                 pyautogui.moveTo(cx, cy)
                                 template_label = FUSION_CACHE.get('ability_label.png')

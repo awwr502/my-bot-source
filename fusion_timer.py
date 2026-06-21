@@ -1908,7 +1908,7 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 빨간 박스 영역 한정 실시간 오츠 이진화 형태 매칭을 시작합니다.")
+                                    bprint("  > 🔍 [결과 판독] 빨간 박스 영역 한정 실시간 양방향 절대 편차 대조를 시작합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
@@ -1929,34 +1929,37 @@ def fusion_bot_loop():
                                             _, max_val_nt, _, _ = cv2.minMaxLoc(res_nt)
                                             no_trait_score = max(no_trait_score, max_val_nt)
                                             
-                                        # [실시간 오츠 이진화 필터] 
-                                        # 빨간 박스 영역 내부의 올리브색/갈색 배경색을 완전히 소멸시키고 오직 하얀색 글자 형태만 화이트(255)로 이분화합니다.
-                                        _, screen_bin = cv2.threshold(screen_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                                        # [실시간 화면 절대 편차 감쇄]
+                                        # 배경색 노이즈를 100% 원천 차단하되, 글씨의 부드러운 안티앨리어싱 경계선을 온전히 살리기 위해 화면 배경 편차 연산을 적용합니다.
+                                        screen_median = np.median(screen_gray)
+                                        screen_diff = cv2.absdiff(screen_gray, int(screen_median))
                                         
-                                        # 2. 가치 특성 7종 이진화 명암 대조 진행 (배경 무시 및 계수 차감 정밀 매칭 가동)
+                                        # 2. 가치 특성 7종 절대 편차 매칭 진행
                                         for t_idx in range(1, 8):
+                                            # 모드 5 흑백 대조군과의 완벽 분리를 위해 원래의 로컬 흑백 원본 템플릿(trait_x.png)을 직접 호출합니다.
                                             t_file = f"trait_{t_idx}.png"
                                             template = FUSION_CACHE.get(t_file)
                                             if template is None: continue
                                             
                                             template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
                                             
-                                            # 템플릿 역시 오츠 알고리즘으로 동일하게 이진화하여 글자 모양만 화이트(255)로 추출하고 배경은 블랙(0)으로 맞춥니다.
-                                            _, template_bin = cv2.threshold(template_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                                            # 템플릿 역시 중간값 편차 감쇄를 수행해 템플릿 배경만 깨끗한 0(블랙)으로 소멸시킵니다.
+                                            template_median = np.median(template_g)
+                                            template_diff = cv2.absdiff(template_g, int(template_median))
                                             
                                             file_best_score = 0.0
-                                            # 미세한 글씨 크기 편차(95% ~ 105%)를 보정하기 위해 배율을 동적으로 축소/확대하여 대조합니다.
-                                            for scale in [0.95, 1.0, 1.05]:
-                                                w = int(template_bin.shape[1] * scale)
-                                                h = int(template_bin.shape[0] * scale)
+                                            # 글씨 크기의 동적 편차(0.85배에서 1.15배까지)를 폭넓고 조밀하게 커버하여 정밀 대조합니다.
+                                            for scale in [0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15]:
+                                                w = int(template_diff.shape[1] * scale)
+                                                h = int(template_diff.shape[0] * scale)
                                                 
-                                                if w > screen_bin.shape[1] or h > screen_bin.shape[0]:
+                                                if w > screen_diff.shape[1] or h > screen_diff.shape[0]:
                                                     continue
                                                     
-                                                resized_template = cv2.resize(template_bin, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                                resized_template = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
                                                 
-                                                # 이진화 처리된 뼈대 이미지끼리 정규화 상관계수(TM_CCOEFF_NORMED)를 적용해 배경 오차를 원천 배제하고 글자 형태만 비교합니다.
-                                                res = cv2.matchTemplate(screen_bin, resized_template, cv2.TM_CCOEFF_NORMED)
+                                                # 양방향 배경이 0으로 완전 동기화된 상태이므로, 정규화 상관계수(TM_CCOEFF_NORMED)를 적용해 글자 뼈대 형태만 정밀 매칭합니다.
+                                                res = cv2.matchTemplate(screen_diff, resized_template, cv2.TM_CCOEFF_NORMED)
                                                 _, max_val, _, _ = cv2.minMaxLoc(res)
                                                 
                                                 if max_val > file_best_score:

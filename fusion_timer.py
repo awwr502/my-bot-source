@@ -328,7 +328,8 @@ FUSION_CONF = {
     'hunt_pop.png': 0.85,
     'empty_checkbox.png': 0.90,
     'butterfly.png': 0.85,
-    'no_trait.png': 0.80
+    'no_trait.png': 0.80,
+    'parent_title.png': 0.85
 }
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
@@ -341,7 +342,8 @@ GRAY_IMAGES = [
     '6.png', '7.png', '14.png',
     'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png', 'select_0_3.png',
     'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png', 'dev_list_btn.png',
-    'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png', 'empty_checkbox.png', 'butterfly.png', 'no_trait.png'
+    'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png', 'empty_checkbox.png', 'butterfly.png', 'no_trait.png', 
+    'parent_title.png'
 ]
 
 # [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
@@ -2137,20 +2139,31 @@ def fusion_bot_loop():
                             bprint("  > [1/2 부모 세팅] 좌측 부모 슬롯 클릭 및 감염물 창 개방...")
                             pyautogui.moveTo(1150, 300); time.sleep(0.1); send_cmd('C')
                             
-                            # 최대 1초간 부모 슬롯 창(select_0_2.png)이 열릴 때까지 실시간 검사 대기
+                            # 최대 1초간 '감염물 선택' 타이틀(parent_title.png)이 인식될 때까지 대기
                             wait_inv_start = time.time()
                             opened = False
                             while bot_active and time.time() - wait_inv_start < 1.0:
-                                if check_img('select_0_2.png', thread_sct):
+                                if check_img('parent_title.png', thread_sct):
                                     opened = True
                                     break
                                 time.sleep(0.05)
                                 
                             # 1초 내에 인식되지 않은 경우 보정 재클릭 수행 후 속행
                             if not opened and bot_active:
-                                bprint("  > ⚠️ [개방 지연] 부모 창 미인식. 보정 재클릭을 수행합니다.")
+                                bprint("  > ⚠️ [개방 지연] '감염물 선택' 타이틀 미인식. 보정 재클릭을 수행합니다.")
                                 pyautogui.moveTo(1150, 300); time.sleep(0.05); send_cmd('C')
-                                time.sleep(0.3)
+                                
+                                # 재클릭 후 2차 검출 대기 (최대 1초)
+                                wait_inv_start = time.time()
+                                while bot_active and time.time() - wait_inv_start < 1.0:
+                                    if check_img('parent_title.png', thread_sct):
+                                        opened = True
+                                        break
+                                    time.sleep(0.05)
+                                    
+                            if opened:
+                                bprint("  > ✅ [확인] '감염물 선택' 인벤토리 창 개방 확인! 0.1초 안정화 대기 후 탐색을 개시합니다.")
+                                time.sleep(0.1)
 
                             # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
                             inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
@@ -2407,7 +2420,16 @@ def fusion_bot_loop():
                                         cx, cy = FUSION_ROI['butterfly.png']['last_pos']
                                         pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                                         bprint("  > 🦋 [필터 성공] 나비 아이콘 클릭 완료! 감염물 리스트 전환 성공.")
-                                        time.sleep(0.5) # 탭 전환 렌더링 딜레이 헷지
+                                        
+                                        # 필터 전환 성공 후, '감염물' 타이틀(inv_title.png)이 선명하게 감지될 때까지 탐색 대기
+                                        wait_title = time.time()
+                                        while bot_active and time.time() - wait_title < 1.5:
+                                            if check_img('inv_title.png', thread_sct):
+                                                break
+                                            time.sleep(0.03)
+                                            
+                                        # 탭 전환 애니메이션의 완벽한 소멸을 위해 안전한 0.2초 추가 대기
+                                        time.sleep(0.2)
                                         break
                                     time.sleep(0.05)
                                     

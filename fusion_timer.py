@@ -1976,7 +1976,7 @@ def fusion_bot_loop():
                                         
                                     # 3. 최종 정밀 가치 판정 분석 (절대 편차 감쇄 기반 엄격 형태 판정)
                                     bprint("  > 📊 [결과 판독 실시간 정밀 검증 리포트]")
-                                    bprint(f"    └ [특성 없음] '이 감염물은 특성이 없습니다' 일치율: {no_trait_score:.4f} (기준값: 0.80)")
+                                    bprint(f"    └ [특성 없음] '이 감염물은 특성이 없습니다' 일치율: {no_trait_score:.4f} (기준값: 0.70)")
                                     
                                     # 3-1) 최고 정합 일치율 특성 선별
                                     best_idx = max(best_debug_scores, key=best_debug_scores.get)
@@ -2007,7 +2007,7 @@ def fusion_bot_loop():
                                         t_file = f"trait_{t_idx}.png"
                                         t_name = TRAIT_NAMES.get(t_file, "이름 미등록")
                                         if t_file in FUSION_CACHE:
-                                            match_status = "🎉합격" if best_debug_scores[t_idx] >= 0.80 else "❌미달"
+                                            match_status = "🎉합격" if best_debug_scores[t_idx] >= 0.70 else "❌미달"
                                             bprint(f"      - [{match_status}] {t_file} ({t_name}) 최고 매칭율: {best_debug_scores[t_idx]:.4f}")
                                             
                                     # [E(ESC) 수령 이탈 오류 방지] 툴팁 상세 확인창 하단의 'F 감염물 획득' 버튼을 직접 입력해 보상을 수령하고 상세창을 닫습니다.

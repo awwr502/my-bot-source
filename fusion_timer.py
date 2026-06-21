@@ -1908,7 +1908,7 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 절대 편차 가치 분석을 시작합니다.")
+                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 절대 편차-상관계수 분석을 시작합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
@@ -1934,7 +1934,7 @@ def fusion_bot_loop():
                                         screen_median = np.median(screen_gray)
                                         screen_diff = cv2.absdiff(screen_gray, int(screen_median))
                                         
-                                        # 2. 가치 특성 7종 절대 편차 및 동적 마스킹 매칭 진행
+                                        # 2. 가치 특성 7종 절대 편차 대조 진행 (inf 오류를 유발하는 mask 매개변수 대신 안전한 TM_CCOEFF_NORMED 적용)
                                         for t_idx in range(1, 8):
                                             t_file = f"trait_{t_idx}.png"
                                             template = FUSION_CACHE.get(t_file)
@@ -1946,9 +1946,6 @@ def fusion_bot_loop():
                                             template_median = np.median(template_g)
                                             template_diff = cv2.absdiff(template_g, int(template_median))
                                             
-                                            # 낚시 봇 특화 수식: 절대 편차에서 획(글씨)에 해당하는 영역만 마스크로 추출 (임계치 15 적용)
-                                            _, auto_mask = cv2.threshold(template_diff, 15, 255, cv2.THRESH_BINARY)
-                                            
                                             file_best_score = 0.0
                                             # 미세한 글씨 크기 편차(95% ~ 105%)를 보정하기 위해 배율을 동적으로 축소/확대하여 대조합니다.
                                             for scale in [0.95, 1.0, 1.05]:
@@ -1959,10 +1956,9 @@ def fusion_bot_loop():
                                                     continue
                                                     
                                                 resized_template = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
-                                                resized_mask = cv2.resize(auto_mask, (w, h), interpolation=cv2.INTER_NEAREST)
                                                 
-                                                # 양방향 배경이 0으로 완전 동기화된 상태에서 마스크를 전달해 배경 오차를 100% 소거하고 글자 형태만 비교합니다.
-                                                res = cv2.matchTemplate(screen_diff, resized_template, cv2.TM_CCORR_NORMED, mask=resized_mask)
+                                                # 양방향 배경이 0으로 완전 동기화된 상태이므로, mask 없이 정규화 상관계수(TM_CCOEFF_NORMED)를 적용해 글자 뼈대 형태만 정밀 매칭합니다.
+                                                res = cv2.matchTemplate(screen_diff, resized_template, cv2.TM_CCOEFF_NORMED)
                                                 _, max_val, _, _ = cv2.minMaxLoc(res)
                                                 
                                                 if max_val > file_best_score:

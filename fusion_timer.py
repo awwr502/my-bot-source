@@ -2432,14 +2432,14 @@ def fusion_bot_loop():
                                         pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                                         bprint("  > 🦋 [필터 성공] 나비 아이콘 클릭 완료! 감염물 리스트 전환 성공.")
                                         
-                                        # 필터 전환 성공 후, '감염물' 타이틀(inv_title.png)이 선명하게 감지될 때까지 탐색 대기
+                                        # 필터 전환 성공 후, 하단의 '선택 종류: 0/3' 표시(select_0_3.png)가 완전히 활성화될 때까지 탐색 대기
                                         wait_title = time.time()
                                         while bot_active and time.time() - wait_title < 1.5:
-                                            if check_img('inv_title.png', thread_sct):
+                                            if check_img('select_0_3.png', thread_sct):
                                                 break
                                             time.sleep(0.03)
                                             
-                                        # 탭 전환 애니메이션의 완벽한 소멸을 위해 안전한 0.2초 추가 대기
+                                        # 탭 전환 연출의 완전한 안정화를 위해 0.2초 추가 대기 후 탐색을 개시합니다.
                                         time.sleep(0.2)
                                         break
                                     time.sleep(0.05)

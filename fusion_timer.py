@@ -2004,17 +2004,17 @@ def fusion_bot_loop():
                                             bprint(f"      - [{match_status}] {t_file} ({t_name}) 최고 매칭율: {best_debug_scores[t_idx]:.4f}")
                                             
                                     # [E(ESC) 수령 이탈 오류 방지] 툴팁 상세 확인창 하단의 'F 감염물 획득' 버튼을 직접 입력해 보상을 수령하고 상세창을 닫습니다.
-                                    bprint("  > 💎 [결과 판독 완료] 상세 확인창에서 수령 단축키(F)를 즉시 입력해 보상을 획득합니다.")
+                                    bprint("  > 💎 [판독 완료] 상세 확인창에서 수령 단축키(F)를 즉시 입력해 보상을 획득합니다.")
                                     send_cmd('F'); time.sleep(0.15); send_cmd('R')
                                     wait_vanish('dev_trait_header.png', thread_sct)
                                     reward_collected = True
                                 
                                 if has_valuable_trait:
                                     identified_trait_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
-                                    bprint(f"  > 🎉 [성공] 결과물 가치 특성 '{identified_trait_name}' 전수 완료! NORMAL 상태로 복사 가동합니다.")
+                                    bprint(f"  > 🎉 [성공] NORMAL 상태로 복사 가동합니다.")
                                     char_sub_modes[char_key] = "NORMAL"
                                 else:
-                                    bprint("  > 😭 [실패] 결과물 가치 특성 미전수! RECOVERY 복구 상태로 전환합니다.")
+                                    bprint("  > 😭 [실패] RECOVERY 복구 상태로 전환합니다.")
                                     char_sub_modes[char_key] = "RECOVERY"
 
                             # 2. 보상 획득 및 획득 창 닫기 진행 (모드 6 이외의 일반 모드 전용)
@@ -2180,7 +2180,7 @@ def fusion_bot_loop():
                                     time.sleep(0.05)
                                     
                             if opened:
-                                bprint("  > ✅ [확인] '감염물 선택' 인벤토리 창 개방 확인! 0.1초 안정화 대기 후 탐색을 개시합니다.")
+                                bprint("  > ✅ [확인] 인벤토리 창 개방 확인! 0.1초 안정화 대기 후 탐색을 개시합니다.")
                                 time.sleep(0.1)
 
                             # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
@@ -2423,7 +2423,7 @@ def fusion_bot_loop():
                                         time.sleep(0.05)
                                         
                                 if opened_mat:
-                                    bprint("  > ✅ [확인] 재료 인벤토리 창 개방 확인! 0.1초 안정화 대기 후 필터 전환을 시도합니다.")
+                                    bprint("  > ✅ [확인] 인벤토리 창 개방 확인! 0.1초 안정화 대기 후 필터 전환을 시도합니다.")
                                     time.sleep(0.1)
 
                                 # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
@@ -2635,17 +2635,17 @@ def fusion_bot_loop():
                                         # [모드 5 통합 딜레이 및 인게임 디테일 로그 출력 시스템 구현]
                                         # 1) 융합 가능 횟수가 1인 경우 (F0 - 스킵 대상)
                                         if is_f0:
-                                            bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 1짜리 감염물 발견. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                            bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 1 발견. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                             fast_clear_tooltip(); continue
                                             
                                         # 2) 융합 가능 횟수가 0인 경우 (F1 - 채택 대상)
                                         elif is_f1:
                                             if current_sub == "NORMAL":
                                                 if has_any_trait:
-                                                    bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 0짜리 특성 감염물 스킵. 특성: '{identified_trait_name}' (신뢰도: {best_score:.2f})")
+                                                    bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 0 스킵. 특성: '{identified_trait_name}' (신뢰도: {best_score:.2f})")
                                                     fast_clear_tooltip(); continue
                                                 else:
-                                                    bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                                    bprint(f"  > 💎 [재료 채택] 융합 0짜리 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                                     target_materials.append((cx, cy, False))
                                             elif current_sub == "RECOVERY":
                                                 already_has_trait_in_list = any(m[2] for m in target_materials)
@@ -2655,7 +2655,7 @@ def fusion_bot_loop():
                                                 elif not has_any_trait:
                                                     blank_count = sum(1 for m in target_materials if not m[2])
                                                     if blank_count < 2:
-                                                        bprint(f"  > 💎 [재료 채택] 융합 가능 횟수 0짜리 순정 감염물 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                                        bprint(f"  > 💎 [재료 채택] 융합 0짜리 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                                         target_materials.append((cx, cy, False))
                                                     else:
                                                         bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")

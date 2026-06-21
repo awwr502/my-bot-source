@@ -1908,14 +1908,14 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 절대 편차-상관계수 분석을 시작합니다.")
+                                    bprint("  > 🔍 [결과 판독] 빨간 박스 영역 한정 실시간 오츠 이진화 형태 매칭을 시작합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
                                     scan_start = time.time()
                                     
-                                    # 우측 인벤토리 및 정보 카드를 물리적으로 100% 격리하기 위해 좌측 패널 영역만 캡처합니다.
-                                    result_roi = {"left": 0, "top": 150, "width": 600, "height": 750}
+                                    # [빨간 박스 규격 반영] 잡특성 동시 발현을 감안하면서 노이즈를 배제하는 최적의 영역(X: 0~400, Y: 110~440)을 캡처합니다.
+                                    result_roi = {"left": 0, "top": 110, "width": 400, "height": 330}
                                     
                                     # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 모든 특성의 점수를 끝까지 누적합니다.
                                     while time.time() - scan_start < 1.5 and bot_active:
@@ -1929,12 +1929,11 @@ def fusion_bot_loop():
                                             _, max_val_nt, _, _ = cv2.minMaxLoc(res_nt)
                                             no_trait_score = max(no_trait_score, max_val_nt)
                                             
-                                        # [실시간 화면 절대 편차 감쇄]
-                                        # 낚시 봇과 100% 동일하게 화면의 배경 중간값을 계산하여 빼줌으로써 화면 배경을 강제로 0(블랙)으로 감쇄시킵니다.
-                                        screen_median = np.median(screen_gray)
-                                        screen_diff = cv2.absdiff(screen_gray, int(screen_median))
+                                        # [실시간 오츠 이진화 필터] 
+                                        # 빨간 박스 영역 내부의 올리브색/갈색 배경색을 완전히 소멸시키고 오직 하얀색 글자 형태만 화이트(255)로 이분화합니다.
+                                        _, screen_bin = cv2.threshold(screen_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                                         
-                                        # 2. 가치 특성 7종 절대 편차 대조 진행 (inf 오류를 유발하는 mask 매개변수 대신 안전한 TM_CCOEFF_NORMED 적용)
+                                        # 2. 가치 특성 7종 이진화 명암 대조 진행 (배경 무시 및 계수 차감 정밀 매칭 가동)
                                         for t_idx in range(1, 8):
                                             t_file = f"trait_{t_idx}.png"
                                             template = FUSION_CACHE.get(t_file)
@@ -1942,23 +1941,22 @@ def fusion_bot_loop():
                                             
                                             template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
                                             
-                                            # 템플릿 역시 중간값 편차 감쇄를 수행해 템플릿 배경을 0(블랙)으로 소멸시킵니다.
-                                            template_median = np.median(template_g)
-                                            template_diff = cv2.absdiff(template_g, int(template_median))
+                                            # 템플릿 역시 오츠 알고리즘으로 동일하게 이진화하여 글자 모양만 화이트(255)로 추출하고 배경은 블랙(0)으로 맞춥니다.
+                                            _, template_bin = cv2.threshold(template_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                                             
                                             file_best_score = 0.0
                                             # 미세한 글씨 크기 편차(95% ~ 105%)를 보정하기 위해 배율을 동적으로 축소/확대하여 대조합니다.
                                             for scale in [0.95, 1.0, 1.05]:
-                                                w = int(template_diff.shape[1] * scale)
-                                                h = int(template_diff.shape[0] * scale)
+                                                w = int(template_bin.shape[1] * scale)
+                                                h = int(template_bin.shape[0] * scale)
                                                 
-                                                if w > screen_diff.shape[1] or h > screen_diff.shape[0]:
+                                                if w > screen_bin.shape[1] or h > screen_bin.shape[0]:
                                                     continue
                                                     
-                                                resized_template = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                                resized_template = cv2.resize(template_bin, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
                                                 
-                                                # 양방향 배경이 0으로 완전 동기화된 상태이므로, mask 없이 정규화 상관계수(TM_CCOEFF_NORMED)를 적용해 글자 뼈대 형태만 정밀 매칭합니다.
-                                                res = cv2.matchTemplate(screen_diff, resized_template, cv2.TM_CCOEFF_NORMED)
+                                                # 이진화 처리된 뼈대 이미지끼리 정규화 상관계수(TM_CCOEFF_NORMED)를 적용해 배경 오차를 원천 배제하고 글자 형태만 비교합니다.
+                                                res = cv2.matchTemplate(screen_bin, resized_template, cv2.TM_CCOEFF_NORMED)
                                                 _, max_val, _, _ = cv2.minMaxLoc(res)
                                                 
                                                 if max_val > file_best_score:
@@ -1977,7 +1975,7 @@ def fusion_bot_loop():
                                     best_idx = max(best_debug_scores, key=best_debug_scores.get)
                                     best_val = best_debug_scores[best_idx]
                                     
-                                    if best_val >= 0.80:
+                                    if best_val >= 0.70:
                                         has_valuable_trait = True
                                         best_score = best_val
                                         best_matched_file = f"trait_{best_idx}.png"
@@ -1987,7 +1985,7 @@ def fusion_bot_loop():
                                         bprint("    └ ❌ [판독 결과] '특성 없음' 문구가 명확히 감지되어 전수 실패로 판정합니다.")
                                         has_valuable_trait = False
                                     else:
-                                        # 2) 7종 가치 특성 중 하나라도 실시간 일치율이 0.80 이상으로 검출된 경우 -> 전수 성공! (NORMAL)
+                                        # 2) 7종 가치 특성 중 하나라도 실시간 일치율이 0.70 이상으로 검출된 경우 -> 전수 성공! (NORMAL)
                                         if has_valuable_trait:
                                             t_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
                                             bprint(f"    └ ✅ [판독 결과] 우리가 원하는 가치 특성 '{t_name}'이 정상 전수되었습니다! (편차 매칭율: {best_score:.4f} >= 0.80)")

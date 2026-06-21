@@ -1908,30 +1908,24 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 영역 이원화(빨간 박스 특성스캔 + 중앙 실패문구스캔) 엔진을 가동합니다.")
+                                    bprint("  > 🔍 [결과 판독] 빨간 박스 영역 실시간 절대 편차 대조 및 오리지널 실패 문구 검증을 시작합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
                                     scan_start = time.time()
                                     
-                                    # [스마트 이원화 ROI 지정]
-                                    # 1. 특성 매칭용 빨간 박스 (배경 노이즈 격리 보장): X 0~400, Y 110~440
+                                    # [빨간 박스 규격 반영] 잡특성 동시 발현을 감안하면서 노이즈를 배제하는 최적의 영역(X: 0~400, Y: 110~440)을 캡처합니다.
                                     result_roi = {"left": 0, "top": 110, "width": 400, "height": 330}
-                                    # 2. 실패문구 매칭용 와이드 영역 (Y=540 중앙 문구 스캔 보장): X 0~400, Y 110~810 (세로 연장)
-                                    no_trait_roi = {"left": 0, "top": 110, "width": 400, "height": 700}
                                     
                                     # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 모든 특성의 점수를 끝까지 누적합니다.
                                     while time.time() - scan_start < 1.5 and bot_active:
-                                        # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행 (중앙부 Y=540까지 안전 확보된 흑백 스캔)
-                                        sct_no_trait = thread_sct.grab(no_trait_roi)
-                                        screen_gray_nt = cv2.cvtColor(np.array(sct_no_trait), cv2.COLOR_BGRA2GRAY)
+                                        # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행 (유저님의 오리지널 100% 검증된 check_img 방식 활용)
+                                        # 렉 없이 안정적으로 검출을 끝내며, 감지 성공 시 기준선(0.80)을 가뿐히 넘기도록 처리합니다.
+                                        if check_img('no_trait.png', thread_sct):
+                                            no_trait_score = 0.95
+                                        else:
+                                            no_trait_score = 0.20
                                         
-                                        no_trait_template = FUSION_CACHE.get('no_trait.png')
-                                        if no_trait_template is not None:
-                                            res_nt = cv2.matchTemplate(screen_gray_nt, no_trait_template, cv2.TM_CCOEFF_NORMED)
-                                            _, max_val_nt, _, _ = cv2.minMaxLoc(res_nt)
-                                            no_trait_score = max(no_trait_score, max_val_nt)
-                                            
                                         # 2. 가치 특성 7종 절대 편차 매칭 진행 (상단 빨간 박스 영역에서만 오탐지 배제 스캔 가동)
                                         sct_img = thread_sct.grab(result_roi)
                                         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)

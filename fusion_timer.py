@@ -20,6 +20,7 @@ import winsound
 import math
 import screen_brightness_control as sbc
 import hashlib
+import concurrent.futures
 
 # [네트워크 고속화] 매번 새로운 연결을 맺는 requests.post 대신 열려있는 통로(Session)를 사용합니다.
 # 이를 통해 DNS 조회 및 SSL 핸드쉐이크 시간을 0.1초 미만으로 단축합니다.

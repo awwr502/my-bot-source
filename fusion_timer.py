@@ -1908,7 +1908,7 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 명암/컬러 이중 교차 분석을 시작합니다.")
+                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 마스크 기반 명암 분석을 시작합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
@@ -1921,7 +1921,6 @@ def fusion_bot_loop():
                                     while time.time() - scan_start < 1.5 and bot_active:
                                         sct_img = thread_sct.grab(result_roi)
                                         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                                        screen_color = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
                                         
                                         # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행 (격리 구역 흑백 매칭)
                                         no_trait_template = FUSION_CACHE.get('no_trait.png')
@@ -1930,19 +1929,26 @@ def fusion_bot_loop():
                                             _, max_val_nt, _, _ = cv2.minMaxLoc(res_nt)
                                             no_trait_score = max(no_trait_score, max_val_nt)
                                             
-                                        # 2. 가치 특성 7종 컬러 매칭 진행 (인벤토리 및 정보 카드가 차단되어 오탐이 완벽히 방지됩니다.)
+                                        # 2. 가치 특성 7종 동적 마스크 기반 정합성 대조 진행
                                         for t_idx in range(1, 8):
-                                            color_key = f"color_trait_{t_idx}.png"
-                                            template_color = FUSION_CACHE.get(color_key)
-                                            if template_color is None: continue
+                                            t_file = f"trait_{t_idx}.png"
+                                            template = FUSION_CACHE.get(t_file)
+                                            if template is None: continue
                                             
-                                            res = cv2.matchTemplate(screen_color, template_color, cv2.TM_CCOEFF_NORMED)
+                                            template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
+                                            
+                                            # [동적 마스크 생성] 글씨 부분만 화이트(255)로 남기고 배경 영역은 완전한 블랙(0)으로 분리해냅니다.
+                                            _, mask = cv2.threshold(template_g, 100, 255, cv2.THRESH_BINARY)
+                                            
+                                            # mask 매개변수를 넘겨주어 오직 하얀색 글자 뼈대 부분만 대조 연산을 돌리고 배경색은 100% 무시합니다.
+                                            # (배경이 흑회색이든, 올리브색이든, 투명 변동이 있든 상관없이 항상 고득점 안착이 보장됩니다.)
+                                            res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCORR_NORMED, mask=mask)
                                             _, max_val, _, _ = cv2.minMaxLoc(res)
                                             
                                             if max_val > best_debug_scores[t_idx]:
                                                 best_debug_scores[t_idx] = max_val
                                                 
-                                            # 우측 노이즈가 원천 배제되었으므로 임계 요구 정확도를 강력한 0.85로 설정해 오탐을 원천 차단합니다.
+                                            # 배경 잡음이 완벽히 마스킹 소거되었으므로 극도로 신뢰성 높은 0.85 철벽 임계점을 가동합니다.
                                             if max_val >= 0.85:
                                                 has_valuable_trait = True
                                                 best_score = max_val

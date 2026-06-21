@@ -1908,16 +1908,16 @@ def fusion_bot_loop():
                                 best_matched_file = None
                                 
                                 if clicked_list_btn:
-                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 마스크 기반 명암 분석을 시작합니다.")
+                                    bprint("  > 🔍 [결과 판독] 좌측 패널 영역 한정 실시간 고해상도 명암 분석을 시작합니다.")
                                     
                                     best_debug_scores = {i: 0.0 for i in range(1, 8)}
                                     no_trait_score = 0.0
                                     scan_start = time.time()
                                     
-                                    # 우측 인벤토리의 노이즈 유입을 원천 예방하기 위해 좌측 결과 패널 부위만 물리적으로 격리하여 캡처합니다.
+                                    # 우측 인벤토리 및 정보 카드를 물리적으로 100% 격리하기 위해 좌측 패널 영역만 캡처합니다.
                                     result_roi = {"left": 0, "top": 150, "width": 600, "height": 750}
                                     
-                                    # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 정밀하게 화면을 훑습니다.
+                                    # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 모든 특성의 점수를 끝까지 누적합니다.
                                     while time.time() - scan_start < 1.5 and bot_active:
                                         sct_img = thread_sct.grab(result_roi)
                                         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
@@ -1929,35 +1929,30 @@ def fusion_bot_loop():
                                             _, max_val_nt, _, _ = cv2.minMaxLoc(res_nt)
                                             no_trait_score = max(no_trait_score, max_val_nt)
                                             
-                                        # 2. 가치 특성 7종 동적 마스크 기반 정합성 대조 진행
+                                        # 2. 가치 특성 7종 원본 명암 대조 진행 (조기 탈출 없이 모든 이미지의 스코어를 균등하게 수집합니다.)
                                         for t_idx in range(1, 8):
                                             t_file = f"trait_{t_idx}.png"
                                             template = FUSION_CACHE.get(t_file)
                                             if template is None: continue
                                             
                                             template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
-                                            
-                                            # [동적 마스크 생성] 글씨 부분만 화이트(255)로 남기고 배경 영역은 완전한 블랙(0)으로 분리해냅니다.
-                                            _, mask = cv2.threshold(template_g, 100, 255, cv2.THRESH_BINARY)
-                                            
-                                            # mask 매개변수를 넘겨주어 오직 하얀색 글자 뼈대 부분만 대조 연산을 돌리고 배경색은 100% 무시합니다.
-                                            # (배경이 흑회색이든, 올리브색이든, 투명 변동이 있든 상관없이 항상 고득점 안착이 보장됩니다.)
-                                            res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCORR_NORMED, mask=mask)
+                                            res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCOEFF_NORMED)
                                             _, max_val, _, _ = cv2.minMaxLoc(res)
                                             
                                             if max_val > best_debug_scores[t_idx]:
                                                 best_debug_scores[t_idx] = max_val
                                                 
-                                            # 잡특성/이로치 전수 유출을 완전 방지하기 위해 엄격한 0.80 가치 판단 기준선을 작동합니다.
-                                            if max_val >= 0.80:
-                                                has_valuable_trait = True
-                                                best_score = max_val
-                                                best_matched_file = f"trait_{t_idx}.png"
-                                                break
-                                                
-                                        if has_valuable_trait:
-                                            break
                                         time.sleep(0.02)
+                                        
+                                    # 3. 누적된 최고 매칭 스코어를 기반으로 정밀한 1등 가치 특성을 가려냅니다.
+                                    best_idx = max(best_debug_scores, key=best_debug_scores.get)
+                                    best_val = best_debug_scores[best_idx]
+                                    
+                                    # 격리 영역 매칭 시 실제 화면에 존재하는 올바른 특성은 최소 0.58 이상의 확실한 상관관계 수치를 가집니다.
+                                    if best_val >= 0.6:
+                                        has_valuable_trait = True
+                                        best_score = best_val
+                                        best_matched_file = f"trait_{best_idx}.png"
                                         
                                     # 3. 최종 정밀 가치 판정 분석 (마스크 기반 엄격 매칭 판정)
                                     bprint("  > 📊 [결과 판독 실시간 정밀 검증 리포트]")

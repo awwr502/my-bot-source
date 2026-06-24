@@ -2666,12 +2666,13 @@ def fusion_bot_loop():
                                             if check_img('level_header.png', thread_sct, force_full=True):
                                                 cx, cy = FUSION_ROI['level_header.png']['last_pos']
                                                 
-                                                # '레벨' 글자 정중앙 기준 우측의 숫자 영역만 정밀하게 상대 크롭(자간 렉 극복을 위해 X축 우측 이동 보정)합니다.
+                                                # '재능' 글자 정중앙 기준 아랫줄의 텍스트 영역을 정밀하게 상대 크롭(X: -30~+170, Y: +30~+70)합니다.
+                                                # 기준 앵커가 '재능'으로 바뀌었으므로, 수직으로 약 30px 하강하고 가로폭을 넓혀 '피드백' 글씨를 안정적으로 수집합니다.
                                                 level_num_roi = {
-                                                    "left": int(cx + 130), # 기준 시작점을 130픽셀 우측으로 보정
-                                                    "top": int(cy - 15),
-                                                    "width": 140,          # 여유롭게 숫자를 담을 수 있도록 폭을 140픽셀로 보정
-                                                    "height": 30
+                                                    "left": int(cx - 30),
+                                                    "top": int(cy + 30),
+                                                    "width": 200,
+                                                    "height": 40
                                                 }
                                                 sct_level = thread_sct.grab(level_num_roi)
                                                 
@@ -2701,9 +2702,9 @@ def fusion_bot_loop():
                                                     
                                                     if max_val_level >= 0.85:
                                                         is_target_level_1 = True
-                                                        bprint(f"  > 💎 [레벨 검증 통과] Level 1 감염물 확인 완료! (일치율: {max_val_level:.4f} >= 0.85)")
+                                                        bprint(f"  > 💎 [재능 검증 통과] 재능 확인 완료! (일치율: {max_val_level:.4f} >= 0.85)")
                                                     else:
-                                                        bprint(f"  > ⏭️ [레벨 미달] Level 1이 아닌 고레벨 감염물입니다. (일치율: {max_val_level:.4f} < 0.85)")
+                                                        bprint(f"  > ⏭️ [재능 미달] 우리가 원치 않는 재능 감염물입니다. (일치율: {max_val_level:.4f} < 0.85)")
                                                         
                                             if not is_target_level_1:
                                                 fast_clear_tooltip()

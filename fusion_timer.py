@@ -2663,14 +2663,15 @@ def fusion_bot_loop():
                                             is_target_level_1 = False
                                             
                                             # 전역에서 '재능' 텍스트 앵커(talent_header.png)를 탐색하여 상세 패널의 동적 좌표를 실시간 추적합니다.
+                                            # (주의: 루프 변수인 cx, cy를 덮어쓰지 않도록 고유 앵커 변수인 anchor_x, anchor_y로 분리 적재하여 슬롯 조준선 꼬임을 완전히 영구 해결합니다.)
                                             if check_img('talent_header.png', thread_sct, force_full=True):
-                                                cx, cy = FUSION_ROI['talent_header.png']['last_pos']
+                                                anchor_x, anchor_y = FUSION_ROI['talent_header.png']['last_pos']
                                                 
-                                                # '재능' 글자 정중앙 기준 아랫줄의 텍스트 영역을 정밀하게 상대 크롭(왼쪽 여백을 버리고 '피드백' 위치로 우측 이동 보정)합니다.
+                                                # '재능' 글자 정중앙 기준 아랫줄의 텍스트 영역을 정밀하게 상대 크롭(X: -30~+170, Y: +30~+70)합니다.
                                                 level_num_roi = {
-                                                    "left": int(cx + 100), # 시작점을 우측으로 130픽셀 밀어내어 왼쪽 테두리 여백을 완전히 잘라냅니다.
-                                                    "top": int(cy + 30),
-                                                    "width": 150,          # 가로 폭을 150픽셀로 컴팩트하게 축소하여 '피드백' 글씨를 정중앙에 안착시킵니다.
+                                                    "left": int(anchor_x - 30),
+                                                    "top": int(anchor_y + 30),
+                                                    "width": 200,
                                                     "height": 40
                                                 }
                                                 sct_level = thread_sct.grab(level_num_roi)

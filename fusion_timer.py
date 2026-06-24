@@ -2686,7 +2686,7 @@ def fusion_bot_loop():
                                                 except Exception as e:
                                                     bprint(f"  > ❌ [디버그] 재능 캡처 저장 실패: {e}")
                                                 
-                                                screen_gray_level = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA_GRAY)
+                                                screen_gray_level = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2GRAY)
                                                 
                                                 template_level_1 = FUSION_CACHE.get('feedback_trait.png')
                                                 if template_level_1 is not None:

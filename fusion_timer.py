@@ -2666,12 +2666,11 @@ def fusion_bot_loop():
                                             if check_img('level_header.png', thread_sct, force_full=True):
                                                 cx, cy = FUSION_ROI['level_header.png']['last_pos']
                                                 
-                                                # '레벨' 글자 정중앙 기준 우측의 여백 전체를 가로 160px 너비로 넉넉하게 크롭(X: +50~+210, Y: -15~+15)합니다.
-                                                # 이렇게 가로 폭을 넓히면 자간 간격 차이나 밀림 현상이 있더라도 숫자 '1'이 무조건 캡처 범위 안에 안전하게 들어옵니다!
+                                                # '레벨' 글자 정중앙 기준 우측의 숫자 영역만 정밀하게 상대 크롭(자간 렉 극복을 위해 X축 우측 이동 보정)합니다.
                                                 level_num_roi = {
-                                                    "left": int(cx + 50),
+                                                    "left": int(cx + 130), # 기준 시작점을 130픽셀 우측으로 보정
                                                     "top": int(cy - 15),
-                                                    "width": 160,
+                                                    "width": 140,          # 여유롭게 숫자를 담을 수 있도록 폭을 140픽셀로 보정
                                                     "height": 30
                                                 }
                                                 sct_level = thread_sct.grab(level_num_roi)

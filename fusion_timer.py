@@ -2220,22 +2220,20 @@ def fusion_bot_loop():
                             for cx, cy in all_candidates:
                                 if len(target_parents) >= 2: break
                                     
-                                # [사용자 피드백 반영] 마우스를 올리기 전에 인벤토리 그리드의 밝기를 검사합니다.
-                                # 비활성화된 0짜리 감염물(흑색 명암) 및 빈 슬롯은 화면 분석 및 조준 대상에서 원천 배제하고 즉시 스킵합니다.
+                                # [사용자 피드백 반영] 마우스를 올리기 전에 인벤토리 그리드의 밝기와 대비를 검사합니다.
                                 rx = cx - 960
                                 ry = cy
                                 slot_roi = screen_bgr[max(0, ry - 15):min(screen_bgr.shape[0], ry + 15), max(0, rx - 15):min(screen_bgr.shape[1], rx + 15)]
                                 
-                                # 0짜리 야광형 아이콘 오인식을 원천 차단하기 위해 평균 밝기와 표준편차(대비)를 함께 분석합니다.
-                                # 비활성화되거나 비어있는 슬롯은 대비 수준이 12 미만으로 강력하게 억제됩니다.
+                                # 일부 야광형 감염물(전기뱀장어 등)은 어두워져도 아이콘의 자체 야광 픽셀 밝기 때문에 빈 슬롯 체크를 통과할 수 있습니다.
+                                # 평균 밝기(mean)와 표준편차(std)를 엄격히 결합하여 어두운 0짜리(비활성) 감염물의 초록색 등급선("B") 노이즈까지 원천 패스합니다.
                                 if slot_roi.size > 0:
                                     slot_gray = cv2.cvtColor(slot_roi, cv2.COLOR_BGR2GRAY)
                                     mean_val = np.mean(slot_gray)
                                     std_val = np.std(slot_gray)
                                     
-                                    # 활성화된 슬롯의 최소 대비 기준(std >= 12.0) 및 최소 평균 밝기(mean >= 30.0) 검증
-                                    if mean_val < 30.0 or std_val < 12.0:
-                                        continue # 어둡거나 빈 슬롯은 마우스 호버 없이 무조건 패스
+                                    if mean_val < 48.0 or std_val < 16.0:
+                                        continue # 어둡거나 빈 슬롯은 즉시 패스
                                     
                                 pyautogui.moveTo(cx, cy)
                                 template_label = FUSION_CACHE.get('ability_label.png')

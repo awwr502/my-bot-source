@@ -330,7 +330,9 @@ FUSION_CONF = {
     'empty_checkbox.png': 0.90,
     'butterfly.png': 0.85,
     'no_trait.png': 0.80,
-    'parent_title.png': 0.85
+    'parent_title.png': 0.85,
+    'level_header.png': 0.88,
+    'level_digit_1.png': 0.85
 }
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
@@ -343,8 +345,8 @@ GRAY_IMAGES = [
     '6.png', '7.png', '14.png',
     'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png', 'select_0_3.png',
     'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png', 'dev_list_btn.png',
-    'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png', 'empty_checkbox.png', 'butterfly.png', 'no_trait.png', 
-    'parent_title.png'
+    'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png', 'empty_checkbox.png', 'butterfly.png', 
+    'no_trait.png', 'parent_title.png', 'level_header.png', 'level_digit_1.png'
 ]
 
 # [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
@@ -2656,6 +2658,45 @@ def fusion_bot_loop():
                                             
                                         # 2) 융합 가능 횟수가 0인 경우 (F1 - 채택 대상)
                                         elif is_f1:
+                                            # [초정밀 동적 레벨 앵커 추적 필터]
+                                            time.sleep(0.1) # 애니메이션 대기 0.1초
+                                            is_target_level_1 = False
+                                            
+                                            # 전역에서 '레벨' 텍스트 앵커를 탐색하여 상세 패널의 동적 좌표를 실시간 추적합니다.
+                                            if check_img('level_header.png', thread_sct, force_full=True):
+                                                cx, cy = FUSION_ROI['level_header.png']['last_pos']
+                                                
+                                                # '레벨' 글자 정중앙 기준 우측의 숫자 영역만 정밀하게 상대 크롭(X: +150~+210, Y: -15~+15)합니다.
+                                                level_num_roi = {
+                                                    "left": int(cx + 150),
+                                                    "top": int(cy - 15),
+                                                    "width": 60,
+                                                    "height": 30
+                                                }
+                                                sct_level = thread_sct.grab(level_num_roi)
+                                                screen_gray_level = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2GRAY)
+                                                
+                                                template_level_1 = FUSION_CACHE.get('level_digit_1.png')
+                                                if template_level_1 is not None:
+                                                    # 오츠 이진화를 거쳐 글씨 형태만 명암 상관계수(TM_CCOEFF_NORMED)로 완벽히 정합합니다.
+                                                    template_level_1_g = cv2.cvtColor(template_level_1, cv2.COLOR_BGR2GRAY) if len(template_level_1.shape) == 3 else template_level_1
+                                                    _, template_level_bin = cv2.threshold(template_level_1_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                                                    
+                                                    _, screen_level_bin = cv2.threshold(screen_gray_level, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                                                    
+                                                    res_level = cv2.matchTemplate(screen_level_bin, template_level_bin, cv2.TM_CCOEFF_NORMED)
+                                                    _, max_val_level, _, _ = cv2.minMaxLoc(res_level)
+                                                    
+                                                    if max_val_level >= 0.85:
+                                                        is_target_level_1 = True
+                                                        bprint(f"  > 💎 [레벨 검증 통과] Level 1 감염물 확인 완료! (일치율: {max_val_level:.4f} >= 0.85)")
+                                                    else:
+                                                        bprint(f"  > ⏭️ [레벨 미달] Level 1이 아닌 고레벨 감염물입니다. (일치율: {max_val_level:.4f} < 0.85)")
+                                                        
+                                            if not is_target_level_1:
+                                                fast_clear_tooltip()
+                                                continue
+                                                
                                             if current_sub == "NORMAL":
                                                 if has_any_trait:
                                                     bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 0 스킵. 특성: '{identified_trait_name}' (신뢰도: {best_score:.2f})")

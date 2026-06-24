@@ -2666,11 +2666,11 @@ def fusion_bot_loop():
                                             if check_img('talent_header.png', thread_sct, force_full=True):
                                                 cx, cy = FUSION_ROI['talent_header.png']['last_pos']
                                                 
-                                                # '재능' 글자 정중앙 기준 우측의 스탯 명암 영역만 정밀하게 상대 크롭(X: +150~+210, Y: -15~+15)합니다.
+                                                # '재능' 글자 정중앙 기준 아랫줄의 텍스트 영역을 정밀하게 상대 크롭(왼쪽 여백을 버리고 '피드백' 위치로 우측 이동 보정)합니다.
                                                 level_num_roi = {
-                                                    "left": int(cx - 30),
+                                                    "left": int(cx + 100), # 시작점을 우측으로 130픽셀 밀어내어 왼쪽 테두리 여백을 완전히 잘라냅니다.
                                                     "top": int(cy + 30),
-                                                    "width": 200,
+                                                    "width": 150,          # 가로 폭을 150픽셀로 컴팩트하게 축소하여 '피드백' 글씨를 정중앙에 안착시킵니다.
                                                     "height": 40
                                                 }
                                                 sct_level = thread_sct.grab(level_num_roi)

@@ -2674,6 +2674,18 @@ def fusion_bot_loop():
                                                     "height": 30
                                                 }
                                                 sct_level = thread_sct.grab(level_num_roi)
+                                                
+                                                # [실시간 좌표 진단용 디버그 캡처] 크롭된 영역이 숫자 1 위치를 정확히 표적하고 있는지 한글 폴더 우회 규격으로 디스크에 실시간 저장합니다.
+                                                try:
+                                                    sct_level_bgr = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2BGR)
+                                                    debug_path = os.path.join(base_dir, "debug_level_crop.png")
+                                                    is_success, im_buf_arr = cv2.imencode(".png", sct_level_bgr)
+                                                    if is_success:
+                                                        with open(debug_path, "wb") as f:
+                                                            f.write(im_buf_arr.tobytes())
+                                                except Exception as e:
+                                                    bprint(f"  > ❌ [디버그] 레벨 캡처 저장 실패: {e}")
+                                                
                                                 screen_gray_level = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2GRAY)
                                                 
                                                 template_level_1 = FUSION_CACHE.get('level_digit_1.png')

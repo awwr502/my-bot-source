@@ -2663,8 +2663,8 @@ def fusion_bot_loop():
                                             is_target_level_1 = False
                                             
                                             # 전역에서 '재능' 텍스트 앵커(talent_header.png)를 탐색하여 상세 패널의 동적 좌표를 실시간 추적합니다.
-                                            if check_img('level_header.png', thread_sct, force_full=True):
-                                                cx, cy = FUSION_ROI['level_header.png']['last_pos']
+                                            if check_img('talent_header.png', thread_sct, force_full=True):
+                                                cx, cy = FUSION_ROI['talent_header.png']['last_pos']
                                                 
                                                 # '재능' 글자 정중앙 기준 우측의 스탯 명암 영역만 정밀하게 상대 크롭(X: +150~+210, Y: -15~+15)합니다.
                                                 level_num_roi = {

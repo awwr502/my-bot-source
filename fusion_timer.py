@@ -331,8 +331,8 @@ FUSION_CONF = {
     'butterfly.png': 0.85,
     'no_trait.png': 0.80,
     'parent_title.png': 0.85,
-    'level_header.png': 0.88,
-    'level_digit_1.png': 0.85
+    'talent_header.png': 0.85,
+    'feedback_trait.png': 0.85
 }
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
@@ -346,7 +346,7 @@ GRAY_IMAGES = [
     'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png', 'select_0_3.png',
     'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png', 'dev_list_btn.png',
     'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png', 'empty_checkbox.png', 'butterfly.png', 
-    'no_trait.png', 'parent_title.png', 'level_header.png', 'level_digit_1.png'
+    'no_trait.png', 'parent_title.png', 'talent_header.png', 'feedback_trait.png'
 ]
 
 # [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
@@ -2658,16 +2658,15 @@ def fusion_bot_loop():
                                             
                                         # 2) 융합 가능 횟수가 0인 경우 (F1 - 채택 대상)
                                         elif is_f1:
-                                            # [초정밀 동적 레벨 앵커 추적 필터]
+                                            # [초정밀 동적 재능 앵커 추적 필터]
                                             time.sleep(0.1) # 애니메이션 대기 0.1초
                                             is_target_level_1 = False
                                             
-                                            # 전역에서 '레벨' 텍스트 앵커를 탐색하여 상세 패널의 동적 좌표를 실시간 추적합니다.
+                                            # 전역에서 '재능' 텍스트 앵커(talent_header.png)를 탐색하여 상세 패널의 동적 좌표를 실시간 추적합니다.
                                             if check_img('level_header.png', thread_sct, force_full=True):
                                                 cx, cy = FUSION_ROI['level_header.png']['last_pos']
                                                 
-                                                # '재능' 글자 정중앙 기준 아랫줄의 텍스트 영역을 정밀하게 상대 크롭(X: -30~+170, Y: +30~+70)합니다.
-                                                # 기준 앵커가 '재능'으로 바뀌었으므로, 수직으로 약 30px 하강하고 가로폭을 넓혀 '피드백' 글씨를 안정적으로 수집합니다.
+                                                # '재능' 글자 정중앙 기준 우측의 스탯 명암 영역만 정밀하게 상대 크롭(X: +150~+210, Y: -15~+15)합니다.
                                                 level_num_roi = {
                                                     "left": int(cx - 30),
                                                     "top": int(cy + 30),
@@ -2676,7 +2675,7 @@ def fusion_bot_loop():
                                                 }
                                                 sct_level = thread_sct.grab(level_num_roi)
                                                 
-                                                # [실시간 좌표 진단용 디버그 캡처] 크롭된 영역이 숫자 1 위치를 정확히 표적하고 있는지 한글 폴더 우회 규격으로 디스크에 실시간 저장합니다.
+                                                # [실시간 좌표 진단용 디버그 캡처] 크롭된 영역이 '피드백' 글씨 위치를 정확히 표적하고 있는지 디스크에 실시간 저장합니다.
                                                 try:
                                                     sct_level_bgr = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2BGR)
                                                     debug_path = os.path.join(base_dir, "debug_level_crop.png")
@@ -2685,11 +2684,11 @@ def fusion_bot_loop():
                                                         with open(debug_path, "wb") as f:
                                                             f.write(im_buf_arr.tobytes())
                                                 except Exception as e:
-                                                    bprint(f"  > ❌ [디버그] 레벨 캡처 저장 실패: {e}")
+                                                    bprint(f"  > ❌ [디버그] 재능 캡처 저장 실패: {e}")
                                                 
-                                                screen_gray_level = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2GRAY)
+                                                screen_gray_level = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA_GRAY)
                                                 
-                                                template_level_1 = FUSION_CACHE.get('level_digit_1.png')
+                                                template_level_1 = FUSION_CACHE.get('feedback_trait.png')
                                                 if template_level_1 is not None:
                                                     # 오츠 이진화를 거쳐 글씨 형태만 명암 상관계수(TM_CCOEFF_NORMED)로 완벽히 정합합니다.
                                                     template_level_1_g = cv2.cvtColor(template_level_1, cv2.COLOR_BGR2GRAY) if len(template_level_1.shape) == 3 else template_level_1
@@ -2702,9 +2701,9 @@ def fusion_bot_loop():
                                                     
                                                     if max_val_level >= 0.85:
                                                         is_target_level_1 = True
-                                                        bprint(f"  > 💎 [재능 검증 통과] 재능 확인 완료! (일치율: {max_val_level:.4f} >= 0.85)")
+                                                        bprint(f"  > 💎 [재능 검증 통과] 우리가 원하는 가치 특성 '피드백' 확인 완료! (일치율: {max_val_level:.4f} >= 0.85)")
                                                     else:
-                                                        bprint(f"  > ⏭️ [재능 미달] 우리가 원치 않는 재능 감염물입니다. (일치율: {max_val_level:.4f} < 0.85)")
+                                                        bprint(f"  > ⏭️ [재능 미달] 우리가 원치 않는 잡재능/이로치 재능 감염물입니다. (일치율: {max_val_level:.4f} < 0.85)")
                                                         
                                             if not is_target_level_1:
                                                 fast_clear_tooltip()

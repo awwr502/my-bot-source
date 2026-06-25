@@ -2538,7 +2538,62 @@ def fusion_bot_loop():
                                         sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
                                         hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                                         
-                                        # 융합 가능 횟수 판독
+                                        # [1단계] 재능 헤더가 완전히 나타날 때까지 최대 0.8초간 렌더링을 대기합니다.
+                                        talent_header_found = False
+                                        wait_th = time.time()
+                                        while time.time() - wait_th < 0.8 and bot_active:
+                                            if check_img('talent_header.png', thread_sct, force_full=True):
+                                                talent_header_found = True
+                                                break
+                                            time.sleep(0.05)
+                                            
+                                        # [2단계] 재능 헤더가 감지되면, 일반 매칭 대조법을 사용하여 피드백 글자를 최우선 검사합니다.
+                                        is_target_level_1 = False
+                                        max_val_level = 0.0
+                                        
+                                        if talent_header_found:
+                                            anchor_x, anchor_y = FUSION_ROI['talent_header.png']['last_pos']
+                                            level_num_roi = {
+                                                "left": int(anchor_x + 100),
+                                                "top": int(anchor_y + 30),
+                                                "width": 180,
+                                                "height": 40
+                                            }
+                                            sct_level = thread_sct.grab(level_num_roi)
+                                            
+                                            # 실시간 디버그 이미지 저장
+                                            try:
+                                                sct_level_bgr = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2BGR)
+                                                debug_path = os.path.join(base_dir, "debug_level_crop.png")
+                                                is_success, im_buf_arr = cv2.imencode(".png", sct_level_bgr)
+                                                if is_success:
+                                                    with open(debug_path, "wb") as f:
+                                                        f.write(im_buf_arr.tobytes())
+                                            except Exception as e:
+                                                bprint(f"  > ❌ [디버그] 재능 캡처 저장 실패: {e}")
+                                                
+                                            screen_gray_level = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2GRAY)
+                                            template_level_1 = FUSION_CACHE.get('feedback_trait.png')
+                                            
+                                            if template_level_1 is not None:
+                                                template_level_1_g = cv2.cvtColor(template_level_1, cv2.COLOR_BGR2GRAY) if len(template_level_1.shape) == 3 else template_level_1
+                                                # 이진화를 생략한 뼈대 기반 일반 매칭 대조법 적용
+                                                res_level = cv2.matchTemplate(screen_gray_level, template_level_1_g, cv2.TM_CCOEFF_NORMED)
+                                                _, max_val_level, _, _ = cv2.minMaxLoc(res_level)
+                                                
+                                                if max_val_level >= 0.78:
+                                                    is_target_level_1 = True
+                                                    
+                                        # [3단계: 조기 탈출] 원하는 가치 재능(피드백)이 아니라면 즉시 다음 감염물로 넘어갑니다.
+                                        if not is_target_level_1:
+                                            bprint(f"  > ⏭️ [재능 미달] 우리가 원치 않는 잡재능 감염물입니다. (피드백 일치율: {max_val_level:.4f} < 0.78)")
+                                            fast_clear_tooltip()
+                                            continue
+                                            
+                                        # [4단계: 사후 판독] 피드백이 확인된 소중한 개체에 한해서만 융합 가능 횟수(0짜리)를 최종 검증합니다.
+                                        sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                        hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                        
                                         label_w = template_label.shape[1]
                                         col_x_start = lx + label_w
                                         col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
@@ -2546,41 +2601,45 @@ def fusion_bot_loop():
                                         col_y_end = min(hover_gray.shape[0], ly + 150)
                                         roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
                                         
-                                        # [사용자 제안 반영] 디버그 사진 분석 결과에 맞춰 숫자가 완벽히 수직 중앙에 안착하도록
-                                        # 크롭 영역을 116:146에서 120:152로 하향 조정하여 상단은 조이고 하단에 여유 패딩을 확보합니다.
-                                        roi_num_gray = roi_col[120:152, 280:340]
+                                        # 부모 슬롯과 정밀 대조 일관성을 맞추기 위해 240:360 표준 범위로 통일 크롭합니다.
+                                        roi_num_gray = roi_col[120:152, 240:360]
                                         
                                         is_f0 = False
                                         is_f1 = False
                                         
                                         t1_img = FUSION_CACHE.get('tier_1.png')
                                         t0_img = FUSION_CACHE.get('tier_0.png')
-                                        
                                         score_t1 = 0.0
                                         score_t0 = 0.0
                                         
                                         if roi_num_gray.size > 0:
-                                            # 1) tier_1.png 매칭
                                             if t1_img is not None:
                                                 t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
                                                 res_t1 = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
                                                 _, score_t1, _, max_loc_t1 = cv2.minMaxLoc(res_t1)
                                                 
-                                            # 2) tier_0.png 매칭
                                             if t0_img is not None:
                                                 t0_img_g = cv2.cvtColor(t0_img, cv2.COLOR_BGR2GRAY) if len(t0_img.shape) == 3 else t0_img
                                                 res_t0 = cv2.matchTemplate(roi_num_gray, t0_img_g, cv2.TM_CCOEFF_NORMED)
                                                 _, score_t0, _, _ = cv2.minMaxLoc(res_t0)
                                                 
-                                            # 3) 상호 신뢰도 대조법을 통해 확실한 1짜리(F0)와 0짜리(F1)를 판정
                                             if score_t1 > score_t0 and score_t1 >= 0.65:
                                                 t1_h = t1_img_g.shape[0] if t1_img is not None else 24
-                                                # 양방향 수직 경계 검증으로 오탐을 최종 방어합니다.
                                                 if is_truly_tier_1(roi_num_gray, max_loc_t1[0], max_loc_t1[1], t1_h):
                                                     is_f0 = True
                                             elif score_t0 >= 0.65:
                                                 is_f1 = True
-                                                    
+                                                
+                                        # 판독 결론 분석 (우선순위 구제 필터 작동)
+                                        if is_f0:
+                                            bprint(f"  > ⏭️ [스킵] 피드백은 있으나 융합 가능 횟수 1 발견. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                            fast_clear_tooltip()
+                                            continue
+                                        elif not is_f1:
+                                            # 이미 피드백이 확정된 감염물이므로, 0.65 임계치 주변의 검출 흔들림이 발생해도 0짜리(F1)로 자동 승인 구제합니다.
+                                            bprint(f"  > 🛡️ [우선순위 구제] 피드백 확인 완료! 애매한 횟수(0.65 미만)를 0짜리(F1)로 자동 구제합니다. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                            is_f1 = True
+                                            
                                         # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
                                         has_any_trait = False
                                         trait_x1 = max(0, lx - 10)
@@ -2649,66 +2708,6 @@ def fusion_bot_loop():
                                                 if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
                                                     has_valuable_trait = True
                                                     identified_trait_name = TRAIT_NAMES.get(top1_file, top1_file)
-                                                    
-                                        # [모드 5 통합 딜레이 및 인게임 디테일 로그 출력 시스템 구현]
-                                        # 1) 융합 가능 횟수가 1인 경우 (F0 - 스킵 대상)
-                                        if is_f0:
-                                            bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 1 발견. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
-                                            fast_clear_tooltip(); continue
-                                            
-                                        # 2) 융합 가능 횟수가 0인 경우 (F1 - 채택 대상)
-                                        elif is_f1:
-                                            # [초정밀 동적 재능 앵커 추적 필터]
-                                            time.sleep(0.1) # 애니메이션 대기 0.1초
-                                            is_target_level_1 = False
-                                            
-                                            # 전역에서 '재능' 텍스트 앵커(talent_header.png)를 탐색하여 상세 패널의 동적 좌표를 실시간 추적합니다.
-                                            # (주의: 루프 변수인 cx, cy를 덮어쓰지 않도록 고유 앵커 변수인 anchor_x, anchor_y로 분리 적재하여 슬롯 조준선 꼬임을 완전히 영구 해결합니다.)
-                                            if check_img('talent_header.png', thread_sct, force_full=True):
-                                                anchor_x, anchor_y = FUSION_ROI['talent_header.png']['last_pos']
-                                                
-                                                # '재능' 글자 정중앙 기준 아랫줄의 텍스트 영역을 정밀하게 상대 크롭(X: -30~+170, Y: +30~+70)합니다.
-                                                level_num_roi = {
-                                                    "left": int(anchor_x + 100),
-                                                    "top": int(anchor_y + 30),
-                                                    "width": 180,          
-                                                    "height": 40
-                                                    }
-                                                sct_level = thread_sct.grab(level_num_roi)
-                                                
-                                                # [실시간 좌표 진단용 디버그 캡처] 크롭된 영역이 '피드백' 글씨 위치를 정확히 표적하고 있는지 디스크에 실시간 저장합니다.
-                                                try:
-                                                    sct_level_bgr = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2BGR)
-                                                    debug_path = os.path.join(base_dir, "debug_level_crop.png")
-                                                    is_success, im_buf_arr = cv2.imencode(".png", sct_level_bgr)
-                                                    if is_success:
-                                                        with open(debug_path, "wb") as f:
-                                                            f.write(im_buf_arr.tobytes())
-                                                except Exception as e:
-                                                    bprint(f"  > ❌ [디버그] 재능 캡처 저장 실패: {e}")
-                                                
-                                                screen_gray_level = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2GRAY)
-                                                
-                                                template_level_1 = FUSION_CACHE.get('feedback_trait.png')
-                                                if template_level_1 is not None:
-                                                    # 오츠 이진화를 거쳐 글씨 형태만 명암 상관계수(TM_CCOEFF_NORMED)로 완벽히 정합합니다.
-                                                    template_level_1_g = cv2.cvtColor(template_level_1, cv2.COLOR_BGR2GRAY) if len(template_level_1.shape) == 3 else template_level_1
-                                                    _, template_level_bin = cv2.threshold(template_level_1_g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                                    
-                                                    _, screen_level_bin = cv2.threshold(screen_gray_level, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                                                    
-                                                    res_level = cv2.matchTemplate(screen_level_bin, template_level_bin, cv2.TM_CCOEFF_NORMED)
-                                                    _, max_val_level, _, _ = cv2.minMaxLoc(res_level)
-                                                    
-                                                    if max_val_level >= 0.85:
-                                                        is_target_level_1 = True
-                                                        bprint(f"  > 💎 [재능 검증 통과] 우리가 원하는 가치 특성 '피드백' 확인 완료! (일치율: {max_val_level:.4f} >= 0.85)")
-                                                    else:
-                                                        bprint(f"  > ⏭️ [재능 미달] 우리가 원치 않는 잡재능/이로치 재능 감염물입니다. (일치율: {max_val_level:.4f} < 0.85)")
-                                                        
-                                            if not is_target_level_1:
-                                                fast_clear_tooltip()
-                                                continue
                                                 
                                             if current_sub == "NORMAL":
                                                 if has_any_trait:

@@ -2557,7 +2557,7 @@ def fusion_bot_loop():
                                                 break
                                             time.sleep(0.05)
                                             
-                                        # [2단계] 재능 헤더가 감지되면, 일반 매칭 대조법을 사용하여 피드백 글자를 최우선 검사합니다.
+                                        # [2단계] 재능 헤더가 감지되면, 일반 매칭 대조법을 사용하여 피드백 글자 보유 여부를 판독합니다.
                                         is_target_level_1 = False
                                         max_val_level = 0.0
                                         
@@ -2587,20 +2587,44 @@ def fusion_bot_loop():
                                             
                                             if template_level_1 is not None:
                                                 template_level_1_g = cv2.cvtColor(template_level_1, cv2.COLOR_BGR2GRAY) if len(template_level_1.shape) == 3 else template_level_1
-                                                # 이진화를 생략한 뼈대 기반 일반 매칭 대조법 적용
                                                 res_level = cv2.matchTemplate(screen_gray_level, template_level_1_g, cv2.TM_CCOEFF_NORMED)
                                                 _, max_val_level, _, _ = cv2.minMaxLoc(res_level)
                                                 
                                                 if max_val_level >= 0.78:
                                                     is_target_level_1 = True
                                                     
-                                        # [3단계: 조기 탈출] 원하는 가치 재능(피드백)이 아니라면 즉시 다음 감염물로 넘어갑니다.
-                                        if not is_target_level_1:
-                                            bprint(f"  > ⏭️ [재능 미달] 우리가 원치 않는 잡재능 감염물입니다. (피드백 일치율: {max_val_level:.4f} < 0.78)")
+                                        # [3단계: 지능형 조기 탈출] 현재 서브 모드 상태에 따른 메타 조합 최적화 필터 작동
+                                        skip_deviant = False
+                                        skip_reason = ""
+                                        
+                                        if current_sub == "NORMAL":
+                                            # 복사 모드에서는 무조건 피드백 재능이 필수입니다.
+                                            if not is_target_level_1:
+                                                skip_deviant = True
+                                                skip_reason = f"NORMAL 모드 피드백 재능 필수 미달 (일치율: {max_val_level:.4f} < 0.78)"
+                                                
+                                        elif current_sub == "RECOVERY":
+                                            # 복구 모드에서는 피드백 순정 2개 + 가치 특성 캐리어 1개의 조합을 실시간 추적합니다.
+                                            already_has_trait = any(m[2] for m in target_materials)
+                                            blank_count = sum(1 for m in target_materials if not m[2])
+                                            
+                                            if is_target_level_1:
+                                                # 피드백이 있는 개체는 순정 2개 채우기용으로만 채택합니다.
+                                                if blank_count >= 2:
+                                                    skip_deviant = True
+                                                    skip_reason = "RECOVERY 모드 순정 피드백 재료 정원 초과 (이미 2개 확보됨)"
+                                            else:
+                                                # 피드백이 없는 개체는 가치 특성 1개 채우기용으로만 채택합니다.
+                                                if already_has_trait:
+                                                    skip_deviant = True
+                                                    skip_reason = "RECOVERY 모드 가치 특성 캐리어 정원 초과 (이미 1개 확보됨)"
+                                                    
+                                        if skip_deviant:
+                                            bprint(f"  > ⏭️ [스킵] {skip_reason}")
                                             fast_clear_tooltip()
                                             continue
                                             
-                                        # [4단계: 사후 판독] 피드백이 확인된 소중한 개체에 한해서만 융합 가능 횟수(0짜리)를 최종 검증합니다.
+                                        # [4단계: 사후 판독] 조건에 맞는 후보들에 한해서만 융합 가능 횟수(0짜리)를 검증합니다.
                                         sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
                                         hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
                                         
@@ -2698,16 +2722,16 @@ def fusion_bot_loop():
                                                                 
                                                                 t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
                                                                 if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
-                                                                    best_score = 0.0
+                                                                    file_best_score = 0.0
                                                                     for t_scale in [0.95, 1.0, 1.05]:
                                                                         t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
                                                                         if t_w <= roi_trait_name_gray.shape[1] and t_h <= roi_trait_gray.shape[0]:
                                                                             res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (t_w, t_h)), cv2.TM_CCOEFF_NORMED)
-                                                                            best_score = max(best_score, np.max(res_st))
+                                                                            file_best_score = max(file_best_score, np.max(res_st))
                                                                     
-                                                                    temp_scores.append((t_file, best_score))
+                                                                    temp_scores.append((t_file, file_best_score))
                                                             break
-                                                    
+                                                            
                                             # 점수순 내림차순 정렬 및 스마트 갭 판독
                                             temp_scores.sort(key=lambda x: x[1], reverse=True)
                                             if len(temp_scores) >= 1:
@@ -2733,17 +2757,18 @@ def fusion_bot_loop():
                                             if has_valuable_trait and not already_has_trait_in_list:
                                                 bprint(f"  > 🧬 [재료 채택] 융합 가능 횟수 0짜리 가치 특성 '{identified_trait_name}' 확보! (신뢰도: {best_score:.2f})")
                                                 target_materials.append((cx, cy, True))
-                                            elif not has_any_trait:
+                                            # 복구용 순정 재료는 반드시 '피드백 재능'을 동시에 가지고 있는 개체만 2개 수집하도록 교차 검증을 추가합니다.
+                                            elif not has_any_trait and is_target_level_1:
                                                 blank_count = sum(1 for m in target_materials if not m[2])
                                                 if blank_count < 2:
-                                                    bprint(f"  > 💎 [재료 채택] 융합 0짜리 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                                    bprint(f"  > 💎 [재료 채택] 융합 0짜리 피드백 순정 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                                     target_materials.append((cx, cy, False))
                                                 else:
                                                     bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                                     fast_clear_tooltip()
                                                     continue
                                             else:
-                                                bprint(f"  > ⏭️ [스킵] RECOVERY 조건에 맞지 않는 일반 특성 감염물. 특성: '{identified_trait_name}'")
+                                                bprint(f"  > ⏭️ [스킵] RECOVERY 조건에 맞지 않는 감염물입니다. (피드백 유무: {is_target_level_1} / 특성: '{identified_trait_name}')")
                                                 fast_clear_tooltip()
                                                 continue
                                                 

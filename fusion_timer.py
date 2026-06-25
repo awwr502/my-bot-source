@@ -2235,18 +2235,16 @@ def fusion_bot_loop():
                                 # [사용자 피드백 반영] 마우스를 올리기 전에 인벤토리 그리드의 형태 분포를 검사합니다.
                                 rx = cx - 960
                                 ry = cy
-                                slot_roi = screen_bgr[max(0, ry - 15):min(screen_bgr.shape[0], ry + 15), max(0, rx - 15):min(screen_bgr.shape[1], rx + 15)]
+                                # 어긋난 좌표 마진을 보정하기 위해 탐색 면적을 80x80 규격으로 대폭 늘려 크롭합니다.
+                                slot_roi = screen_bgr[max(0, ry - 40):min(screen_bgr.shape[0], ry + 40), max(0, rx - 40):min(screen_bgr.shape[1], rx + 40)]
                                 
-                                # [고휘도 화소 분포 필터] 색상이나 평균 밝기에 관계없이 오직 '활성화된 글자/아이콘 면적'만 계산하여 필터링합니다.
-                                # 빈 슬롯(0개) 및 어두운 0회 슬롯(극소수 반사광만 존재)은 화소 수가 미달되어 마우스 호버 전에 철저하게 차단됩니다.
+                                # [고휘도 화소 분포 필터] 빈칸 및 어둡게 표시된 0회 비활성 감염물을 필터링합니다.
                                 if slot_roi.size > 0:
-                                    slot_gray = cv2.cvtColor(slot_roi, cv2.COLOR_BGR2GRAY)
+                                    # 색상 채널을 모두 고려해 높은 밝기를 가지는 선명한 컬러 화소 수를 집계합니다.
+                                    bright_pixel_count = np.sum(slot_roi > 100)
                                     
-                                    # 30x30 영역(총 900픽셀) 중 밝기 110을 넘어서는 선명한 화소의 개수를 카운트합니다.
-                                    bright_pixel_count = np.sum(slot_gray > 110)
-                                    
-                                    # 선명한 화소가 최소 15개 미만인 어두운 슬롯과 빈 슬롯은 즉시 패스합니다.
-                                    if bright_pixel_count < 15:
+                                    # 활성화된 감염물은 밝은 화소가 최소 25개 이상 검출되며, 비어있거나 어두운 0회짜리는 이 기준에 도달하지 못해 차단됩니다.
+                                    if bright_pixel_count < 25:
                                         continue
                                     
                                 pyautogui.moveTo(cx, cy)
@@ -2512,15 +2510,16 @@ def fusion_bot_loop():
                                     # 마우스를 가져가기 전에 재료 인벤토리의 어두운 감염물과 빈 영역을 선제적으로 거릅니다.
                                     rx = cx - 960
                                     ry = cy
-                                    slot_roi = screen_bgr[max(0, ry - 15):min(screen_bgr.shape[0], ry + 15), max(0, rx - 15):min(screen_bgr.shape[1], rx + 15)]
+                                    # 어긋난 좌표 마진을 보정하기 위해 탐색 면적을 80x80 규격으로 대폭 늘려 크롭합니다.
+                                    slot_roi = screen_bgr[max(0, ry - 40):min(screen_bgr.shape[0], ry + 40), max(0, rx - 40):min(screen_bgr.shape[1], rx + 40)]
                                     
+                                    # [고휘도 화소 분포 필터] 빈칸 및 어둡게 표시된 0회 비활성 감염물을 필터링합니다.
                                     if slot_roi.size > 0:
-                                        slot_gray = cv2.cvtColor(slot_roi, cv2.COLOR_BGR2GRAY)
-                                        mean_val = np.mean(slot_gray)
-                                        std_val = np.std(slot_gray)
+                                        bright_pixel_count = np.sum(slot_roi > 100)
                                         
-                                        if mean_val < 30.0 or std_val < 12.0:
-                                            continue # 어둡거나 빈 슬롯은 툴팁 분석 자체를 건너뛰고 신속 패스
+                                        # 활성화된 감염물은 밝은 화소가 최소 25개 이상 검출되며, 비어있거나 어두운 0회짜리는 이 기준에 도달하지 못해 차단됩니다.
+                                        if bright_pixel_count < 25:
+                                            continue
                                             
                                     pyautogui.moveTo(cx, cy)
                                     template_label = FUSION_CACHE.get('ability_label.png')

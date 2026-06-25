@@ -2250,7 +2250,7 @@ def fusion_bot_loop():
                                     saturation = max_c - min_c
                                     
                                     # 1) 채도가 45를 넘는 선명한 원색 화소이거나, 2) 채도가 낮아도 밝기가 140을 넘는 초고대비 화소만 집계합니다.
-                                    active_pixels = np.sum(((saturation > 45) & (max_c > 80)) | (max_c > 140))
+                                    active_pixels = np.sum(((saturation > 45) & (max_c > 115)) | (max_c > 140))
                                     
                                     # 활성 화소가 최소 15개 미만인 빈칸 및 어둡게 비활성화된 슬롯은 철저하게 차단합니다.
                                     if active_pixels < 15:

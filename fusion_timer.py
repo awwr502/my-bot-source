@@ -405,6 +405,16 @@ GRAY_IMAGES.extend(dynamic_traits)
 for img in dynamic_traits:
     FUSION_CONF[img] = 0.92
 
+# 저장 폴더 내의 특성 파일명들을 동적으로 스캔하여 가장 높은 파일 번호를 자동 검출합니다.
+trait_numbers_found = []
+for f in dynamic_traits:
+    parts = f.split('_')
+    if len(parts) > 1:
+        num_part = parts[1].split('.')[0]
+        if num_part.isdigit():
+            trait_numbers_found.append(int(num_part))
+MAX_TRAIT_NUM = max(trait_numbers_found) if trait_numbers_found else 7
+
 # 2. 패치가 완료된 로컬 폴더에서 RAM으로 일괄 적재 (캐릭터 사진 포함)
 for img_name in target_images:
     full_path = os.path.join(base_dir, img_name)
@@ -1913,17 +1923,17 @@ def fusion_bot_loop():
                                 if clicked_list_btn:
                                     bprint("  > 🔍 [결과 판독] 빨간 박스 영역 한정 실시간 양방향 절대 편차 대조를 시작합니다.")
                                     
-                                    best_debug_scores = {i: 0.0 for i in range(1, 8)}
+                                    best_debug_scores = {i: 0.0 for i in range(1, MAX_TRAIT_NUM + 1)}
                                     no_trait_score = 0.0
                                     scan_start = time.time()
                                     
                                     # [빨간 박스 규격 반영] 잡특성 동시 발현을 감안하면서 노이즈를 배제하는 최적의 영역(X: 0~400, Y: 110~440)을 캡처합니다.
                                     result_roi = {"left": 0, "top": 110, "width": 400, "height": 330}
                                     
-                                    # [초고속 사전 연산] 루프 외부에서 가치 특성 7종의 7단계 스케일별 절대 편차 템플릿을 딱 한 번만 사전 생성하여 RAM 캐시에 적재합니다.
+                                    # [초고속 사전 연산] 루프 외부에서 가치 특성 N종의 7단계 스케일별 절대 편차 템플릿을 딱 한 번만 사전 생성하여 RAM 캐시에 적재합니다.
                                     # 이로써 루프 내부에서의 무거운 리사이즈(cv2.resize) 및 중간값 연산 부하가 100% 제거됩니다!
                                     precalculated_templates = {}
-                                    for t_idx in range(1, 8):
+                                    for t_idx in range(1, MAX_TRAIT_NUM + 1):
                                         t_file = f"trait_{t_idx}.png"
                                         template = FUSION_CACHE.get(t_file)
                                         if template is None: continue
@@ -1952,7 +1962,7 @@ def fusion_bot_loop():
                                             else:
                                                 no_trait_score = 0.20
                                             
-                                            # 2. 가치 특성 7종 절대 편차 매칭 진행 (상단 빨간 박스 영역에서만 오탐지 배제 스캔 가동)
+                                            # 2. 가치 특성 N종 절대 편차 매칭 진행 (상단 불안정 영역 외 오탐지 배제 스캔 가동)
                                             sct_img = thread_sct.grab(result_roi)
                                             screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                                             
@@ -1979,8 +1989,8 @@ def fusion_bot_loop():
                                                 if file_best_score > best_debug_scores[t_idx]:
                                                     best_debug_scores[t_idx] = file_best_score
 
-                                            # 7종 특성 분석 스레드 병렬 일괄 투입!
-                                            futures = [executor.submit(scan_worker, t_idx) for t_idx in range(1, 8)]
+                                            # N종 특성 분석 스레드 병렬 일괄 투입!
+                                            futures = [executor.submit(scan_worker, t_idx) for t_idx in range(1, MAX_TRAIT_NUM + 1)]
                                             concurrent.futures.wait(futures)
                                             
                                             time.sleep(0.02)
@@ -2003,18 +2013,18 @@ def fusion_bot_loop():
                                         bprint("    └ ❌ [판독 결과] '특성 없음' 문구가 명확히 감지되어 전수 실패로 판정합니다.")
                                         has_valuable_trait = False
                                     else:
-                                        # 2) 7종 가치 특성 중 하나라도 실시간 일치율이 0.70 이상으로 검출된 경우 -> 전수 성공! (NORMAL)
+                                        # 2) N종 가치 특성 중 하나라도 실시간 일치율이 0.70 이상으로 검출된 경우 -> 전수 성공! (NORMAL)
                                         if has_valuable_trait:
                                             t_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
                                             bprint(f"    └ ✅ [판독 결과] 우리가 원하는 가치 특성 '{t_name}'이 정상 전수되었습니다! (편차 매칭율: {best_score:.4f} >= 0.80)")
                                         else:
                                             # 3) 특성은 있으나(이로치 등 잡특성), 우리가 원하지 않는 버리는 특성만 붙은 경우 -> 전수 실패! (RECOVERY)
                                             bprint("    └ ❌ [판독 결과] 특성이 존재하지만, 우리가 원치 않는 잡특성/이로치 특성만 전수되었습니다.")
-                                            bprint("      (가치 특성 7종 중 어떤 것도 매칭 기준선인 0.80을 넘지 못해 전수 실패로 판정하고 RECOVERY 모드를 가동합니다.)")
+                                            bprint(f"      (가치 특성 {MAX_TRAIT_NUM}종 중 어떤 것도 매칭 기준선인 0.80을 넘지 못해 전수 실패로 판정하고 RECOVERY 모드를 가동합니다.)")
                                             has_valuable_trait = False
                                             
                                     # 상세 스코어 투명하게 리포트 출력
-                                    for t_idx in range(1, 8):
+                                    for t_idx in range(1, MAX_TRAIT_NUM + 1):
                                         t_file = f"trait_{t_idx}.png"
                                         t_name = TRAIT_NAMES.get(t_file, "이름 미등록")
                                         if t_file in FUSION_CACHE:
@@ -2328,8 +2338,8 @@ def fusion_bot_loop():
                                                 res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
                                                 cur_tr = np.max(res_t)
                                                 if cur_tr >= conf_trait:
-                                                    # 1번부터 7번 가치 특성 정밀 대조 시작
-                                                    for t_idx in range(1, 8):
+                                                    # 1번부터 N번 가치 특성 정밀 대조 시작
+                                                    for t_idx in range(1, MAX_TRAIT_NUM + 1):
                                                         t_file = f"trait_{t_idx}.png"
                                                         t_template = FUSION_CACHE.get(t_file)
                                                         if t_template is None: continue
@@ -2345,7 +2355,7 @@ def fusion_bot_loop():
                                                             
                                                             temp_scores.append((t_file, best_score))
                                                     break
-                                                    
+                                            
                                     # 점수순 내림차순 정렬 및 스마트 갭 판독
                                     temp_scores.sort(key=lambda x: x[1], reverse=True)
                                     if len(temp_scores) >= 1:
@@ -2680,24 +2690,24 @@ def fusion_bot_loop():
                                                         res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
                                                         cur_tr = np.max(res_t)
                                                         if cur_tr >= conf_trait:
-                                                            # 1번부터 7번 가치 특성 정밀 대조 시작
-                                                            for t_idx in range(1, 8):
+                                                            # 1번부터 N번 가치 특성 정밀 대조 시작
+                                                            for t_idx in range(1, MAX_TRAIT_NUM + 1):
                                                                 t_file = f"trait_{t_idx}.png"
                                                                 t_template = FUSION_CACHE.get(t_file)
                                                                 if t_template is None: continue
                                                                 
                                                                 t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
                                                                 if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
-                                                                    file_best_score = 0.0
+                                                                    best_score = 0.0
                                                                     for t_scale in [0.95, 1.0, 1.05]:
                                                                         t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
                                                                         if t_w <= roi_trait_name_gray.shape[1] and t_h <= roi_trait_gray.shape[0]:
                                                                             res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (t_w, t_h)), cv2.TM_CCOEFF_NORMED)
-                                                                            file_best_score = max(file_best_score, np.max(res_st))
+                                                                            best_score = max(best_score, np.max(res_st))
                                                                     
-                                                                    temp_scores.append((t_file, file_best_score))
+                                                                    temp_scores.append((t_file, best_score))
                                                             break
-                                                            
+                                                    
                                             # 점수순 내림차순 정렬 및 스마트 갭 판독
                                             temp_scores.sort(key=lambda x: x[1], reverse=True)
                                             if len(temp_scores) >= 1:

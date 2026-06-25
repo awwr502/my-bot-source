@@ -2669,9 +2669,9 @@ def fusion_bot_loop():
                                                 
                                                 # '재능' 글자 정중앙 기준 아랫줄의 텍스트 영역을 정밀하게 상대 크롭(X: -30~+170, Y: +30~+70)합니다.
                                                 level_num_roi = {
-                                                    "left": int(anchor_x - 30),
+                                                    "left": int(anchor_x + 100),
                                                     "top": int(anchor_y + 30),
-                                                    "width": 200,          
+                                                    "width": 180,          
                                                     "height": 40
                                                     }
                                                 sct_level = thread_sct.grab(level_num_roi)

@@ -2709,35 +2709,35 @@ def fusion_bot_loop():
                                                     has_valuable_trait = True
                                                     identified_trait_name = TRAIT_NAMES.get(top1_file, top1_file)
                                                 
-                                            if current_sub == "NORMAL":
-                                                if has_any_trait:
-                                                    bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 0 스킵. 특성: '{identified_trait_name}' (신뢰도: {best_score:.2f})")
-                                                    fast_clear_tooltip(); continue
-                                                else:
+                                        # [개선 적용] 서브 모드 판별 구문을 특성 감지 블록 외부인 정상 레벨(40칸)로 정렬하여 무결성 분류를 수행합니다.
+                                        if current_sub == "NORMAL":
+                                            if has_any_trait:
+                                                bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 0 스킵. 특성: '{identified_trait_name}' (신뢰도: {best_score:.2f})")
+                                                fast_clear_tooltip()
+                                                continue
+                                            else:
+                                                bprint(f"  > 💎 [재료 채택] 융합 0짜리 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                                target_materials.append((cx, cy, False))
+                                        elif current_sub == "RECOVERY":
+                                            already_has_trait_in_list = any(m[2] for m in target_materials)
+                                            if has_valuable_trait and not already_has_trait_in_list:
+                                                bprint(f"  > 🧬 [재료 채택] 융합 가능 횟수 0짜리 가치 특성 '{identified_trait_name}' 확보! (신뢰도: {best_score:.2f})")
+                                                target_materials.append((cx, cy, True))
+                                            elif not has_any_trait:
+                                                blank_count = sum(1 for m in target_materials if not m[2])
+                                                if blank_count < 2:
                                                     bprint(f"  > 💎 [재료 채택] 융합 0짜리 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                                     target_materials.append((cx, cy, False))
-                                            elif current_sub == "RECOVERY":
-                                                already_has_trait_in_list = any(m[2] for m in target_materials)
-                                                if has_valuable_trait and not already_has_trait_in_list:
-                                                    bprint(f"  > 🧬 [재료 채택] 융합 가능 횟수 0짜리 가치 특성 '{identified_trait_name}' 확보! (신뢰도: {best_score:.2f})")
-                                                    target_materials.append((cx, cy, True))
-                                                elif not has_any_trait:
-                                                    blank_count = sum(1 for m in target_materials if not m[2])
-                                                    if blank_count < 2:
-                                                        bprint(f"  > 💎 [재료 채택] 융합 0짜리 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
-                                                        target_materials.append((cx, cy, False))
-                                                    else:
-                                                        bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
-                                                        fast_clear_tooltip(); continue
                                                 else:
-                                                    bprint(f"  > ⏭️ [스킵] RECOVERY 조건에 맞지 않는 일반 특성 감염물. 특성: '{identified_trait_name}'")
-                                                    fast_clear_tooltip(); continue
-                                            
-                                        # 3) 판독 불가 상태인 경우 (예외 회피용 자동 스킵)
-                                        else:
-                                            bprint(f"  > ⚠️ [판독 실패] 융합 가능 횟수 인식 불가. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
-                                            fast_clear_tooltip(); continue
-                                            
+                                                    bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                                    fast_clear_tooltip()
+                                                    continue
+                                            else:
+                                                bprint(f"  > ⏭️ [스킵] RECOVERY 조건에 맞지 않는 일반 특성 감염물. 특성: '{identified_trait_name}'")
+                                                fast_clear_tooltip()
+                                                continue
+                                                
+                                        # 안전화 처리를 완료하고 툴팁을 닫습니다.
                                         fast_clear_tooltip()
                                     
                                 if len(target_materials) < 3:

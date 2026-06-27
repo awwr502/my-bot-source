@@ -2625,7 +2625,7 @@ def fusion_bot_loop():
                                                     res_level = cv2.matchTemplate(screen_gray_level, template_level_1_g, cv2.TM_CCOEFF_NORMED)
                                                     _, max_val_level, _, _ = cv2.minMaxLoc(res_level)
                                                     
-                                                    if max_val_level >= 0.78:
+                                                    if max_val_level >= 0.75:
                                                         is_target_level_1 = True
                                                         
                                             # [3단계: 지능형 조기 탈출] 현재 서브 모드 상태에 따른 메타 조합 최적화 필터 작동

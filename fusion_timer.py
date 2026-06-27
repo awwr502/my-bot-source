@@ -2811,9 +2811,55 @@ def fusion_bot_loop():
                                     else:
                                         break
                                         
-                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                                # [모드 3/4와 완전히 동일한 초고속 소멸 방식 적용]
-                                wait_vanish('select_0_3.png', thread_sct)
+                                if len(target_materials) < 3:
+                                    bprint("  > 🛑 [재료 부족] 필요한 조건의 F1 재료가 부족합니다. 캐릭터 스킵 시퀀스 진입.")
+                                    send_cmd('E'); time.sleep(0.15); send_cmd('R'); skip_current_char = True
+                                else:
+                                    # 재료 슬롯 등록 클릭
+                                    bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")
+                                    for idx, mt in enumerate(target_materials):
+                                        pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
+                                                
+                                        # 첫 번째 재료 클릭 시 노출되는 경고 팝업을 '2.png'를 사용해 최대 0.5초간 능동 대기합니다.
+                                        if idx == 0:
+                                            has_popup = False
+                                            popup_name = None
+                                                    
+                                            start_wait = time.time()
+                                            while time.time() - start_wait < 0.5 and bot_active:
+                                                if check_img('2.png', thread_sct, force_full=True):
+                                                    has_popup = True
+                                                    popup_name = '2.png'
+                                                    break
+                                                time.sleep(0.03)
+                                                        
+                                            if has_popup:
+                                                bprint("  > ⚠️ [경고 팝업 감지] 재료 소모 알림(2.png) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
+                                                
+                                                # 1. 최초 1회 전체 화면 매칭 성공 후, 두 번째 캐릭터부터는 캐시 범위(ROI) 조준 타격으로 초고속 클릭합니다.
+                                                if check_img('empty_checkbox.png', thread_sct):
+                                                    cx, cy = FUSION_ROI['empty_checkbox.png']['last_pos']
+                                                    pyautogui.moveTo(cx, cy, duration=0.1); time.sleep(0.05)
+                                                    send_cmd('C'); time.sleep(0.1)
+                                                else:
+                                                    bprint("  > ❌ [경고] 'empty_checkbox.png' 이미지를 검출하지 못해 임시 기본 글씨 좌표(910, 618)로 클릭을 우회합니다.")
+                                                    pyautogui.moveTo(910, 618, duration=0.1); time.sleep(0.05)
+                                                    send_cmd('C'); time.sleep(0.1)
+                                                    
+                                                # 2. 확인 단축키 F 입력
+                                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                                # 3. 팝업이 사라질 때까지 최대 0.5초 동안 초고속 실시간 능동 대기합니다.
+                                                wait_vanish_start = time.time()
+                                                while time.time() - wait_vanish_start < 0.5 and bot_active:
+                                                    if not check_img(popup_name, thread_sct, force_full=True):
+                                                        break
+                                                    time.sleep(0.03)
+                                                # 4. 마우스를 다시 원래 재료 감염물 자리로 정교하게 복귀
+                                                pyautogui.moveTo(mt[0], mt[1]); time.sleep(0.05)
+                                                    
+                                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                    # [모드 3/4와 완전히 동일한 초고속 소멸 방식 적용]
+                                    wait_vanish('select_0_3.png', thread_sct)
                                     
                         else:
                             # [기존 모드 3, 4 세팅 진입]

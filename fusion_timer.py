@@ -2236,6 +2236,14 @@ def fusion_bot_loop():
                                 inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
                                 screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
                                             
+                                # 체크마크 사전 스캔 (Y축 180 이상으로 제한하여 타이틀 오탐 완벽 차단)
+                                check_pts_global = []
+                                if template_check is not None and screen_bgr.shape[0] >= 180:
+                                    screen_bgr_restricted = screen_bgr[180:, :]
+                                    res_c = cv2.matchTemplate(screen_bgr_restricted, template_check, cv2.TM_CCOEFF_NORMED)
+                                    loc_c = np.where(res_c >= 0.85)
+                                    check_pts_global = [(pt[0] + 960, pt[1] + 180) for pt in zip(*loc_c[::-1])]
+                                            
                                 target_parents = []
                                 for cx, cy in all_candidates:
                                     if len(target_parents) >= 2: break
@@ -2244,6 +2252,11 @@ def fusion_bot_loop():
                                     mem_parent_x, mem_parent_y = char_inventory_memory[char_key + "_parent"]
                                     if not is_parent_rescan and curr_sort_key < (mem_parent_x // 95, mem_parent_y):
                                         continue # 이미 과거에 확인했던 위치이므로 즉시 패스
+                                        
+                                    # 체크마크가 이미 있는 슬롯은 탐색에서 제외
+                                    is_checked = any(math.hypot(cx - c[0], cy - c[1]) < 40 for c in check_pts_global)
+                                    if is_checked:
+                                        continue
                                         
                                     # [사용자 피드백 반영] 마우스를 올리기 전에 인벤토리 그리드의 형태 분포를 검사합니다.
                                     rx = cx - 960

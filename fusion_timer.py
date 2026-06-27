@@ -2520,8 +2520,8 @@ def fusion_bot_loop():
                                     all_candidates = [] # [원상복구] 이전 부모 슬롯의 좌표 리스트 간섭을 막기 위해 리스트를 정상 리셋합니다.
                                     for j in range(7):
                                         for i in range(5):
-                                            cx = 1405 + i * 95
-                                            cy = 305 + j * 95
+                                            cx = 1410 + i * 95
+                                            cy = 310 + j * 95
                                             all_candidates.append((cx, cy))
                                             
                                     # [상->하->좌->우] 순서로 판별하기 위해 후보 좌표들을 모드 3/4와 동일하게 세밀 정렬합니다.

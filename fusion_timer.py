@@ -2181,7 +2181,7 @@ def fusion_bot_loop():
                             current_sub = char_sub_modes[char_key]
                             bprint(f"  > 💡 [모드 6] 현재 상태: {current_sub} 세팅 시퀀스를 시작합니다.")
                             
-                            # 부모 슬롯용 메모리와 재료 슬롯용 메모리를 해당 캐릭터별로 각각 분리하여 초기화
+                            # 부모 슬롯 메모리와 재료 슬롯 메모리 개별 분리 초기화
                             if (char_key + "_parent") not in char_inventory_memory:
                                 char_inventory_memory[char_key + "_parent"] = (0, 0)
                             if (char_key + "_material") not in char_inventory_memory:
@@ -2380,7 +2380,7 @@ def fusion_bot_loop():
                                         temp_scores.sort(key=lambda x: x[1], reverse=True)
                                         if len(temp_scores) >= 1:
                                             top1_file, top1_score = temp_scores[0]
-                                            top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
+                                            top2_score = temp_scores[1][1] if len(top2_score) > 1 else 0.0
                                             
                                             if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
                                                 has_valuable_trait = True
@@ -2487,18 +2487,6 @@ def fusion_bot_loop():
                                     bprint("  > ✅ [확인] 인벤토리 창 개방 확인! 0.1초 안정화 대기 후 필터 전환을 시도합니다.")
                                     time.sleep(0.1)
 
-                                # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
-                                # 재료 슬롯 역시 템플릿 매칭 없이 고정 5x7 그리드 순회를 이용해 융합이 가능한 F1들을 수집합니다.
-                                all_candidates = [] # [원상복구] 이전 부모 슬롯의 좌표 리스트 간섭을 막기 위해 리스트를 정상 리셋합니다.
-                                for j in range(7):
-                                    for i in range(5):
-                                        cx = 1420 + i * 95
-                                        cy = 320 + j * 95
-                                        all_candidates.append((cx, cy))
-                                        
-                                # [상->하->좌->우] 순서로 판별하기 위해 후보 좌표들을 모드 3/4와 동일하게 세밀 정렬합니다.
-                                all_candidates.sort(key=lambda c: (c[0] // 95, c[1]))
-                                    
                                 # [사용자 피드백 반영] 나비 필터 아이콘(butterfly.png) 탐색 및 동적 타격
                                 bprint("  > 🦋 [필터 전환] 나비 아이콘(butterfly.png) 탐색 및 탭 전환 시도...")
                                 found_butterfly = False
@@ -2532,6 +2520,7 @@ def fusion_bot_loop():
                                     all_candidates = [] # [원상복구] 이전 부모 슬롯의 좌표 리스트 간섭을 막기 위해 리스트를 정상 리셋합니다.
                                     for j in range(7):
                                         for i in range(5):
+                                            # ★★★ 혹시 재료슬롯 시작점 좌표를 수정하여 사용 중이시라면 아래 수치를 커스텀 수치로 변경해 주시면 됩니다. ★★★
                                             cx = 1420 + i * 95
                                             cy = 320 + j * 95
                                             all_candidates.append((cx, cy))
@@ -2570,7 +2559,7 @@ def fusion_bot_loop():
                                         pyautogui.moveTo(cx, cy)
                                         template_label = FUSION_CACHE.get('ability_label.png')
                                         mon = thread_sct.monitors[1]
-                                        r_left = max(mon["left"], cx - 1100) # [동적 캡처 적용] 모드 3/4와 동일하게 마우스 위치 기준 좌측 1100px을 동적 캡처합니다.
+                                        r_left = max(mon["left"], cx - 1100) # [동적 캡처 적용] 모드 3/4와 완전히 동일하게 마우스 위치 기준 좌측 1100px을 동적 캡처합니다.
                                         r_top = mon["top"]
                                         r_width = 1100
                                         r_height = mon["height"]
@@ -2761,9 +2750,9 @@ def fusion_bot_loop():
                                                                             t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
                                                                             if t_w <= roi_trait_name_gray.shape[1] and t_h <= roi_trait_gray.shape[0]:
                                                                                 res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (t_w, t_h)), cv2.TM_CCOEFF_NORMED)
-                                                                                file_best_score = max(file_best_score, np.max(res_st))
+                                                                                best_score = max(best_score, np.max(res_st))
                                                                         
-                                                                        temp_scores.append((t_file, file_best_score))
+                                                                        temp_scores.append((t_file, best_score))
                                                                 break
                                                                 
                                                 # 점수순 내림차순 정렬 및 스마트 갭 판독

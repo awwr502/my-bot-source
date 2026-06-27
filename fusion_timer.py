@@ -2758,9 +2758,9 @@ def fusion_bot_loop():
                                                 # 점수순 내림차순 정렬 및 스마트 갭 판독
                                                 temp_scores.sort(key=lambda x: x[1], reverse=True)
                                                 if len(temp_scores) >= 1:
-                                                top1_file, top1_score = temp_scores[0]
-                                                top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
-                                                best_score = top1_score
+                                                    top1_file, top1_score = temp_scores[0]
+                                                    top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
+                                                    best_score = top1_score
                                                 
                                                 if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
                                                     has_valuable_trait = True

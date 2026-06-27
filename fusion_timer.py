@@ -1228,7 +1228,15 @@ def fusion_bot_loop():
                                     bprint(f"  > 🛑 [보호] 5레벨 감염물. (인식률: {max_seen_5:.2f} / 시간: {lvl5_render_time:.2f}초 / 모드: {time_mode_str})")
                                 elif has_trait:
                                     identified_trait_name = "미등록 특성"
-                                    active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
+                                    # 모드 5 한정: trait_1.png부터 trait_6.png까지만 수집하여 탐색 대상을 철저히 조율합니다.
+                                    active_trait_files = []
+                                    for k in FUSION_CACHE.keys():
+                                        if k.startswith('trait_') and k.endswith('.png'):
+                                            parts = k.split('_')
+                                            if len(parts) > 1:
+                                                num_str = parts[1].split('.')[0]
+                                                if num_str.isdigit() and 1 <= int(num_str) <= 6:
+                                                    active_trait_files.append(k)
                                     
                                     best_score = 0.0
                                     temp_scores = [] # 점수 계산을 위한 임시 리스트

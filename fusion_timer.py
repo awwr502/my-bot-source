@@ -2521,7 +2521,7 @@ def fusion_bot_loop():
                                     for j in range(7):
                                         for i in range(5):
                                             cx = 1400 + i * 95
-                                            cy = 220 + j * 95
+                                            cy = 300 + j * 95
                                             all_candidates.append((cx, cy))
                                             
                                     # [상->하->좌->우] 순서로 판별하기 위해 후보 좌표들을 모드 3/4와 동일하게 세밀 정렬합니다.

@@ -2516,6 +2516,7 @@ def fusion_bot_loop():
                                     
                                 is_material_rescan = False
                                 while bot_active:
+                                    # 재료 슬롯 역시 템플릿 매칭 없이 고정 5x7 그리드 순회를 이용해 융합이 가능한 F1들을 수집합니다.
                                     all_candidates = [] # [원상복구] 이전 부모 슬롯의 좌표 리스트 간섭을 막기 위해 리스트를 정상 리셋합니다.
                                     for j in range(7):
                                         for i in range(5):

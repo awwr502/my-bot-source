@@ -2552,7 +2552,7 @@ def fusion_bot_loop():
                                             mean_val = np.mean(slot_gray)
                                             
                                             # 평균 밝기가 극히 낮은 완전히 비어있는 검은색 슬롯만 즉시 패스합니다. (어떤 색상/종류의 재료든 다 통과)
-                                            if mean_val < 30.0:
+                                            if mean_val < 20.0:
                                                 continue
                                                 
                                         pyautogui.moveTo(cx, cy)

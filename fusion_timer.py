@@ -2567,13 +2567,22 @@ def fusion_bot_loop():
                                         # 어긋난 좌표 마진을 보정하기 위해 탐색 면적을 80x80 규격으로 대폭 늘려 크롭합니다.
                                         slot_roi = screen_bgr[max(0, ry - 40):min(screen_bgr.shape[0], ry + 40), max(0, rx - 40):min(screen_bgr.shape[1], rx + 40)]
                                         
-                                        # [초경량 빈칸 필터] 재료 창은 어두운 잠금 상태가 없으므로 아예 비어있는 블랙 슬롯만 필터링합니다.
+                                        # [범용 채도-밝기 융합 필터] 감염물의 색상이나 종류에 상관없이 활성 상태의 화소만 정밀 검출합니다.
                                         if slot_roi.size > 0:
-                                            slot_gray = cv2.cvtColor(slot_roi, cv2.COLOR_BGRA2GRAY)
-                                            mean_val = np.mean(slot_gray)
-                                            
-                                            # 평균 밝기가 극히 낮은 완전히 비어있는 검은색 슬롯만 즉시 패스합니다. (어떤 색상/종류의 재료든 다 통과)
-                                            if mean_val < 20.0:
+                                            b = slot_roi[:, :, 0].astype(int)
+                                            g = slot_roi[:, :, 1].astype(int)
+                                            r = slot_roi[:, :, 2].astype(int)
+                                        
+                                            # 삼원색 중 가장 높은 값과 가장 낮은 값의 편차(채도) 및 최고 밝기를 연산합니다.
+                                            max_c = np.maximum(np.maximum(r, g), b)
+                                            min_c = np.minimum(np.minimum(r, g), b)
+                                            saturation = max_c - min_c
+                                        
+                                            # 1) 채도가 45를 넘는 선명한 원색 화소이거나, 2) 채도가 낮아도 밝기가 140을 넘는 초고대비 화소만 집계합니다.
+                                            active_pixels = np.sum(((saturation > 45) & (max_c > 115)) | (max_c > 140))
+                                        
+                                            # 활성 화소가 최소 15개 미만인 빈칸 및 어둡게 비활성화된 슬롯은 철저하게 차단합니다.
+                                            if active_pixels < 15:
                                                 continue
                                                 
                                         pyautogui.moveTo(cx, cy)

@@ -2537,14 +2537,41 @@ def fusion_bot_loop():
                                     
                                 is_material_rescan = False
                                 while bot_active:
-                                    # 재료 슬롯 역시 템플릿 매칭 없이 고정 5x7 그리드 순회를 이용해 융합이 가능한 F1들을 수집합니다.
-                                    all_candidates = [] # [원상복구] 이전 부모 슬롯의 좌표 리스트 간섭을 막기 위해 리스트를 정상 리셋합니다.
-                                    for j in range(6):
-                                        for i in range(5):
-                                            cx = 1410 + i * 95
-                                            cy = 310 + j * 95
-                                            all_candidates.append((cx, cy))
+                                    # 재료 인벤토리 화면을 사전 스캔하여 슬롯의 색상 및 이미지 매칭을 위한 화면 확보
+                                    screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
+                                    
+                                    all_candidates = [] # [원상복구] 이전 부모 슬롯의 좌표 리스트 간섭을 막기 위해 리셋합니다.
+                                    
+                                    if current_sub == "NORMAL":
+                                        # [정상 모드] 베이스 재료인 item_A1만 이미지 매칭으로 초고속 핀포인트 탐색 진행 (빈칸/타 감염물 무시)
+                                        X_OFFSET = 960
+                                        for item_name in ['item_A1.png']:
+                                            template = FUSION_CACHE.get(item_name)
+                                            if template is None: continue
                                             
+                                            conf = FUSION_CONF.get(item_name, 0.95)
+                                            res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
+                                            loc = np.where(res >= conf)
+                                            h, w = template.shape[:2]
+                                            
+                                            for pt in zip(*loc[::-1]):
+                                                real_x = pt[0] + X_OFFSET
+                                                real_y = pt[1]
+                                                
+                                                # 중복 검출 방지
+                                                if any(math.hypot(real_x - (cp[0] - w//2), real_y - (cp[1] - h//2)) < 40 for cp in all_candidates):
+                                                    continue
+                                                # 슬롯 정중앙 좌표로 변환하여 후보에 추가
+                                                all_candidates.append((real_x + w//2, real_y + h//2))
+                                                
+                                    elif current_sub == "RECOVERY":
+                                        # [복구 모드] 다른 종류의 감염물에 붙어있을지도 모르는 가치 특성 캐리어를 찾아야 하므로 전체 격자(5x6) 탐색 진행
+                                        for j in range(6):
+                                            for i in range(5):
+                                                cx = 1400 + i * 95
+                                                cy = 315 + j * 95
+                                                all_candidates.append((cx, cy))
+                                                
                                     # [상->하->좌->우] 순서로 판별하기 위해 후보 좌표들을 모드 3/4와 동일하게 세밀 정렬합니다.
                                     all_candidates.sort(key=lambda c: (c[0] // 95, c[1]))
                                         

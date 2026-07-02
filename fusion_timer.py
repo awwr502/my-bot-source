@@ -2011,7 +2011,7 @@ def fusion_bot_loop():
                                     best_idx = max(best_debug_scores, key=best_debug_scores.get)
                                     best_val = best_debug_scores[best_idx]
                                     
-                                    if best_val >= 0.70:
+                                    if best_val >= 0.75:
                                         has_valuable_trait = True
                                         best_score = best_val
                                         best_matched_file = f"trait_{best_idx}.png"

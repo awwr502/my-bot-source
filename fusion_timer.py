@@ -2549,7 +2549,7 @@ def fusion_bot_loop():
                                             template = FUSION_CACHE.get(item_name)
                                             if template is None: continue
                                             
-                                            conf = FUSION_CONF.get(item_name, 0.95)
+                                            conf = FUSION_CONF.get(item_name, 0.85)
                                             res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
                                             loc = np.where(res >= conf)
                                             h, w = template.shape[:2]

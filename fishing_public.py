@@ -24,6 +24,10 @@ import hashlib
 import queue
 import csv
 import concurrent.futures # [추가] 스레드 풀 재사용을 위한 모듈
+import warnings
+
+# [경고 숨김] 최신 파이썬 버전 구동 시 발생하는 mss 라이브러리의 단순 DeprecationWarning 경고를 콘솔에서 숨깁니다.
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # mss 객체는 딱 한 번만 생성해두고 계속 재사용합니다 (메모리 최적화)
 sct = mss.mss()
@@ -1033,57 +1037,12 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             use_mask = None
             use_color = False
 
-        # [안전장치 추가] 검색 대상 이미지 영역이 템플릿보다 작아 OpenCV 오류가 발생하는 현상 방지
-        s_h, s_w = screen_processed.shape[:2]
-        t_h, t_w = template_processed.shape[:2]
-        if s_h < t_h or s_w < t_w:
-            # 문제가 된 ROI 캐시를 무효화하고 넓은 전체 영역으로 복원하여 재시도합니다.
-            cache_data['master_box'] = None
-            cache_data['samples'].clear()
-            ctx['history'].clear()
-            ctx['is_locked'] = False
-            
-            target_monitor = active_sct.monitors[1]
-            if img_path == 'fishing.png':
-                target_monitor = {
-                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
-                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
-                    "width": int(target_monitor["width"] * 0.4),
-                    "height": int(target_monitor["height"] * 0.5)
-                }
-            elif img_path == 'bait_change.png':
-                target_monitor = {
-                    "left": int(target_monitor["left"]),
-                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.45),
-                    "width": int(target_monitor["width"] * 0.25),
-                    "height": int(target_monitor["height"] * 0.23)
-                }
-            elif img_path == 'green_range.png':
-                target_monitor = {
-                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
-                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
-                    "width": int(target_monitor["width"] * 0.4),
-                    "height": int(target_monitor["height"] * 0.5)
-                }
-                
-            sct_img = active_sct.grab(target_monitor)
-            if img_path == 'green_float.png' and template_color is not None:
-                screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-                sb, sg, sr = cv2.split(screen_bgr)
-                screen_processed = cv2.subtract(sg, cv2.max(sr, sb))
-            else:
-                screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                
-            s_h, s_w = screen_processed.shape[:2]
-            if s_h < t_h or s_w < t_w:
-                return None  # 최후의 수단: 보정 이후에도 비정상 규격일 경우 매칭을 건너뛰어 크래시 완전 예방
-
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
             res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
         else:
             res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
-                
+            
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         # 2. [실시간 자가 치유 능동 폴백]
@@ -1236,7 +1195,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         # [인식 실패 연동 및 디버그용 콘솔 알림] (10초당 1회만 노출)
         if max_val < active_conf:
             ctx['found'] = False
-            if img_path not in ['popup_char.png', 'popup_main.png']:
+            # 잠수방지 전용 모드(State 0)인 동안에는 bait_change.png의 탐색 실패 콘솔 로그를 숨겨 오해 및 콘솔 스팸을 방지합니다.
+            if img_path not in ['popup_char.png', 'popup_main.png'] and not (img_path == 'bait_change.png' and state == 0):
                 now = time.time()
                 if now - ctx.get('last_fail_log_time', 0) > 10.0:
                     ctx['last_fail_log_time'] = now
@@ -1463,10 +1423,26 @@ def afk_monitor_loop():
                 continue
                 
             try:
+                # 1장만 캡처하여 잠수방지(exit_notice)와 추천(recommend) 두 곳에 알뜰하게 공유 (연산량 극대화 절약)
+                sct_img = afk_sct.grab(afk_sct.monitors[1])
+                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+
+                # --- [추가] 추천/선물 증정 팝업 제거 루틴 (메인 스레드 멈춤 없이 즉각 캔슬) ---
+                template_rec = IMAGE_CACHE.get('recommend.png')
+                if template_rec is not None:
+                    res_rec = cv2.matchTemplate(screen_gray, template_rec, cv2.TM_CCOEFF_NORMED)
+                    _, max_val_rec, _, _ = cv2.minMaxLoc(res_rec)
+                    if max_val_rec >= 0.80:
+                        bprint("\n=============================================")
+                        bprint("  > 🎁 [전역 감시망] 추천/선물 팝업 감지! ESC 1회로 강제 해제합니다.")
+                        bprint("=============================================")
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        time.sleep(0.5) # 팝업 소멸 안정화 대기
+                        continue # 해제 후 루프 처음으로 이동하여 추가 연산 생략
+
+                # --- 기존 잠수방지 루틴 ---
                 template = IMAGE_CACHE.get('exit_notice.png')
                 if template is not None:
-                    sct_img = afk_sct.grab(afk_sct.monitors[1])
-                    screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                     res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
                     _, max_val, _, _ = cv2.minMaxLoc(res)
                     
@@ -1479,18 +1455,27 @@ def afk_monitor_loop():
                         send_blynk_notification("⚠️ 잠수 방지 감지")
                         dump_blackbox_log("잠수방지_비동기_감지")
                         
-                        # [근본 해결] 전역 깃발(is_rod_casted)이나 State 조건에 의존한 맹목적인 사전 ESC 입력을 전면 폐지합니다.
-                        # 대신 알림창을 먼저 F로 지운 뒤, 남은 UI를 시각적으로 직접 확인하여 처리합니다.
-
-                        # 알림창 이미지가 화면에서 완전히 사라질 때까지 F키 반복 (ESC 절대 입력 안 함)
+                        # [연타 상자개방 방지 + 지연 보완 리트라이 융합] 
+                        # F를 1초에 단 1회씩만 안전하게 리트라이하여 보관함 강제 개방을 원천 방지하고 렉으로 인한 유실을 해결합니다.
                         while True:
-                            sct_img_check = afk_sct.grab(afk_sct.monitors[1])
-                            screen_gray_check = cv2.cvtColor(np.array(sct_img_check), cv2.COLOR_BGRA2GRAY)
-                            # [오류 수정 반영] 탈출 컷오프를 진입(0.80)보다 낮은 0.75로 유지하여 완벽히 지워지도록 보장
-                            if cv2.minMaxLoc(cv2.matchTemplate(screen_gray_check, template, cv2.TM_CCOEFF_NORMED))[1] < 0.75:
-                                break
+                            # 1. 일단 해제 신호(F)를 1회 전송
                             send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                            time.sleep(0.5)
+                            
+                            # 2. 최대 1.0초 동안 알림창이 화면에서 소멸하는지 감시
+                            is_vanished = False
+                            wait_start = time.time()
+                            while time.time() - wait_start < 1.0:
+                                sct_img_check = afk_sct.grab(afk_sct.monitors[1])
+                                screen_gray_check = cv2.cvtColor(np.array(sct_img_check), cv2.COLOR_BGRA2GRAY)
+                                if cv2.minMaxLoc(cv2.matchTemplate(screen_gray_check, template, cv2.TM_CCOEFF_NORMED))[1] < 0.75:
+                                    is_vanished = True
+                                    break
+                                time.sleep(0.1) # 감시 대기
+                            
+                            # 3. 1초 이내에 정상 소멸했다면 완전히 대기 루프 탈출
+                            if is_vanished:
+                                break
+                            # 만약 1초가 초과되었는데도 여전히 알림창이 있다면, F 입력을 무시한 것으로 판단하여 2회차 입력을 진행합니다.
                         
                         # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
                         def check_ui(img_name, conf):
@@ -1502,7 +1487,7 @@ def afk_monitor_loop():
 
                         found_fishing = check_ui('fishing.png', 0.75)
                         time.sleep(0.5) # 0.5초 딜레이
-                        found_specific_b = check_ui('specific_B.png', 0.7)
+                        found_specific_b = check_ui('specific_B.png', 0.78)
                         time.sleep(0.5)
                         found_catch = check_ui('catch_F.png', 0.70) # 수거 창 잔존 여부 확인
                         
@@ -1519,11 +1504,11 @@ def afk_monitor_loop():
                                             break
                                         time.sleep(0.1)
                                 # 2. 낚시나 보관함 창이 발견되면 ESC(E) 입력
-                                elif check_ui('fishing.png', 0.75) or check_ui('specific_B.png', 0.7):
+                                elif check_ui('fishing.png', 0.75) or check_ui('specific_B.png', 0.78):
                                     send_cmd('E'); time.sleep(0.1); send_cmd('R')
                                     wait_start = time.time()
                                     while time.time() - wait_start < 1.5:
-                                        if not check_ui('fishing.png', 0.75) and not check_ui('specific_B.png', 0.7):
+                                        if not check_ui('fishing.png', 0.75) and not check_ui('specific_B.png', 0.78):
                                             break
                                         time.sleep(0.1)
                                 # 3. 모두 사라졌으면 루프 탈출
@@ -1553,7 +1538,9 @@ def afk_monitor_loop():
                         send_blynk_notification("[완료]잠수 방지 해제") 
                         time.sleep(0.7) # [누락 복구] 메인 봇 복귀 전 0.7초 안정화 딜레이
                         
-                        state = 1 # 메인 루프가 사각지대(대기 중)에 갇혀있더라도 1단계부터 깔끔하게 다시 시작하도록 오버라이드
+                        # 원래는 무조건 state = 1로 만들었으나, 현재 봇이 '잠수방지 전용 모드(State 0)'인 상태라면 낚시로 강제 복귀하지 않고 State 0 상태를 계속 유지합니다.
+                        if state != 0:
+                            state = 1
                         is_afk_processing = False
             except Exception as e:
                 pass
@@ -1709,28 +1696,56 @@ def victory_coin_bot_loop():
         except Exception as e:
             vprint(f"  > [승리코인 탐색 에러] {img_name} 검색 실패: {e}")
             return False
-        
-    def wait_vanish(img_name, thread_sct):
-        vprint(f"  > [대기] {img_name} 사라짐 대기 중...")
-        
-        # [스마트 소멸 검증] 단 1프레임의 오탐(애니메이션, 렉)으로 루프가 깨지는 것을 막기 위해
-        # 연속 5회(약 0.25초) 동안 완전히 안 보여야 진짜 사라진 것으로 인정합니다.
+
+    def wait_vanish(img_name, thread_sct, timeout=10.0):
+        """전환 애니메이션이나 자체 로딩 완료로 인해 스스로 사라지는 이미지 전용 안전 타임아웃 대기 함수"""
+        vprint(f"  > [대기] {img_name} 사라짐 대기 중 (제한: {timeout}초)...")
+        start_t = time.time()
         vanish_count = 0
-        while victory_active:
+        while time.time() - start_t < timeout and victory_active:
             if check_img(img_name, thread_sct):
-                vanish_count = 0 # 다시 보이면 카운터 초기화 (가짜 소멸 방지)
+                vanish_count = 0 # 다시 노출되면 카운터 초기화
             else:
                 vanish_count += 1
-                
             if vanish_count >= 5:
-                break # 연속 5번 못 찾았을 때만 진짜 소멸로 인정하고 루프 탈출
+                vprint(f"  > ✅ [완료] {img_name} 소멸 확인!")
+                return True
+            time.sleep(0.05)
+        vprint(f"  > ⚠️ [경고] {img_name} 소멸 대기 한계 시간 초과. 다음 흐름을 강제 진행합니다.")
+        return False
+
+    def send_cmd_until_vanish(img_name, key, thread_sct, timeout=6.0):
+        """키 누락(씹힘) 버그를 원천 봉쇄하기 위해 이미지가 완전히 사라질 때까지 주기적으로 입력을 계속 전송하는 능동 조작 예외 처리 함수"""
+        vprint(f"  > [능동 대기] {img_name} 사라질 때까지 {key} 키 반복 입력 시퀀스 작동 (제한: {timeout}초)...")
+        start_t = time.time()
+        last_press_t = 0.0
+        
+        while time.time() - start_t < timeout and victory_active:
+            now = time.time()
+            # 0.4초마다 반복적으로 키 신호 입력 (하드웨어 통신 씹힘 극복)
+            if now - last_press_t > 0.4:
+                send_cmd(key); time.sleep(0.05); send_cmd('R')
+                last_press_t = now
+            
+            # 이미지 소멸 여부 더 엄격하게 실시간 이중 점검 (3회 연속 미검출 시 확실한 소멸로 간주)
+            vanish_count = 0
+            for _ in range(3):
+                if not check_img(img_name, thread_sct):
+                    vanish_count += 1
+                else:
+                    break
+                time.sleep(0.03)
                 
+            if vanish_count >= 3:
+                vprint(f"  > ✅ [완료] {img_name} 소멸 확인!")
+                return True
             time.sleep(0.05)
             
-        vprint(f"  > [완료] {img_name} 완벽 소멸 확인!")
+        vprint(f"  > ⚠️ [경고] {img_name} 반복 입력 한계 시간 도달. 흐름 꼬임 예방을 위해 다음 단계로 전이합니다.")
+        return False
 
     with mss.mss() as thread_sct:
-        victory_start_img = None # [신규] 1단계에서 찾은 사진을 기억하는 변수
+        victory_start_img = None
         while True:
             try:
                 if not victory_active:
@@ -1747,11 +1762,14 @@ def victory_coin_bot_loop():
                         time.sleep(0.05)
                         
                     if found:
-                        victory_start_img = found # 다음 단계를 위해 발견한 이미지 기록
-                        vprint(f"  > [인식 성공] {found} 발견! F 입력")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish(found, thread_sct)
-                        state = 2
+                        victory_start_img = found
+                        # F키 상호작용 적용 여부를 리턴값으로 판별하여, 실패 시 다음 단계로 우회하지 않고 1단계에 남아 성공할 때까지 반복 시도합니다.
+                        success = send_cmd_until_vanish(found, 'F', thread_sct)
+                        if success:
+                            state = 2
+                        else:
+                            vprint("  > ⚠️ [진입 실패] F 상호작용 씹힘 감지 (유저 차단 등). 1단계로 되돌아가 재시도합니다.")
+                            state = 1
                     else:
                         vprint("  > [인식 실패] 1.png / 2.png 미발견. F 누르고 재탐색합니다.")
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
@@ -1764,27 +1782,27 @@ def victory_coin_bot_loop():
                         time.sleep(0.05)
                         
                     if found:
-                        vprint("  > [인식 성공] 3.png 발견! F 입력")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish('3.png', thread_sct)
+                        # 3.png(매치 열기)를 감지하면 클릭이 보장 완료될 때까지 확실히 반복 주입합니다.
+                        success = send_cmd_until_vanish('3.png', 'F', thread_sct)
+                        if success:
+                            state = 3
+                        else:
+                            vprint("  > ⚠️ [매치 실패] 3.png 소멸 적용 실패. 안전을 위해 1단계로 롤백합니다.")
+                            state = 1
                     else:
-                        vprint("  > [인식 실패] 3.png 미발견. 다음 단계로 넘어갑니다.")
-                    state = 3
+                        vprint("  > ❌ [인식 실패] 3.png 미발견! 1단계(F 진입단계)로 롤백하여 다시 F 입력을 수행합니다.")
+                        state = 1
                     
                 elif state == 3:
-                    # [모드 2 전용] 모드 2일 경우 무조건 발동
                     if victory_mode == 2:
                         vprint("  > [승리코인] 3단계: 2초 대기 후 1.png 탐색을 시작합니다. (모드 2 전용)")
-                        
-                        time.sleep(2.0) # 1.png를 찾기 전에 2초를 먼저 대기합니다.
-                        
+                        time.sleep(2.0)
                         found_1 = False
-                        # 1.png가 뜰 때까지 승리코인 스위치가 켜져 있는 한 계속 대기합니다.
                         while victory_active:
                             if check_img('1.png', thread_sct):
                                 found_1 = True
                                 break
-                            time.sleep(0.1) # 대기 중 CPU 부하 방지
+                            time.sleep(0.1)
                             
                         if found_1:
                             vprint("  > [인식 성공] 1.png 발견! 9.png 탐색을 시작합니다.")
@@ -1802,10 +1820,8 @@ def victory_coin_bot_loop():
                             else:
                                 vprint("  > [인식 실패] 9.png 미발견. 다음 단계로 넘어갑니다.")
                         else:
-                            # 단축키(<)로 강제 정지하여 빠져나온 경우
                             vprint("  > [정지] 대기 중 승리코인 가동이 중지되었습니다.")
                     else:
-                        # 모드 1일 경우 불필요한 로그 없이 조용히 스킵
                         pass 
                     state = 4
                     
@@ -1818,7 +1834,6 @@ def victory_coin_bot_loop():
                         target_success = '6.png'
                         
                     found_img = None
-                    
                     while victory_active:
                         if check_img(target_success, thread_sct): 
                             found_img = target_success
@@ -1829,14 +1844,12 @@ def victory_coin_bot_loop():
                         time.sleep(0.05) 
                         
                     if found_img == '4.png':
-                        vprint("  > [인식 성공] 4.png 발견! (보스 처치 완료) ESC 입력")
-                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish('4.png', thread_sct)
+                        # ESC 입력이 게임 창에 제대로 먹힐 때까지 끝까지 전송합니다.
+                        send_cmd_until_vanish('4.png', 'E', thread_sct)
                         state = 5
                     elif found_img == '6.png':
-                        vprint("  > [인식 성공] 6.png 발견! (모드 2 클리어) F 입력 및 8단계 전이")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish('6.png', thread_sct)
+                        # F 입력이 적용되어 해당 창이 닫힐 때까지 반복 전송합니다.
+                        send_cmd_until_vanish('6.png', 'F', thread_sct)
                         state = 8
                     elif found_img == '8.png':
                         vprint("  > [분기 전환] 8.png 발견! (클리어 실패 감지) 바로 7단계로 점프합니다.")
@@ -1846,7 +1859,8 @@ def victory_coin_bot_loop():
                         
                 elif state == 5:
                     vprint("  > [승리코인] 5단계: 0.5초 대기")
-                    time.sleep(0.05)
+                    # 0.05초로 지정되어 무의미하게 넘어가던 딜레이를 정석 0.5초 대기 시간으로 완벽히 복구합니다.
+                    time.sleep(0.5)
                     state = 6
                     
                 elif state == 6:
@@ -1857,9 +1871,8 @@ def victory_coin_bot_loop():
                         time.sleep(0.05)
                         
                     if found:
-                        vprint("  > [인식 성공] 5.png 발견! ESC 입력")
-                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish('5.png', thread_sct)
+                        # ESC(E) 입력이 정상 적용될 때까지 보장 전송합니다.
+                        send_cmd_until_vanish('5.png', 'E', thread_sct)
                     else:
                         vprint("  > [인식 실패] 5.png 미발견. 다음 단계로 넘어갑니다.")
                     state = 7
@@ -1872,9 +1885,8 @@ def victory_coin_bot_loop():
                         time.sleep(0.05)
                         
                     if found:
-                        vprint("  > [인식 성공] 6.png 발견! F 입력")
-                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        wait_vanish('6.png', thread_sct)
+                        # F 입력 보장을 전송합니다.
+                        send_cmd_until_vanish('6.png', 'F', thread_sct)
                     else:
                         vprint("  > [인식 실패] 6.png 미발견. 다음 단계로 넘어갑니다.")
                     state = 8
@@ -1888,13 +1900,14 @@ def victory_coin_bot_loop():
                         
                     if found:
                         vprint("  > [인식 성공] 7.png 발견! 대기합니다.")
-                        wait_vanish('7.png', thread_sct)
+                        # 애니메이션 로딩용 7.png는 스스로 가라앉는 이미지이므로 안전 타임아웃이 포함된 대기 감시 장치로 수행합니다.
+                        wait_vanish('7.png', thread_sct, timeout=15.0)
                         time.sleep(0.05)
                         state = 1
                     else:
                         vprint("  > [인식 실패] 7.png 미발견. F 누르고 재탐색합니다.")
                         send_cmd('F'); time.sleep(0.1); send_cmd('R')
-                        
+                            
             except BotStopException:
                 vprint("  > [봇 가동 정지] 작동을 중지하고 대기합니다.")
                 try:
@@ -2077,7 +2090,7 @@ def fishing_bot(max_allowed_seconds):
             
             while time.time() - wait_throw < 1.5 and bot_active:
                 if check_exit_notification(): return False
-                if safe_find_image('broken_rod.png', 0.8):
+                if safe_find_image('broken_rod.png', 0.76):
                     current_rod_state = "UNFOLDED"
                     break
                 elif safe_find_image('throw_btn.png', 0.70):
@@ -2086,7 +2099,7 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.05)
 
             if not current_rod_state and bot_active:
-                if safe_find_image('broken_rod.png', 0.80, region="FULL_SCREEN"):
+                if safe_find_image('broken_rod.png', 0.76, region="FULL_SCREEN"):
                     current_rod_state = "UNFOLDED"
                 elif safe_find_image('throw_btn.png', 0.70, region="FULL_SCREEN"):
                     current_rod_state = "HELD"
@@ -2178,13 +2191,15 @@ def fishing_bot(max_allowed_seconds):
                 time.sleep(0.1)
                 state = -1 # 정지 상태일 때 강제로 초기화 상태(-1) 부여
                 state_start_time = time.time() # 봇이 쉬는 동안에는 타이머가 흘러가지 않도록 매 순간 현재 시간으로 초기화
+                force_watchdog_reason = None # [복구] 비활성화 시 워치독 사유를 완전히 초기화하여 재시작 시 오작동 방지
                 continue
 
             # === [2순위] 모든 State 시작 전 공통 체크 (워치독보다 무조건 우선) ===
             if check_exit_notification():
                 send_cmd('U') # 혹시 모를 클릭 해제
                 send_cmd('R')
-                if safe_find_image('bait_change.png', 0.70):
+                # 낚시 가동 중(state != 0)에 잠수방지가 발생한 것이라면, 해제 후 무조건 낚시 복귀(State 1)로 가야 낚싯대를 다시 자동 재장착합니다.
+                if state != 0:
                     state = 1
                 else:
                     state = 0
@@ -2213,18 +2228,39 @@ def fishing_bot(max_allowed_seconds):
                 
                 recovered = False
                 
-                # (0) [우선 실행] 블라인드 상호작용 (F) 시도
-                # 어떤 화면이 떠 있든 가장 먼저 F 키를 눌러 상호작용/수거를 시도합니다.
-                bprint("  > [분석 0단계] 블라인드 F 입력 선제 시도")
-                send_cmd('F'); time.sleep(0.2); send_cmd('R'); time.sleep(1.0)
+                # (0) [우선 실행] 상호작용 (F) 수거 시도 (상자 근처 오작동 방지)
+                # 수거창([G] 방생)이 화면에 실제로 남아있을 때만 F를 입력하고, 그 외에는 블라인드 F 입력을 스킵하여 상자가 열리는 것을 원천 차단합니다.
+                if safe_find_image('catch_F.png', 0.70):
+                    bprint("  > [분석 0단계] 수거창 감지! F 입력으로 수거를 시도합니다.")
+                    send_cmd('F'); time.sleep(0.2); send_cmd('R'); time.sleep(1.0)
+                else:
+                    bprint("  > [분석 0단계] 수거창 미감지. 불필요한 상자 개방을 막기 위해 F 입력을 건너뜁니다.")
                 
-                # F 입력 후 UI 상태를 다시 확인하여 복구 여부를 판별합니다.
-                if not safe_find_image('catch_F.png', 0.70) and not safe_find_image('specific_B.png', 0.7) and not safe_find_image('fishing.png', 0.75) and not safe_find_image('fishing_mode.png', 0.70):
-                    recovered = True
-                    bprint("  > [성공] 선제 F 입력으로 화면 복구 완료")
+                # UI 상태를 확인하여 복구 여부를 판별합니다. (fishing.png 임계값도 안전한 0.78로 동기화, 시스템 메뉴가 열려 있다면 복구 실패 처리)
+                if not safe_find_image('catch_F.png', 0.70) and not safe_find_image('specific_B.png', 0.78) and not safe_find_image('fishing.png', 0.75) and not safe_find_image('fishing_mode.png', 0.70):
+                    if safe_find_image('sys_1.png', 0.70):
+                        bprint("  > [분석] 시스템 메뉴창(sys_1.png)이 감지되었습니다. 추가 복구 작업을 수행합니다.")
+                        recovered = False
+                    else:
+                        recovered = True
+                        bprint("  > [성공] 선제 F 입력으로 화면 복구 완료")
 
                 # F 입력만으로 복구되지 않았을 경우 기존 분석 로직 진입
                 if not recovered:
+                    # (0-1) 시스템 메뉴창(sys_1.png) 진입 상태 해결
+                    if safe_find_image('sys_1.png', 0.70):
+                        bprint("  > [분석 0-1단계] 시스템 메뉴창(sys_1.png) 감지! ESC(E) 입력으로 메뉴 닫기 시도...")
+                        for _ in range(5):
+                            send_cmd('E'); time.sleep(0.2); send_cmd('R'); time.sleep(1.0)
+                            if not safe_find_image('sys_1.png', 0.70):
+                                recovered = True
+                                bprint("  > [성공] 시스템 메뉴창이 닫혔습니다. 인게임 포커스 및 자세 복구를 위해 좌클릭(C)을 실행합니다.")
+                                send_cmd('0'); time.sleep(0.1); send_cmd('R')
+                                time.sleep(0.5)
+                                send_cmd('C'); time.sleep(0.1); send_cmd('R')
+                                time.sleep(0.5) # 캐릭터 자세 변화 및 UI 갱신 대기 시간 부여
+                                break
+
                     # (1) 수거 창(F) 잔존 꼬임
                     if safe_find_image('catch_F.png', 0.70):
                         bprint("  > [분석 1단계] 수거 창(F) 미처리. 강제 획득 시도")
@@ -2234,11 +2270,11 @@ def fishing_bot(max_allowed_seconds):
                                 recovered = True; break
                     
                     # (2) 보관함 창(B) 잔존 꼬임
-                    elif safe_find_image('specific_B.png', 0.7):
+                    elif safe_find_image('specific_B.png', 0.78):
                         bprint("  > [분석 2단계] 보관함 UI(B) 잔존. 강제 종료(ESC) 시도")
                         for _ in range(10):
                             send_cmd('E'); time.sleep(0.2); send_cmd('R'); time.sleep(1.0)
-                            if not safe_find_image('specific_B.png', 0.7):
+                            if not safe_find_image('specific_B.png', 0.78):
                                 recovered = True; break
                                 
                     # (3) 낚시 UI 잔존 꼬임
@@ -2290,13 +2326,8 @@ def fishing_bot(max_allowed_seconds):
 
             # --- [State 0] 잠수 방지 전용 모드 (대기 및 자가 복귀) ---
             if state == 0:
-                # 낚시 준비 상태가 확인되면 스스로 대기를 풀고 다시 낚시를 시작합니다.
-                if safe_find_image('bait_change.png', 0.70):
-                    bprint("  > [복귀] 낚시 준비 상태가 확인되었습니다. 정상 낚시 모드(State 1)로 진입합니다.")
-                    state = 1
-                    state_start_time = time.time()
-                else:
-                    time.sleep(0.5) # CPU 부하를 방지하며 다음 루프 대기
+                # 이 단계는 오직 백그라운드 스레드의 잠수방지 알림(exit_notice) 감시 및 해제 작동만 유휴 대기합니다. (자동 복귀 로직 폐기)
+                time.sleep(1.0)
                 continue
 
             # --- [State 1] 캐스팅 (좌클릭 홀딩 보강) ---
@@ -2849,12 +2880,13 @@ def fishing_bot(max_allowed_seconds):
                     if time.time() - wait_f_start > 5.0: 
                         bprint("  > ⚠️ [버그 감지] 물고기 들고 멈춤 버그 감지! 강제 해제(ESC)를 1회 실행합니다.")
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                        time.sleep(1.0)
+                        time.sleep(0.8)
                         state = 1
                         break
                     time.sleep(0.1)
                 
                 if state == 1: continue
+                time.sleep(3.0)
 
                 bprint("  > [수거] F 연타 및 소멸 검증 시작")
                 f_spam_start = time.time()
@@ -2863,7 +2895,7 @@ def fishing_bot(max_allowed_seconds):
                 template_f = IMAGE_CACHE.get('catch_F.png')
                 template_ar = IMAGE_CACHE.get('auto_release.png')
 
-                # --- 1단계: F 연타 및 소멸 검증 (아이콘 소멸 시 즉시 탈출) ---
+                # --- 1단계: 1초 단위 리트라이식 F 수거 및 소멸 검증 (과속 연타로 인한 상자 강제개방 원천 방지) ---
                 while True: # bot_active로 스르륵 탈출 방지
                     if not bot_active: raise BotStopException() # 즉시 폭파
                     if check_exit_notification(): state = 1; break
@@ -2872,30 +2904,51 @@ def fishing_bot(max_allowed_seconds):
                         bprint("  > [경고] 10초 타임아웃 경과! 강제 상태 검증 진입")
                         break
 
-                    screen_gray = fast_cv_screenshot(gray=True)
-                    has_f_now = (template_f is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_gray, template_f, cv2.TM_CCOEFF_NORMED))[1] >= 0.7)
-
-                    # 낚싯줄이 완전히 회수될 때까지 대기 연타를 수행합니다.
-                    time.sleep(0.8)
-                    if has_f_now:
-                        send_cmd('F'); time.sleep(0.05); send_cmd('R')
-                        time.sleep(0.2) # 과도한 과속 연타로 상자가 열리는 것을 막기 위해 입력 주기를 0.2초로 안정화
-                    else:
-                        # F가 안 보이면 0.05초 간격으로 3회(총 0.15초) 연속 확인하여 깜빡임 완벽 차단
-                        really_gone = True
-                        for _ in range(3):
-                            time.sleep(0.05)
-                            screen_check = fast_cv_screenshot(gray=True)
-                            if template_f is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_check, template_f, cv2.TM_CCOEFF_NORMED))[1] >= 0.7:
-                                really_gone = False
-                                break
+                    # 1. 일단 수거 신호(F)를 단 1회 전송
+                    send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                    
+                    # 2. 최대 0.3초 동안 수거창(G 방생 아이콘)이 사라지는지 조용히 감시 (F 중복 전송 방지)
+                    is_vanished = False
+                    wait_start = time.time()
+                    while time.time() - wait_start < 0.3:
+                        if not bot_active: raise BotStopException()
+                        if check_exit_notification(): state = 1; break
                         
-                        if really_gone:
-                            stats['daily_catch'] += 1
-                            stats['total_catch'] += 1
-                            break # 완전히 사라졌으므로 1단계 수거 루프 즉시 탈출
+                        screen_gray = fast_cv_screenshot(gray=True)
+                        has_f_now = (template_f is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_gray, template_f, cv2.TM_CCOEFF_NORMED))[1] >= 0.7)
+                        
+                        if not has_f_now:
+                            # 사라진 것이 감지되면 0.01초 간격으로 10회(총 0.1초) 최종 확인하여 깜빡임 방지
+                            really_gone = True
+                            for _ in range(10):
+                                time.sleep(0.01)
+                                screen_check = fast_cv_screenshot(gray=True)
+                                if template_f is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_check, template_f, cv2.TM_CCOEFF_NORMED))[1] >= 0.7:
+                                    really_gone = False
+                                    break
+                            if really_gone:
+                                is_vanished = True
+                                break
+                        time.sleep(0.1) # 감시 대기
+                        
+                    # 3. 정상적으로 소멸했다면 카운트를 올리고 탈출
+                    if is_vanished:
+                        stats['daily_catch'] += 1
+                        stats['total_catch'] += 1
+                        break
+                    # 만약 1초 대기 동안 수거창이 안 꺼졌다면 서버 렉으로 판단하고 다음 루프에서 F 1회 추가 수동 전송
 
                 if not bot_active or state == 1: continue
+
+                # [상자 오작동 예방] 수거 완료 후 예기치 않게 창고(specific_B.png)가 열린 현상 해결
+                if safe_find_image('specific_B.png', 0.78):
+                    bprint("  > ⚠️ [상자 오작동 감지] 수거 도중 창고(specific_B.png)가 열렸습니다! 탈출 시퀀스(ESC 2회) 가동...")
+                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.3)
+                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.5)
+                    state = 1
+                    continue
 
                 # --- 2단계: 상태 검증 및 방생 알림(auto_release) / 낚싯대 준비(bait_change) 동시 정밀 감시 ---
                 bprint("  > [완료] 수거 동작 종료. 실시간 동적 상태 검증 진입...")
@@ -3108,7 +3161,7 @@ def fishing_bot(max_allowed_seconds):
                         vanish_start = time.time()
                         is_vanished = False
                         while time.time() - vanish_start < 1.5 and bot_active:
-                            if not safe_find_image('specific_B.png', 0.7):
+                            if not safe_find_image('specific_B.png', 0.75):
                                 is_vanished = True
                                 break
                             time.sleep(0.1) # 0.1초 간격으로 확인

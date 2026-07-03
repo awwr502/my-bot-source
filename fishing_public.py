@@ -888,8 +888,8 @@ def preload_all_images():
                     else:
                         IMAGE_COLOR_CACHE[filename] = img_unchanged
                         
-                # [인식 엔진 근본 개선] 자동 마스킹 강제 대상에서 bait_change.png를 제외합니다.
-                if filename in ['broken_rod.png', 'fishing.png', 'green_range.png']:
+                # [복구] 배경 노이즈로 인한 인식 실패를 막기 위해 bait_change.png에 다시 투명 마스크를 적용합니다.
+                if filename in ['broken_rod.png', 'fishing.png', 'green_range.png', 'bait_change.png']:
                     if filename not in IMAGE_MASK_CACHE and img_gray is not None:
                         median_val = np.median(img_gray)
                         diff = cv2.absdiff(img_gray, int(median_val))
@@ -931,8 +931,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
     mask = IMAGE_MASK_CACHE.get(img_path)
     template_color = IMAGE_COLOR_CACHE.get(img_path)
     
-    # [인식 엔진 근본 개선] bait_change.png를 외곽선 매칭에서 제외하여 오탐지를 원천 차단하고 인식률을 복구합니다.
-    MASK_UI_LIST = ['broken_rod.png', 'fishing.png', 'green_range.png']
+    # [복구] ROI 캐시가 없을 때 발생하는 배경 노이즈 간섭을 무시하기 위해 마스크 리스트에 bait_change.png를 복구합니다.
+    MASK_UI_LIST = ['broken_rod.png', 'fishing.png', 'green_range.png', 'bait_change.png']
     
     try:
         if template_gray is None: return None

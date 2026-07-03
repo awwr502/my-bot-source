@@ -2080,7 +2080,7 @@ def fishing_bot(max_allowed_seconds):
                 force_watchdog_reason = "장착 10회 연속 실패(예비 소진)"
                 return False
 
-            if safe_find_image('bait_change.png', 0.70):
+            if safe_find_image('bait_change.png', 0.75):
                 bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
                 return True
 

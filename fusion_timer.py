@@ -2788,7 +2788,7 @@ def fusion_bot_loop():
                                             
                                             if has_any_trait:
                                                 trait_name_x1 = max(0, lx - 10)
-                                                trait_name_x2 = lx + 360
+                                                trait_name_x2 = lx + 450
                                                 trait_name_y1 = ly + 30
                                                 trait_name_y2 = ly + 300
                                                 roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]

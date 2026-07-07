@@ -2602,10 +2602,14 @@ def fusion_bot_loop():
                                         check_pts_global = [(pt[0] + 960, pt[1] + 180) for pt in zip(*loc_c[::-1])]
                                     
                                     for cx, cy in all_candidates:
-                                        # [스마트 동선 최적화] 현재 스크롤 페이지 안에서 3개가 다 모였을 때만 즉시 조기 탈출합니다.
-                                        current_page_count = sum(1 for m in target_materials if m[2] == scroll_state)
-                                        if current_page_count >= 3:
-                                            break
+                                        # [스마트 동선 최적화] 현재 스크롤 페이지 안에서 모든 역할이 충족되었을 때만 즉시 조기 탈출합니다.
+                                        if current_sub == "NORMAL":
+                                            current_page_count = sum(1 for m in target_materials if m[2] == scroll_state)
+                                            if current_page_count >= 3: break
+                                        elif current_sub == "RECOVERY":
+                                            current_page_traits = sum(1 for m in target_materials if m[2] == scroll_state and m[3])
+                                            current_page_blanks = sum(1 for m in target_materials if m[2] == scroll_state and not m[3])
+                                            if current_page_traits >= 1 and current_page_blanks >= 2: break
                                         
                                         curr_sort_key = (cx // 95, cy)
                                         mem_mat_x, mem_mat_y, mem_scroll = char_inventory_memory[char_key + "_material"]
@@ -2862,9 +2866,24 @@ def fusion_bot_loop():
                                             # 성공적으로 찾았으면 메모리 업데이트
                                             char_inventory_memory[char_key + "_material"] = (cx, cy, scroll_state)
 
-                                            # [스마트 밀어내기] 바구니에 3개를 초과해서 담기면, 가장 예전에 찾은(이전 페이지) 감염물을 버립니다.
-                                            if len(target_materials) > 3:
-                                                target_materials.pop(0)
+                                            # [역할 기반 스마트 밀어내기] 바구니에 허용량을 초과해서 담기면, 방금 찾은 녀석과 동일한 역할을 가진 예전 감염물을 찾아 버립니다.
+                                            if current_sub == "NORMAL":
+                                                if len(target_materials) > 3:
+                                                    target_materials.pop(0)
+                                            elif current_sub == "RECOVERY":
+                                                # 방금 내가 추가한 것의 역할(특성유무) 확인 (리스트의 맨 마지막 요소)
+                                                just_added_is_trait = target_materials[-1][3]
+                                                
+                                                if just_added_is_trait:
+                                                    # 특성이 1개를 초과하면, 이전에 있던 특성 개체를 찾아서 버림
+                                                    trait_items = [m for m in target_materials if m[3]]
+                                                    if len(trait_items) > 1:
+                                                        target_materials.remove(trait_items[0])
+                                                else:
+                                                    # 순정이 2개를 초과하면, 이전에 있던 순정 개체 중 가장 오래된 것을 찾아서 버림
+                                                    blank_items = [m for m in target_materials if not m[3]]
+                                                    if len(blank_items) > 2:
+                                                        target_materials.remove(blank_items[0])
                                         
                                     # 해당 페이지 탐색이 모두 끝났을 때, 총 3개가 모여있다면 스크롤을 넘기지 않고 최종 클릭 단계로 넘어갑니다.
                                     if len(target_materials) >= 3:

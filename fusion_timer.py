@@ -2197,7 +2197,7 @@ def fusion_bot_loop():
                             if (char_key + "_parent") not in char_inventory_memory:
                                 char_inventory_memory[char_key + "_parent"] = (0, 0)
                             if (char_key + "_material") not in char_inventory_memory:
-                                char_inventory_memory[char_key + "_material"] = (0, 0)
+                                char_inventory_memory[char_key + "_material"] = (0, 0, 0)
                             
                             # 1단계: 부모 슬롯(F0 / 1짜리) 채우기
                             bprint("  > [1/2 부모 세팅] 좌측 부모 슬롯 클릭 및 감염물 창 개방...")

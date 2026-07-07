@@ -146,7 +146,6 @@ is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 char_thread_active = False # 수동 캐릭터 변경 스레드 제어 플래그
 char_inventory_memory = {} # 캐릭터별 인벤토리 탐색 위치 기억용 딕셔너리
 char_sub_modes = {} # 캐릭터별 특성 복사 모드 상태 기억용 (NORMAL / RECOVERY)
-char_target_traits = {} # 캐릭터별 복사하려는 활성 가치 특성 이미지명 보관소
 ENABLE_POPUP_MAIN_CHECK = True # 자정 팝업 감지 기능 활성화 상태 변수
 current_logged_in_char = "5.png" # 현재 접속 중인 캐릭터 추적 변수 (초기값)
 
@@ -404,7 +403,7 @@ dynamic_traits = [f for f in os.listdir(base_dir) if f.startswith('trait_') and 
 target_images.extend(dynamic_traits)
 GRAY_IMAGES.extend(dynamic_traits)
 for img in dynamic_traits:
-    FUSION_CONF[img] = 0.85
+    FUSION_CONF[img] = 0.92
 
 # 저장 폴더 내의 특성 파일명들을 동적으로 스캔하여 가장 높은 파일 번호를 자동 검출합니다.
 trait_numbers_found = []
@@ -1007,10 +1006,8 @@ def toggle_start(mode=1):
         bprint("🔵 [모드 6: 재료 복사 모드 시작] 단축키(>) 입력 감지")
     bprint("=============================================")
     
-    # 매크로 새로 시작 시 모든 캐릭터의 탐색 위치, 복구 모드 상태, 세팅 가치 특성 기억을 완전 무결하게 태초의 상태로 비워줍니다.
+    # 매크로 새로 시작 시 캐릭터 인벤토리 탐색 기억 초기화
     char_inventory_memory.clear()
-    char_sub_modes.clear()
-    char_target_traits.clear()
     
     # 모든 세팅과 콘솔 메시지 출력이 완전히 끝난 후 봇 스레드 가동
     bot_active = True
@@ -1951,17 +1948,13 @@ def fusion_bot_loop():
                                         
                                         template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
                                         template_median = np.median(template_g)
-                                        
-                                        # [노이즈 킬러 임계 필터 적용]
-                                        # 배경의 미세한 격자무늬/노이즈가 가늘고 촘촘한 '에메' 글씨를 방해하지 않도록, 중간값보다 어두운 모든 배경 노이즈를 100% 소멸(Black)시킵니다.
-                                        _, template_diff = cv2.threshold(template_g, int(template_median + 25), 255, cv2.THRESH_TOZERO)
+                                        template_diff = cv2.absdiff(template_g, int(template_median))
                                         
                                         precalculated_templates[t_idx] = []
                                         for scale in [0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15]:
                                             w = int(template_diff.shape[1] * scale)
                                             h = int(template_diff.shape[0] * scale)
-                                            # [보간법 개선] '에메' 같이 세로 선이 얇고 촘촘한 글씨가 크기 조절 시 흐려지거나 뭉개지지 않도록 정밀한 INTER_LINEAR를 적용합니다.
-                                            resized_t = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_LINEAR)
+                                            resized_t = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
                                             precalculated_templates[t_idx].append(resized_t)
                                             
                                     # [병렬 스레드 풀 고용] 프레임마다 스레드를 파괴/생성하는 오버헤드를 막기 위해 루프 외부에서 딱 한 번만 풀을 고용합니다.
@@ -1981,9 +1974,9 @@ def fusion_bot_loop():
                                             sct_img = thread_sct.grab(result_roi)
                                             screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                                             
-                                            # 실시간 화면 배경 소멸 연산 및 노이즈 킬러 임계 필터 동일 적용
+                                            # 실시간 화면 배경 소멸 연산
                                             screen_median = np.median(screen_gray)
-                                            _, screen_diff = cv2.threshold(screen_gray, int(screen_median + 25), 255, cv2.THRESH_TOZERO)
+                                            screen_diff = cv2.absdiff(screen_gray, int(screen_median))
                                             
                                             # 병렬로 연산을 처리할 개별 특성 연산관 스레드 함수를 정의합니다.
                                             def scan_worker(t_idx):
@@ -2200,7 +2193,7 @@ def fusion_bot_loop():
                             if (char_key + "_parent") not in char_inventory_memory:
                                 char_inventory_memory[char_key + "_parent"] = (0, 0)
                             if (char_key + "_material") not in char_inventory_memory:
-                                char_inventory_memory[char_key + "_material"] = (0, 0, 0)
+                                char_inventory_memory[char_key + "_material"] = (0, 0)
                             
                             # 1단계: 부모 슬롯(F0 / 1짜리) 채우기
                             bprint("  > [1/2 부모 세팅] 좌측 부모 슬롯 클릭 및 감염물 창 개방...")
@@ -2420,9 +2413,7 @@ def fusion_bot_loop():
                                             already_has_trait_in_list = any(p[2] for p in target_parents)
                                             if has_valuable_trait and not already_has_trait_in_list:
                                                 target_parents.append((cx, cy, True))
-                                                # [메모리 저장] 어떤 특성을 부모로 확보했는지 기록해 둡니다. (예: "trait_14.png")
-                                                char_target_traits[char_key] = best_matched_file
-                                                bprint(f"  > 🧬 [부모 채택] F0 가치 특성({best_matched_file}) 감염물 확보 완료.")
+                                                bprint("  > 🧬 [부모 채택] F0 가치 특성 감염물 확보 완료.")
                                             elif not has_any_trait:
                                                 already_blank_in_list = any(not p[2] for p in target_parents)
                                                 if not already_blank_in_list:
@@ -2592,56 +2583,12 @@ def fusion_bot_loop():
                                                     all_candidates.append((snap_cx, snap_cy))
                                                     
                                     elif current_sub == "RECOVERY":
-                                        # [하이브리드 탐색 연계] 세팅 중인 가치 특성 번호를 추출합니다.
-                                        target_trait_file = char_target_traits.get(char_key, "trait_14.png")
-                                        target_idx = 14 # 기본값 (보수적 수색)
-                                        try:
-                                            target_idx = int(target_trait_file.split('_')[1].split('.')[0])
-                                        except: pass
-                                        
-                                        exclude_traits = [7, 8, 9, 10, 12, 13, 14]
-                                        
-                                        if target_idx in exclude_traits:
-                                            # 지정된 7개 특성은 기존의 철저한 5x6 전수 조사 방식으로 수색을 진행합니다.
-                                            for j in range(6):
-                                                for i in range(5):
-                                                    cx = 1400 + i * 95
-                                                    cy = 315 + j * 95
-                                                    all_candidates.append((cx, cy))
-                                        else:
-                                            # 나머지 특성(1~6, 11 등)은 정상모드와 완전히 동일하게 item_A1, B1, A2, B2를 활용한 핀포인트 초고속 매칭으로 진행합니다.
-                                            X_OFFSET = 960
-                                            screen_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
-                                            
-                                            for item_name in ['item_A1.png', 'item_A2.png']:
-                                                template = FUSION_CACHE.get(item_name)
-                                                if template is None: continue
-                                                
-                                                template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
-                                                conf = 0.82
-                                                
-                                                res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCOEFF_NORMED)
-                                                loc = np.where(res >= conf)
-                                                h, w = template_g.shape[:2]
-                                                
-                                                for pt in zip(*loc[::-1]):
-                                                    real_x = pt[0] + X_OFFSET
-                                                    real_y = pt[1]
-                                                    
-                                                    raw_cx = real_x + w // 2
-                                                    raw_cy = real_y + h // 2
-                                                    
-                                                    grid_i = int(round((raw_cx - 1400) / 95.0))
-                                                    grid_j = int(round((raw_cy - 315) / 95.0))
-                                                    
-                                                    if grid_i < 0 or grid_i > 4 or grid_j < 0 or grid_j > 5:
-                                                        continue
-                                                        
-                                                    snap_cx = 1400 + grid_i * 95
-                                                    snap_cy = 315 + grid_j * 95
-                                                    
-                                                    if not any(math.hypot(snap_cx - cp[0], snap_cy - cp[1]) < 40 for cp in all_candidates):
-                                                        all_candidates.append((snap_cx, snap_cy))
+                                        # [복구 모드] 5x6 탐색 진행
+                                        for j in range(6):
+                                            for i in range(5):
+                                                cx = 1400 + i * 95
+                                                cy = 315 + j * 95
+                                                all_candidates.append((cx, cy))
                                                 
                                     # 정렬
                                     all_candidates.sort(key=lambda c: (c[0] // 95, c[1]))
@@ -2703,15 +2650,10 @@ def fusion_bot_loop():
                                             hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                             res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                             _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                            # [임계치 완화] 고급 감염물의 일렁이는 특성창 이펙트에서도 어빌리티 영역을 완벽하게 포착하도록 기준을 0.70으로 조율합니다.
-                                            if mv_l >= 0.70:
+                                            if mv_l >= 0.80:
                                                 label_found = True; lx, ly = ml_l[0], ml_l[1]
                                                 break
                                             time.sleep(0.05)
-
-                                        if not label_found:
-                                            bprint(f"  > ⚠️ [알림] 재료 툴팁 '어빌리티' 라벨 미검출로 슬롯을 건너뜁니다. (최고 정합률: {mv_l:.4f} < 0.70)")
-                                            fast_clear_tooltip(); continue
 
                                         if label_found:
                                             time.sleep(0.05)
@@ -2846,7 +2788,7 @@ def fusion_bot_loop():
                                             
                                             if has_any_trait:
                                                 trait_name_x1 = max(0, lx - 10)
-                                                trait_name_x2 = lx + 450
+                                                trait_name_x2 = lx + 360
                                                 trait_name_y1 = ly + 30
                                                 trait_name_y2 = ly + 300
                                                 roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
@@ -2946,10 +2888,6 @@ def fusion_bot_loop():
                                     bprint("  > 🛑 [재료 부족] 캐릭터 스킵 시퀀스 진입.")
                                     send_cmd('E'); time.sleep(0.15); send_cmd('R'); skip_current_char = True
                                 else:
-                                    # [핵심 수정] 물리 좌표 정렬이 아니라, "탐색(발견) 완료된 역순(가장 마지막에 찾은 최신 발견물 우선)"으로 리스트를 뒤집어 클릭을 집행합니다.
-                                    # 이로써 가장 마지막에 발견된(우하단 측) 감염물부터 거꾸로 3번째 -> 2번째 -> 1번째 순서대로 클릭 등록을 수행합니다.
-                                    target_materials.reverse()
-                                    
                                     # 재료 슬롯 등록 일괄 클릭 (스크롤 오차 0% 완벽 동기화)
                                     bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")
                                     current_scroll = scroll_state

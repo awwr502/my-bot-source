@@ -403,7 +403,7 @@ dynamic_traits = [f for f in os.listdir(base_dir) if f.startswith('trait_') and 
 target_images.extend(dynamic_traits)
 GRAY_IMAGES.extend(dynamic_traits)
 for img in dynamic_traits:
-    FUSION_CONF[img] = 0.92
+    FUSION_CONF[img] = 0.85
 
 # 저장 폴더 내의 특성 파일명들을 동적으로 스캔하여 가장 높은 파일 번호를 자동 검출합니다.
 trait_numbers_found = []
@@ -1954,7 +1954,8 @@ def fusion_bot_loop():
                                         for scale in [0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15]:
                                             w = int(template_diff.shape[1] * scale)
                                             h = int(template_diff.shape[0] * scale)
-                                            resized_t = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                            # [보간법 개선] '에메' 같이 세로 선이 얇고 촘촘한 글씨가 크기 조절 시 흐려지거나 뭉개지지 않도록 정밀한 INTER_LINEAR를 적용합니다.
+                                            resized_t = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_LINEAR)
                                             precalculated_templates[t_idx].append(resized_t)
                                             
                                     # [병렬 스레드 풀 고용] 프레임마다 스레드를 파괴/생성하는 오버헤드를 막기 위해 루프 외부에서 딱 한 번만 풀을 고용합니다.

@@ -1947,10 +1947,8 @@ def fusion_bot_loop():
                                         if template is None: continue
                                         
                                         template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
-                                        # [정밀도 향상 1] 템플릿 이미지에서 글자가 아닌 배경 픽셀값(최빈값 근사치)을 찾아 도려냅니다.
-                                        counts = np.bincount(template_g.flatten())
-                                        template_bg_val = np.argmax(counts)
-                                        template_diff = cv2.absdiff(template_g, int(template_bg_val))
+                                        template_median = np.median(template_g)
+                                        template_diff = cv2.absdiff(template_g, int(template_median))
                                         
                                         precalculated_templates[t_idx] = []
                                         for scale in [0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15]:
@@ -1976,10 +1974,9 @@ def fusion_bot_loop():
                                             sct_img = thread_sct.grab(result_roi)
                                             screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                                             
-                                            # [정밀도 향상 2] 툴팁 화면에서 반투명 배경값(최빈값)을 찾아 완벽하게 0(블랙)으로 날려버립니다.
-                                            counts_screen = np.bincount(screen_gray.flatten())
-                                            screen_bg_val = np.argmax(counts_screen)
-                                            screen_diff = cv2.absdiff(screen_gray, int(screen_bg_val))
+                                            # 실시간 화면 배경 소멸 연산
+                                            screen_median = np.median(screen_gray)
+                                            screen_diff = cv2.absdiff(screen_gray, int(screen_median))
                                             
                                             # 병렬로 연산을 처리할 개별 특성 연산관 스레드 함수를 정의합니다.
                                             def scan_worker(t_idx):
@@ -2847,21 +2844,13 @@ def fusion_bot_loop():
                                                     bprint(f"  > 💎 [재료 채택] 융합 0짜리 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                                     target_materials.append((cx, cy, scroll_state, False)) # has_trait=False
                                             elif current_sub == "RECOVERY":
-                                                # [밀어내기 진입 장벽 제거] 이전 페이지에서 수집된 교체 가능한 요소가 있는지 체크
-                                                trait_items_from_prev_page = [m for m in target_materials if m[3] and m[2] < scroll_state]
-                                                blank_items_from_prev_page = [m for m in target_materials if not m[3] and m[2] < scroll_state]
-                                                
                                                 already_has_trait_in_list = any(m[3] for m in target_materials)
-                                                blank_count = sum(1 for m in target_materials if not m[3])
-                                                
-                                                # 가치 특성 개체 판단 (이미 특성이 있더라도 이전 페이지 것이라면 교체하기 위해 진입 허용)
-                                                if has_valuable_trait and (not already_has_trait_in_list or len(trait_items_from_prev_page) > 0):
+                                                if has_valuable_trait and not already_has_trait_in_list:
                                                     bprint(f"  > 🧬 [재료 채택] 융합 가능 횟수 0짜리 가치 특성 '{identified_trait_name}' 확보! (신뢰도: {best_score:.2f})")
                                                     target_materials.append((cx, cy, scroll_state, True)) # has_trait=True
-                                                    
-                                                # 순정 피드백 개체 판단 (이미 2개가 다 찼더라도 이전 페이지 것이라면 교체하기 위해 진입 허용)
                                                 elif not has_any_trait and is_target_level_1:
-                                                    if blank_count < 2 or len(blank_items_from_prev_page) > 0:
+                                                    blank_count = sum(1 for m in target_materials if not m[3])
+                                                    if blank_count < 2:
                                                         bprint(f"  > 💎 [재료 채택] 융합 0짜리 피드백 순정 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
                                                         target_materials.append((cx, cy, scroll_state, False))
                                                     else:

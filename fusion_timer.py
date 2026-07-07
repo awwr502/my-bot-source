@@ -2590,8 +2590,8 @@ def fusion_bot_loop():
                                                 cy = 315 + j * 95
                                                 all_candidates.append((cx, cy))
                                                 
-                                    # 정렬
-                                    all_candidates.sort(key=lambda c: (c[0] // 95, c[1]))
+                                    # 최신 획득 순서(우측 하단)부터 탐색하기 위해 역순 정렬
+                                    all_candidates.sort(key=lambda c: (c[0] // 95, c[1]), reverse=True)
                                         
                                     # 체크마크 사전 스캔 (Y축 180 이상으로 제한하여 타이틀 오탐 완벽 차단)
                                     check_pts_global = []
@@ -2866,7 +2866,7 @@ def fusion_bot_loop():
                                     if scroll_state == 0:
                                         bprint("  > ⏬ [스크롤 이동] 상단 탐색 완료. 마우스 휠을 16회 내려 하단 탐색을 이어갑니다.")
                                         pyautogui.moveTo(1400, 500)
-                                        for _ in range(16): pyautogui.scroll(-120); time.sleep(0.02)
+                                        for _ in range(16): pyautogui.scroll(-120); time.sleep(0.05)
                                         time.sleep(0.3)
                                         scroll_state = 1
                                         continue
@@ -2874,7 +2874,7 @@ def fusion_bot_loop():
                                         if not is_material_rescan:
                                             bprint("  > 🧠 [메모리 리스캔] 재료가 부족합니다. 마우스 휠을 16회 올려 처음부터 1회 전체 스캔을 재진행합니다.")
                                             pyautogui.moveTo(1400, 500)
-                                            for _ in range(16): pyautogui.scroll(120); time.sleep(0.02)
+                                            for _ in range(16): pyautogui.scroll(120); time.sleep(0.05)
                                             time.sleep(0.3)
                                             is_material_rescan = True
                                             scroll_state = 0
@@ -2900,10 +2900,10 @@ def fusion_bot_loop():
                                             pyautogui.moveTo(1400, 500)
                                             if item_scroll == 1:
                                                 bprint("  > ⏬ [스크롤 맞춤] 하단 재료 클릭을 위해 휠을 내립니다.")
-                                                for _ in range(16): pyautogui.scroll(-120); time.sleep(0.02)
+                                                for _ in range(16): pyautogui.scroll(-120); time.sleep(0.05)
                                             else:
                                                 bprint("  > ⏫ [스크롤 맞춤] 상단 재료 클릭을 위해 휠을 올립니다.")
-                                                for _ in range(16): pyautogui.scroll(120); time.sleep(0.02)
+                                                for _ in range(16): pyautogui.scroll(120); time.sleep(0.05)
                                             time.sleep(0.3)
                                             current_scroll = item_scroll
                                             

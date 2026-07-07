@@ -2654,10 +2654,15 @@ def fusion_bot_loop():
                                             hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
                                             res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
                                             _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
-                                            if mv_l >= 0.80:
+                                            # [임계치 완화] 고급 감염물의 일렁이는 특성창 이펙트에서도 어빌리티 영역을 완벽하게 포착하도록 기준을 0.70으로 조율합니다.
+                                            if mv_l >= 0.70:
                                                 label_found = True; lx, ly = ml_l[0], ml_l[1]
                                                 break
                                             time.sleep(0.05)
+
+                                        if not label_found:
+                                            bprint(f"  > ⚠️ [알림] 재료 툴팁 '어빌리티' 라벨 미검출로 슬롯을 건너뜁니다. (최고 정합률: {mv_l:.4f} < 0.70)")
+                                            fast_clear_tooltip(); continue
 
                                         if label_found:
                                             time.sleep(0.05)

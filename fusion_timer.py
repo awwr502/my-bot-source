@@ -2621,17 +2621,17 @@ def fusion_bot_loop():
                                             
                                         rx = cx - 960
                                         ry = cy - 5
-                                        slot_roi = screen_bgr[max(0, ry - 40):min(screen_bgr.shape[0], ry + 40), max(0, rx - 40):min(screen_bgr.shape[1], rx + 40)]
+                                        # 테두리 및 반투명 배경 간섭을 피하기 위해 슬롯의 정중앙 40x40 영역만 정밀 크롭합니다.
+                                        slot_roi = screen_bgr[max(0, ry - 20):min(screen_bgr.shape[0], ry + 20), max(0, rx - 20):min(screen_bgr.shape[1], rx + 20)]
                                         
                                         if slot_roi.size > 0:
-                                            b = slot_roi[:, :, 0].astype(int)
-                                            g = slot_roi[:, :, 1].astype(int)
-                                            r = slot_roi[:, :, 2].astype(int)
-                                            max_c = np.maximum(np.maximum(r, g), b)
-                                            min_c = np.minimum(np.minimum(r, g), b)
-                                            saturation = max_c - min_c
-                                            active_pixels = np.sum(((saturation > 45) & (max_c > 115)) | (max_c > 140))
-                                            if active_pixels < 15:
+                                            gray_roi = cv2.cvtColor(slot_roi, cv2.COLOR_BGR2GRAY)
+                                            max_val = np.max(gray_roi)
+                                            std_val = np.std(gray_roi)
+                                            
+                                            # 아웃포커싱된 뒷배경 비침은 표준편차 9.0을 넘지 못합니다.
+                                            # 실제 감염물(날카로운 텍스처 존재)이 들어있을 때만 이 기준선을 통과합니다.
+                                            if max_val < 75 and std_val < 9.0:
                                                 continue
                                                 
                                         pyautogui.moveTo(cx, cy)

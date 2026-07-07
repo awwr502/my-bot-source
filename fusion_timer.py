@@ -2866,7 +2866,7 @@ def fusion_bot_loop():
                                     if scroll_state == 0:
                                         bprint("  > ⏬ [스크롤 이동] 상단 탐색 완료. 마우스 휠을 16회 내려 하단 탐색을 이어갑니다.")
                                         pyautogui.moveTo(1400, 500)
-                                        for _ in range(16): pyautogui.scroll(-120); time.sleep(0.02)
+                                        for _ in range(16): pyautogui.scroll(-120); time.sleep(0.05)
                                         time.sleep(0.3)
                                         scroll_state = 1
                                         continue
@@ -2874,7 +2874,7 @@ def fusion_bot_loop():
                                         if not is_material_rescan:
                                             bprint("  > 🧠 [메모리 리스캔] 재료가 부족합니다. 마우스 휠을 16회 올려 처음부터 1회 전체 스캔을 재진행합니다.")
                                             pyautogui.moveTo(1400, 500)
-                                            for _ in range(16): pyautogui.scroll(120); time.sleep(0.02)
+                                            for _ in range(16): pyautogui.scroll(120); time.sleep(0.05)
                                             time.sleep(0.3)
                                             is_material_rescan = True
                                             scroll_state = 0
@@ -2888,6 +2888,10 @@ def fusion_bot_loop():
                                     bprint("  > 🛑 [재료 부족] 캐릭터 스킵 시퀀스 진입.")
                                     send_cmd('E'); time.sleep(0.15); send_cmd('R'); skip_current_char = True
                                 else:
+                                    # [핵심 수정] 물리 좌표 정렬이 아니라, "탐색(발견) 완료된 역순(가장 마지막에 찾은 최신 발견물 우선)"으로 리스트를 뒤집어 클릭을 집행합니다.
+                                    # 이로써 가장 마지막에 발견된(우하단 측) 감염물부터 거꾸로 3번째 -> 2번째 -> 1번째 순서대로 클릭 등록을 수행합니다.
+                                    target_materials.reverse()
+                                    
                                     # 재료 슬롯 등록 일괄 클릭 (스크롤 오차 0% 완벽 동기화)
                                     bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")
                                     current_scroll = scroll_state
@@ -2900,10 +2904,10 @@ def fusion_bot_loop():
                                             pyautogui.moveTo(1400, 500)
                                             if item_scroll == 1:
                                                 bprint("  > ⏬ [스크롤 맞춤] 하단 재료 클릭을 위해 휠을 내립니다.")
-                                                for _ in range(16): pyautogui.scroll(-120); time.sleep(0.02)
+                                                for _ in range(16): pyautogui.scroll(-120); time.sleep(0.05)
                                             else:
                                                 bprint("  > ⏫ [스크롤 맞춤] 상단 재료 클릭을 위해 휠을 올립니다.")
-                                                for _ in range(16): pyautogui.scroll(120); time.sleep(0.02)
+                                                for _ in range(16): pyautogui.scroll(120); time.sleep(0.05)
                                             time.sleep(0.3)
                                             current_scroll = item_scroll
                                             

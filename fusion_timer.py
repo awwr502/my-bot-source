@@ -1938,8 +1938,8 @@ def fusion_bot_loop():
                                     # [빨간 박스 규격 반영] 잡특성 동시 발현을 감안하면서 노이즈를 배제하는 최적의 영역(X: 0~400, Y: 110~440)을 캡처합니다.
                                     result_roi = {"left": 0, "top": 110, "width": 400, "height": 330}
                                     
-                                    # [초고속 사전 연산] 루프 외부에서 가치 특성 N종의 7단계 스케일별 절대 편차 템플릿을 딱 한 번만 사전 생성하여 RAM 캐시에 적재합니다.
-                                    # 이로써 루프 내부에서의 무거운 리사이즈(cv2.resize) 및 중간값 연산 부하가 100% 제거됩니다!
+                                    # [초고속 사전 연산: 순수 그레이스케일 정규화 엔진]
+                                    # 이진화나 편차 연산으로 폰트를 훼손하지 않고 원본 명암을 그대로 유지하여 TM_CCOEFF_NORMED의 자체 배경 무시 능력을 극대화합니다.
                                     precalculated_templates = {}
                                     for t_idx in range(1, MAX_TRAIT_NUM + 1):
                                         t_file = f"trait_{t_idx}.png"
@@ -1947,22 +1947,19 @@ def fusion_bot_loop():
                                         if template is None: continue
                                         
                                         template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
-                                        template_median = np.median(template_g)
-                                        template_diff = cv2.absdiff(template_g, int(template_median))
                                         
                                         precalculated_templates[t_idx] = []
                                         for scale in [0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15]:
-                                            w = int(template_diff.shape[1] * scale)
-                                            h = int(template_diff.shape[0] * scale)
-                                            resized_t = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                            w = int(template_g.shape[1] * scale)
+                                            h = int(template_g.shape[0] * scale)
+                                            resized_t = cv2.resize(template_g, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
                                             precalculated_templates[t_idx].append(resized_t)
                                             
                                     # [병렬 스레드 풀 고용] 프레임마다 스레드를 파괴/생성하는 오버헤드를 막기 위해 루프 외부에서 딱 한 번만 풀을 고용합니다.
                                     with concurrent.futures.ThreadPoolExecutor(max_workers=7) as executor:
                                         # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 모든 특성의 점수를 끝까지 누적합니다.
                                         while time.time() - scan_start < 1.5 and bot_active:
-                                            # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행 (유저님의 오리지널 100% 검증된 check_img 방식 활용)
-                                            # 만약 특성 없음이 포착되면, 다른 특성을 훑어볼 필요가 전혀 없으므로 즉시 복구 모드로 직행(Break)합니다!
+                                            # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행
                                             if check_img('no_trait.png', thread_sct):
                                                 no_trait_score = 0.92
                                                 bprint("  > ⚠️ [특성 없음] '특성이 없습니다' 문구가 조기 감지되었습니다. 불필요한 스캔을 생략하고 즉시 탈출합니다.")
@@ -1970,13 +1967,9 @@ def fusion_bot_loop():
                                             else:
                                                 no_trait_score = 0.20
                                             
-                                            # 2. 가치 특성 N종 절대 편차 매칭 진행 (상단 불안정 영역 외 오탐지 배제 스캔 가동)
+                                            # 2. 실시간 화면 순수 그레이스케일 처리
                                             sct_img = thread_sct.grab(result_roi)
                                             screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                                            
-                                            # 실시간 화면 배경 소멸 연산
-                                            screen_median = np.median(screen_gray)
-                                            screen_diff = cv2.absdiff(screen_gray, int(screen_median))
                                             
                                             # 병렬로 연산을 처리할 개별 특성 연산관 스레드 함수를 정의합니다.
                                             def scan_worker(t_idx):
@@ -1984,11 +1977,11 @@ def fusion_bot_loop():
                                                 
                                                 file_best_score = 0.0
                                                 for resized_template in precalculated_templates[t_idx]:
-                                                    if resized_template.shape[1] > screen_diff.shape[1] or resized_template.shape[0] > screen_diff.shape[0]:
+                                                    if resized_template.shape[1] > screen_gray.shape[1] or resized_template.shape[0] > screen_gray.shape[0]:
                                                         continue
                                                         
-                                                    # 양방향 배경이 0으로 완전 동기화된 상태이므로, mask 없이 정규화 상관계수(TM_CCOEFF_NORMED)를 적용해 글자 뼈대 형태만 정밀 매칭합니다.
-                                                    res = cv2.matchTemplate(screen_diff, resized_template, cv2.TM_CCOEFF_NORMED)
+                                                    # TM_CCOEFF_NORMED가 배경 밝기를 스스로 차감하므로 글자 형태만 완벽하게 매칭됩니다.
+                                                    res = cv2.matchTemplate(screen_gray, resized_template, cv2.TM_CCOEFF_NORMED)
                                                     _, max_val, _, _ = cv2.minMaxLoc(res)
                                                     
                                                     if max_val > file_best_score:
@@ -2003,7 +1996,7 @@ def fusion_bot_loop():
                                             
                                             time.sleep(0.02)
                                         
-                                    # 3. 최종 정밀 가치 판정 분석 (절대 편차 감쇄 기반 엄격 형태 판정)
+                                    # 3. 최종 정밀 가치 판정 분석
                                     bprint("  > 📊 [결과 판독 실시간 정밀 검증 리포트]")
                                     bprint(f"    └ [특성 없음] '이 감염물은 특성이 없습니다' 일치율: {no_trait_score:.4f} (기준값: 0.70)")
                                     
@@ -2011,6 +2004,7 @@ def fusion_bot_loop():
                                     best_idx = max(best_debug_scores, key=best_debug_scores.get)
                                     best_val = best_debug_scores[best_idx]
                                     
+                                    # 순수 그레이스케일 기준 0.75 이상이면 완벽한 일치로 간주합니다.
                                     if best_val >= 0.75:
                                         has_valuable_trait = True
                                         best_score = best_val
@@ -2021,14 +2015,14 @@ def fusion_bot_loop():
                                         bprint("    └ ❌ [판독 결과] '특성 없음' 문구가 명확히 감지되어 전수 실패로 판정합니다.")
                                         has_valuable_trait = False
                                     else:
-                                        # 2) N종 가치 특성 중 하나라도 실시간 일치율이 0.70 이상으로 검출된 경우 -> 전수 성공! (NORMAL)
+                                        # 2) N종 가치 특성 중 하나라도 실시간 일치율이 0.75 이상으로 검출된 경우 -> 전수 성공! (NORMAL)
                                         if has_valuable_trait:
                                             t_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
-                                            bprint(f"    └ ✅ [판독 결과] 우리가 원하는 가치 특성 '{t_name}'이 정상 전수되었습니다! (편차 매칭율: {best_score:.4f} >= 0.80)")
+                                            bprint(f"    └ ✅ [판독 결과] 우리가 원하는 가치 특성 '{t_name}'이 정상 전수되었습니다! (매칭율: {best_score:.4f} >= 0.75)")
                                         else:
                                             # 3) 특성은 있으나(이로치 등 잡특성), 우리가 원하지 않는 버리는 특성만 붙은 경우 -> 전수 실패! (RECOVERY)
                                             bprint("    └ ❌ [판독 결과] 특성이 존재하지만, 우리가 원치 않는 잡특성/이로치 특성만 전수되었습니다.")
-                                            bprint(f"      (가치 특성 {MAX_TRAIT_NUM}종 중 어떤 것도 매칭 기준선인 0.80을 넘지 못해 전수 실패로 판정하고 RECOVERY 모드를 가동합니다.)")
+                                            bprint(f"      (최고 매칭율이 {best_val:.4f}로 0.75를 넘지 못해 RECOVERY 모드를 가동합니다.)")
                                             has_valuable_trait = False
                                             
                                     # 상세 스코어 투명하게 리포트 출력
@@ -2036,7 +2030,7 @@ def fusion_bot_loop():
                                         t_file = f"trait_{t_idx}.png"
                                         t_name = TRAIT_NAMES.get(t_file, "이름 미등록")
                                         if t_file in FUSION_CACHE:
-                                            match_status = "🎉합격" if best_debug_scores[t_idx] >= 0.70 else "❌미달"
+                                            match_status = "🎉합격" if best_debug_scores[t_idx] >= 0.75 else "❌미달"
                                             bprint(f"      - [{match_status}] {t_file} ({t_name}) 최고 매칭율: {best_debug_scores[t_idx]:.4f}")
                                             
                                     # [E(ESC) 수령 이탈 오류 방지] 툴팁 상세 확인창 하단의 'F 감염물 획득' 버튼을 직접 입력해 보상을 수령하고 상세창을 닫습니다.

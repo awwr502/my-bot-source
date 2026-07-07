@@ -2892,9 +2892,9 @@ def fusion_bot_loop():
                                     bprint("  > 🛑 [재료 부족] 캐릭터 스킵 시퀀스 진입.")
                                     send_cmd('E'); time.sleep(0.15); send_cmd('R'); skip_current_char = True
                                 else:
-                                    # [핵심 수정] 찾은 3개의 재료를 "최신 순서(하단/우측)" 순으로 정렬하여 클릭을 진행합니다.
-                                    # 스크롤 상태(item_scroll=1)가 먼저 오고, 그 다음 Y(cy), X(cx) 좌표 기준 내림차순 정렬합니다.
-                                    target_materials.sort(key=lambda m: (m[2], m[1], m[0]), reverse=True)
+                                    # [핵심 수정] 물리 좌표 정렬이 아니라, "탐색(발견) 완료된 역순(가장 마지막에 찾은 최신 발견물 우선)"으로 리스트를 뒤집어 클릭을 집행합니다.
+                                    # 이로써 가장 마지막에 발견된(우하단 측) 감염물부터 거꾸로 3번째 -> 2번째 -> 1번째 순서대로 클릭 등록을 수행합니다.
+                                    target_materials.reverse()
                                     
                                     # 재료 슬롯 등록 일괄 클릭 (스크롤 오차 0% 완벽 동기화)
                                     bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")

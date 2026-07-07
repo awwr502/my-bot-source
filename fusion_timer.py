@@ -1007,8 +1007,10 @@ def toggle_start(mode=1):
         bprint("🔵 [모드 6: 재료 복사 모드 시작] 단축키(>) 입력 감지")
     bprint("=============================================")
     
-    # 매크로 새로 시작 시 캐릭터 인벤토리 탐색 기억 초기화
+    # 매크로 새로 시작 시 모든 캐릭터의 탐색 위치, 복구 모드 상태, 세팅 가치 특성 기억을 완전 무결하게 태초의 상태로 비워줍니다.
     char_inventory_memory.clear()
+    char_sub_modes.clear()
+    char_target_traits.clear()
     
     # 모든 세팅과 콘솔 메시지 출력이 완전히 끝난 후 봇 스레드 가동
     bot_active = True

@@ -1936,7 +1936,7 @@ def fusion_bot_loop():
                                     scan_start = time.time()
                                     
                                     # [빨간 박스 규격 반영] 잡특성 동시 발현을 감안하면서 노이즈를 배제하는 최적의 영역(X: 0~400, Y: 110~440)을 캡처합니다.
-                                    result_roi = {"left": 0, "top": 110, "width": 400, "height": 330}
+                                    result_roi = {"left": 0, "top": 110, "width": 480, "height": 330}
                                     
                                     # [초고속 사전 연산] 루프 외부에서 가치 특성 N종의 7단계 스케일별 절대 편차 템플릿을 딱 한 번만 사전 생성하여 RAM 캐시에 적재합니다.
                                     # 이로써 루프 내부에서의 무거운 리사이즈(cv2.resize) 및 중간값 연산 부하가 100% 제거됩니다!
@@ -1958,7 +1958,7 @@ def fusion_bot_loop():
                                             precalculated_templates[t_idx].append(resized_t)
                                             
                                     # [병렬 스레드 풀 고용] 프레임마다 스레드를 파괴/생성하는 오버헤드를 막기 위해 루프 외부에서 딱 한 번만 풀을 고용합니다.
-                                    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as executor:
+                                    with concurrent.futures.ThreadPoolExecutor(max_workers=max(7, MAX_TRAIT_NUM)) as executor:
                                         # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 모든 특성의 점수를 끝까지 누적합니다.
                                         while time.time() - scan_start < 1.5 and bot_active:
                                             # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행 (유저님의 오리지널 100% 검증된 check_img 방식 활용)
@@ -2193,7 +2193,7 @@ def fusion_bot_loop():
                             if (char_key + "_parent") not in char_inventory_memory:
                                 char_inventory_memory[char_key + "_parent"] = (0, 0)
                             if (char_key + "_material") not in char_inventory_memory:
-                                char_inventory_memory[char_key + "_material"] = (0, 0)
+                                char_inventory_memory[char_key + "_material"] = (0, 0, 0)
                             
                             # 1단계: 부모 슬롯(F0 / 1짜리) 채우기
                             bprint("  > [1/2 부모 세팅] 좌측 부모 슬롯 클릭 및 감염물 창 개방...")

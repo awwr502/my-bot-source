@@ -1948,7 +1948,10 @@ def fusion_bot_loop():
                                         
                                         template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
                                         template_median = np.median(template_g)
-                                        template_diff = cv2.absdiff(template_g, int(template_median))
+                                        
+                                        # [노이즈 킬러 임계 필터 적용]
+                                        # 배경의 미세한 격자무늬/노이즈가 가늘고 촘촘한 '에메' 글씨를 방해하지 않도록, 중간값보다 어두운 모든 배경 노이즈를 100% 소멸(Black)시킵니다.
+                                        _, template_diff = cv2.threshold(template_g, int(template_median + 25), 255, cv2.THRESH_TOZERO)
                                         
                                         precalculated_templates[t_idx] = []
                                         for scale in [0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15]:
@@ -1975,9 +1978,9 @@ def fusion_bot_loop():
                                             sct_img = thread_sct.grab(result_roi)
                                             screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                                             
-                                            # 실시간 화면 배경 소멸 연산
+                                            # 실시간 화면 배경 소멸 연산 및 노이즈 킬러 임계 필터 동일 적용
                                             screen_median = np.median(screen_gray)
-                                            screen_diff = cv2.absdiff(screen_gray, int(screen_median))
+                                            _, screen_diff = cv2.threshold(screen_gray, int(screen_median + 25), 255, cv2.THRESH_TOZERO)
                                             
                                             # 병렬로 연산을 처리할 개별 특성 연산관 스레드 함수를 정의합니다.
                                             def scan_worker(t_idx):

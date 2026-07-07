@@ -2556,7 +2556,7 @@ def fusion_bot_loop():
                                             if template is None: continue
                                             
                                             template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
-                                            conf = 0.75
+                                            conf = 0.82
                                             
                                             res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCOEFF_NORMED)
                                             loc = np.where(res >= conf)
@@ -2602,14 +2602,7 @@ def fusion_bot_loop():
                                         check_pts_global = [(pt[0] + 960, pt[1] + 180) for pt in zip(*loc_c[::-1])]
                                     
                                     for cx, cy in all_candidates:
-                                        # [스마트 동선 최적화] 현재 스크롤 페이지 안에서 모든 역할이 충족되었을 때만 즉시 조기 탈출합니다.
-                                        if current_sub == "NORMAL":
-                                            current_page_count = sum(1 for m in target_materials if m[2] == scroll_state)
-                                            if current_page_count >= 3: break
-                                        elif current_sub == "RECOVERY":
-                                            current_page_traits = sum(1 for m in target_materials if m[2] == scroll_state and m[3])
-                                            current_page_blanks = sum(1 for m in target_materials if m[2] == scroll_state and not m[3])
-                                            if current_page_traits >= 1 and current_page_blanks >= 2: break
+                                        if len(target_materials) >= 3: break
                                         
                                         curr_sort_key = (cx // 95, cy)
                                         mem_mat_x, mem_mat_y, mem_scroll = char_inventory_memory[char_key + "_material"]
@@ -2865,27 +2858,7 @@ def fusion_bot_loop():
                                             fast_clear_tooltip()
                                             # 성공적으로 찾았으면 메모리 업데이트
                                             char_inventory_memory[char_key + "_material"] = (cx, cy, scroll_state)
-
-                                            # [역할 기반 스마트 밀어내기] 바구니에 허용량을 초과해서 담기면, 방금 찾은 녀석과 동일한 역할을 가진 예전 감염물을 찾아 버립니다.
-                                            if current_sub == "NORMAL":
-                                                if len(target_materials) > 3:
-                                                    target_materials.pop(0)
-                                            elif current_sub == "RECOVERY":
-                                                # 방금 내가 추가한 것의 역할(특성유무) 확인 (리스트의 맨 마지막 요소)
-                                                just_added_is_trait = target_materials[-1][3]
-                                                
-                                                if just_added_is_trait:
-                                                    # 특성이 1개를 초과하면, 이전에 있던 특성 개체를 찾아서 버림
-                                                    trait_items = [m for m in target_materials if m[3]]
-                                                    if len(trait_items) > 1:
-                                                        target_materials.remove(trait_items[0])
-                                                else:
-                                                    # 순정이 2개를 초과하면, 이전에 있던 순정 개체 중 가장 오래된 것을 찾아서 버림
-                                                    blank_items = [m for m in target_materials if not m[3]]
-                                                    if len(blank_items) > 2:
-                                                        target_materials.remove(blank_items[0])
                                         
-                                    # 해당 페이지 탐색이 모두 끝났을 때, 총 3개가 모여있다면 스크롤을 넘기지 않고 최종 클릭 단계로 넘어갑니다.
                                     if len(target_materials) >= 3:
                                         break
                                         
@@ -2893,8 +2866,7 @@ def fusion_bot_loop():
                                     if scroll_state == 0:
                                         bprint("  > ⏬ [스크롤 이동] 상단 탐색 완료. 마우스 휠을 16회 내려 하단 탐색을 이어갑니다.")
                                         pyautogui.moveTo(1400, 500)
-                                        # [스크롤 안정화] 인게임 프레임 씹힘 방지를 위해 딜레이를 0.05초로 연장
-                                        for _ in range(16): pyautogui.scroll(-120); time.sleep(0.05)
+                                        for _ in range(16): pyautogui.scroll(-120); time.sleep(0.02)
                                         time.sleep(0.3)
                                         scroll_state = 1
                                         continue
@@ -2902,8 +2874,7 @@ def fusion_bot_loop():
                                         if not is_material_rescan:
                                             bprint("  > 🧠 [메모리 리스캔] 재료가 부족합니다. 마우스 휠을 16회 올려 처음부터 1회 전체 스캔을 재진행합니다.")
                                             pyautogui.moveTo(1400, 500)
-                                            # [스크롤 안정화] 
-                                            for _ in range(16): pyautogui.scroll(120); time.sleep(0.05)
+                                            for _ in range(16): pyautogui.scroll(120); time.sleep(0.02)
                                             time.sleep(0.3)
                                             is_material_rescan = True
                                             scroll_state = 0
@@ -2917,11 +2888,8 @@ def fusion_bot_loop():
                                     bprint("  > 🛑 [재료 부족] 캐릭터 스킵 시퀀스 진입.")
                                     send_cmd('E'); time.sleep(0.15); send_cmd('R'); skip_current_char = True
                                 else:
-                                    # [역순 정렬] 최근에 찾은 감염물부터 클릭하도록 리스트의 순서를 완전히 뒤집습니다.
-                                    target_materials.reverse()
-                                    
                                     # 재료 슬롯 등록 일괄 클릭 (스크롤 오차 0% 완벽 동기화)
-                                    bprint("  > 🔄 [재료 투입] 선택된 재료 3개를 최근 찾은 순서대로 클릭 중...")
+                                    bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")
                                     current_scroll = scroll_state
                                     
                                     for idx, mt in enumerate(target_materials):
@@ -2932,10 +2900,10 @@ def fusion_bot_loop():
                                             pyautogui.moveTo(1400, 500)
                                             if item_scroll == 1:
                                                 bprint("  > ⏬ [스크롤 맞춤] 하단 재료 클릭을 위해 휠을 내립니다.")
-                                                for _ in range(16): pyautogui.scroll(-120); time.sleep(0.05)
+                                                for _ in range(16): pyautogui.scroll(-120); time.sleep(0.02)
                                             else:
                                                 bprint("  > ⏫ [스크롤 맞춤] 상단 재료 클릭을 위해 휠을 올립니다.")
-                                                for _ in range(16): pyautogui.scroll(120); time.sleep(0.05)
+                                                for _ in range(16): pyautogui.scroll(120); time.sleep(0.02)
                                             time.sleep(0.3)
                                             current_scroll = item_scroll
                                             

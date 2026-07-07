@@ -146,6 +146,7 @@ is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 char_thread_active = False # 수동 캐릭터 변경 스레드 제어 플래그
 char_inventory_memory = {} # 캐릭터별 인벤토리 탐색 위치 기억용 딕셔너리
 char_sub_modes = {} # 캐릭터별 특성 복사 모드 상태 기억용 (NORMAL / RECOVERY)
+char_target_traits = {} # 캐릭터별 복사하려는 활성 가치 특성 이미지명 보관소
 ENABLE_POPUP_MAIN_CHECK = True # 자정 팝업 감지 기능 활성화 상태 변수
 current_logged_in_char = "5.png" # 현재 접속 중인 캐릭터 추적 변수 (초기값)
 
@@ -2417,7 +2418,9 @@ def fusion_bot_loop():
                                             already_has_trait_in_list = any(p[2] for p in target_parents)
                                             if has_valuable_trait and not already_has_trait_in_list:
                                                 target_parents.append((cx, cy, True))
-                                                bprint("  > 🧬 [부모 채택] F0 가치 특성 감염물 확보 완료.")
+                                                # [메모리 저장] 어떤 특성을 부모로 확보했는지 기록해 둡니다. (예: "trait_14.png")
+                                                char_target_traits[char_key] = best_matched_file
+                                                bprint(f"  > 🧬 [부모 채택] F0 가치 특성({best_matched_file}) 감염물 확보 완료.")
                                             elif not has_any_trait:
                                                 already_blank_in_list = any(not p[2] for p in target_parents)
                                                 if not already_blank_in_list:
@@ -2587,12 +2590,56 @@ def fusion_bot_loop():
                                                     all_candidates.append((snap_cx, snap_cy))
                                                     
                                     elif current_sub == "RECOVERY":
-                                        # [복구 모드] 5x6 탐색 진행
-                                        for j in range(6):
-                                            for i in range(5):
-                                                cx = 1400 + i * 95
-                                                cy = 315 + j * 95
-                                                all_candidates.append((cx, cy))
+                                        # [하이브리드 탐색 연계] 세팅 중인 가치 특성 번호를 추출합니다.
+                                        target_trait_file = char_target_traits.get(char_key, "trait_14.png")
+                                        target_idx = 14 # 기본값 (보수적 수색)
+                                        try:
+                                            target_idx = int(target_trait_file.split('_')[1].split('.')[0])
+                                        except: pass
+                                        
+                                        exclude_traits = [7, 8, 9, 10, 12, 13, 14]
+                                        
+                                        if target_idx in exclude_traits:
+                                            # 지정된 7개 특성은 기존의 철저한 5x6 전수 조사 방식으로 수색을 진행합니다.
+                                            for j in range(6):
+                                                for i in range(5):
+                                                    cx = 1400 + i * 95
+                                                    cy = 315 + j * 95
+                                                    all_candidates.append((cx, cy))
+                                        else:
+                                            # 나머지 특성(1~6, 11 등)은 정상모드와 완전히 동일하게 item_A1, B1, A2, B2를 활용한 핀포인트 초고속 매칭으로 진행합니다.
+                                            X_OFFSET = 960
+                                            screen_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+                                            
+                                            for item_name in ['item_A1.png', 'item_A2.png']:
+                                                template = FUSION_CACHE.get(item_name)
+                                                if template is None: continue
+                                                
+                                                template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
+                                                conf = 0.82
+                                                
+                                                res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCOEFF_NORMED)
+                                                loc = np.where(res >= conf)
+                                                h, w = template_g.shape[:2]
+                                                
+                                                for pt in zip(*loc[::-1]):
+                                                    real_x = pt[0] + X_OFFSET
+                                                    real_y = pt[1]
+                                                    
+                                                    raw_cx = real_x + w // 2
+                                                    raw_cy = real_y + h // 2
+                                                    
+                                                    grid_i = int(round((raw_cx - 1400) / 95.0))
+                                                    grid_j = int(round((raw_cy - 315) / 95.0))
+                                                    
+                                                    if grid_i < 0 or grid_i > 4 or grid_j < 0 or grid_j > 5:
+                                                        continue
+                                                        
+                                                    snap_cx = 1400 + grid_i * 95
+                                                    snap_cy = 315 + grid_j * 95
+                                                    
+                                                    if not any(math.hypot(snap_cx - cp[0], snap_cy - cp[1]) < 40 for cp in all_candidates):
+                                                        all_candidates.append((snap_cx, snap_cy))
                                                 
                                     # 정렬
                                     all_candidates.sort(key=lambda c: (c[0] // 95, c[1]))

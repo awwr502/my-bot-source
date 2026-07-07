@@ -2556,7 +2556,7 @@ def fusion_bot_loop():
                                             if template is None: continue
                                             
                                             template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
-                                            conf = 0.82
+                                            conf = 0.75
                                             
                                             res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCOEFF_NORMED)
                                             loc = np.where(res >= conf)

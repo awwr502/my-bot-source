@@ -2801,18 +2801,28 @@ def fusion_bot_loop():
                                                             res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
                                                             cur_tr = np.max(res_t)
                                                             if cur_tr >= conf_trait:
+                                                                # 실시간 화면 배경 소멸 연산 적용 (반투명 툴팁 배경 관통)
+                                                                screen_median = np.median(roi_trait_name_gray)
+                                                                screen_diff = cv2.absdiff(roi_trait_name_gray, int(screen_median))
+                                                                
                                                                 for t_idx in range(1, MAX_TRAIT_NUM + 1):
                                                                     t_file = f"trait_{t_idx}.png"
                                                                     t_template = FUSION_CACHE.get(t_file)
                                                                     if t_template is None: continue
                                                                     
                                                                     t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                                                    if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
+                                                                    
+                                                                    # 템플릿 배경 소멸 연산
+                                                                    template_median = np.median(t_template_g)
+                                                                    template_diff = cv2.absdiff(t_template_g, int(template_median))
+                                                                    
+                                                                    if screen_diff.shape[0] >= t_template_g.shape[0] and screen_diff.shape[1] >= t_template_g.shape[1]:
                                                                         file_best_score = 0.0
                                                                         for t_scale in [0.95, 1.0, 1.05]:
                                                                             t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
-                                                                            if t_w <= roi_trait_name_gray.shape[1] and t_h <= roi_trait_gray.shape[0]:
-                                                                                res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (t_w, t_h)), cv2.TM_CCOEFF_NORMED)
+                                                                            if t_w <= screen_diff.shape[1] and t_h <= roi_trait_gray.shape[0]:
+                                                                                resized_t = cv2.resize(template_diff, (t_w, t_h))
+                                                                                res_st = cv2.matchTemplate(screen_diff, resized_t, cv2.TM_CCOEFF_NORMED)
                                                                                 file_best_score = max(file_best_score, np.max(res_st))
                                                                         
                                                                         temp_scores.append((t_file, file_best_score))

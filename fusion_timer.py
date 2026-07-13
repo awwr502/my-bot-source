@@ -1381,8 +1381,6 @@ def fusion_bot_loop():
                         bprint("  > [초기화] ESC 2회 입력하여 모든 창을 닫고 안전하게 복귀합니다.")
                         send_cmd('E'); time.sleep(0.2); send_cmd('R')
                         time.sleep(0.2)
-                        send_cmd('E'); time.sleep(0.2); send_cmd('R')
-                        time.sleep(0.2)
 
                         bprint("  > 🛑 [종료] 감염물 분별 처리 완료."); toggle_stop(); continue
                 

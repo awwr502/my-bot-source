@@ -2097,8 +2097,12 @@ def fishing_bot(max_allowed_seconds):
 
     def auto_equip_rod():
         """3곳에 흩어진 낚싯대 장착 로직을 통합한 단일 모듈"""
-        nonlocal force_watchdog_reason
+        nonlocal force_watchdog_reason, cast_fail_count
         global check_char_popup
+    
+        # [초고속 레이스 컨디션 방어] 화면 캡처가 너무 빨라 파손 직후의 잔상 UI를 장착 완료 상태로 오해하는 현상을 방지하기 위해 최소 안정화 지연을 부여합니다.
+        time.sleep(0.4)
+    
         swap_attempts = 0
         while bot_active:
             if check_exit_notification():
@@ -2119,6 +2123,7 @@ def fishing_bot(max_allowed_seconds):
 
             if safe_find_image('bait_change.png', 0.70):
                 bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
+                cast_fail_count = 0 # 장착 완료 확인 시 캐스팅 실패 카운트 즉시 초기화
                 return True
 
             bprint("  > 🎣 [탐색 1단계] 낚싯대 파지 상태 확인 중...")
@@ -2149,6 +2154,7 @@ def fishing_bot(max_allowed_seconds):
 
             if current_rod_state == "UNFOLDED":
                 bprint("  > ✅ [장착 완료] 낚싯대가 이미 펼쳐져 있습니다. 즉시 낚시를 재개합니다.")
+                cast_fail_count = 0 # 장착 완료 확인 시 캐스팅 실패 카운트 즉시 초기화
                 return True
                 
             elif current_rod_state == "HELD":
@@ -2169,6 +2175,7 @@ def fishing_bot(max_allowed_seconds):
                         
                 if found_start:
                     bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
+                    cast_fail_count = 0 # 장착 완료 확인 시 캐스팅 실패 카운트 즉시 초기화
                     return True
                 else:
                     bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터 다시 시도합니다.")
@@ -2357,9 +2364,10 @@ def fishing_bot(max_allowed_seconds):
                 check_char_popup = True
                 
                 if is_manual_start:
-                    # [트랙 A: 수동 시작] 실수로 켠 경우를 대비해 낚싯대 단서가 있을 때만 낚시 모드(State 1)로 진입합니다.
+                    # [트랙 A: 수동 시작] 실수로 켠 경우를 대비해 낚싯대 상태(미끼변경, 던지기, 내구도소진) 중 하나라도 감지될 때만 낚시 모드(State 1)로 진입합니다.
                     if safe_find_image('bait_change.png', 0.70) or safe_find_image('throw_btn.png', 0.70) or safe_find_image('broken_rod.png', 0.70):
-                        bprint("  > [수동 시작] 낚싯대 상태 감지 성공 -> 정상 낚시 모드 진입 (State 1)")
+                        bprint("  > 정상 낚시 모드 진입 (State 1)")
+                        cast_fail_count = 0 # 수동 시작 시 실패 카운트 초기화
                         state = 1
                     else:
                         bprint("  > [수동 시작] 낚싯대 아이콘 미발견 -> 안전을 위해 잠수 대기 모드로 격리합니다 (State 0)")
@@ -2367,6 +2375,7 @@ def fishing_bot(max_allowed_seconds):
                 else:
                     # [트랙 B: 자동 복구/순환] 이미 구동 중이었으므로 맨주먹(빈손)일지라도 무조건 State 1로 가 자가 장착을 시도합니다.
                     bprint("  > [자동 리셋] 복구 및 순환 감지. 낚시 복귀 (State 1)")
+                    cast_fail_count = 0 # 자동 리셋 복구 시 실패 카운트 무조건 초기화
                     state = 1
 
             # --- [State 0] 잠수 방지 전용 모드 (대기 및 자가 복귀) ---

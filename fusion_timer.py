@@ -2047,6 +2047,7 @@ def fusion_bot_loop():
                                     identified_trait_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
                                     bprint(f"  > 🎉 [성공] NORMAL 상태로 복사 가동합니다.")
                                     char_sub_modes[char_key] = "NORMAL"
+                                    char_inventory_memory[char_key + "_target_trait"] = best_matched_file
                                 else:
                                     bprint("  > 😭 [실패] RECOVERY 복구 상태로 전환합니다.")
                                     char_sub_modes[char_key] = "RECOVERY"
@@ -2396,22 +2397,30 @@ def fusion_bot_loop():
                                                         break
                                                 
                                         # 점수순 내림차순 정렬 및 스마트 갭 판독
-                                        temp_scores.sort(key=lambda x: x[1], reverse=True)
-                                        if len(temp_scores) >= 1:
-                                            top1_file, top1_score = temp_scores[0]
-                                            top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
-                                            
-                                            if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
-                                                has_valuable_trait = True
+                                                temp_scores.sort(key=lambda x: x[1], reverse=True)
+                                                if len(temp_scores) >= 1:
+                                                    top1_file, top1_score = temp_scores[0]
+                                                    top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
                                                     
-                                    if current_sub == "NORMAL":
-                                        # NORMAL 상태: 1~7 가치 특성 F0 1개 + 특성 없는 순정 F0 1개
-                                        # F0(is_f0가 True)인 경우에만 부모 후보로 등록합니다.
-                                        if is_f0:
-                                            already_has_trait_in_list = any(p[2] for p in target_parents)
-                                            if has_valuable_trait and not already_has_trait_in_list:
-                                                target_parents.append((cx, cy, True))
-                                                bprint("  > 🧬 [부모 채택] F0 가치 특성 감염물 확보 완료.")
+                                                    top1_name = TRAIT_NAMES.get(top1_file, top1_file)
+                                                    has_number = any(char.isdigit() for char in top1_name)
+                                                    smart_floor = 0.75 if has_number else 0.70
+                                                    target_conf = FUSION_CONF.get(top1_file, 0.85)
+                                                    
+                                                    if top1_score >= target_conf or (top1_score >= smart_floor and (top1_score - top2_score) >= 0.05):
+                                                        has_valuable_trait = True
+                                                        parent_target_file = top1_file
+                                            
+                                            if current_sub == "NORMAL":
+                                                # NORMAL 상태: 1~7 가치 특성 F0 1개 + 특성 없는 순정 F0 1개
+                                                # F0(is_f0가 True)인 경우에만 부모 후보로 등록합니다.
+                                                if is_f0:
+                                                    already_has_trait_in_list = any(p[2] for p in target_parents)
+                                                    if has_valuable_trait and not already_has_trait_in_list:
+                                                        target_parents.append((cx, cy, True))
+                                                        if 'parent_target_file' in locals():
+                                                            char_inventory_memory[char_key + "_target_trait"] = parent_target_file
+                                                        bprint(f"  > 🧬 [부모 채택] F0 가치 특성({TRAIT_NAMES.get(parent_target_file, parent_target_file) if 'parent_target_file' in locals() else '가치 특성'}) 감염물 확보 완료.")
                                             elif not has_any_trait:
                                                 already_blank_in_list = any(not p[2] for p in target_parents)
                                                 if not already_blank_in_list:
@@ -2791,6 +2800,8 @@ def fusion_bot_loop():
                                                 trait_name_y2 = ly + 300
                                                 roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
                                                 
+                                                locked_trait = char_inventory_memory.get(char_key + "_target_trait")
+                                                
                                                 temp_scores = []
                                                 if roi_trait_gray.size > 0:
                                                     for scale in [0.95, 1.0, 1.05]:
@@ -2803,27 +2814,45 @@ def fusion_bot_loop():
                                                                 screen_median = np.median(roi_trait_name_gray)
                                                                 screen_diff = cv2.absdiff(roi_trait_name_gray, int(screen_median))
                                                                 
-                                                                for t_idx in range(1, MAX_TRAIT_NUM + 1):
-                                                                    t_file = f"trait_{t_idx}.png"
-                                                                    t_template = FUSION_CACHE.get(t_file)
-                                                                    if t_template is None: continue
-                                                                    
-                                                                    t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
-                                                                    
-                                                                    # 템플릿 배경 소멸 연산
-                                                                    template_median = np.median(t_template_g)
-                                                                    template_diff = cv2.absdiff(t_template_g, int(template_median))
-                                                                    
-                                                                    if screen_diff.shape[0] >= t_template_g.shape[0] and screen_diff.shape[1] >= t_template_g.shape[1]:
-                                                                        file_best_score = 0.0
-                                                                        for t_scale in [0.95, 1.0, 1.05]:
-                                                                            t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
-                                                                            if t_w <= screen_diff.shape[1] and t_h <= roi_trait_gray.shape[0]:
-                                                                                resized_t = cv2.resize(template_diff, (t_w, t_h))
-                                                                                res_st = cv2.matchTemplate(screen_diff, resized_t, cv2.TM_CCOEFF_NORMED)
-                                                                                file_best_score = max(file_best_score, np.max(res_st))
+                                                                # 이미 잠금된 특성이 있는 경우, 오직 해당 특성만 매칭하여 오탐지를 원천 차단하고 속도를 비약적으로 향상시킵니다.
+                                                                if locked_trait:
+                                                                    t_template = FUSION_CACHE.get(locked_trait)
+                                                                    if t_template is not None:
+                                                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                                                        template_median = np.median(t_template_g)
+                                                                        template_diff = cv2.absdiff(t_template_g, int(template_median))
                                                                         
-                                                                        temp_scores.append((t_file, file_best_score))
+                                                                        if screen_diff.shape[0] >= t_template_g.shape[0] and screen_diff.shape[1] >= t_template_g.shape[1]:
+                                                                            file_best_score = 0.0
+                                                                            for t_scale in [0.95, 1.0, 1.05]:
+                                                                                t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
+                                                                                if t_w <= screen_diff.shape[1] and t_h <= roi_trait_gray.shape[0]:
+                                                                                    resized_t = cv2.resize(template_diff, (t_w, t_h))
+                                                                                    res_st = cv2.matchTemplate(screen_diff, resized_t, cv2.TM_CCOEFF_NORMED)
+                                                                                    file_best_score = max(file_best_score, np.max(res_st))
+                                                                            
+                                                                            temp_scores.append((locked_trait, file_best_score))
+                                                                else:
+                                                                    # 잠금된 특성이 없을 때만 1~N번 특성 전수 검사 진행 (최초 실행 시 1회만 수행됨)
+                                                                    for t_idx in range(1, MAX_TRAIT_NUM + 1):
+                                                                        t_file = f"trait_{t_idx}.png"
+                                                                        t_template = FUSION_CACHE.get(t_file)
+                                                                        if t_template is None: continue
+                                                                        
+                                                                        t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                                                        template_median = np.median(t_template_g)
+                                                                        template_diff = cv2.absdiff(t_template_g, int(template_median))
+                                                                        
+                                                                        if screen_diff.shape[0] >= t_template_g.shape[0] and screen_diff.shape[1] >= t_template_g.shape[1]:
+                                                                            file_best_score = 0.0
+                                                                            for t_scale in [0.95, 1.0, 1.05]:
+                                                                                t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
+                                                                                if t_w <= screen_diff.shape[1] and t_h <= roi_trait_gray.shape[0]:
+                                                                                    resized_t = cv2.resize(template_diff, (t_w, t_h))
+                                                                                    res_st = cv2.matchTemplate(screen_diff, resized_t, cv2.TM_CCOEFF_NORMED)
+                                                                                    file_best_score = max(file_best_score, np.max(res_st))
+                                                                            
+                                                                            temp_scores.append((t_file, file_best_score))
                                                                 break
                                                                 
                                                 temp_scores.sort(key=lambda x: x[1], reverse=True)
@@ -2831,10 +2860,18 @@ def fusion_bot_loop():
                                                     top1_file, top1_score = temp_scores[0]
                                                     top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
                                                     best_score = top1_score
-                                                
-                                                    if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
+                                                    
+                                                    top1_name = TRAIT_NAMES.get(top1_file, top1_file)
+                                                    has_number = any(char.isdigit() for char in top1_name)
+                                                    smart_floor = 0.75 if has_number else 0.70
+                                                    target_conf = FUSION_CONF.get(top1_file, 0.85)
+                                                    
+                                                    if top1_score >= target_conf or (top1_score >= smart_floor and (top1_score - top2_score) >= 0.05):
                                                         has_valuable_trait = True
-                                                        identified_trait_name = TRAIT_NAMES.get(top1_file, top1_file)
+                                                        identified_trait_name = top1_name
+                                                        # 찾은 특성을 향후 고속 연산을 위해 메모리에 잠금
+                                                        if not locked_trait:
+                                                            char_inventory_memory[char_key + "_target_trait"] = top1_file
                                                     
                                             if current_sub == "NORMAL":
                                                 if has_any_trait:

@@ -2402,12 +2402,8 @@ def fusion_bot_loop():
                                                     top1_file, top1_score = temp_scores[0]
                                                     top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
                                                     
-                                                    top1_name = TRAIT_NAMES.get(top1_file, top1_file)
-                                                    has_number = any(char.isdigit() for char in top1_name)
-                                                    smart_floor = 0.75 if has_number else 0.70
-                                                    target_conf = FUSION_CONF.get(top1_file, 0.85)
-                                                    
-                                                    if top1_score >= target_conf or (top1_score >= smart_floor and (top1_score - top2_score) >= 0.05):
+                                                    # 멀쩡하던 오리지널 부모 인식 성능(0.80 기준)을 100% 동일하게 복구하여 인식률 저하를 해결합니다.
+                                                    if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
                                                         has_valuable_trait = True
                                                         parent_target_file = top1_file
                                             
@@ -2863,9 +2859,9 @@ def fusion_bot_loop():
                                                     top1_name = TRAIT_NAMES.get(top1_file, top1_file)
                                                     has_number = any(char.isdigit() for char in top1_name)
                                                     smart_floor = 0.75 if has_number else 0.70
-                                                    target_conf = FUSION_CONF.get(top1_file, 0.85)
                                                     
-                                                    if top1_score >= target_conf or (top1_score >= smart_floor and (top1_score - top2_score) >= 0.05):
+                                                    # FUSION_CONF의 엄격한 0.92 대신 검증된 0.80 하한선 기준을 적용하여 첫 매칭 실패를 원천 방지합니다.
+                                                    if top1_score >= 0.80 or (top1_score >= smart_floor and (top1_score - top2_score) >= 0.05):
                                                         has_valuable_trait = True
                                                         identified_trait_name = top1_name
                                                         # 찾은 특성을 향후 고속 연산을 위해 메모리에 잠금

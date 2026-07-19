@@ -2672,9 +2672,9 @@ def fusion_bot_loop():
                                             if talent_header_found:
                                                 anchor_x, anchor_y = FUSION_ROI['talent_header.png']['last_pos']
                                                 level_num_roi = {
-                                                    "left": int(anchor_x + 100),
+                                                    "left": int(anchor_x - 30),
                                                     "top": int(anchor_y + 30),
-                                                    "width": 180,
+                                                    "width": 240,
                                                     "height": 40
                                                 }
                                                 sct_level = thread_sct.grab(level_num_roi)

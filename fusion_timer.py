@@ -2671,11 +2671,10 @@ def fusion_bot_loop():
                                             
                                             if talent_header_found:
                                                 anchor_x, anchor_y = FUSION_ROI['talent_header.png']['last_pos']
-                                                # 전기 피드백 등 재능 글자가 우측으로 치우치지 않고 재능 헤더 바로 아래에 있으므로 X축 범위를 넓게 중앙으로 교정합니다.
                                                 level_num_roi = {
-                                                    "left": int(anchor_x - 30),
+                                                    "left": int(anchor_x + 100),
                                                     "top": int(anchor_y + 30),
-                                                    "width": 240,
+                                                    "width": 180,
                                                     "height": 40
                                                 }
                                                 sct_level = thread_sct.grab(level_num_roi)
@@ -2780,14 +2779,13 @@ def fusion_bot_loop():
                                                         if cur_tr >= conf_trait:
                                                             has_any_trait = True
                                                             break
-                                                            
+                                                    
                                             has_valuable_trait = False
                                             identified_trait_name = "미등록 특성"
                                             best_score = 0.0
                                             
                                             if has_any_trait:
                                                 trait_name_x1 = max(0, lx - 10)
-                                                # 우측 감지 범위를 430으로 확장하여 두 번째 칸에 나열된 특성까지 완벽 포착합니다.
                                                 trait_name_x2 = lx + 430
                                                 trait_name_y1 = ly + 30
                                                 trait_name_y2 = ly + 300
@@ -2812,9 +2810,9 @@ def fusion_bot_loop():
                                                                     
                                                                     t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
                                                                     
-                                                                    # 템플릿 배경 소멸 연산 (단문 특성 왜곡 방지를 위해 20백분위수 적용)
-                                                                    template_bg = np.percentile(t_template_g, 20)
-                                                                    template_diff = cv2.absdiff(t_template_g, int(template_bg))
+                                                                    # 템플릿 배경 소멸 연산
+                                                                    template_median = np.median(t_template_g)
+                                                                    template_diff = cv2.absdiff(t_template_g, int(template_median))
                                                                     
                                                                     if screen_diff.shape[0] >= t_template_g.shape[0] and screen_diff.shape[1] >= t_template_g.shape[1]:
                                                                         file_best_score = 0.0

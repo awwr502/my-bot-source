@@ -1006,115 +1006,115 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 }
             region = None 
         elif region:
-                target_monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
-            elif cache_data['master_box']:
-                target_monitor = cache_data['master_box']
-            else:
-                target_monitor = active_sct.monitors[1]
-                if img_path == 'fishing.png':
-                    target_monitor = {
-                        "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
-                        "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
-                        "width": int(target_monitor["width"] * 0.4),
-                        "height": int(target_monitor["height"] * 0.5)
-                    }
-                elif img_path == 'bait_change.png':
-                    # 가로는 극좌측 25%만 확인하고, 세로는 45% ~ 68% 범위로 한정하여 하단 채팅창(745px 이후) 유입을 100% 물리 차단
-                    target_monitor = {
-                        "left": int(target_monitor["left"]),
-                        "top": int(target_monitor["top"] + target_monitor["height"] * 0.45),
-                        "width": int(target_monitor["width"] * 0.25),
-                        "height": int(target_monitor["height"] * 0.23)
-                    }
-                elif img_path == 'green_range.png':
-                    target_monitor = {
-                        "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
-                        "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
-                        "width": int(target_monitor["width"] * 0.4),
-                        "height": int(target_monitor["height"] * 0.5)
-                    }
+            target_monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
+        elif cache_data['master_box']:
+            target_monitor = cache_data['master_box']
+        else:
+            target_monitor = active_sct.monitors[1]
+            if img_path == 'fishing.png':
+                target_monitor = {
+                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
+                    "width": int(target_monitor["width"] * 0.4),
+                    "height": int(target_monitor["height"] * 0.5)
+                }
+            elif img_path == 'bait_change.png':
+                # 가로는 극좌측 25%만 확인하고, 세로는 45% ~ 68% 범위로 한정하여 하단 채팅창(745px 이후) 유입을 100% 물리 차단
+                target_monitor = {
+                    "left": int(target_monitor["left"]),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.45),
+                    "width": int(target_monitor["width"] * 0.25),
+                    "height": int(target_monitor["height"] * 0.23)
+                }
+            elif img_path == 'green_range.png':
+                target_monitor = {
+                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
+                    "width": int(target_monitor["width"] * 0.4),
+                    "height": int(target_monitor["height"] * 0.5)
+                }
 
-            sct_img = active_sct.grab(target_monitor)
+        sct_img = active_sct.grab(target_monitor)
+        
+        # 1. 색상 분석 및 정합성 매치 분기 처리
+        # A. 낚싯대 상태 감지용 3개 중요 이미지: 양방향 필터 전처리 단독 가동 (높은 일치율 복구 완료)
+        if img_path in ['bait_change.png', 'broken_rod.png', 'throw_btn.png']:
+            screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+            screen_processed = cv2.bilateralFilter(screen_gray, 5, 50, 50)
+            template_processed = template_gray
+            use_mask = None
+            use_color = False
             
-            # 1. 색상 분석 및 정합성 매치 분기 처리
-            # A. 낚싯대 상태 감지용 3개 중요 이미지: 양방향 필터 전처리 단독 가동 (높은 일치율 복구 완료)
+        # B. 녹색 찌의 경우: 기존 특화 추출식 사용
+        elif img_path == 'green_float.png' and template_color is not None:
+            screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+            sb, sg, sr = cv2.split(screen_bgr)
+            screen_processed = cv2.subtract(sg, cv2.max(sr, sb))
+            
+            tb, tg, tr = cv2.split(template_color)
+            template_processed = cv2.subtract(tg, cv2.max(tr, tb))
+            use_mask = None
+            use_color = True
+            
+        # C. 지정된 4개 이미지의 경우: 배경을 100% 생략하는 투명 마스크 매칭 강제 가동 (수동 투명화/자동 획 마스크 공용)
+        elif img_path in MASK_UI_LIST and mask is not None:
+            screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+            template_processed = template_gray
+            use_mask = mask
+            use_color = False
+            
+        # D. 그 외 모든 일반 UI/문자열: 기존의 검증된 Grayscale 매칭 사용
+        else:
+            screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+            template_processed = template_gray
+            use_mask = None
+            use_color = False
+
+        if use_mask is not None:
+            # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
+            res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
+        else:
+            res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+            
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+
+        # 2. [실시간 자가 치유 능동 폴백]
+        # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재조준하여 스캔
+        is_using_cache = (not is_fallback_scan and not region and cache_data['master_box'] is not None)
+        if max_val < active_conf and is_using_cache:
+            full_monitor = active_sct.monitors[1]
+            sct_img_full = active_sct.grab(full_monitor)
+            
             if img_path in ['bait_change.png', 'broken_rod.png', 'throw_btn.png']:
-                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                screen_processed = cv2.bilateralFilter(screen_gray, 5, 50, 50)
-                template_processed = template_gray
-                use_mask = None
-                use_color = False
-                
-            # B. 녹색 찌의 경우: 기존 특화 추출식 사용
+                screen_gray_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
+                screen_processed_f = cv2.bilateralFilter(screen_gray_f, 5, 50, 50)
             elif img_path == 'green_float.png' and template_color is not None:
-                screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-                sb, sg, sr = cv2.split(screen_bgr)
-                screen_processed = cv2.subtract(sg, cv2.max(sr, sb))
-                
-                tb, tg, tr = cv2.split(template_color)
-                template_processed = cv2.subtract(tg, cv2.max(tr, tb))
-                use_mask = None
-                use_color = True
-                
-            # C. 지정된 4개 이미지의 경우: 배경을 100% 생략하는 투명 마스크 매칭 강제 가동 (수동 투명화/자동 획 마스크 공용)
+                screen_bgr_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
+                sb_f, sg_f, sr_f = cv2.split(screen_bgr_f)
+                screen_processed_f = cv2.subtract(sg_f, cv2.max(sr_f, sb_f))
             elif img_path in MASK_UI_LIST and mask is not None:
-                screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                template_processed = template_gray
-                use_mask = mask
-                use_color = False
-                
-            # D. 그 외 모든 일반 UI/문자열: 기존의 검증된 Grayscale 매칭 사용
+                screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
             else:
-                screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                template_processed = template_gray
-                use_mask = None
-                use_color = False
-
+                screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
+                
             if use_mask is not None:
-                # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
-                res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
+                res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
             else:
-                res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+                res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCOEFF_NORMED)
                 
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-
-            # 2. [실시간 자가 치유 능동 폴백]
-            # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재조준하여 스캔
-            is_using_cache = (not is_fallback_scan and not region and cache_data['master_box'] is not None)
-            if max_val < active_conf and is_using_cache:
-                full_monitor = active_sct.monitors[1]
-                sct_img_full = active_sct.grab(full_monitor)
+            _, max_val_f, _, max_loc_f = cv2.minMaxLoc(res_f)
+            
+            if max_val_f >= active_conf:
+                print(f"  > 💊 [자가 치유] '{img_path}' 캐시 수명 만료 감지! 전체화면 좌표로 자가 복구 완료.")
+                cache_data['master_box'] = None
+                cache_data['samples'].clear()
+                ctx['history'].clear()
+                ctx['is_locked'] = False
                 
-                if img_path in ['bait_change.png', 'broken_rod.png', 'throw_btn.png']:
-                    screen_gray_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
-                    screen_processed_f = cv2.bilateralFilter(screen_gray_f, 5, 50, 50)
-                elif img_path == 'green_float.png' and template_color is not None:
-                    screen_bgr_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
-                    sb_f, sg_f, sr_f = cv2.split(screen_bgr_f)
-                    screen_processed_f = cv2.subtract(sg_f, cv2.max(sr_f, sb_f))
-                elif img_path in MASK_UI_LIST and mask is not None:
-                    screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
-                else:
-                    screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
-                    
-                if use_mask is not None:
-                    res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCORR_NORMED, mask=use_mask)
-                else:
-                    res_f = cv2.matchTemplate(screen_processed_f, template_processed, cv2.TM_CCOEFF_NORMED)
-                    
-                _, max_val_f, _, max_loc_f = cv2.minMaxLoc(res_f)
-                
-                if max_val_f >= active_conf:
-                    print(f"  > 💊 [자가 치유] '{img_path}' 캐시 수명 만료 감지! 전체화면 좌표로 자가 복구 완료.")
-                    cache_data['master_box'] = None
-                    cache_data['samples'].clear()
-                    ctx['history'].clear()
-                    ctx['is_locked'] = False
-                    
-                    target_monitor = full_monitor
-                    max_val = max_val_f
-                    max_loc = max_loc_f
-                    screen_processed = screen_processed_f
+                target_monitor = full_monitor
+                max_val = max_val_f
+                max_loc = max_loc_f
+                screen_processed = screen_processed_f
 
         # 3. [기존 가우시안 적응형 이진화 대피소 복구]
         # 지정된 4개 마스크 대상 외의 다른 일반 이미지 매칭 실패 시, 이전의 가우시안 적응형 이진화를 안정적으로 수행합니다.

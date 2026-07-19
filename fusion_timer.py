@@ -2588,8 +2588,8 @@ def fusion_bot_loop():
                                                 cy = 315 + j * 95
                                                 all_candidates.append((cx, cy))
                                                 
-                                    # 정렬
-                                    all_candidates.sort(key=lambda c: (c[0] // 95, c[1]))
+                                    # [세로 정렬 보존] 열(Column) 95픽셀 수치로 정확하게 세로 우선 정렬을 수행하여 중구난방 튀는 현상을 정밀 복구합니다.
+                                    all_candidates.sort(key=lambda c: ((c[0] - 1400) // 95, c[1]))
                                         
                                     # 체크마크 사전 스캔 (Y축 180 이상으로 제한하여 타이틀 오탐 완벽 차단)
                                     check_pts_global = []
@@ -2602,14 +2602,15 @@ def fusion_bot_loop():
                                     for cx, cy in all_candidates:
                                         if len(target_materials) >= 3: break
                                         
-                                        curr_sort_key = (cx // 95, cy)
+                                        curr_sort_key = ((cx - 1400) // 95, cy)
                                         mem_mat_x, mem_mat_y, mem_scroll = char_inventory_memory[char_key + "_material"]
+                                        last_sort_key = ((mem_mat_x - 1400) // 95, mem_mat_y) if mem_mat_x > 0 else (0, 0)
                                         if not is_material_rescan:
                                             # 스크롤 상태가 이전 사이클에서 하단(1)이었다면 상단(0)은 무조건 패스
                                             if scroll_state < mem_scroll:
                                                 continue
                                             elif scroll_state == mem_scroll:
-                                                if curr_sort_key < (mem_mat_x // 95, mem_mat_y):
+                                                if curr_sort_key < last_sort_key:
                                                     continue
                                             
                                         # 체크마크가 이미 있는 슬롯은 탐색에서 제외

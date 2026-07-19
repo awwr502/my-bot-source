@@ -2707,17 +2707,16 @@ def fusion_bot_loop():
                                                     skip_deviant = True
                                                     skip_reason = f"NORMAL 모드 피드백 재능 필수 미달 (일치율: {max_val_level:.4f} < 0.78)"
                                             elif current_sub == "RECOVERY":
-                                                already_has_trait = any(m[3] for m in target_materials) # m은 (cx, cy, scroll, has_trait)
+                                                already_has_trait = any(m[3] for m in target_materials)
                                                 blank_count = sum(1 for m in target_materials if not m[3])
                                                 
-                                                if is_target_level_1:
-                                                    if blank_count >= 2:
-                                                        skip_deviant = True
-                                                        skip_reason = "RECOVERY 모드 순정 피드백 재료 정원 초과 (이미 2개 확보됨)"
-                                                else:
+                                                # 피드백이 없는 아이템인 경우: 오직 '가치 특성 캐리어' 후보만 가능합니다.
+                                                if not is_target_level_1:
                                                     if already_has_trait:
                                                         skip_deviant = True
-                                                        skip_reason = "RECOVERY 모드 가치 특성 캐리어 정원 초과 (이미 1개 확보됨)"
+                                                        skip_reason = "RECOVERY 모드 가치 특성 캐리어 이미 확보됨 (피드백 없는 재료 스킵)"
+                                                # 피드백이 있는 아이템인 경우: '순정 피드백' 또는 '가치 특성 캐리어(피드백 포함)' 둘 다 가능하므로 
+                                                # 선제 필터를 패스시키고 하단의 상세 정밀 매칭 조건에서 확실하게 구분합니다.
                                                         
                                             if skip_deviant:
                                                 bprint(f"  > ⏭️ [스킵] {skip_reason}")
@@ -2883,20 +2882,21 @@ def fusion_bot_loop():
                                                     target_materials.append((cx, cy, scroll_state, False)) # has_trait=False
                                             elif current_sub == "RECOVERY":
                                                 already_has_trait_in_list = any(m[3] for m in target_materials)
+                                                blank_count = sum(1 for m in target_materials if not m[3])
+                                                
+                                                # 1. 가치 특성 캐리어 선택 조건 (목표 가치 특성을 가졌고, 아직 리스트에 특성 캐리어가 없을 때)
                                                 if has_valuable_trait and not already_has_trait_in_list:
                                                     bprint(f"  > 🧬 [재료 채택] 융합 가능 횟수 0짜리 가치 특성 '{identified_trait_name}' 확보! (신뢰도: {best_score:.2f})")
                                                     target_materials.append((cx, cy, scroll_state, True)) # has_trait=True
-                                                elif not has_any_trait and is_target_level_1:
-                                                    blank_count = sum(1 for m in target_materials if not m[3])
-                                                    if blank_count < 2:
-                                                        bprint(f"  > 💎 [재료 채택] 융합 0짜리 피드백 순정 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
-                                                        target_materials.append((cx, cy, scroll_state, False))
-                                                    else:
-                                                        bprint(f"  > ⏭️ [스킵] 순정 감염물 정원 초과. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
-                                                        fast_clear_tooltip()
-                                                        continue
+                                                    
+                                                # 2. 순정 피드백 재료 선택 조건 (특성이 전혀 없고, 피드백 재능이 있으며, 아직 순정이 2개 미만일 때)
+                                                elif not has_any_trait and is_target_level_1 and blank_count < 2:
+                                                    bprint(f"  > 💎 [재료 채택] 융합 0짜리 피드백 순정 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                                    target_materials.append((cx, cy, scroll_state, False)) # has_trait=False
+                                                    
                                                 else:
-                                                    bprint(f"  > ⏭️ [스킵] RECOVERY 조건에 맞지 않는 감염물입니다. (피드백 유무: {is_target_level_1} / 특성: '{identified_trait_name}')")
+                                                    # 위 조건들에 해당하지 않거나 각 슬롯별 정원이 초과된 경우 안전하게 스킵 처리합니다.
+                                                    bprint(f"  > ⏭️ [스킵] RECOVERY 조건에 맞지 않거나 해당 정원이 만석입니다. (피드백 유무: {is_target_level_1} / 특성: '{identified_trait_name}')")
                                                     fast_clear_tooltip()
                                                     continue
                                                     

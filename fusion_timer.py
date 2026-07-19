@@ -2671,35 +2671,24 @@ def fusion_bot_loop():
                                             
                                             if talent_header_found:
                                                 anchor_x, anchor_y = FUSION_ROI['talent_header.png']['last_pos']
-                                                # 전기 피드백 등 재능 글자가 우측으로 치우치지 않고 재능 헤더 바로 아래에 있으므로 X축 범위를 넓게 중앙으로 교정합니다.
                                                 level_num_roi = {
-                                                    "left": int(anchor_x - 30),
+                                                    "left": int(anchor_x + 100),
                                                     "top": int(anchor_y + 30),
-                                                    "width": 240,
+                                                    "width": 180,
                                                     "height": 40
                                                 }
                                                 sct_level = thread_sct.grab(level_num_roi)
+                                                
                                                 screen_gray_level = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2GRAY)
-                                                
-                                                # [핵심 수식] 실시간 화면 배경 소멸 연산 적용 (반투명 툴팁 배경 관통 제거)
-                                                screen_median = np.median(screen_gray_level)
-                                                screen_diff = cv2.absdiff(screen_gray_level, int(screen_median))
-                                                
                                                 template_level_1 = FUSION_CACHE.get('feedback_trait.png')
+                                                
                                                 if template_level_1 is not None:
                                                     template_level_1_g = cv2.cvtColor(template_level_1, cv2.COLOR_BGR2GRAY) if len(template_level_1.shape) == 3 else template_level_1
+                                                    res_level = cv2.matchTemplate(screen_gray_level, template_level_1_g, cv2.TM_CCOEFF_NORMED)
+                                                    _, max_val_level, _, _ = cv2.minMaxLoc(res_level)
                                                     
-                                                    # [핵심 수식] 템플릿 배경 소멸 연산 (단문 왜곡 방지를 위해 20백분위수 적용)
-                                                    template_bg = np.percentile(template_level_1_g, 20)
-                                                    template_diff = cv2.absdiff(template_level_1_g, int(template_bg))
-                                                    
-                                                    if screen_diff.shape[0] >= template_level_1_g.shape[0] and screen_diff.shape[1] >= template_level_1_g.shape[1]:
-                                                        res_level = cv2.matchTemplate(screen_diff, template_diff, cv2.TM_CCOEFF_NORMED)
-                                                        _, max_val_level, _, _ = cv2.minMaxLoc(res_level)
-                                                        
-                                                        # 배경 노이즈가 소멸되어 순수 대조가 가능하므로 임계값은 안정적인 0.70으로 검증합니다.
-                                                        if max_val_level >= 0.70:
-                                                            is_target_level_1 = True
+                                                    if max_val_level >= 0.75:
+                                                        is_target_level_1 = True
                                                         
                                             skip_deviant = False
                                             skip_reason = ""
@@ -2790,14 +2779,13 @@ def fusion_bot_loop():
                                                         if cur_tr >= conf_trait:
                                                             has_any_trait = True
                                                             break
-                                                            
+                                                    
                                             has_valuable_trait = False
                                             identified_trait_name = "미등록 특성"
                                             best_score = 0.0
                                             
                                             if has_any_trait:
                                                 trait_name_x1 = max(0, lx - 10)
-                                                # 우측 감지 범위를 430으로 확장하여 두 번째 칸에 나열된 특성까지 완벽 포착합니다.
                                                 trait_name_x2 = lx + 430
                                                 trait_name_y1 = ly + 30
                                                 trait_name_y2 = ly + 300
@@ -2822,9 +2810,9 @@ def fusion_bot_loop():
                                                                     
                                                                     t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
                                                                     
-                                                                    # 템플릿 배경 소멸 연산 (단문 특성 왜곡 방지를 위해 20백분위수 적용)
-                                                                    template_bg = np.percentile(t_template_g, 20)
-                                                                    template_diff = cv2.absdiff(t_template_g, int(template_bg))
+                                                                    # 템플릿 배경 소멸 연산
+                                                                    template_median = np.median(t_template_g)
+                                                                    template_diff = cv2.absdiff(t_template_g, int(template_median))
                                                                     
                                                                     if screen_diff.shape[0] >= t_template_g.shape[0] and screen_diff.shape[1] >= t_template_g.shape[1]:
                                                                         file_best_score = 0.0

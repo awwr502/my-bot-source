@@ -2087,6 +2087,7 @@ def animal_bot_loop():
 
 def oblivion_bot_loop():
     global oblivion_active
+    import mss
     
     def oprint(msg):
         current_time = datetime.now().strftime("%H:%M:%S")
@@ -2094,157 +2095,158 @@ def oblivion_bot_loop():
         full_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         blackbox_buffer.append(f"[{full_time}] {msg}")
 
-    def find_img(img_name, conf=0.7, full_screen=False):
-        if full_screen:
-            return safe_find_image(img_name, conf=conf, region="FULL_SCREEN")
-        else:
-            return safe_find_image(img_name, conf=conf)
+    with mss.mss() as thread_sct:
+        def find_img(img_name, conf=0.7, full_screen=False):
+            if full_screen:
+                return safe_find_image(img_name, conf=conf, region="FULL_SCREEN", custom_sct=thread_sct)
+            else:
+                return safe_find_image(img_name, conf=conf, custom_sct=thread_sct)
 
-    while True:
-        if not oblivion_active:
-            time.sleep(0.1)
-            continue
-        
-        try:
-            oprint("=== 망각 모드 시퀀스 시작 ===")
-            
-            # 1) 1번 입력 후 d 0.5초 w 3초 입력 후 x 1회 입력 후 1.png가 사라질때 까지 최대 3초 대기 (사라지면 즉시 다음 단계로)
-            oprint("1단계: '1' 키 입력 -> D 0.5초 유지 -> W 3초 유지 -> X 1회 입력 -> 1.png 소멸 대기(최대 3초)")
-            send_cmd('1'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
-            send_cmd('D'); time.sleep(0.5); send_cmd('R'); time.sleep(0.1)
-            send_cmd('W'); time.sleep(3.0); send_cmd('R'); time.sleep(0.1)
-            send_cmd('X'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
-            
-            start_t = time.time()
-            while time.time() - start_t < 3.0:
-                if not oblivion_active: raise BotStopException()
-                if not find_img('1.png', conf=0.75, full_screen=True):
-                    break
-                time.sleep(0.05)
-            
-            # 2) 1.png가 사라지면 1초 후 스페이스바를 2초동안 누른 뒤 다시 1.png가 인식될때까지 최대 6초 대기(인식되면 즉시 다음 단계로)
-            oprint("2단계: 1초 대기 -> 스페이스바 2초 유지 -> 1.png 인식 대기(최대 6초)")
-            time.sleep(1.0)
-            send_cmd(' '); time.sleep(2.0); send_cmd('R'); time.sleep(0.1)
-            
-            start_t = time.time()
-            while time.time() - start_t < 6.0:
-                if not oblivion_active: raise BotStopException()
-                if find_img('1.png', conf=0.75, full_screen=True):
-                    break
-                time.sleep(0.05)
-            
-            # 3) 1.png가 인식되면 w 3초 입력 후 현재 첨부한 보상 획득.png가 인식될때까지 좌클릭 유지
-            oprint("3단계: W 3초 유지 -> 'reward_gain.png'(ROI) 인식 시까지 좌클릭 유지")
-            send_cmd('W'); time.sleep(3.0); send_cmd('R'); time.sleep(0.1)
-            
-            send_cmd('L') # 좌클릭 유지
-            while oblivion_active:
-                if find_img('reward_gain.png', conf=0.70, full_screen=False):
-                    break
-                time.sleep(0.05)
-            
-            if not oblivion_active: raise BotStopException()
-            
-            # 4) 보상 획득.png이 인식되면 좌클릭 홀딩한걸 해제하고 x 1회 입력 후 0.5초 대기
-            oprint("4단계: 좌클릭 해제 -> X 1회 입력 -> 0.5초 대기")
-            send_cmd('U'); send_cmd('R'); time.sleep(0.1)
-            send_cmd('X'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
-            
-            # 5) 7.png가 인식될때 까지 w 유지 후 7.png가 인식되면 1.png가 인식될때까지 최대 10초 대기 (인식되면 즉시 다음 단계로)
-            oprint("5단계: 7.png 인식될 때까지 W 유지 -> W 해제 -> 1.png 인식 대기(최대 10초)")
-            send_cmd('W')
-            while oblivion_active:
-                if find_img('7.png', conf=0.70, full_screen=True):
-                    break
-                time.sleep(0.05)
-            send_cmd('R'); time.sleep(0.2)
-            
-            start_t = time.time()
-            while time.time() - start_t < 10.0:
-                if not oblivion_active: raise BotStopException()
-                if find_img('1.png', conf=0.75, full_screen=True):
-                    break
-                time.sleep(0.05)
-            
-            # 6) R키 1회 입력 후 첨부한 앵커.png를 인식할때까지 마우스를 우측으로 돌리면서 찾기
-            oprint("6단계: R키 1회 입력 -> 'anchor.png'(전체화면) 인식 시까지 마우스 우측 회전")
-            send_cmd('R'); time.sleep(0.2)
-            while oblivion_active:
-                if find_img('anchor.png', conf=0.70, full_screen=True):
-                    break
-                send_cmd('M35,0')
-                time.sleep(0.04)
-                
-            if not oblivion_active: raise BotStopException()
-            
-            # 7) 앵커.png를 찾았으면 앵커.png에 마우스 커서를 이동하고 첨부한 보물 상자.png가 화면에 인식될때까지 w 유지
-            oprint("7단계: 마우스 커서를 앵커로 이동 -> 'treasure_box.png'(전체화면) 인식 시까지 W 유지")
-            anc_pos = find_img('anchor.png', conf=0.70, full_screen=True)
-            if anc_pos:
-                pyautogui.moveTo(anc_pos.left + anc_pos.width//2, anc_pos.top + anc_pos.height//2)
+        while True:
+            if not oblivion_active:
                 time.sleep(0.1)
+                continue
             
-            send_cmd('W')
-            while oblivion_active:
-                if find_img('treasure_box.png', conf=0.70, full_screen=True):
-                    break
-                time.sleep(0.05)
-            send_cmd('R'); time.sleep(0.2)
-            
-            # 8) 보물 상자.png가 인식되면 F 1회 -> 0.2초 대기 -> F 1회 입력
-            oprint("8단계: F 1회 입력 -> 0.2초 대기 -> F 1회 입력")
-            send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
-            send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.3)
-            
-            # 9) ART + F4를 동시에 누른 뒤 현재 첨부한 재도전.png가 인식되면 Y 입력
-            oprint("9단계: Alt + F4 입력 -> 'retry.png'(ROI) 인식 대기 -> Y 입력")
-            pyautogui.hotkey('alt', 'f4')
-            while oblivion_active:
-                if find_img('retry.png', conf=0.70, full_screen=False):
-                    break
-                time.sleep(0.05)
-            
-            if not oblivion_active: raise BotStopException()
-            send_cmd('Y'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
-            
-            # 10) 최대 3초까지대기 후 7.png가 인식되면 즉시 탈출, 미인식 시 Y 1회 더 입력 후 7.png 탐색
-            oprint("10단계: 7.png 인식 대기(최대 3초) -> 미인식 시 Y 1회 추가 입력")
-            found_7 = False
-            start_t = time.time()
-            while time.time() - start_t < 3.0:
+            try:
+                oprint("=== 망각 모드 시퀀스 시작 ===")
+                
+                # 1) 1번 입력 후 d 0.5초 w 3초 입력 후 x 1회 입력 후 1.png가 사라질때 까지 최대 3초 대기 (사라지면 즉시 다음 단계로)
+                oprint("1단계: '1' 키 입력 -> D 0.5초 유지 -> W 3초 유지 -> X 1회 입력 -> 1.png 소멸 대기(최대 3초)")
+                send_cmd('1'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
+                send_cmd('D'); time.sleep(0.5); send_cmd('R'); time.sleep(0.1)
+                send_cmd('W'); time.sleep(3.0); send_cmd('R'); time.sleep(0.1)
+                send_cmd('X'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
+                
+                start_t = time.time()
+                while time.time() - start_t < 3.0:
+                    if not oblivion_active: raise BotStopException()
+                    if not find_img('1.png', conf=0.75, full_screen=True):
+                        break
+                    time.sleep(0.05)
+                
+                # 2) 1.png가 사라지면 1초 후 스페이스바를 2초동안 누른 뒤 다시 1.png가 인식될때까지 최대 6초 대기(인식되면 즉시 다음 단계로)
+                oprint("2단계: 1초 대기 -> 스페이스바 2초 유지 -> 1.png 인식 대기(최대 6초)")
+                time.sleep(1.0)
+                send_cmd(' '); time.sleep(2.0); send_cmd('R'); time.sleep(0.1)
+                
+                start_t = time.time()
+                while time.time() - start_t < 6.0:
+                    if not oblivion_active: raise BotStopException()
+                    if find_img('1.png', conf=0.75, full_screen=True):
+                        break
+                    time.sleep(0.05)
+                
+                # 3) 1.png가 인식되면 w 3초 입력 후 현재 첨부한 보상 획득.png가 인식될때까지 좌클릭 유지
+                oprint("3단계: W 3초 유지 -> 'reward_gain.png'(ROI) 인식 시까지 좌클릭 유지")
+                send_cmd('W'); time.sleep(3.0); send_cmd('R'); time.sleep(0.1)
+                
+                send_cmd('L') # 좌클릭 유지 (Mouse press)
+                while oblivion_active:
+                    if find_img('reward_gain.png', conf=0.70, full_screen=False):
+                        break
+                    time.sleep(0.05)
+                
                 if not oblivion_active: raise BotStopException()
-                if find_img('7.png', conf=0.70, full_screen=True):
-                    found_7 = True
-                    break
-                time.sleep(0.05)
-            
-            if not found_7:
-                oprint("  > 3초 초과: Y 1회 추가 전송 및 7.png 재탐색")
-                send_cmd('Y'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                
+                # 4) 보상 획득.png이 인식되면 좌클릭 홀딩한걸 해제하고 x 1회 입력 후 0.5초 대기
+                oprint("4단계: 좌클릭 해제 -> X 1회 입력 -> 0.5초 대기")
+                send_cmd('U'); send_cmd('R'); time.sleep(0.1)
+                send_cmd('X'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                
+                # 5) 7.png가 인식될때 까지 w 유지 후 7.png가 인식되면 1.png가 인식될때까지 최대 10초 대기 (인식되면 즉시 다음 단계로)
+                oprint("5단계: 7.png 인식될 때까지 W 유지 -> W 해제 -> 1.png 인식 대기(최대 10초)")
+                send_cmd('W')
                 while oblivion_active:
                     if find_img('7.png', conf=0.70, full_screen=True):
                         break
                     time.sleep(0.05)
+                send_cmd('R'); time.sleep(0.2)
+                
+                start_t = time.time()
+                while time.time() - start_t < 10.0:
+                    if not oblivion_active: raise BotStopException()
+                    if find_img('1.png', conf=0.75, full_screen=True):
+                        break
+                    time.sleep(0.05)
+                
+                # 6) R키 1회 입력 후 첨부한 앵커.png를 인식할때까지 마우스를 우측으로 돌리면서 찾기
+                oprint("6단계: R키 1회 입력 -> 'anchor.png'(전체화면) 인식 시까지 마우스 우측 회전")
+                send_cmd('R'); time.sleep(0.2)
+                while oblivion_active:
+                    if find_img('anchor.png', conf=0.70, full_screen=True):
+                        break
+                    send_cmd('M35,0')
+                    time.sleep(0.04)
                     
-            if not oblivion_active: raise BotStopException()
-            
-            # 11) 1.png가 인식될때까지 대기 후 1.png가 인식되면 1번부터 다시 반복
-            oprint("11단계: 1.png 인식 대기 후 다음 사이클로 전환")
-            while oblivion_active:
-                if find_img('1.png', conf=0.75, full_screen=True):
-                    break
-                time.sleep(0.1)
-            
-            oprint("=== 사이클 정상 완료! ===")
-            
-        except BotStopException:
-            oprint("  > [망각] 정지 신호를 감지하여 작동을 취소하고 정지합니다.")
-            try:
-                arduino.write('U'.encode()); arduino.flush()
-                arduino.write('R'.encode()); arduino.flush()
-            except: pass
-            continue
+                if not oblivion_active: raise BotStopException()
+                
+                # 7) 앵커.png를 찾았으면 앵커.png에 마우스 커서를 이동하고 첨부한 보물 상자.png가 화면에 인식될때까지 w 유지
+                oprint("7단계: 마우스 커서를 앵커로 이동 -> 'treasure_box.png'(전체화면) 인식 시까지 W 유지")
+                anc_pos = find_img('anchor.png', conf=0.70, full_screen=True)
+                if anc_pos:
+                    pyautogui.moveTo(anc_pos.left + anc_pos.width//2, anc_pos.top + anc_pos.height//2)
+                    time.sleep(0.1)
+                
+                send_cmd('W')
+                while oblivion_active:
+                    if find_img('treasure_box.png', conf=0.70, full_screen=True):
+                        break
+                    time.sleep(0.05)
+                send_cmd('R'); time.sleep(0.2)
+                
+                # 8) 보물 상자.png가 인식되면 F 1회 -> 0.2초 대기 -> F 1회 입력
+                oprint("8단계: F 1회 입력 -> 0.2초 대기 -> F 1회 입력")
+                send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
+                send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.3)
+                
+                # 9) ART + F4를 동시에 누른 뒤 현재 첨부한 재도전.png가 인식되면 Y 입력
+                oprint("9단계: Alt + F4 입력 -> 'retry.png'(ROI) 인식 대기 -> Y 입력")
+                pyautogui.hotkey('alt', 'f4')
+                while oblivion_active:
+                    if find_img('retry.png', conf=0.70, full_screen=False):
+                        break
+                    time.sleep(0.05)
+                
+                if not oblivion_active: raise BotStopException()
+                send_cmd('Y'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                
+                # 10) 최대 3초까지대기 후 7.png가 인식되면 즉시 탈출, 미인식 시 Y 1회 더 입력 후 7.png 탐색
+                oprint("10단계: 7.png 인식 대기(최대 3초) -> 미인식 시 Y 1회 추가 입력")
+                found_7 = False
+                start_t = time.time()
+                while time.time() - start_t < 3.0:
+                    if not oblivion_active: raise BotStopException()
+                    if find_img('7.png', conf=0.70, full_screen=True):
+                        found_7 = True
+                        break
+                    time.sleep(0.05)
+                
+                if not found_7:
+                    oprint("  > 3초 초과: Y 1회 추가 전송 및 7.png 재탐색")
+                    send_cmd('Y'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                    while oblivion_active:
+                        if find_img('7.png', conf=0.70, full_screen=True):
+                            break
+                        time.sleep(0.05)
+                        
+                if not oblivion_active: raise BotStopException()
+                
+                # 11) 1.png가 인식될때까지 대기 후 1.png가 인식되면 1번부터 다시 반복
+                oprint("11단계: 1.png 인식 대기 후 다음 사이클로 전환")
+                while oblivion_active:
+                    if find_img('1.png', conf=0.75, full_screen=True):
+                        break
+                    time.sleep(0.1)
+                
+                oprint("=== 사이클 정상 완료! ===")
+                
+            except BotStopException:
+                oprint("  > [망각] 정지 신호를 감지하여 작동을 취소하고 정지합니다.")
+                try:
+                    arduino.write('U'.encode()); arduino.flush()
+                    arduino.write('R'.encode()); arduino.flush()
+                except: pass
+                continue
 
 def fishing_bot(max_allowed_seconds):
     # check_char_popup을 전역 선언 목록에 추가합니다.

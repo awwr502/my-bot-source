@@ -220,7 +220,12 @@ def jitter_sleep(seconds):
     while time.time() - start_t < final_time:
         # '가동 중'에 sleep에 들어왔는데, 도중에 '정지(False)'로 바뀌었을 때만 즉시 폭파!
         current_active = bot_active or victory_active or animal_active or oblivion_active
-        if was_active_at_start and not current_active:
+        
+        # [스레드 안전 조치] 현재 실행 스레드가 메인 스레드 또는 명시적 봇 동작 스레드일 때만 예외를 발생시켜 보조 스레드의 돌연사를 차단합니다.
+        t_name = threading.current_thread().name
+        is_bot_thread = (t_name == "MainThread" or "bot_thread" in t_name)
+        
+        if is_bot_thread and was_active_at_start and not current_active:
             raise BotStopException()
         original_sleep(max(0, min(0.05, final_time - (time.time() - start_t))))
 
@@ -2336,10 +2341,10 @@ def fishing_bot(max_allowed_seconds):
     # check_char_popup을 전역 선언 목록에 추가합니다.
     global bot_active, run_start_time, bot_mode, char_index, char_start_time, char_pure_run_time, state, check_char_popup
     
-    # 서브 봇 백그라운드 스레드 가동
-    threading.Thread(target=victory_coin_bot_loop, daemon=True).start()
-    threading.Thread(target=animal_bot_loop, daemon=True).start()
-    threading.Thread(target=oblivion_bot_loop, daemon=True).start()
+    # 서브 봇 백그라운드 스레드 가동 (스레드 이름을 명시하여 안전한 종료 감시 연동)
+    threading.Thread(target=victory_coin_bot_loop, daemon=True, name="bot_thread_victory").start()
+    threading.Thread(target=animal_bot_loop, daemon=True, name="bot_thread_animal").start()
+    threading.Thread(target=oblivion_bot_loop, daemon=True, name="bot_thread_oblivion").start()
     
     # 봇이 켜지자마자 가장 먼저 사진들부터 메모리에 싹 다 올립니다.
     preload_all_images()

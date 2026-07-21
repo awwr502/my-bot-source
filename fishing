@@ -2090,6 +2090,32 @@ def animal_bot_loop():
                 except: pass
                 continue
 
+def find_treasure_box_multi_scale(target_img_path, conf=0.55):
+    """이동 중 발생하는 보물상자 UI의 극심한 크기(스케일) 변화와 카메라 흔들림을 무력화하는 고밀도 다중 스케일 이진화 엔진"""
+    try:
+        screen_gray = fast_cv_screenshot(gray=True)
+        template = IMAGE_CACHE.get(target_img_path)
+        if template is None: return False
+        
+        # 1. 캡처 화면 가우시안 이진화 전처리 (배경 노이즈 및 모션 블러 실시간 감쇄)
+        screen_bin = cv2.adaptiveThreshold(screen_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        
+        # 2. 다양한 스케일 대입 (거리 좁혀짐에 따른 글자 크기 확장 완벽 방어)
+        scales = [0.5, 0.7, 0.85, 1.0, 1.15, 1.3]
+        for scale in scales:
+            w, h = int(template.shape[1] * scale), int(template.shape[0] * scale)
+            if w < 10 or h < 10: continue
+            resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
+            resized_bin = cv2.adaptiveThreshold(resized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+            
+            res = cv2.matchTemplate(screen_bin, resized_bin, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(res)
+            if max_val >= conf:
+                return True
+        return False
+    except:
+        return False
+
 def oblivion_bot_loop():
     global oblivion_active
     import mss
@@ -2250,6 +2276,7 @@ def oblivion_bot_loop():
                     
                 if not oblivion_active: raise BotStopException()
                 oprint("  > [성공] 앵커 목표 감지 완료")
+                time.sleep(0.5)
                 
                 # 7단계
                 oprint("[7단계 시작] 오브젝트 정합성 조준")
@@ -2265,8 +2292,8 @@ def oblivion_bot_loop():
                         toggle_stop()
                         raise BotStopException()
                         
-                    # 캐릭터 이동 시 생기는 3D 카메라 흔들림(Motion Blur)을 극복하기 위해 임계값을 0.62로 하향하여 기동 중 조기 제동을 보장합니다.
-                    if find_img('treasure_box.png', conf=0.62, full_screen=True):
+                    # 거리 좁혀짐에 따른 스케일 변화와 흔들림을 모두 관통하는 다중 스케일 조준 엔진 호출 (매칭률 0.55 통과 시 칼제동)
+                    if find_treasure_box_multi_scale('treasure_box.png', conf=0.55):
                         break
                     time.sleep(0.05)
                 

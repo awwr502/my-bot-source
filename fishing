@@ -2290,35 +2290,56 @@ def oblivion_bot_loop():
                 oprint("  > [성공] 앵커 목표 감지 완료")
                 time.sleep(0.5)
                 
-                # 7단계
-                
-                oprint("  > [입력] 'W' 키 유지")
-                send_cmd('W')
-                oprint("  > [대기] 'treasure_box.png'(보물상자) 인식 대기")
-                while oblivion_active:
-                    # [포커스/UAC/훅 씹힘 자가치유] 전역 훅이 차단당한 상황에서도 물리적인 [ 키 입력을 실시간으로 직접 강제 감지하여 정지시킵니다.
-                    if keyboard.is_pressed('['):
-                        toggle_stop()
-                        raise BotStopException()
-                        
-                    # 거리 좁혀짐에 따른 스케일 변화와 흔들림을 모두 관통하는 다중 스케일 조준 엔진 호출 (매칭률 0.55 통과 시 칼제동)
-                    if find_treasure_box_multi_scale('treasure_box.png', conf=0.55):
-                        break
-                    time.sleep(0.05)
-                
-                # 수색 대기 중 [ 키 입력 시 즉각적인 강제 제동 처리
+                # 7~8단계 통합: 점진적 전진 및 확정 수거 시퀀스 (인치웜 솔루션)
+                oprint("[7~8단계 시작] 3D 정렬 및 점진적 보상 수거 가동")
+                align_view_by_anchor('anchor.png') # 3D 정밀 시점 정렬로 전방 조준
                 if not oblivion_active: raise BotStopException()
                 
-                oprint("  > [입력] 'W' 키 해제")
+                # 1. 안전하게 상자 앞 영역까지 최초 2.0초 전진 수행
+                oprint("  > [전진] 안전 영역까지 최초 2.0초 전진 시작...")
+                send_cmd('W')
+                time.sleep(2.0)
                 send_cmd('R'); time.sleep(0.2)
                 
-                # 8단계
-                oprint("[8단계 시작] 전리품 수거")
-                oprint("  > [입력] 'F' 키 1회 입력 (열기)")
-                send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                looted = False
+                attempts = 0
                 
-                oprint("  > [입력] 'F' 키 1회 입력 (수령)")
-                send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.3)
+                # 상자를 열고 보상을 획득할 때까지 "전진 -> 수거 시도 -> 2D UI 검증" 루프 작동 (최대 10회)
+                while oblivion_active and attempts < 10:
+                    attempts += 1
+                    oprint(f"  > [수거 시도 {attempts}회차] 상자 열기(F) 및 수령(F) 시도...")
+                    
+                    # F 2회 연속 입력으로 상자 상호작용 및 습득 수행
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
+                    
+                    # 보상 획득 팝업(reward_gain.png)이 정상적으로 떴는지 확인 (0.6초 대기 확인)
+                    check_start = time.time()
+                    while time.time() - check_start < 0.6:
+                        if keyboard.is_pressed('['):
+                            toggle_stop()
+                            raise BotStopException()
+                        
+                        # 2D 플랫 UI인 보상획득 배너가 선명하게 매칭되는지 확인
+                        if find_img('reward_gain.png', conf=0.65, full_screen=False):
+                            looted = True
+                            break
+                        time.sleep(0.05)
+                        
+                    if looted:
+                        oprint("  > 🎉 [성공] 'reward_gain.png' 보상 수령 완료 팝업 감지! 수거 성공.")
+                        break
+                    
+                    # 수령 실패 시 거리가 부족한 것으로 판단, 0.5초 추가 미세 전진 후 재시도
+                    oprint("  > [미검출] 보상 팝업 미확인. 상자와의 거리 단축을 위해 0.5초 미세 전진합니다.")
+                    send_cmd('W')
+                    time.sleep(0.5)
+                    send_cmd('R'); time.sleep(0.2)
+                    
+                if not oblivion_active: raise BotStopException()
+                
+                if not looted:
+                    oprint("  > ⚠️ [경고] 최대 수색 한계치 도달. 안전을 위해 다음 단계를 강제 강행합니다.")
                 
                 # 9단계
                 oprint("[9단계 시작] 인스턴스 재도전 접수")

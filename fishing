@@ -128,12 +128,15 @@ def dump_blackbox_log(reason):
 # 즉각 정지를 위한 커스텀 예외 클래스
 class BotStopException(Exception): pass
 class BotRestartException(Exception): pass
+class BotDeathException(Exception): pass # [사망복구] 사망 복구 전용 예외 클래스 신설
 
 # 모든 time.sleep 에 일괄적으로 +-0.005초 랜덤 딜레이 적용
 original_sleep = time.sleep
 victory_active = False # [승리코인] 전역 상태 변수 추가
 animal_active = False # [동물포획] 전역 상태 변수 추가
 oblivion_active = False # [망각모드] 전역 상태 변수 추가
+oblivion_stage = 0      # [사망감시] 망각모드 진행 단계 트래커
+death_trigger = False   # [사망복구] 캐릭터 사망 복구 신호 트리거
 victory_mode = 1 # 승리코인 모드 선택 변수 (1 또는 2)
 original_brightness = 100 # [화면 밝기] 모니터 원래 밝기 복구용 저장소
 is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
@@ -228,6 +231,11 @@ def jitter_sleep(seconds):
         
         if is_bot_thread and was_active_at_start and not current_active:
             raise BotStopException()
+            
+        # [사망 긴급복구 인터셉터] 사냥 도중 사망 트리거가 켜지면 슬립 대기를 즉시 강제 취소하고 사망 전용 예외를 발생시킵니다.
+        if is_bot_thread and death_trigger:
+            raise BotDeathException()
+            
         original_sleep(max(0, min(0.05, final_time - (time.time() - start_t))))
 
 # 기존 time.sleep 함수를 커스텀 함수로 바꿔치기
@@ -2511,6 +2519,128 @@ def oblivion_bot_loop():
                     arduino.write('R'.encode()); arduino.flush()
                 except: pass
                 continue
+            except BotDeathException:
+                oprint("  > 💀 [사망 복구] 캐릭터 사망 감지! 10단계 던전 재진입 시퀀스를 시작합니다 (수리 생략).")
+                global death_trigger
+                death_trigger = False # 사망 트리거 즉각 클리어
+                
+                try:
+                    # 복구 연산 가동 전 물리 키보드/마우스 눌려있는 버퍼 안전 해제
+                    arduino.write('U'.encode()); arduino.flush()
+                    arduino.write('R'.encode()); arduino.flush()
+                except: pass
+                time.sleep(0.5)
+                
+                # 1) alt + f4를 눌러서(소문자 q 명령어) sys_2.png가 감지되면 F 입력
+                oprint("  > [복구 1단계] Alt + F4 입력 -> 'sys_2.png' 대기")
+                send_cmd('q'); time.sleep(0.15); send_cmd('R'); time.sleep(0.1)
+                while oblivion_active:
+                    if find_img('sys_2.png', conf=0.70, full_screen=True):
+                        break
+                    time.sleep(0.1)
+                if not oblivion_active: raise BotStopException()
+                oprint("  > [복구 1단계] 'sys_2.png' 감지됨 -> 'F' 키 입력")
+                send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                
+                # 2) 최대 10초까지 1.png가 인식되는지 능동대기(1.png가 인식되면 즉시 다음단계로)
+                oprint("  > [복구 2단계] '1.png' 인식 대기 (최대 10초)")
+                start_t = time.time()
+                while time.time() - start_t < 10.0:
+                    if not oblivion_active: raise BotStopException()
+                    if find_img('1.png', conf=0.75, full_screen=True):
+                        break
+                    time.sleep(0.1)
+                
+                # [사망 복구 특권 분기] 수리 조작(3~4단계)을 완벽히 건너뛰고 바로 5단계 'F' 던전입장 메뉴 가동으로 점프!
+                oprint("  > [복구 5단계] 사망 복구 상태이므로 장비 수리 생략 -> 던전 입장 메뉴 열기 'F' 키 입력")
+                send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                
+                if not oblivion_active: raise BotStopException()
+                
+                # 6) 현재 첨부한 던전 입장.png가 인식될 때 까지 대기 후 인식되면 0.5초 대기 (ROI 학습형)
+                oprint("  > [복구 6단계] 'dungeon_enter.png'(던전 입장) 인식 대기")
+                while oblivion_active:
+                    if find_img('dungeon_enter.png', conf=0.70, full_screen=False):
+                        break
+                    time.sleep(0.1)
+                if not oblivion_active: raise BotStopException()
+                oprint("  > [복구 6단계] 'dungeon_enter.png' 감지! 0.5초 대기")
+                time.sleep(0.5)
+                
+                # 7) D 입력 -> 0.2초 대기 -> D입력 후 현재 첨부한 사진 마스터.png 인식(미인식 시 D 1회 입력후 재인식) (ROI 학습형)
+                oprint("  > [복구 7단계] 난이도 조절 'D' 키 연속 2회 입력...")
+                send_cmd('D'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
+                send_cmd('D'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
+                
+                while oblivion_active:
+                    if find_img('master.png', conf=0.70, full_screen=False):
+                        oprint("  > [복구 7단계] 'master.png'(Lv.60) 포착 완료!")
+                        break
+                    oprint("  > [복구 7단계] 'master.png' 미검출 -> 'D' 키 1회 추가 전송 및 재조준...")
+                    send_cmd('D'); time.sleep(0.1); send_cmd('R'); time.sleep(0.3)
+                if not oblivion_active: raise BotStopException()
+                
+                # 8) 7번이 인식되면 F 입력 후 7.png가 인식되는지 확인 후 미인식 시 F 재입력
+                oprint("  > [복구 8단계] 'F' 키 입력 후 '7.png' 확인")
+                while oblivion_active:
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                    found_7 = False
+                    wait_7 = time.time()
+                    while time.time() - wait_7 < 1.0:
+                        if find_img('7.png', conf=0.70, full_screen=True):
+                            found_7 = True
+                            break
+                        time.sleep(0.05)
+                    if found_7:
+                        oprint("  > [복구 8단계] '7.png' 인입 완료!")
+                        break
+                    oprint("  > [복구 8단계] '7.png' 미인입 -> 'F' 키 재전송...")
+                if not oblivion_active: raise BotStopException()
+                
+                # 9) 8번이 인식되면 1.png가 인식될때 까지 대기
+                oprint("  > [복구 9단계] '1.png' 로딩 대기")
+                while oblivion_active:
+                    if find_img('1.png', conf=0.75, full_screen=True):
+                        break
+                    time.sleep(0.2)
+                if not oblivion_active: raise BotStopException()
+                
+                # 10) 1.png가 인식되면 0.5초 대기 후 1단계 부터 시작
+                oprint("  > [복구 10단계] 복구 완료! 0.5초 대기 후 망각 모드 처음부터 무한 리스타트")
+                time.sleep(0.5)
+                raise BotRestartException()
+
+def death_monitor_loop():
+    global oblivion_active, oblivion_stage, death_trigger
+    import mss
+    import cv2
+    import numpy as np
+    
+    with mss.mss() as death_sct:
+        while True:
+            # 1단계부터 6단계 돌입 직전(사냥 액티브 대역)에서만 감시 가동
+            if not oblivion_active or oblivion_stage < 1 or oblivion_stage >= 6:
+                time.sleep(0.5)
+                continue
+                
+            try:
+                # 1장 전체화면을 찍어 사망 화면(death.png) 감시 (가우시안 보정 자동 연동)
+                sct_img = death_sct.grab(death_sct.monitors[1])
+                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                
+                template = IMAGE_CACHE.get('death.png')
+                if template is not None:
+                    res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, _ = cv2.minMaxLoc(res)
+                    
+                    if max_val >= 0.75:
+                        bprint("\n🚨🚨🚨 [사망 감지] 캐릭터 사망(사망.png) 확인! 10단계 던전 재진입 복구 루틴을 트리거합니다. 🚨🚨🚨")
+                        send_blynk_notification("💀 캐릭터 사망 감지! 던전 자동 재진입 시퀀스 가동")
+                        death_trigger = True # 사망 복구 트리거 활성화
+                        time.sleep(1.0)
+            except:
+                pass
+            time.sleep(0.2)
 
 def fishing_bot(max_allowed_seconds):
     # check_char_popup을 전역 선언 목록에 추가합니다.

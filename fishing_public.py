@@ -1015,12 +1015,12 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                     "height": int(target_monitor["height"] * 0.5)
                 }
             elif img_path == 'bait_change.png':
-                # 가로는 극좌측 25%만 확인하고, 세로는 45% ~ 68% 범위로 한정하여 하단 채팅창(745px 이후) 유입을 100% 물리 차단
+                # [UI 배율 호환 패치] 세로 수색 범위를 40% ~ 75%로 확장하여 다양한 UI 크기에서도 미끼 변경 아이콘이 잘리지 않고 감지되도록 보완하되, 채팅창(75% 이후) 간섭은 유지 차단합니다.
                 target_monitor = {
                     "left": int(target_monitor["left"]),
-                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.45),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.40),
                     "width": int(target_monitor["width"] * 0.25),
-                    "height": int(target_monitor["height"] * 0.23)
+                    "height": int(target_monitor["height"] * 0.35)
                 }
             elif img_path == 'green_range.png':
                 target_monitor = {
@@ -1044,12 +1044,12 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                     "height": int(target_monitor["height"] * 0.5)
                 }
             elif img_path == 'bait_change.png':
-                # 가로는 극좌측 25%만 확인하고, 세로는 45% ~ 68% 범위로 한정하여 하단 채팅창(745px 이후) 유입을 100% 물리 차단
+                # [UI 배율 호환 패치] 세로 수색 범위를 40% ~ 75%로 확장하여 다양한 UI 크기에서도 미끼 변경 아이콘이 잘리지 않고 감지되도록 보완하되, 채팅창(75% 이후) 간섭은 유지 차단합니다.
                 target_monitor = {
                     "left": int(target_monitor["left"]),
-                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.45),
+                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.40),
                     "width": int(target_monitor["width"] * 0.25),
-                    "height": int(target_monitor["height"] * 0.23)
+                    "height": int(target_monitor["height"] * 0.35)
                 }
             elif img_path == 'green_range.png':
                 target_monitor = {
@@ -1577,16 +1577,9 @@ def afk_monitor_loop():
                                     break
                             bprint("  > [성공] UI 회수 완료.")
                         
-                        # [누락 복구] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)
-                        bprint("  > [대기] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)...")
-                        wait_idle_start = time.time()
-                        while time.time() - wait_idle_start < 6.0:
-                            sct_img_idle = afk_sct.grab(afk_sct.monitors[1])
-                            screen_idle = cv2.cvtColor(np.array(sct_img_idle), cv2.COLOR_BGRA2GRAY)
-                            temp_idle = IMAGE_CACHE.get('bait_change.png')
-                            if temp_idle is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_idle, temp_idle, cv2.TM_CCOEFF_NORMED))[1] >= 0.80:
-                                break
-                            time.sleep(0.8)
+                        # [패치 반영] ESC 타격 시 낚싯대를 아예 장착 해제하므로, 모션 대기를 생략하고 0.5초 안전 대기만 수행합니다.
+                        bprint("  > [대기] 낚싯대 해제에 따른 0.5초 안정화 대기...")
+                        time.sleep(0.5)
 
                         # 위치 보정 (S 0.8초 -> W 0.8초)
                         bprint("  > [보정] 해제 완료. 위치 보정(S->W) 수행...")
@@ -2406,9 +2399,9 @@ def oblivion_bot_loop():
                 oprint("  > [입력] 'r' 키 1회 입력")
                 send_cmd('r'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
                 
-                oprint("  > [회전] 'anchor.png'(앵커) 포착될 때까지 마우스 우측 고속 회전")
+                oprint("  > [회전] 'anchor1.png'(앵커) 포착될 때까지 마우스 우측 고속 회전")
                 while oblivion_active:
-                    if find_img('anchor.png', conf=0.70, full_screen=True):
+                    if find_img('anchor1.png', conf=0.70, full_screen=True):
                         break
                     send_cmd('M260,0')  # 35에서 250으로 회전각 상향 (속도 대폭 증가)
                     time.sleep(0.02)    # 연산 지연시간 최소화
@@ -2699,7 +2692,7 @@ def fishing_bot(max_allowed_seconds):
     force_watchdog_reason = None # [신규] 명시적 워치독 트리거 사유
 
     def auto_equip_rod():
-        """3곳에 흩어진 낚싯대 장착 로직을 통합한 단일 모듈"""
+        """[패치 반영] 0번 클릭 시 장착 및 펼치기 통합(3.0초) 적용 버전"""
         nonlocal force_watchdog_reason, cast_fail_count
         global check_char_popup
     
@@ -2724,65 +2717,31 @@ def fishing_bot(max_allowed_seconds):
                 force_watchdog_reason = "장착 10회 연속 실패(예비 소진)"
                 return False
 
-            if safe_find_image('bait_change.png', 0.70):
-                bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
+            # 1. 낚싯대가 이미 완벽히 펼쳐져 있는지 확인
+            if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.76):
+                bprint("  > ✅ [장착 완료] 낚싯대가 펼쳐진 상태로 준비되어 있습니다!")
                 cast_fail_count = 0 # 장착 완료 확인 시 캐스팅 실패 카운트 즉시 초기화
                 return True
 
-            bprint("  > 🎣 [탐색 1단계] 낚싯대 파지 상태 확인 중...")
-            current_rod_state = None
-            wait_throw = time.time()
+            # 2. 손에 아무것도 없는 상태로 판정 -> 0번 전송 후 3초 애니메이션 대기
+            bprint("  > 🎣 [장착 개시] 숫자 '0' 입력 및 장착/펼치기 통합 대기 (3.0초)...")
+            send_cmd('0'); time.sleep(0.1); send_cmd('R')
             
-            while time.time() - wait_throw < 1.5 and bot_active:
+            # 3.0초 동안 0.1초씩 끊어서 정지 유무 모니터링하며 대기 (반응성 유지)
+            wait_start = time.time()
+            while time.time() - wait_start < 3.0:
+                if not bot_active: return False
                 if check_exit_notification(): return False
-                if safe_find_image('broken_rod.png', 0.76):
-                    current_rod_state = "UNFOLDED"
-                    break
-                elif safe_find_image('throw_btn.png', 0.70):
-                    current_rod_state = "HELD"
-                    break
-                time.sleep(0.05)
+                time.sleep(0.1)
 
-            if not current_rod_state and bot_active:
-                if safe_find_image('broken_rod.png', 0.76, region="FULL_SCREEN"):
-                    current_rod_state = "UNFOLDED"
-                elif safe_find_image('throw_btn.png', 0.70, region="FULL_SCREEN"):
-                    current_rod_state = "HELD"
-
-            if not current_rod_state:
-                bprint("  > 🔄 [낚싯대 스왑] 아이콘 미인식. 숫자 '0' 입력 후 재탐색...")
-                send_cmd('0'); time.sleep(0.1); send_cmd('R')
-                time.sleep(0.6)
-                continue
-
-            if current_rod_state == "UNFOLDED":
-                bprint("  > ✅ [장착 완료] 낚싯대가 이미 펼쳐져 있습니다. 즉시 낚시를 재개합니다.")
-                cast_fail_count = 0 # 장착 완료 확인 시 캐스팅 실패 카운트 즉시 초기화
+            # 3. 대기 후 다시 펼침 확인
+            if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.76):
+                bprint("  > ✅ [장착 성공] 3초 대기 후 낚싯대 자동 펼치기 완료!")
+                cast_fail_count = 0
                 return True
-                
-            elif current_rod_state == "HELD":
-                bprint("  > 🎣 [클릭 2단계] '던지기' 아이콘 확인! 좌클릭(C) 입력 후 장착 대기...")
-                send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                
-                found_start = False
-                wait_start = time.time()
-                while time.time() - wait_start < 1.5 and bot_active:
-                    if safe_find_image('bait_change.png', 0.70):
-                        found_start = True
-                        break
-                    time.sleep(0.05)
-                    
-                if not found_start and bot_active:
-                    if safe_find_image('bait_change.png', 0.70, region="FULL_SCREEN"):
-                        found_start = True
-                        
-                if found_start:
-                    bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
-                    cast_fail_count = 0 # 장착 완료 확인 시 캐스팅 실패 카운트 즉시 초기화
-                    return True
-                else:
-                    bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터 다시 시도합니다.")
-                    continue
+            else:
+                bprint("  > ⚠️ [재시도] 낚싯대 인지 실패. 다시 시도합니다.")
+                continue
         return False
 
     while True:
@@ -2968,7 +2927,7 @@ def fishing_bot(max_allowed_seconds):
                 
                 if is_manual_start:
                     # [트랙 A: 수동 시작] 실수로 켠 경우를 대비해 낚싯대 상태(미끼변경, 던지기, 내구도소진) 중 하나라도 감지될 때만 낚시 모드(State 1)로 진입합니다.
-                    if safe_find_image('bait_change.png', 0.70) or safe_find_image('throw_btn.png', 0.70) or safe_find_image('broken_rod.png', 0.70):
+                    if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70):
                         bprint("  > 정상 낚시 모드 진입 (State 1)")
                         cast_fail_count = 0 # 수동 시작 시 실패 카운트 초기화
                         state = 1
@@ -3307,226 +3266,58 @@ def fishing_bot(max_allowed_seconds):
             # 루프가 끝나면 스레드 풀을 깔끔하게 해제
                 species_executor.shutdown(wait=False)
 
-            # --- [State 4] 파이팅 (투트랙 멀티스레딩 최적화) ---
+            # --- [State 4] 파이팅 (DDR 신형 QTE 엔진 가동) ---
             elif state == 4:
-                bprint("[State 4] 파이팅 모드 진입 (투트랙 CCTV 엔진 가동)")
+                bprint("[State 4] 파이팅 모드 진입 (DDR 신형 QTE 엔진 가동)")
                 
-                # 1. 진입 초기 UI 안착 대기
-                wait_ui_start = time.time()
-                ui_pos = None # [신규] 좌표를 한 번에 저장할 변수
+                missing_ui_count = 0
                 
-                while time.time() - wait_ui_start < 2.0 and bot_active:
-                    ui_pos = safe_find_image('fishing_mode.png', 0.70) # 유저가 원하는 임계값으로 수정 가능
-                    if ui_pos:
+                while bot_active:
+                    if not bot_active: raise BotStopException()
+                    if check_exit_notification():
+                        state = 1
                         break
-                    time.sleep(0.1)
+                        
+                    # 1. 성공 수거창 감지 시 즉각 5단계 전이
+                    if safe_find_image('catch_F.png', 0.70):
+                        bprint("  > 🎉 [성공] 수거 창(catch_F.png) 포착! 5단계(수거)로 전이합니다.")
+                        send_cmd('R')
+                        state = 5
+                        break
+                        
+                    # 2. 물고기가 끊어졌거나 도망가서 기본 낚싯대 준비 상태로 돌아간 경우 감지
+                    if safe_find_image('bait_change.png', 0.70, region="FULL_SCREEN"):
+                        bprint("  > ⚠️ [실패] 낚싯대 준비 상태 조기 복귀 감지 -> 1단계 복귀")
+                        send_cmd('R')
+                        state = 1
+                        break
 
-                # [폴백 추가] 2초간 못 찾았으면 전체화면으로 1회 강제 스캔하여 ROI 자가 치유 유도
-                if not ui_pos and bot_active:
-                    bprint("  > [폴백] 2초 내 파이팅 UI 탐색 실패. 전체화면 정밀 스캔을 1회 시도합니다.")
-                    ui_pos = safe_find_image('fishing_mode.png', 0.70, region="FULL_SCREEN")
-
-                if not bot_active: raise BotStopException()
-
-                # 전체화면 스캔으로도 실패했다면 낚시 취소
-                if not ui_pos:
-                    bprint("  > [에러] UI 인식 최종 실패. 블라인드 파이팅을 방지하기 위해 낚시를 취소하고 초기화합니다.")
-                    send_cmd('E'); time.sleep(0.5); send_cmd('R')
-                    state = 1
-                    continue
-
-                time.sleep(0.2) # UI 애니메이션 안정화 대기 (스캔은 다시 하지 않음)
-                missing_ui_count = 0 
-                
-                # [핵심 1] 렌즈 고정 (110x110) - 이미 찾아둔 ui_pos 좌표를 그대로 재활용
-                cx = ui_pos.left + ui_pos.width // 2
-                cy = ui_pos.top + ui_pos.height // 2
-                x1 = max(0, cx - 55)
-                y1 = max(0, cy - 55)
-                gauge_roi = (int(x1), int(y1), 110, 110)
-                
-                # 스레드 통신용 플래그
-                fight_status = "KEEP"
-                is_qte_active = False
-                fighting_active = True
-
-                # [분신 역할] 백그라운드에서 QTE와 성공 여부만 조용히 감시하는 CCTV
-                def check_status_cctv():
-                    nonlocal missing_ui_count, is_qte_active, fight_status, fighting_active
-                    import mss
-                    import cv2
-                    import numpy as np
-
-                    # [오류 해결] 지역 변수 누락으로 인한 쓰레드 다운 현상 해결을 위해 카운터 초기값 선언
-                    catch_f_frames = 0
-
-                    with mss.mss() as cctv_sct:
-                        while fighting_active and bot_active:
-                            # [핵심 최적화] 5번씩 찍던 캡처를 딱 1번의 전체화면 캡처로 통합! (캡처 병목 원천 차단)
-                            sct_full = cctv_sct.grab(cctv_sct.monitors[1])
-                            screen_full_gray = cv2.cvtColor(np.array(sct_full), cv2.COLOR_BGRA2GRAY)
-
-                            def thread_safe_find(img_name, conf):
-                                try:
-                                    template = IMAGE_CACHE.get(img_name)
-                                    if template is None: return False
-                                    
-                                    # 캡처를 새로 하지 않고, 1장 찍어둔 전체화면에서 ROI 구역만 수학적으로 잘라냄 (속도 극대화)
-                                    if img_name in ROI_SAMPLER and ROI_SAMPLER[img_name].get('master_box'):
-                                        mb = ROI_SAMPLER[img_name]['master_box']
-                                        x, y, w, h = mb['left'], mb['top'], mb['width'], mb['height']
-                                        roi_gray = screen_full_gray[y:y+h, x:x+w]
-                                        res = cv2.matchTemplate(roi_gray, template, cv2.TM_CCOEFF_NORMED)
-                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                        
-                                        if max_val >= conf:
-                                            # 좌표 보정 및 동적 패딩 갱신
-                                            real_x, real_y = max_loc[0] + x, max_loc[1] + y
-                                            th, tw = template.shape
-                                            roi_data = ROI_SAMPLER[img_name]
-                                            roi_data['samples'].append((real_x, real_y, tw, th))
-                                            
-                                            if len(roi_data['samples']) >= 3:
-                                                pad_x = max(30, int(tw * 0.25))
-                                                pad_y = max(30, int(th * 0.25))
-                                                min_x = min(s[0] for s in roi_data['samples']) - pad_x
-                                                min_y = min(s[1] for s in roi_data['samples']) - pad_y
-                                                max_x = max(s[0] + s[2] for s in roi_data['samples']) + pad_x
-                                                max_y = max(s[1] + s[3] for s in roi_data['samples']) + pad_y
-                                                roi_data['master_box'] = {
-                                                    "left": int(max(0, min_x)), "top": int(max(0, min_y)),
-                                                    "width": int(max_x - min_x), "height": int(max_y - min_y)
-                                                }
-                                            return True
-                                        return False
-                                    else:
-                                        # ROI가 없을 땐 전체화면 배열 그대로 매칭
-                                        res = cv2.matchTemplate(screen_full_gray, template, cv2.TM_CCOEFF_NORMED)
-                                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                                        
-                                        if max_val >= conf:
-                                            real_x, real_y = max_loc[0], max_loc[1]
-                                            th, tw = template.shape
-                                            if img_name not in ROI_SAMPLER:
-                                                ROI_SAMPLER[img_name] = {'samples': deque(maxlen=10), 'master_box': None}
-                                            ROI_SAMPLER[img_name]['samples'].append((real_x, real_y, tw, th))
-                                            return True
-                                        return False
-                                except: return False
-
-                            # 1장의 사진으로 5가지 UI를 병목 없이 순식간에 검사
-                            if thread_safe_find('exit_notice.png', 0.80): 
-                                bprint("  > [CCTV 긴급] 잠수방지 알림 포착. 파이팅 강제 초기화")
-                                fight_status = "RESET"; break
-
-                            qte_found = False
-                            for img, key in [('press_A.png', 'A'), ('press_D.png', 'D')]:
-                                if thread_safe_find(img, 0.60):
-                                    missing_ui_count = 0 
-                                    is_qte_active = True
-                                    send_cmd('U') 
-                                    bprint(f"  ! [QTE] {key} 대응 시작")
-                                    qte_start_time = time.time()
-                                    
-                                    while thread_safe_find(img, 0.60) and bot_active:
-                                        if time.time() - qte_start_time > 8.0:
-                                            bprint(f"  > [경고] QTE({key}) 8초 초과! 오염된 ROI를 파기하고 파이팅을 재시작합니다.")
-                                            if img in ROI_SAMPLER: del ROI_SAMPLER[img]
-                                            fight_status = "RESTART"
-                                            break
-                                        if thread_safe_find('exit_notice.png', 0.85):
-                                            fight_status = "RESET"
-                                            break
-                                        send_cmd(key); time.sleep(0.05)
-
-                                        sct_full = cctv_sct.grab(cctv_sct.monitors[1])
-                                        screen_full_gray = cv2.cvtColor(np.array(sct_full), cv2.COLOR_BGRA2GRAY)
-                                        
-                                    send_cmd('R')
-                                    is_qte_active = False 
-                                    qte_found = True
-                                    break
-                            
-                            if fight_status in ["RESET", "RESTART"]: break
-                            if qte_found: continue
-
-                            # [논리 교차 검증]
-                            if thread_safe_find('catch_F.png', 0.70):
-                                catch_f_frames += 1
-                                if catch_f_frames >= 3:
-                                    if not thread_safe_find('fishing_mode.png', 0.70):
-                                        fight_status = "FINISH"; break
-                                    else:
-                                        catch_f_frames = 0 
-                            else:
-                                catch_f_frames = 0
-
-                            if not thread_safe_find('fishing_mode.png', 0.70): 
-                                missing_ui_count += 1
-                                if missing_ui_count >= 15: 
-                                    bprint("  > [CCTV] 파이팅 UI 15회(1.5초) 미발견. 낚싯줄 끊어짐으로 간주하여 캐스팅으로 복귀합니다.")
-                                    fight_status = "RESET"; break
-                            else:
-                                missing_ui_count = 0 
-                            
-                            time.sleep(0.1)
-
-                # 분신(CCTV 스레드) 백그라운드 출격
-                threading.Thread(target=check_status_cctv, daemon=True).start()
-
-                bprint("  > [AI 파이팅] 초고속 텐션 전담 모드 가동 (병목 0%)")
-                is_pulling = False 
-                fight_start_time = time.time()
-                
-                # [본체 역할] 오로지 텐션만 0.001초 속도로 바라보며 칼같이 마우스를 제어함
-                while True: 
-                    if not bot_active: 
-                        fighting_active = False # 분신도 함께 퇴근시킴
-                        raise BotStopException()
-
-                    # CCTV(분신)에서 종료 신호가 왔는지 확인
-                    if fight_status == "FINISH": 
-                        send_cmd('U'); fighting_active = False; state = 5; break
-                    if fight_status == "RESET": 
-                        send_cmd('U'); fighting_active = False
-                        bprint("  > [모션 대기] 낚싯대 회수 애니메이션을 기다립니다 (1.5초)...")
-                        time.sleep(1.0)
-                        state = 1; break
-                    if fight_status == "RESTART": 
-                        send_cmd('U'); fighting_active = False
-                        bprint("  > [모션 대기] 낚싯대 회수 애니메이션을 기다립니다 (1.5초)...")
-                        time.sleep(1.0)
-                        state = 4; break
+                    # 3. 신형 QTE 버튼 매칭 (A와 D의 형태 오판독 방지를 위해 임계값 0.82로 정밀 검증)
+                    # full_screen=False 이므로 자가 치유형 ROI 및 가우시안 이진화 필터가 자동으로 동시 작동합니다.
+                    found_A = safe_find_image('fishing_A.png', conf=0.82, full_screen=False)
+                    found_D = safe_find_image('fishing_D.png', conf=0.82, full_screen=False)
                     
-                    # QTE 진행 중이면 마우스에서 손을 떼고 대기
-                    if is_qte_active:
-                        is_pulling = False
-                        time.sleep(0.01)
-                        continue
-
-                    # 1. 텐션 스캔 (렉 유발 로직이 분리되어 무조건 0.001초 응답 보장)
-                    red_count = get_tension_status(gauge_roi)
-                    
-                    # 2. 파이팅 진입 직후 0.1초 동안만 살짝 당겨줌 (시작하자마자 터짐 방지)
-                    if time.time() - fight_start_time < 0.1:
-                        if not is_pulling:
-                            send_cmd('L')
-                            is_pulling = True
-                        time.sleep(0.01)
+                    if found_A:
+                        bprint("  > ⌨️ [입력] 'A' 키 입력")
+                        send_cmd('A'); time.sleep(0.08); send_cmd('R')
+                        missing_ui_count = 0
+                    elif found_D:
+                        bprint("  > ⌨️ [입력] 'D' 키 입력")
+                        send_cmd('D'); time.sleep(0.08); send_cmd('R')
+                        missing_ui_count = 0
                     else:
-                        # 3. 비대칭 텐션 제어 (놓을 땐 0.000초 즉각 반응, 당길 땐 브레이크)
-                        # 빨간색이 15픽셀만 보여도 초고속으로 손을 뗍니다.
-                        if red_count >= 15:
-                            if is_pulling:
-                                send_cmd('U') # 이중 릴리즈 및 딜레이 삭제 (응답속도 극대화)
-                                is_pulling = False
-                            time.sleep(0.005) # 손을 떼고 나서는 아주 짧게만 대기
+                        # 낚시 인터페이스(fishing_mode) 소멸 여부 실시간 확인 (1.5초 이상 소멸 시 대기 상태 복귀)
+                        if not safe_find_image('fishing_mode.png', 0.70, region="FULL_SCREEN"):
+                            missing_ui_count += 1
+                            if missing_ui_count >= 30:
+                                bprint("  > ⚠️ [실패] 낚시 인터페이스 1.5초간 미포착 -> 1단계 복귀")
+                                send_cmd('R')
+                                state = 1
+                                break
                         else:
-                            if not is_pulling:
-                                send_cmd('L') 
-                                is_pulling = True
-                            # 당길 때는 브레이크를 걸어 빨간색으로 치솟는 관성을 억제합니다.
-                            time.sleep(0.015)
+                            missing_ui_count = 0
+                            
+                    time.sleep(0.02) # 루프 탐색 주기 (반응성 확보 및 CPU 균형)
 
             # --- [State 5] 수거 (완결성 검증 로직) ---
             elif state == 5:

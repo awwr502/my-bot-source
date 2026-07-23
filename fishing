@@ -1577,16 +1577,9 @@ def afk_monitor_loop():
                                     break
                             bprint("  > [성공] UI 회수 완료.")
                         
-                        # [누락 복구] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)
-                        bprint("  > [대기] 낚싯대 회수 모션 종료 대기 (최대 6초 능동 확인)...")
-                        wait_idle_start = time.time()
-                        while time.time() - wait_idle_start < 6.0:
-                            sct_img_idle = afk_sct.grab(afk_sct.monitors[1])
-                            screen_idle = cv2.cvtColor(np.array(sct_img_idle), cv2.COLOR_BGRA2GRAY)
-                            temp_idle = IMAGE_CACHE.get('bait_change.png')
-                            if temp_idle is not None and cv2.minMaxLoc(cv2.matchTemplate(screen_idle, temp_idle, cv2.TM_CCOEFF_NORMED))[1] >= 0.80:
-                                break
-                            time.sleep(0.8)
+                        # [패치 반영] ESC 타격 시 낚싯대를 아예 장착 해제하므로, 모션 대기를 생략하고 0.5초 안전 대기만 수행합니다.
+                        bprint("  > [대기] 낚싯대 해제에 따른 0.5초 안정화 대기...")
+                        time.sleep(0.5)
 
                         # 위치 보정 (S 0.8초 -> W 0.8초)
                         bprint("  > [보정] 해제 완료. 위치 보정(S->W) 수행...")
@@ -2699,7 +2692,7 @@ def fishing_bot(max_allowed_seconds):
     force_watchdog_reason = None # [신규] 명시적 워치독 트리거 사유
 
     def auto_equip_rod():
-        """3곳에 흩어진 낚싯대 장착 로직을 통합한 단일 모듈"""
+        """[패치 반영] 0번 클릭 시 장착 및 펼치기 통합(3.0초) 적용 버전"""
         nonlocal force_watchdog_reason, cast_fail_count
         global check_char_popup
     
@@ -2724,65 +2717,31 @@ def fishing_bot(max_allowed_seconds):
                 force_watchdog_reason = "장착 10회 연속 실패(예비 소진)"
                 return False
 
-            if safe_find_image('bait_change.png', 0.70):
-                bprint("  > ✅ [장착 완료] 낚싯대가 이미 준비되어 있습니다!")
+            # 1. 낚싯대가 이미 완벽히 펼쳐져 있는지 확인
+            if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.76):
+                bprint("  > ✅ [장착 완료] 낚싯대가 펼쳐진 상태로 준비되어 있습니다!")
                 cast_fail_count = 0 # 장착 완료 확인 시 캐스팅 실패 카운트 즉시 초기화
                 return True
 
-            bprint("  > 🎣 [탐색 1단계] 낚싯대 파지 상태 확인 중...")
-            current_rod_state = None
-            wait_throw = time.time()
+            # 2. 손에 아무것도 없는 상태로 판정 -> 0번 전송 후 3초 애니메이션 대기
+            bprint("  > 🎣 [장착 개시] 숫자 '0' 입력 및 장착/펼치기 통합 대기 (3.0초)...")
+            send_cmd('0'); time.sleep(0.1); send_cmd('R')
             
-            while time.time() - wait_throw < 1.5 and bot_active:
+            # 3.0초 동안 0.1초씩 끊어서 정지 유무 모니터링하며 대기 (반응성 유지)
+            wait_start = time.time()
+            while time.time() - wait_start < 3.0:
+                if not bot_active: return False
                 if check_exit_notification(): return False
-                if safe_find_image('broken_rod.png', 0.76):
-                    current_rod_state = "UNFOLDED"
-                    break
-                elif safe_find_image('throw_btn.png', 0.70):
-                    current_rod_state = "HELD"
-                    break
-                time.sleep(0.05)
+                time.sleep(0.1)
 
-            if not current_rod_state and bot_active:
-                if safe_find_image('broken_rod.png', 0.76, region="FULL_SCREEN"):
-                    current_rod_state = "UNFOLDED"
-                elif safe_find_image('throw_btn.png', 0.70, region="FULL_SCREEN"):
-                    current_rod_state = "HELD"
-
-            if not current_rod_state:
-                bprint("  > 🔄 [낚싯대 스왑] 아이콘 미인식. 숫자 '0' 입력 후 재탐색...")
-                send_cmd('0'); time.sleep(0.1); send_cmd('R')
-                time.sleep(0.6)
-                continue
-
-            if current_rod_state == "UNFOLDED":
-                bprint("  > ✅ [장착 완료] 낚싯대가 이미 펼쳐져 있습니다. 즉시 낚시를 재개합니다.")
-                cast_fail_count = 0 # 장착 완료 확인 시 캐스팅 실패 카운트 즉시 초기화
+            # 3. 대기 후 다시 펼침 확인
+            if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.76):
+                bprint("  > ✅ [장착 성공] 3초 대기 후 낚싯대 자동 펼치기 완료!")
+                cast_fail_count = 0
                 return True
-                
-            elif current_rod_state == "HELD":
-                bprint("  > 🎣 [클릭 2단계] '던지기' 아이콘 확인! 좌클릭(C) 입력 후 장착 대기...")
-                send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                
-                found_start = False
-                wait_start = time.time()
-                while time.time() - wait_start < 1.5 and bot_active:
-                    if safe_find_image('bait_change.png', 0.70):
-                        found_start = True
-                        break
-                    time.sleep(0.05)
-                    
-                if not found_start and bot_active:
-                    if safe_find_image('bait_change.png', 0.70, region="FULL_SCREEN"):
-                        found_start = True
-                        
-                if found_start:
-                    bprint("  > ✅ [장착 완료] 낚싯대가 준비되었습니다!")
-                    cast_fail_count = 0 # 장착 완료 확인 시 캐스팅 실패 카운트 즉시 초기화
-                    return True
-                else:
-                    bprint("  > ⚠️ [재시도] 낚싯대 아이콘 미인식. 처음부터 다시 시도합니다.")
-                    continue
+            else:
+                bprint("  > ⚠️ [재시도] 낚싯대 인지 실패. 다시 시도합니다.")
+                continue
         return False
 
     while True:

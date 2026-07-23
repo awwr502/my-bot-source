@@ -1381,37 +1381,34 @@ def find_anchor_final(target_img_path):
 
 def align_view_by_anchor(anchor_img):
     target = anchor_img[0] if isinstance(anchor_img, list) else anchor_img
-    
-    # 1. 카메라가 완전히 멈춰있는 깨끗한 상태에서 앵커 위치를 단 1회 정밀 측정합니다. (흔들림 렉 배제)
-    pos = find_anchor_final(target)
-    if not pos: return False
-    
-    tx, ty = pos
-    err_x = int(tx - CENTER_X)
-    err_y = int(ty - CENTER_Y)
-    
-    # 2. 산출된 오차 거리만큼 아두이노에게 다이렉트 단발성 이동을 명령합니다.
-    # (이동이 일어나는 동안에는 캡처를 일절 수행하지 않아, 도중에 무언가 가리더라도 에임이 튀지 않습니다.)
-    if err_x != 0 or err_y != 0:
-        send_cmd(f'M{err_x},{err_y}')
-        
-        # 3. 하드웨어 이동이 완료되어 윈도우 3D 화면이 제자리에 안착할 수 있도록 0.2초의 물리 안정화 시간을 줍니다.
-        time.sleep(0.2)
-        
-    # 4. 정지 상태에서 딱 1회 최종 검증 스캔을 수행하여 잔여 오차가 남았는지 대조 후 마감합니다.
-    pos_verify = find_anchor_final(target)
-    if pos_verify:
-        vx, vy = pos_verify
-        vex = int(vx - CENTER_X)
-        vey = int(vy - CENTER_Y)
-        if math.hypot(vex, vey) < 15: # 최종 오차 범위 15픽셀 이내이면 정렬 완료
-            return True
-        else:
-            # 미세 잔여 오차에 대해 단발성 최종 보정
-            send_cmd(f'M{vex},{vey}')
-            time.sleep(0.1)
-            return True
+    start_time = time.time()
+    DYNAMIC_P = P_GAIN * 0.85 # 오버슈트 방지 게인
+
+    while time.time() - start_time < 2.0 and (bot_active or oblivion_active):
+        pos = find_anchor_final(target)
+        if pos:
+            tx, ty = pos
+            # [수정] v5의 offset_x 로직을 제거하여 이중 보정을 막았습니다.
+            err_x = tx - CENTER_X
+            err_y = ty - CENTER_Y
+            dist = math.hypot(err_x, err_y)
             
+            if dist < 10: return True
+
+            dx, dy = int(err_x * DYNAMIC_P), int(err_y * DYNAMIC_P)
+
+            # 불응기 최소화 (정지 성능 유지)
+            if abs(dx) < 2: dx = 0
+            if abs(dy) < 2: dy = 0
+
+            if dx != 0 or dy != 0:
+                send_cmd(f'M{dx},{dy}')
+            
+            start_time = time.time() - 0.5 
+            time.sleep(0.01)
+        else:
+            time.sleep(0.01)
+            continue
     return False
 
 def get_tension_status(exact_roi):

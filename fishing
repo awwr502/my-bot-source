@@ -137,6 +137,7 @@ animal_active = False # [동물포획] 전역 상태 변수 추가
 oblivion_active = False # [망각모드] 전역 상태 변수 추가
 oblivion_stage = 0      # [사망감시] 망각모드 진행 단계 트래커
 death_trigger = False   # [사망복구] 캐릭터 사망 복구 신호 트리거
+silence_fail_log = False # [대기수색] 수색 대기 중 실패 로그 무음 처리용 플래그
 victory_mode = 1 # 승리코인 모드 선택 변수 (1 또는 2)
 original_brightness = 100 # [화면 밝기] 모니터 원래 밝기 복구용 저장소
 is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
@@ -1253,11 +1254,12 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                             print(f"  > 📸 [ROI 복구 캡처] '{img_path}'의 누락된 고정 범위 사진을 다시 저장했습니다.")
                     except: pass
 
-        # [인식 실패 연동 및 디버그용 콘솔 알림] (10초당 1회만 노출)
+        # [인식 실패 연동 및 디버그용 콘솔 알림] (10초당 1회만 노출, 무음 플래그 적용)
         if max_val < active_conf:
             ctx['found'] = False
-            # 잠수방지 전용 모드(State 0)인 동안에는 bait_change.png의 탐색 실패 콘솔 로그를 숨겨 오해 및 콘솔 스팸을 방지합니다.
-            if img_path not in ['popup_char.png', 'popup_main.png'] and not (img_path == 'bait_change.png' and state == 0):
+            if not globals().get('silence_fail_log', False):
+                # 잠수방지 전용 모드(State 0)인 동안에는 bait_change.png의 탐색 실패 콘솔 로그를 숨겨 오해 및 콘솔 스팸을 방지합니다.
+                if img_path not in ['popup_char.png', 'popup_main.png'] and not (img_path == 'bait_change.png' and state == 0):
                 now = time.time()
                 if now - ctx.get('last_fail_log_time', 0) > 10.0:
                     ctx['last_fail_log_time'] = now
@@ -3252,12 +3254,40 @@ def fishing_bot(max_allowed_seconds):
                         
                         if reset_by_notice: break
                         
-                        # 줄 끊기 타격 후 정상 낚시 대기 자세(bait_change 또는 broken_rod) 혹은 완전 맨손(tab_roulette) 상태가 되었는지 확인하여 완료 판정
-                        time.sleep(0.3)
-                        if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70) or safe_find_image('tab_roulette.png', 0.70):
-                            bprint("  > [완료] UI 소멸 또는 대기 상태 복구 확인. 줄 끊기 성공.")
+                        # 줄 끊기 타격 후 정상 낚시 대기 자세(bait_change 또는 broken_rod) 혹은 완전 맨손(tab_roulette) 상태가 되었는지 최대 5.0초간 감시
+                        oprint("  > [대기] 낚시 상태 초기화 감시 중 (최대 5.0초)...")
+                        
+                        global silence_fail_log
+                        silence_fail_log = True # 대기하는 동안 불필요한 [인식 미달] 로그 스팸 인쇄 강제 차단
+                        
+                        found_restored = False
+                        wait_start_t = time.time()
+                        
+                        while time.time() - wait_start_t < 5.0 and bot_active:
+                            if keyboard.is_pressed('['):
+                                silence_fail_log = False
+                                toggle_stop()
+                                raise BotStopException()
+                            
+                            # 세 개 중 하나라도 발견되면 즉시 탈출 (found_bait는 1단계 진입 시 자동 판별되므로 공통 해제)
+                            if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70) or safe_find_image('tab_roulette.png', 0.70):
+                                found_restored = True
+                                break
+                            time.sleep(0.08) # 0.08초 주기로 고속 스캔
+                            
+                        silence_fail_log = False # 탐색 종료 후 무음 플래그 원상 복구
+                        
+                        if not bot_active: raise BotStopException()
+                        
+                        if found_restored:
+                            bprint("  > [완료] UI 소멸 및 대기 상태 복구 완료. 줄 끊기 성공.")
                             time.sleep(1.0); state = 1; break
                         else:
+                            bprint("  > [실패] 5.0초 대기 시간 초과. 미검출 항목 상세 수치를 1회 출력합니다.")
+                            # 무음 플래그가 꺼졌으므로, 아래 호출이 최종 실패 수치 로그를 콘솔에 딱 1회만 인쇄해 줍니다.
+                            safe_find_image('bait_change.png', 0.70)
+                            safe_find_image('broken_rod.png', 0.70)
+                            safe_find_image('tab_roulette.png', 0.70)
                             bprint("  > [실패] UI 잔존. 재시도...")
 
                     if state != 1:

@@ -1098,7 +1098,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             
             # [QTE 초정밀 기하학적 에지 매칭 필터]
             # 게이지 바 변화 및 조명 왜곡의 영향을 우회하기 위해 양방향 필터 처리 후
-            # Canny 에지 검출 및 2x2 커널 팽창을 통하여 텍스트 형상의 테두리만 추출해 정밀 대조합니다.
+            # Canny 에지 검출 및 2x2 커널 팽창을 수행합니다.
+            # 이후 가우시안 블러(Soft-Edge) 처리를 통해 미세한 UI 배율 차이를 극복하고,
+            # hold(지속)와 tap(연타)의 주변부 고유 테두리 형상 차이를 감쇄 없이 명밀히 구분합니다.
             if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
                 screen_filtered = cv2.bilateralFilter(screen_processed, 5, 75, 75)
                 template_filtered = cv2.bilateralFilter(template_processed, 5, 75, 75)
@@ -1107,8 +1109,11 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                 template_edges = cv2.Canny(template_filtered, 35, 125)
                 
                 kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-                screen_processed = cv2.dilate(screen_edges, kernel, iterations=1)
-                template_processed = cv2.dilate(template_edges, kernel, iterations=1)
+                screen_dilated = cv2.dilate(screen_edges, kernel, iterations=1)
+                template_dilated = cv2.dilate(template_edges, kernel, iterations=1)
+                
+                screen_processed = cv2.GaussianBlur(screen_dilated, (5, 5), 1.5)
+                template_processed = cv2.GaussianBlur(template_dilated, (5, 5), 1.5)
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)

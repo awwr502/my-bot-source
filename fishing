@@ -1096,23 +1096,44 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             use_mask = None
             use_color = False
             
-            # [QTE 국소 적응형 폰트 외곽선 매칭 필터]
-            # 1) '계속 탭'과 '계속 길게'의 획 차이를 명확히 분리하고, 2) 배경색 변화 및 노이즈를 완벽히 소거합니다.
-            # 실시간 게이지바 및 반투명 툴팁 배경의 명도 변화를 로컬 sliding window 방식으로 연산하여 100% 검은색으로 지워버리고,
-            # 오직 문자의 부드러운 외곽 테두리 뼈대만 흰색 획으로 가공하여 화면과 템플릿을 정합합니다.
+            # [QTE 우측 우세 영역 분리 검증 필터]
+            # 'A | 계속 ' 이라는 공통 부분으로 인한 오판독을 근본적으로 차단하기 위한 2단계 분리 정합 기술입니다.
             if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_hold_B.png', 'fishing_tap_A.png', 'fishing_tap_D.png', 'fishing_tap_B.png']:
                 screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-                screen_red = screen_bgr[:, :, 2] # 녹색 게이지 차단용 적색 채널 추출
+                screen_processed = screen_bgr[:, :, 2] # 적색(Red) 채널 추출 (녹색 게이지 완벽 상쇄)
                 
                 template_bgr = IMAGE_COLOR_CACHE.get(img_path)
                 if template_bgr is not None:
-                    template_red = template_bgr[:, :, 2]
+                    template_processed = template_bgr[:, :, 2]
                 else:
-                    template_red = template_gray
+                    template_processed = template_gray
+                
+                # 1단계: 전체 템플릿 매칭으로 정확한 UI의 시작 좌표(max_loc) 검출
+                res_full = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res_full)
+                
+                # 해당 QTE가 화면에 아예 존재하지 않는 상황인 경우, 불필요한 연산 없이 안전하게 점수 반환 후 탈출
+                if max_val < 0.4:
+                    if return_score:
+                        return max_val
+                    return None
                     
-                # 국소 영역 평균(Gaussian) 기준 이진화 적용 (동적 임계로 배경/노이즈 완벽 격리)
-                screen_processed = cv2.adaptiveThreshold(screen_red, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 4)
-                template_processed = cv2.adaptiveThreshold(template_red, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 4)
+                # 2단계: 공통 문자("A | 계속 ")를 배제하고 오직 고유 문자("길게" / "탭") 영역만 잘라내어 정밀 정합 수행
+                h, w = template_processed.shape[:2]
+                crop_start_x = int(w * 0.55) # 문자열의 우측 45% 지점 지정
+                
+                # 화면에서 매칭된 크기만큼 정밀 패치 크롭
+                screen_patch = screen_processed[max_loc[1]:max_loc[1]+h, max_loc[0]:max_loc[0]+w]
+                
+                # 템플릿과 화면 패치를 우측 고유 영역으로만 슬라이싱
+                template_right = template_processed[:, crop_start_x:]
+                screen_right = screen_patch[:, crop_start_x:]
+                
+                # 우측 고유 문자 영역 정합 점수를 최종 일치율(max_val)로 채택
+                res_right = cv2.matchTemplate(screen_right, template_right, cv2.TM_CCOEFF_NORMED)
+                _, right_score, _, _ = cv2.minMaxLoc(res_right)
+                
+                max_val = right_score
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)

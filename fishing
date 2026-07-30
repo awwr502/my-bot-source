@@ -1067,9 +1067,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         if img_path in ['bait_change.png', 'broken_rod.png', 'throw_btn.png']:
             screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
             screen_processed = cv2.bilateralFilter(screen_gray, 5, 50, 50)
-            # [필터 미스매치 자가 치유] 화면에만 양방향 필터를 적용하고 템플릿에는 적용하지 않아 발생하던
-            # 이미지 질감 차이(점수 대폭락) 문제를 해결하기 위해, 템플릿에도 동일한 양방향 필터를 적용합니다.
-            template_processed = cv2.bilateralFilter(template_gray, 5, 50, 50)
+            template_processed = template_gray
             use_mask = None
             use_color = False
             
@@ -1098,24 +1096,12 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             use_mask = None
             use_color = False
             
-            # [QTE 초정밀 기하학적 에지 매칭 필터]
-            # 게이지 바 변화 및 조명 왜곡의 영향을 우회하기 위해 양방향 필터 처리 후
-            # Canny 에지 검출 및 2x2 커널 팽창을 수행합니다.
-            # 이후 가우시안 블러(Soft-Edge) 처리를 통해 미세한 UI 배율 차이를 극복하고,
-            # hold(지속)와 tap(연타)의 주변부 고유 테두리 형상 차이를 감쇄 없이 명밀히 구분합니다.
-            if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
-                screen_filtered = cv2.bilateralFilter(screen_processed, 5, 75, 75)
-                template_filtered = cv2.bilateralFilter(template_processed, 5, 75, 75)
-                
-                screen_edges = cv2.Canny(screen_filtered, 35, 125)
-                template_edges = cv2.Canny(template_filtered, 35, 125)
-                
-                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-                screen_dilated = cv2.dilate(screen_edges, kernel, iterations=1)
-                template_dilated = cv2.dilate(template_edges, kernel, iterations=1)
-                
-                screen_processed = cv2.GaussianBlur(screen_dilated, (5, 5), 1.5)
-                template_processed = cv2.GaussianBlur(template_dilated, (5, 5), 1.5)
+            # [QTE 초정밀 백색 가공 필터]
+            # 글자 뒷배경으로 초록색/파란색 게이지바가 차오르며 픽셀 대조율이 저하되는 것을 완전히 차단하기 위해,
+            # 게이지 색상 범위(160 이하)를 완전히 무시하고 오직 순수 흰색 글자/테두리(215 이상)만 정밀 추출합니다.
+            if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_hold_B.png', 'fishing_tap_A.png', 'fishing_tap_D.png', 'fishing_tap_B.png']:
+                _, screen_processed = cv2.threshold(screen_processed, 215, 255, cv2.THRESH_BINARY)
+                _, template_processed = cv2.threshold(template_processed, 215, 255, cv2.THRESH_BINARY)
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
@@ -1165,7 +1151,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         # 3. [기존 가우시안 적응형 이진화 대피소 복구]
         # 지정된 4개 마스크 대상 외의 다른 일반 이미지 매칭 실패 시, 이전의 가우시안 적응형 이진화를 안정적으로 수행합니다.
-        if max_val < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png' and img_path not in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
+        if max_val < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png':
             s_gray = screen_processed
             t_gray = template_processed
             
@@ -1202,7 +1188,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re)
             
             # 재검증 시에도 일반 이미지인 경우 기존 가우시안 적응형 이진화 가동
-            if max_val_re < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png' and img_path not in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
+            if max_val_re < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png':
                 sr_gray = re_processed
                 tr_gray = template_processed
                 sr_bin = cv2.adaptiveThreshold(sr_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)

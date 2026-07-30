@@ -1096,11 +1096,19 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             use_mask = None
             use_color = False
             
-            # [QTE 초정밀 흰색 추출 필터] 신형 QTE 4종의 경우, 글자 뒷배경으로 초록색 게이지바가 채워지며 픽셀 대조율이 떨어지는 것을 방지하기 위해 임계값 210의 강제 이진화를 수행합니다.
-            # 이 작업을 거치면 초록색 게이지바 배경은 완전히 검은색(0)으로 지워지고, 오직 순수 흰색 글자 테두리만 추출되어 게이지 차오름 유무와 상관없이 정상적인 인식을 유지합니다.
+            # [QTE 초정밀 기하학적 에지 매칭 필터]
+            # 게이지 바 변화 및 조명 왜곡의 영향을 우회하기 위해 양방향 필터 처리 후
+            # Canny 에지 검출 및 2x2 커널 팽창을 통하여 텍스트 형상의 테두리만 추출해 정밀 대조합니다.
             if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
-                _, screen_processed = cv2.threshold(screen_processed, 160, 255, cv2.THRESH_BINARY)
-                _, template_processed = cv2.threshold(template_processed, 160, 255, cv2.THRESH_BINARY)
+                screen_filtered = cv2.bilateralFilter(screen_processed, 5, 75, 75)
+                template_filtered = cv2.bilateralFilter(template_processed, 5, 75, 75)
+                
+                screen_edges = cv2.Canny(screen_filtered, 35, 125)
+                template_edges = cv2.Canny(template_filtered, 35, 125)
+                
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+                screen_processed = cv2.dilate(screen_edges, kernel, iterations=1)
+                template_processed = cv2.dilate(template_edges, kernel, iterations=1)
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
@@ -1150,7 +1158,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
 
         # 3. [기존 가우시안 적응형 이진화 대피소 복구]
         # 지정된 4개 마스크 대상 외의 다른 일반 이미지 매칭 실패 시, 이전의 가우시안 적응형 이진화를 안정적으로 수행합니다.
-        if max_val < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png':
+        if max_val < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png' and img_path not in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
             s_gray = screen_processed
             t_gray = template_processed
             
@@ -1187,7 +1195,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re)
             
             # 재검증 시에도 일반 이미지인 경우 기존 가우시안 적응형 이진화 가동
-            if max_val_re < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png':
+            if max_val_re < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png' and img_path not in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
                 sr_gray = re_processed
                 tr_gray = template_processed
                 sr_bin = cv2.adaptiveThreshold(sr_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)

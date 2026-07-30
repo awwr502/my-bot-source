@@ -1096,12 +1096,20 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             use_mask = None
             use_color = False
             
-            # [QTE 초정밀 백색 가공 필터]
-            # 글자 뒷배경으로 초록색/파란색 게이지바가 차오르며 픽셀 대조율이 저하되는 것을 완전히 차단하기 위해,
-            # 게이지 색상 범위(160 이하)를 완전히 무시하고 오직 순수 흰색 글자/테두리(215 이상)만 정밀 추출합니다.
+            # [QTE 초록 게이지 차단용 적색 채널 필터]
+            # 차징 진행 시 배경에 녹색(Green) 게이지가 채워지면서 발생하는 그레이스케일 평균값 왜곡(점수 급락 및 잦은 뗌 현상)을 해결합니다.
+            # 빛의 3원색 원리에 따라, 녹색 게이지는 적색(Red) 채널에서 거의 0(완전한 검은색)으로 렌더링되어 투명한 배경처럼 무력화되는 반면,
+            # 회색/흰색 글자는 적색 채널에서도 원래의 밝은 광량을 그대로 유지합니다.
+            # 이 필터를 통해 이진화 없이 글자의 부드러운 안티앨리어싱을 보존하면서 녹색 게이지의 간섭만 완벽히 걸러냅니다.
             if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_hold_B.png', 'fishing_tap_A.png', 'fishing_tap_D.png', 'fishing_tap_B.png']:
-                _, screen_processed = cv2.threshold(screen_processed, 215, 255, cv2.THRESH_BINARY)
-                _, template_processed = cv2.threshold(template_processed, 215, 255, cv2.THRESH_BINARY)
+                screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+                screen_processed = screen_bgr[:, :, 2] # 적색(Red) 채널만 추출하여 녹색 게이지를 검은 배경으로 상쇄
+                
+                template_bgr = IMAGE_COLOR_CACHE.get(img_path)
+                if template_bgr is not None:
+                    template_processed = template_bgr[:, :, 2] # 템플릿도 적색 채널만 추출해 정합성 동기화
+                else:
+                    template_processed = template_gray
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)

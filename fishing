@@ -974,7 +974,7 @@ def log_confidence_to_csv(log_type, img_path, target_conf, actual_conf, min_c=No
                              f"{min_c:.3f}" if min_c else "-", f"{max_c:.3f}" if max_c else "-", note])
     except: pass
 
-def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
+def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_score=False):
     """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진 (동적 임계값 폐기 & CSV 로깅)"""
     global IMAGE_CACHE, IMAGE_COLOR_CACHE, IMAGE_MASK_CACHE, ROI_SAMPLER
     
@@ -1096,20 +1096,23 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             use_mask = None
             use_color = False
             
-            # [QTE 초록 게이지 차단용 적색 채널 필터]
-            # 차징 진행 시 배경에 녹색(Green) 게이지가 채워지면서 발생하는 그레이스케일 평균값 왜곡(점수 급락 및 잦은 뗌 현상)을 해결합니다.
-            # 빛의 3원색 원리에 따라, 녹색 게이지는 적색(Red) 채널에서 거의 0(완전한 검은색)으로 렌더링되어 투명한 배경처럼 무력화되는 반면,
-            # 회색/흰색 글자는 적색 채널에서도 원래의 밝은 광량을 그대로 유지합니다.
-            # 이 필터를 통해 이진화 없이 글자의 부드러운 안티앨리어싱을 보존하면서 녹색 게이지의 간섭만 완벽히 걸러냅니다.
+            # [QTE 국소 적응형 폰트 외곽선 매칭 필터]
+            # 1) '계속 탭'과 '계속 길게'의 획 차이를 명확히 분리하고, 2) 배경색 변화 및 노이즈를 완벽히 소거합니다.
+            # 실시간 게이지바 및 반투명 툴팁 배경의 명도 변화를 로컬 sliding window 방식으로 연산하여 100% 검은색으로 지워버리고,
+            # 오직 문자의 부드러운 외곽 테두리 뼈대만 흰색 획으로 가공하여 화면과 템플릿을 정합합니다.
             if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_hold_B.png', 'fishing_tap_A.png', 'fishing_tap_D.png', 'fishing_tap_B.png']:
                 screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-                screen_processed = screen_bgr[:, :, 2] # 적색(Red) 채널만 추출하여 녹색 게이지를 검은 배경으로 상쇄
+                screen_red = screen_bgr[:, :, 2] # 녹색 게이지 차단용 적색 채널 추출
                 
                 template_bgr = IMAGE_COLOR_CACHE.get(img_path)
                 if template_bgr is not None:
-                    template_processed = template_bgr[:, :, 2] # 템플릿도 적색 채널만 추출해 정합성 동기화
+                    template_red = template_bgr[:, :, 2]
                 else:
-                    template_processed = template_gray
+                    template_red = template_gray
+                    
+                # 국소 영역 평균(Gaussian) 기준 이진화 적용 (동적 임계로 배경/노이즈 완벽 격리)
+                screen_processed = cv2.adaptiveThreshold(screen_red, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 4)
+                template_processed = cv2.adaptiveThreshold(template_red, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 4)
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
@@ -1118,6 +1121,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
             
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
+
+        if return_score:
+            return max_val
 
         # 2. [실시간 자가 치유 능동 폴백]
         # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재조준하여 스캔
@@ -3357,11 +3363,29 @@ def fishing_bot(max_allowed_seconds):
                         state = 1
                         break
 
-                    # 3. 신형 4가지 하이브리드 QTE 감지 (A/D 오판독 방지를 위해 임계값 0.82 고밀도 검증)
-                    found_hold_A = safe_find_image('fishing_hold_A.png', conf=0.82)
-                    found_hold_D = safe_find_image('fishing_hold_D.png', conf=0.82)
-                    found_tap_A  = safe_find_image('fishing_tap_A.png', conf=0.82)
-                    found_tap_D  = safe_find_image('fishing_tap_D.png', conf=0.82)
+                    # 3. 신형 4가지 하이브리드 QTE 감지 (상대 점수 경쟁 기법을 통한 오판독 원천 차단)
+                    # 공통 글자 "A | 계속 " 부분으로 인한 오판독을 없애기 위해, 각 템플릿의 실제 매칭 점수를 모두 구한 뒤
+                    # 가장 높은 점수를 가진 1개의 실제 행동만 실행합니다.
+                    score_hold_A = safe_find_image('fishing_hold_A.png', conf=0.5, return_score=True) or 0.0
+                    score_hold_D = safe_find_image('fishing_hold_D.png', conf=0.5, return_score=True) or 0.0
+                    score_tap_A  = safe_find_image('fishing_tap_A.png', conf=0.5, return_score=True) or 0.0
+                    score_tap_D  = safe_find_image('fishing_tap_D.png', conf=0.5, return_score=True) or 0.0
+                    
+                    qte_results = [
+                        ('HOLD_A', score_hold_A),
+                        ('HOLD_D', score_hold_D),
+                        ('TAP_A', score_tap_A),
+                        ('TAP_D', score_tap_D)
+                    ]
+                    
+                    # 가장 높은 매칭 점수를 가진 항목 추출
+                    best_qte, best_score = max(qte_results, key=lambda x: x[1])
+                    
+                    # 최고 일치율이 0.78 이상인 경우에만 해당 동작을 True로 판정
+                    found_hold_A = (best_qte == 'HOLD_A' and best_score >= 0.78)
+                    found_hold_D = (best_qte == 'HOLD_D' and best_score >= 0.78)
+                    found_tap_A  = (best_qte == 'TAP_A' and best_score >= 0.78)
+                    found_tap_D  = (best_qte == 'TAP_D' and best_score >= 0.78)
                     
                     # 4. 동작 분기 처리 (홀드는 디바운스 프레임 필터로 무지성 떼기 방지, 탭은 초고속 수색 광클 연타)
                     if found_hold_A:

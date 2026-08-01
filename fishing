@@ -1096,14 +1096,28 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             use_mask = None
             use_color = False
             
-            # [QTE 초록 게이지바 완벽 소거용 180 최적 이진화 및 우측 슬라이싱 필터]
-            # 제공해주신 스크린샷 분석 결과, 초록 게이지(명도 ~150)와 글자 코어(명도 ~210) 사이의 명도차를 이용합니다.
-            # '180' 임계값으로 이진화하면 초록 게이지와 반투명 배경은 100% 검은색으로 증발하고, 하얀색 글씨 획만 선명하게 보존됩니다.
-            # 그 후 우측 45% 영역("길게" vs "탭")만 잘라내어 정밀 정합하므로 오판독이 원천적으로 불가능해집니다.
+            # [QTE 초록 게이지바 완벽 소거용 상대적 동적 이진화 및 우측 슬라이싱 필터]
+            # 화면과 템플릿의 절대적 밝기 차이(HDR, 모니터 밝기 등)로 인한 100% 검은색 깨짐 문제를 원천 방지하기 위해,
+            # 각 이미지의 실제 최대 밝기를 계산하여 그 "80% 수준"에서 임계값을 자동으로 동적 연산하는 기술을 적용합니다.
             if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
-                # 180 골디락스 임계값으로 게이지바 노이즈를 완벽하게 차단하고 문자 획만 추출
-                _, screen_processed = cv2.threshold(screen_processed, 180, 255, cv2.THRESH_BINARY)
-                _, template_processed = cv2.threshold(template_processed, 180, 255, cv2.THRESH_BINARY)
+                screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+                screen_processed = screen_bgr[:, :, 2] # 적색(Red) 채널 추출 (녹색 게이지 필터링)
+                
+                template_bgr = IMAGE_COLOR_CACHE.get(img_path)
+                if template_bgr is not None:
+                    template_processed = template_bgr[:, :, 2]
+                else:
+                    template_processed = template_gray
+                
+                # 상대적 최대 밝기 측정 및 동적 80% 컷오프 임계 이진화 수행
+                screen_max = np.max(screen_processed)
+                screen_thresh = int(screen_max * 0.80) if screen_max > 120 else 150
+                
+                template_max = np.max(template_processed)
+                template_thresh = int(template_max * 0.80) if template_max > 120 else 150
+                
+                _, screen_processed = cv2.threshold(screen_processed, screen_thresh, 255, cv2.THRESH_BINARY)
+                _, template_processed = cv2.threshold(template_processed, template_thresh, 255, cv2.THRESH_BINARY)
                 
                 # 1단계: 전체 템플릿 매칭으로 정확한 UI의 시작 좌표(max_loc) 검출
                 res_full = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)

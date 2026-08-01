@@ -1096,12 +1096,12 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             use_mask = None
             use_color = False
             
-            # [QTE 초록 게이지바 완벽 소거용 상대적 동적 이진화 및 우측 슬라이싱 필터]
-            # 화면과 템플릿의 절대적 밝기 차이(HDR, 모니터 밝기 등)로 인한 100% 검은색 깨짐 문제를 원천 방지하기 위해,
-            # 각 이미지의 실제 최대 밝기를 계산하여 그 "80% 수준"에서 임계값을 자동으로 동적 연산하는 기술을 적용합니다.
-            if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
+            # [QTE 및 Fishing Mode 배경 소거용 상대적 동적 이진화 및 우측 슬라이싱 필터]
+            # 화면과 템플릿의 절대적 밝기 차이(HDR, 조명 등)로 인한 인식률 하락을 방지하기 위해,
+            # 최대 밝기의 "80% 수준"에서 임계값을 자동으로 동적 연산하는 기술을 QTE 및 fishing_mode에 통합 적용합니다.
+            if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png', 'fishing_mode.png']:
                 screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-                screen_processed = screen_bgr[:, :, 2] # 적색(Red) 채널 추출 (녹색 게이지 필터링)
+                screen_processed = screen_bgr[:, :, 2] # 적색(Red) 채널 추출
                 
                 template_bgr = IMAGE_COLOR_CACHE.get(img_path)
                 if template_bgr is not None:
@@ -1119,32 +1119,31 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
                 _, screen_processed = cv2.threshold(screen_processed, screen_thresh, 255, cv2.THRESH_BINARY)
                 _, template_processed = cv2.threshold(template_processed, template_thresh, 255, cv2.THRESH_BINARY)
                 
-                # 1단계: 전체 템플릿 매칭으로 정확한 UI의 시작 좌표(max_loc) 검출
-                res_full = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(res_full)
-                
-                # 해당 QTE가 화면에 아예 존재하지 않는 상황인 경우 탈출
-                if max_val < 0.4:
-                    if return_score:
-                        return max_val
-                    return None
+                # QTE 이미지인 경우에만 오탐 방지용 2단계 '우측 슬라이싱 검증'을 수행합니다.
+                if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
+                    # 1단계: 전체 템플릿 매칭으로 정확한 UI의 시작 좌표(max_loc) 검출
+                    res_full = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, max_loc = cv2.minMaxLoc(res_full)
                     
-                # 2단계: 공통 문자("A | 계속 ")를 배제하고 우측 고유 영역만 잘라내어 정밀 대조
-                h, w = template_processed.shape[:2]
-                crop_start_x = int(w * 0.55) # 우측 45% 지점 슬라이싱
-                
-                # 화면에서 매칭된 크기만큼 정밀 패치 크롭
-                screen_patch = screen_processed[max_loc[1]:max_loc[1]+h, max_loc[0]:max_loc[0]+w]
-                
-                # 템플릿과 화면 패치를 우측 고유 영역으로만 슬라이싱
-                template_right = template_processed[:, crop_start_x:]
-                screen_right = screen_patch[:, crop_start_x:]
-                
-                # 우측 고유 문자 영역 정합 점수를 최종 일치율(max_val)로 채택
-                res_right = cv2.matchTemplate(screen_right, template_right, cv2.TM_CCOEFF_NORMED)
-                _, right_score, _, _ = cv2.minMaxLoc(res_right)
-                
-                max_val = right_score
+                    # 해당 QTE가 화면에 아예 존재하지 않는 상황인 경우 탈출
+                    if max_val < 0.4:
+                        if return_score:
+                            return max_val
+                        return None
+                        
+                    # 2단계: 공통 문자("A | 계속 ")를 배제하고 우측 고유 영역만 잘라내어 정밀 대조
+                    h, w = template_processed.shape[:2]
+                    crop_start_x = int(w * 0.55) # 우측 45% 지점 슬라이싱
+                    
+                    screen_patch = screen_processed[max_loc[1]:max_loc[1]+h, max_loc[0]:max_loc[0]+w]
+                    
+                    template_right = template_processed[:, crop_start_x:]
+                    screen_right = screen_patch[:, crop_start_x:]
+                    
+                    res_right = cv2.matchTemplate(screen_right, template_right, cv2.TM_CCOEFF_NORMED)
+                    _, right_score, _, _ = cv2.minMaxLoc(res_right)
+                    
+                    max_val = right_score
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)

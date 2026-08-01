@@ -1005,38 +1005,27 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
 
         active_sct = custom_sct if custom_sct else sct
 
-        if is_fallback_scan:
-            target_monitor = active_sct.monitors[1]
-            # [오탐 방지] 사용자의 인게임 실제 스크린샷 픽셀을 바탕으로 초정밀 좌표 구역 격리
-            if img_path == 'fishing.png':
-                target_monitor = {
-                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
-                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
-                    "width": int(target_monitor["width"] * 0.4),
-                    "height": int(target_monitor["height"] * 0.5)
-                }
-            elif img_path == 'bait_change.png':
-                # [UI 배율 호환 패치] 세로 수색 범위를 40% ~ 75%로 확장하여 다양한 UI 크기에서도 미끼 변경 아이콘이 잘리지 않고 감지되도록 보완하되, 채팅창(75% 이후) 간섭은 유지 차단합니다.
-                target_monitor = {
-                    "left": int(target_monitor["left"]),
-                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.40),
-                    "width": int(target_monitor["width"] * 0.25),
-                    "height": int(target_monitor["height"] * 0.35)
-                }
-            elif img_path == 'green_range.png':
-                target_monitor = {
-                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
-                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
-                    "width": int(target_monitor["width"] * 0.4),
-                    "height": int(target_monitor["height"] * 0.5)
-                }
-            region = None 
-        elif region:
+        # 1. 수색 대역(target_monitor)의 수립 및 분기 우선순위 단일화 (중복 제거)
+        if region:
+            # 명시적으로 전달받은 범위(region)가 있는 경우 우선 적용
             target_monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
-        elif cache_data['master_box']:
+        elif img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
+            # QTE 프롬프트 수색 대역 격리 (하단 센터 영역: X 30~70%, Y: 50~95%)
+            p_mon = active_sct.monitors[1]
+            target_monitor = {
+                "left": int(p_mon["left"] + p_mon["width"] * 0.30),
+                "top": int(p_mon["top"] + p_mon["height"] * 0.50),
+                "width": int(p_mon["width"] * 0.40),
+                "height": int(p_mon["height"] * 0.45)
+            }
+        elif cache_data['master_box'] and not is_fallback_scan:
+            # 학습된 캐시(master_box)가 존재하고, 강제 전체화면 탐색 상태가 아닐 때 캐시 적용
             target_monitor = cache_data['master_box']
         else:
+            # 캐시가 전혀 없거나, 자가 치유를 위해 강제로 전체화면 폴백 탐색을 해야 하는 상황
             target_monitor = active_sct.monitors[1]
+            
+            # [오탐 방지 및 스캔 경량화] 이미지별 최적 획정 범위 분할 적용
             if img_path == 'fishing.png':
                 target_monitor = {
                     "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
@@ -1045,7 +1034,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
                     "height": int(target_monitor["height"] * 0.5)
                 }
             elif img_path == 'bait_change.png':
-                # [UI 배율 호환 패치] 세로 수색 범위를 40% ~ 75%로 확장하여 다양한 UI 크기에서도 미끼 변경 아이콘이 잘리지 않고 감지되도록 보완하되, 채팅창(75% 이후) 간섭은 유지 차단합니다.
                 target_monitor = {
                     "left": int(target_monitor["left"]),
                     "top": int(target_monitor["top"] + target_monitor["height"] * 0.40),
@@ -1059,6 +1047,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
                     "width": int(target_monitor["width"] * 0.4),
                     "height": int(target_monitor["height"] * 0.5)
                 }
+            
+            # 강제 폴백 검사 종료 후 상태 복귀
+            region = None 
 
         sct_img = active_sct.grab(target_monitor)
         
@@ -1096,14 +1087,14 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             use_mask = None
             use_color = False
             
-            # [QTE 및 Fishing Mode 배경 소거용 상대적 동적 이진화 및 우측 슬라이싱 필터]
-            # 채널 미스매치 예외를 방지하고 HDR/모니터 밝기 하락을 막기 위해 1채널 순수 Grayscale 상에서 연산을 수행합니다.
-            # 또한 .copy()를 적용하여 메모리(RAM) 내의 원본 템플릿 이미지가 변형되는 현상을 원천 방지합니다.
+            # [QTE 및 "거두기" 텍스트 배경 소거용 상대적 동적 이진화 및 우측 슬라이싱 필터]
+            # 사용자가 fishing_mode.png를 "거두기" 텍스트 이미지로 전면 교체하였으므로, 
+            # 이 역시 QTE 글씨와 동일하게 동적 80% 임계값 이진화 필터를 통과시켜 반투명 어두운 배경을 완벽히 소거합니다.
             if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png', 'fishing_mode.png']:
                 screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                template_processed = template_gray.copy() # 메모리 누적 오염 방지를 위해 템플릿 복사본 사용
+                template_processed = template_gray.copy() # 메모리 오염을 원천 방지하기 위해 템플릿 복사본 사용
                 
-                # 각 이미지의 고유한 실제 최대 밝기를 계산하여 그 "80% 수준"에서 임계값을 자동으로 동적 연산
+                # 상대적 최대 밝기 측정 및 동적 80% 컷오프 임계 이진화 수행
                 screen_max = np.max(screen_processed)
                 screen_thresh = int(screen_max * 0.80) if screen_max > 120 else 150
                 
@@ -1113,7 +1104,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
                 _, screen_processed = cv2.threshold(screen_processed, screen_thresh, 255, cv2.THRESH_BINARY)
                 _, template_processed = cv2.threshold(template_processed, template_thresh, 255, cv2.THRESH_BINARY)
                 
-                # QTE 이미지인 경우에만 오탐 방지용 2단계 '우측 슬라이싱 검증'을 수행합니다.
+                # QTE 이미지인 경우에만 오탐 방지용 2단계 '우측 슬라이싱 검증'을 수행합니다 ("거두기" 텍스트는 전량 정밀 매칭 수행).
                 if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
                     # 1단계: 전체 템플릿 매칭으로 정확한 UI의 시작 좌표(max_loc) 검출
                     res_full = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)

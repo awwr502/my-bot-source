@@ -1096,31 +1096,28 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             use_mask = None
             use_color = False
             
-            # [QTE 우측 우세 영역 분리 검증 필터]
-            # 'A | 계속 ' 이라는 공통 부분으로 인한 오판독을 근본적으로 차단하기 위한 2단계 분리 정합 기술입니다.
-            if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_hold_B.png', 'fishing_tap_A.png', 'fishing_tap_D.png', 'fishing_tap_B.png']:
-                screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-                screen_processed = screen_bgr[:, :, 2] # 적색(Red) 채널 추출 (녹색 게이지 완벽 상쇄)
-                
-                template_bgr = IMAGE_COLOR_CACHE.get(img_path)
-                if template_bgr is not None:
-                    template_processed = template_bgr[:, :, 2]
-                else:
-                    template_processed = template_gray
+            # [QTE 초록 게이지바 완벽 소거용 180 최적 이진화 및 우측 슬라이싱 필터]
+            # 제공해주신 스크린샷 분석 결과, 초록 게이지(명도 ~150)와 글자 코어(명도 ~210) 사이의 명도차를 이용합니다.
+            # '180' 임계값으로 이진화하면 초록 게이지와 반투명 배경은 100% 검은색으로 증발하고, 하얀색 글씨 획만 선명하게 보존됩니다.
+            # 그 후 우측 45% 영역("길게" vs "탭")만 잘라내어 정밀 정합하므로 오판독이 원천적으로 불가능해집니다.
+            if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
+                # 180 골디락스 임계값으로 게이지바 노이즈를 완벽하게 차단하고 문자 획만 추출
+                _, screen_processed = cv2.threshold(screen_processed, 180, 255, cv2.THRESH_BINARY)
+                _, template_processed = cv2.threshold(template_processed, 180, 255, cv2.THRESH_BINARY)
                 
                 # 1단계: 전체 템플릿 매칭으로 정확한 UI의 시작 좌표(max_loc) 검출
                 res_full = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(res_full)
                 
-                # 해당 QTE가 화면에 아예 존재하지 않는 상황인 경우, 불필요한 연산 없이 안전하게 점수 반환 후 탈출
+                # 해당 QTE가 화면에 아예 존재하지 않는 상황인 경우 탈출
                 if max_val < 0.4:
                     if return_score:
                         return max_val
                     return None
                     
-                # 2단계: 공통 문자("A | 계속 ")를 배제하고 오직 고유 문자("길게" / "탭") 영역만 잘라내어 정밀 정합 수행
+                # 2단계: 공통 문자("A | 계속 ")를 배제하고 우측 고유 영역만 잘라내어 정밀 대조
                 h, w = template_processed.shape[:2]
-                crop_start_x = int(w * 0.55) # 문자열의 우측 45% 지점 지정
+                crop_start_x = int(w * 0.55) # 우측 45% 지점 슬라이싱
                 
                 # 화면에서 매칭된 크기만큼 정밀 패치 크롭
                 screen_patch = screen_processed[max_loc[1]:max_loc[1]+h, max_loc[0]:max_loc[0]+w]

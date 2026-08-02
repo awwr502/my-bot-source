@@ -29,32 +29,43 @@ import warnings
 # [경고 숨김] 최신 파이썬 버전 구동 시 발생하는 mss 라이브러리의 단순 DeprecationWarning 경고를 콘솔에서 숨깁니다.
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# mss 객체는 딱 한 번만 생성해두고 계속 재사용합니다 (메모리 최적화)
-sct = mss.mss()
+# [스레드 안전성 보강] mss 객체는 멀티스레드 환경에서 디바이스 컨텍스트(DC) 핸들 공유 오류를 방지하기 위해 스레드 로컬(Thread-Local) 저장소를 통해 안전하게 관리합니다.
+_mss_local = threading.local()
+
+def get_sct_safe():
+    if not hasattr(_mss_local, 'sct'):
+        import mss
+        _mss_local.sct = mss.mss()
+    return _mss_local.sct
+
+# 하위 호환성을 위해 전역 sct 레퍼런스도 초기 생성하여 유지합니다.
+sct = get_sct_safe()
 
 def fast_screenshot(region=None):
     """pyautogui.screenshot()을 완벽히 대체할 mss 기반 초고속 캡처 함수"""
+    active_sct = get_sct_safe()
     if region:
         # pyautogui의 region(x, y, w, h) 형식을 mss 형식으로 번역
         monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
     else:
         # 전체 화면 (기본 1번 모니터)
-        monitor = sct.monitors[1]
+        monitor = active_sct.monitors[1]
     
     # 0.002초 만에 빛의 속도로 화면 캡처
-    sct_img = sct.grab(monitor)
+    sct_img = active_sct.grab(monitor)
     
     # 기존 코드들이 에러를 뿜지 않도록, 원래 pyautogui가 주던 똑같은 'PIL Image' 형태로 변환해서 던져줍니다.
     return Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
 
 def fast_cv_screenshot(region=None, gray=True):
     """PIL을 거치지 않고 mss에서 즉시 OpenCV Numpy 배열(흑백/컬러)로 직행하는 극초고속 캡처 함수"""
+    active_sct = get_sct_safe()
     if region:
         monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
     else:
-        monitor = sct.monitors[1]
+        monitor = active_sct.monitors[1]
     
-    sct_img = sct.grab(monitor)
+    sct_img = active_sct.grab(monitor)
     screen_np = np.array(sct_img)
     
     if gray:
@@ -62,7 +73,6 @@ def fast_cv_screenshot(region=None, gray=True):
     else:
         return cv2.cvtColor(screen_np, cv2.COLOR_BGRA2BGR)
 
-# [마법의 뇌수술] 이제부터 코드 전체의 pyautogui.screenshot은 fast_screenshot으로 강제 교체됩니다!
 pyautogui.screenshot = fast_screenshot
 
 # =========================================================================
@@ -1003,7 +1013,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
         is_fallback_scan = (region == "FULL_SCREEN")
         target_monitor = None
 
-        active_sct = custom_sct if custom_sct else sct
+        active_sct = custom_sct if custom_sct else get_sct_safe()
 
         # 1. 수색 대역(target_monitor)의 수립 및 분기 우선순위 단일화 (중복 제거)
         if region and not is_fallback_scan:
@@ -2177,7 +2187,7 @@ def find_anomaly_by_color(custom_sct=None):
     및 하늘 높이 치솟는 백청색 빛기둥(Beam)의 HSV 범위를 감지하여 중심 좌표를 획득합니다.
     """
     try:
-        active_sct = custom_sct if custom_sct else sct
+        active_sct = custom_sct if custom_sct else get_sct_safe()
         monitor = active_sct.monitors[1]
         sct_img = active_sct.grab(monitor)
         img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)

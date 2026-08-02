@@ -2189,48 +2189,35 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
 
 def find_anchor1_by_color(custom_sct=None):
     """
-    [v19 하이브리드 컬러-쉐이프 매칭 엔진]
-    화면의 핑크색 영역만 남겨둔 마스크(Mask) 위에서 anchor1.png의 고유한 불꽃/샤드 형태의 
-    핑크 실루엣 마스크를 다중 스케일로 대조 매칭(Template Matching)합니다.
-    단순히 핑크색이 있다고 매칭되는 오탐을 100% 원천 예방하고, 정확한 앵커의 형상만 골라냅니다.
+    [v20 정밀 그레이스케일 다중 배율 매칭 엔진]
+    네온 발광체의 색상 변동성에 영향을 받지 않도록 그레이스케일 매칭으로 복귀하되,
+    배경 오탐을 완벽히 차단하기 위해 촘촘한 배율(95%~140%)과 매우 높은 임계값(0.88)을 적용합니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
         monitor = active_sct.monitors[1]
         sct_img = active_sct.grab(monitor)
-        screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-        screen_hsv = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2HSV)
+        screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
         
-        # 1. 화면 속 강렬한 네온 핑크/퍼플 영역 검출 (배경의 모든 노이즈를 까맣게 지워버림)
-        lower_pink = np.array([135, 60, 100])
-        upper_pink = np.array([175, 255, 255])
-        screen_mask = cv2.inRange(screen_hsv, lower_pink, upper_pink)
+        template = IMAGE_CACHE.get('anchor1.png')
+        if template is None: return None
         
-        # 2. 템플릿 이미지 불러오기 및 핑크 실루엣 추출
-        template_bgr = IMAGE_COLOR_CACHE.get('anchor1.png')
-        if template_bgr is None: return None
-        
-        template_hsv = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2HSV)
-        template_mask = cv2.inRange(template_hsv, lower_pink, upper_pink)
-        
-        # 3. 실루엣 간의 다중 스케일 형상 매칭 시작 (90%, 100%, 110%)
         best_val = -1
         best_box = None
         
-        scales = [0.90, 1.0, 1.10]
+        # 원거리 조준용 기본 배율부터 접근 시의 확대 배율까지 커버 (95% ~ 140%)
+        scales = [0.95, 1.0, 1.05, 1.20, 1.40]
         for scale in scales:
-            w = int(template_mask.shape[1] * scale)
-            h = int(template_mask.shape[0] * scale)
+            w = int(template.shape[1] * scale)
+            h = int(template.shape[0] * scale)
             if w < 10 or h < 10: continue
             
-            resized_t = cv2.resize(template_mask, (w, h), interpolation=cv2.INTER_AREA)
-            
-            # 마스크 대 마스크 매칭 수행 (배경 노이즈가 0이므로 완벽하게 형태만 대조)
-            res = cv2.matchTemplate(screen_mask, resized_t, cv2.TM_CCOEFF_NORMED)
+            resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
+            res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             
-            # 형태 일치율이 0.70 이상으로 완벽하게 일치하는 경우
-            if max_val >= 0.70 and max_val > best_val:
+            # 임계값을 0.88로 엄격하게 유지하여 배경 구조물의 오탐을 철저하게 방어합니다.
+            if max_val >= 0.88 and max_val > best_val:
                 best_val = max_val
                 real_x = max_loc[0] + monitor["left"]
                 real_y = max_loc[1] + monitor["top"]
@@ -2239,7 +2226,7 @@ def find_anchor1_by_color(custom_sct=None):
         if best_box:
             return best_box
         return None
-    except Exception as e:
+    except:
         return None
 
 def oblivion_bot_loop():

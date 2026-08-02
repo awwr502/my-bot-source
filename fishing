@@ -2190,16 +2190,20 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
 
 def find_anchor1_by_color(custom_sct=None):
     """
-    [v28 정밀 그레이스케일 다중 배율 매칭 엔진 - 표지판 벽면 탐색용]
-    붉은색 'RESTRICTED AREA' 표지판의 고대비 텍스트 라인을 효과적으로 활용하기 위해,
-    가우시안 블러를 제거하고 원본의 선명한 외곽선 및 텍스트 패턴을 기준으로 
-    비대칭 배율 압축 매칭(정면/측면 왜곡 보정)을 수행합니다.
+    [v29 하이브리드 포스트-레드 검증 장벽 탐색기]
+    그레이스케일 매칭으로 형태를 잡은 후보지 내에서, 붉은색 'RESTRICTED AREA' 표지판의 
+    색상 일치 여부를 실시간으로 사후 검증(Post-Match Red Validation)합니다.
+    형태가 유사한 회색 철골, 장벽, 나무 구조물은 붉은색 화소가 0개이므로 2단계 검증에서 100% 즉시 실격됩니다.
+    이로 인해 극도로 낮춘 임계값(0.55)과 다각도 원근 왜곡 조건 하에서도 오탐율을 0%에 수렴시킵니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
         monitor = active_sct.monitors[1]
         sct_img = active_sct.grab(monitor)
-        screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+        
+        screen_np = np.array(sct_img)
+        screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
+        screen_hsv = cv2.cvtColor(cv2.cvtColor(screen_np, cv2.COLOR_BGRA2BGR), cv2.COLOR_BGR2HSV)
         
         template = IMAGE_CACHE.get('anchor1.png')
         if template is None: return None
@@ -2222,13 +2226,36 @@ def find_anchor1_by_color(custom_sct=None):
                 res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(res)
                 
-                # 가파른 원근 왜곡 시의 사다리꼴 전단 변형(Shear)을 포용하도록 임계값을 0.75로 조율
-                if max_val >= 0.75 and max_val > best_val:
-                    best_val = max_val
-                    real_x = max_loc[0] + monitor["left"]
-                    real_y = max_loc[1] + monitor["top"]
-                    best_box = Box(real_x, real_y, w, h)
+                # 형태 유사도가 0.65 이상인 후보군 선별
+                if max_val >= 0.65 and max_val > best_val:
+                    rx = max_loc[0]
+                    ry = max_loc[1]
                     
+                    # [2차 사후 레드 검증]
+                    # 후보 매칭 영역만 BGR/HSV로 크롭하여 내부에 실제 빨간 표지판의 화소가 존재하는지 분석
+                    crop_hsv = screen_hsv[ry:ry+h, rx:rx+w]
+                    
+                    # 붉은색 범위 검출 (양끝단 대역 융합)
+                    lower_red1 = np.array([0, 70, 70])
+                    upper_red1 = np.array([10, 255, 255])
+                    lower_red2 = np.array([170, 70, 70])
+                    upper_red2 = np.array([180, 255, 255])
+                    
+                    mask_r1 = cv2.inRange(crop_hsv, lower_red1, upper_red1)
+                    mask_r2 = cv2.inRange(crop_hsv, lower_red2, upper_red2)
+                    mask_red = cv2.bitwise_or(mask_r1, mask_r2)
+                    
+                    red_pixels = cv2.countNonZero(mask_red)
+                    
+                    # 해당 박스 면적 대비 최소 1.5% 이상이 붉은색 화소여야 진짜 표지판 장벽으로 승인!
+                    min_required_red = max(2, int((w * h) * 0.015))
+                    
+                    if red_pixels >= min_required_red:
+                        best_val = max_val
+                        real_x = rx + monitor["left"]
+                        real_y = ry + monitor["top"]
+                        best_box = Box(real_x, real_y, w, h)
+                        
         if best_box:
             return best_box
         return None

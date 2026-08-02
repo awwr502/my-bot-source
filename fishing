@@ -2189,52 +2189,57 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
 
 def find_anchor1_by_color(custom_sct=None):
     """
-    [v21 광대역 가우시안 이진화 매칭 엔진]
-    3D 공간에서의 거리에 따른 극심한 크기 축소(40% 배율)를 지원하기 위해 
-    0.4부터 1.3까지 광대역 스케일을 전개하며, 배경의 철골/모래주머니 오탐을 차단하기 위해 
-    가우시안 적응형 이진화(Adaptive Thresholding)로 선명한 에지 실루엣만 추출하여 정밀 대조합니다.
+    [v22 순수 HSV 컬러-기하 필터링 엔진]
+    회전하는 3D 물체의 특성을 살려 템플릿 이미지를 완전히 배제하고,
+    오직 실시간 네온 핑크 HSV 색상 검출 및 엄격한 물리 종횡비(가로세로 비율) 필터링만 사용합니다.
+    둥근 포탈이나 자잘한 파티클 이펙트, 캐릭터 무기 광원을 완벽히 소거하고 진짜 앵커만 격리합니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
         monitor = active_sct.monitors[1]
         sct_img = active_sct.grab(monitor)
-        screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+        img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+        img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
         
-        template = IMAGE_CACHE.get('anchor1.png')
-        if template is None: return None
+        # 1. 앵커 고유의 강렬한 발광 네온 핑크/자주색 대역 검출 (매우 좁고 엄격한 밝은 자주 대역 설정)
+        lower_pink = np.array([140, 90, 120])
+        upper_pink = np.array([170, 255, 255])
+        mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
         
-        # 1. 모션 블러 소거를 위한 양방향 필터 및 가우시안 적응형 이진화 전처리 동기화 (외곽선 뼈대 추출)
-        screen_filtered = cv2.bilateralFilter(screen_gray, 5, 40, 40)
-        screen_bin = cv2.adaptiveThreshold(screen_filtered, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        # 2. 구조적 닫기(Closing)로 끊어진 핑크 에너지를 한 덩어리로 병합
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        morph = cv2.morphologyEx(mask_pink, cv2.MORPH_CLOSE, kernel)
         
-        template_filtered = cv2.bilateralFilter(template, 5, 40, 40)
-        template_bin = cv2.adaptiveThreshold(template_filtered, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        best_val = -1
-        best_box = None
+        best_target = None
+        max_area = 0
         
-        # 2. 광대역 스케일 촘촘히 전개 (원거리 40% 초소형 크기부터 밀착 130% 대형 크기까지 완벽 대응)
-        scales = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
-        for scale in scales:
-            w = int(template.shape[1] * scale)
-            h = int(template.shape[0] * scale)
-            if w < 10 or h < 10: continue
+        for c in contours:
+            area = cv2.contourArea(c)
+            # 너무 작으면 무기 반짝임이나 자잘한 불꽃 파티클, 너무 크면 대형 포탈 화면 간섭으로 간주하여 필터링
+            if area < 120 or area > 18000: 
+                continue
             
-            resized_t = cv2.resize(template_bin, (w, h), interpolation=cv2.INTER_AREA)
+            x, y, w, h = cv2.boundingRect(c)
             
-            # 외곽 실루엣 매칭 수행 (배경 노이즈가 모두 0으로 정제되어 오탐이 원천적으로 차단됨)
-            res = cv2.matchTemplate(screen_bin, resized_t, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            # [핵심] 아노말리(앵커1)는 공중에 세로로 솟아오른 길쭉한 형태입니다.
+            aspect_ratio = h / float(w) if w > 0 else 0
             
-            # 외곽선 실루엣 형태 정밀 부합 기준값 설정
-            if max_val >= 0.65 and max_val > best_val:
-                best_val = max_val
-                real_x = max_loc[0] + monitor["left"]
-                real_y = max_loc[1] + monitor["top"]
-                best_box = Box(real_x, real_y, w, h)
-                
-        if best_box:
-            return best_box
+            # 둥근 형태(포탈, h/w ~ 1.0)나 가로형 광원(무기, h/w < 1.0)을 모두 탈락시키고,
+            # 오직 세로로 길쭉한 불꽃/샤드 형상(1.3 ~ 3.5 배율)만 엄격히 수용합니다.
+            if 1.3 <= aspect_ratio <= 3.5:
+                # 화면 아래쪽(바닥 반사나 플레이어 무기)은 감지 대상에서 제외 (Y축 상위 75% 영역만 탐색)
+                if y + h < monitor["height"] * 0.75:
+                    if area > max_area:
+                        max_area = area
+                        best_target = (x, y, w, h)
+                        
+        if best_target:
+            x, y, w, h = best_target
+            cx = x + w // 2
+            cy = y + h // 2
+            return Box(cx - w//2, cy - h//2, w, h)
         return None
     except:
         return None

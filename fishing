@@ -2189,22 +2189,16 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
 
 def find_anchor1_by_color(custom_sct=None):
     """
-    [v25 초고정밀 하이브리드 포스트-에미시브 코어 검증 엔진]
-    그레이스케일 매칭으로 형태를 잡은 후보지 내에서, 3D 비발광 텍스처(어두운 핑크 꽃/잎 등)를 
-    완벽하게 필터링하기 위해 이중 에미시브(발광) 광원 검증을 도입합니다.
-    1차: 높은 채도(S>=90)와 밝기(V>=160)를 만족하는 '네온 핑크' 광원 밀도 검증
-    2차: 중심부에 오버익스포저된 고휘도 '백색 코어(White-hot core, V>=225, S<=100)'의 존재 유무 검증
-    형태가 유사한 꽃 텍스처는 스스로 빛을 내지 못하므로 2중 광원 필터에서 완전히 탈락합니다.
+    [v26 정밀 그레이스케일 매칭 엔진 - 회색 샌드백 장벽 전용]
+    사용자님께서 제안해주신 최적의 2단계 탐색 기법을 가동합니다.
+    회전하지 않는 고정형 구조물인 '회색 샌드백 벽(anchor1.png)'을 그레이스케일 매칭으로 1차 탐색하여 
+    오탐 없는 선제 에임 정렬의 고유 기준점으로 삼습니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
         monitor = active_sct.monitors[1]
         sct_img = active_sct.grab(monitor)
-        
-        # 그레이스케일 및 HSV 이미지를 동시에 획득
-        screen_np = np.array(sct_img)
-        screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
-        screen_hsv = cv2.cvtColor(cv2.cvtColor(screen_np, cv2.COLOR_BGRA2BGR), cv2.COLOR_BGR2HSV)
+        screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
         
         template = IMAGE_CACHE.get('anchor1.png')
         if template is None: return None
@@ -2212,7 +2206,7 @@ def find_anchor1_by_color(custom_sct=None):
         best_val = -1
         best_box = None
         
-        # 광대역 스케일 전개 (원거리 소형부터 근거리 대형까지)
+        # 3D 거리 보정용 다중 스케일 적용 (40% ~ 130%)
         scales = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
         for scale in scales:
             w = int(template.shape[1] * scale)
@@ -2223,43 +2217,64 @@ def find_anchor1_by_color(custom_sct=None):
             res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             
-            # 형태 유사도가 0.65 이상인 후보군 필터링
-            if max_val >= 0.65 and max_val > best_val:
-                rx = max_loc[0]
-                ry = max_loc[1]
+            # 구조물 정밀 매칭 기준값 설정
+            if max_val >= 0.75 and max_val > best_val:
+                best_val = max_val
+                real_x = max_loc[0] + monitor["left"]
+                real_y = max_loc[1] + monitor["top"]
+                best_box = Box(real_x, real_y, w, h)
                 
-                # 후보지의 화면 높이가 비정상적으로 낮으면 배제 (바닥 반사광/무기 노이즈 차단)
-                if ry + h < monitor["height"] * 0.75:
-                    
-                    # [포스트 에미시브 이중 검증 단계]
-                    # 후보 영역의 HSV 서브 매트릭스를 크롭하여 정밀 광원 분석을 가동합니다.
-                    crop_hsv = screen_hsv[ry:ry+h, rx:rx+w]
-                    
-                    # 1) 고진폭 네온 핑크 대역 필터링 (V값을 160 이상으로 대폭 상향하여 어두운 꽃/나뭇잎 디퓨즈 텍스처를 완벽 제거)
-                    lower_pink = np.array([135, 90, 160])
-                    upper_pink = np.array([175, 255, 255])
-                    mask_pink = cv2.inRange(crop_hsv, lower_pink, upper_pink)
-                    
-                    pink_pixels = cv2.countNonZero(mask_pink)
-                    
-                    # 2) 중심부 백색 실광원 코어 검증 (V >= 225, S <= 100) -> 발광체가 아니면 생기지 않는 카메라 포화(Saturated) 영역
-                    lower_white = np.array([0, 0, 225])
-                    upper_white = np.array([180, 100, 255])
-                    mask_white = cv2.inRange(crop_hsv, lower_white, upper_white)
-                    
-                    white_pixels = cv2.countNonZero(mask_white)
-                    
-                    # 형태 일치 2% 조건 충족 및 중심부에 최소 3픽셀 이상의 눈부신 백색 광원 코어가 고밀도로 뭉쳐있어야 최종 승인!
-                    min_required_pink = max(3, int((w * h) * 0.02))
-                    
-                    if pink_pixels >= min_required_pink and white_pixels >= 3:
-                        best_val = max_val
-                        real_x = rx + monitor["left"]
-                        real_y = ry + monitor["top"]
-                        best_box = Box(real_x, real_y, w, h)
-                        
         if best_box:
             return best_box
+        return None
+    except:
+        return None
+
+def find_deviant_by_color(custom_sct=None):
+    """
+    [v26 데비안트 전용 정밀 센터-컬러 감지기]
+    이미 6단계에서 회색 샌드백 벽(anchor1.png)을 기준으로 에임 조준을 마친 상태이므로,
+    우측 덩굴 꽃잎 등의 핑크색 노이즈를 완전 차단하기 위해 화면 중앙 대역(중앙선 기준 좌우 350px 내)
+    에 위치한 진짜 보상 데비안트의 핑크색 발광 코어만 정확하게 골라내어 추적합니다.
+    """
+    try:
+        active_sct = custom_sct if custom_sct else get_sct_safe()
+        monitor = active_sct.monitors[1]
+        sct_img = active_sct.grab(monitor)
+        img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+        img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+        
+        # 선명한 네온 핑크 대역 필터링
+        lower_pink = np.array([135, 80, 150])
+        upper_pink = np.array([175, 255, 255])
+        mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
+        
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        morph = cv2.morphologyEx(mask_pink, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        best_target = None
+        max_area = 0
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < 100 or area > 20000: continue
+            
+            x, y, w, h = cv2.boundingRect(c)
+            aspect_ratio = h / float(w) if w > 0 else 0
+            if 1.1 <= aspect_ratio <= 3.5:
+                # [핵심 수평 차단막] 화면 중앙선(CENTER_X) 기준 좌우 350픽셀 이내에 들어온 것만 검출하여
+                # 화면 우측에 있는 덩굴 꽃잎 노이즈를 물리적으로 완벽 차단!
+                cx_local = x + w // 2
+                if abs(cx_local - (monitor["width"] // 2)) < 350:
+                    if area > max_area:
+                        max_area = area
+                        best_target = (x, y, w, h)
+                        
+        if best_target:
+            x, y, w, h = best_target
+            cx = x + w // 2
+            cy = y + h // 2
+            return Box(cx - w//2, cy - h//2, w, h)
         return None
     except:
         return None
@@ -2555,27 +2570,27 @@ def oblivion_bot_loop():
                 # 7~8단계 통합: 점진적 전진 및 확정 수거 시퀀스 (인치웜 솔루션)
                 oprint("[7~8단계 시작] 아노말리 수색 및 실시간 트래킹 전진 수거 가동")
                 
-                # 6단계에서 이미 'anchor1.png'로 에임 조준을 완료했으므로, 360도 무지성 회전을 전면 배제하고
-                # 정방향 시야각 내에서 아노말리(데비안트)의 고유 핑크 컬러를 감지합니다.
-                oprint("  > [수색] 6단계 조준선 근처에서 아노말리 실시간 탐색 시작...")
+                # 6단계에서 이미 회색 샌드백 벽(anchor1.png)으로 에임 조준을 완료했으므로,
+                # 시야 정면에 위치한 아노말리(데비안트)의 고유 핑크 컬러를 중앙 대역 내에서 정밀 감지합니다.
+                oprint("  > [수색] 조준 완료된 정면 시야각에서 진짜 보상 데비안트 탐색 시작...")
                 target_found = False
                 
-                # 1. 제자리에서 아노말리 탐색 시도
+                # 1. 제자리에서 데비안트 탐색 시도
                 for _ in range(5):
-                    box = find_anchor1_by_color(thread_sct)
+                    box = find_deviant_by_color(thread_sct)
                     if box:
                         target_found = True
                         break
                     time.sleep(0.1)
                 
-                # 2. 정면에서 미검출 시, 좌우로 미세 회전하며 스캔 (오탐 방지를 위해 360도 스핀 대신 좌우 미세 수색)
+                # 2. 정면에서 미검출 시, 좌우로 미세 회전하며 스캔 (좌우 미세 수색)
                 if not target_found:
-                    oprint("  > [수색] 정면 미검출: 좌우 미세 수색으로 아노말리 핑크 빔 포착 시도...")
+                    oprint("  > [수색] 정면 미검출: 좌우 미세 수색으로 진짜 데비안트 포착 시도...")
                     sweep_steps = ['M-100,0', 'M200,0', 'M-100,0'] # 좌측 이동 -> 우측 이동 -> 원상 복귀
                     for step in sweep_steps:
                         send_cmd(step)
                         time.sleep(0.1)
-                        box = find_anchor1_by_color(thread_sct)
+                        box = find_deviant_by_color(thread_sct)
                         if box:
                             target_found = True
                             break
@@ -2589,19 +2604,18 @@ def oblivion_bot_loop():
                     
                     start_walk_t = time.time()
                     while oblivion_active and (time.time() - start_walk_t < 10.0): # 최대 10초 추적 제한
-                        box = find_anchor1_by_color(thread_sct)
+                        box = find_deviant_by_color(thread_sct)
                         if box:
                             cx = box.left + box.width // 2
                             err_x = cx - CENTER_X
                             
-                            # 아노말리 방향으로 에임 자동 스티어링 (X축 정렬)
+                            # 데비안트 방향으로 에임 자동 스티어링 (X축 정렬)
                             if abs(err_x) > 20:
                                 dx = int(err_x * 0.20)
                                 dx = max(-40, min(40, dx)) # 오버슈트 방지 클램핑
                                 send_cmd(f'M{dx},0')
                                 
                         # [도달 판정] 보물상자 UI('treasure_box.png')가 화면에 뜨면 도착 완료로 판정하고 전진을 중단합니다.
-                        # 다중 스케일 이진화와 표준 정밀 매칭 두 경로를 크로스 체크하여 완벽하게 탐지해냅니다.
                         if find_treasure_box_multi_scale('treasure_box.png', conf=0.50) or safe_find_image('treasure_box.png', conf=0.65, custom_sct=thread_sct):
                             oprint("  > 🚨 [도달] 'treasure_box.png' 보물상자 UI 노출 확인! 즉각 정지합니다.")
                             break
@@ -2611,7 +2625,7 @@ def oblivion_bot_loop():
                     send_cmd('R') # W 키 해제 (전진 종료)
                     time.sleep(0.2)
                 else:
-                    oprint("  > ⚠️ [경고] 아노말리 스캔 실패. 안전 거리 확보를 위해 기본값 전진 1.5초를 적용합니다.")
+                    oprint("  > ⚠️ [경고] 진짜 데비안트 스캔 실패. 안전 거리 확보를 위해 기본값 전진 1.5초를 적용합니다.")
                     send_cmd('W')
                     time.sleep(1.5)
                     send_cmd('R')

@@ -2183,9 +2183,11 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
 
 def find_anchor1_by_color(custom_sct=None):
     """
-    [v26 정밀 그레이스케일 매칭 엔진 - 회색 샌드백 장벽 탐색용]
-    3D 환경의 명암 변화와 시점 왜곡을 극복하기 위해 매칭 임계값을 0.60으로 현실화하고,
-    미세한 노이즈를 필터링하여 오탐 없이 회색 샌드백 벽면(anchor1.png)을 정확히 포착합니다.
+    [v27 원근 투영 왜곡 극복 - 비대칭 배율 압축 매칭 엔진]
+    3D 공간에서 장벽을 정면이 아닌 측면(빗각)에서 바라볼 때 발생하는 
+    가로 폭 압축 현상(Perspective Compression)을 수학적으로 극복합니다.
+    매치 탐색 시 가로 폭을 100%(정면) 및 72%(측면) 두 가지 비율로 비대칭 스케일링하여 
+    다각도에서 완벽하게 장벽(anchor1.png)을 포착해 냅니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
@@ -2204,24 +2206,28 @@ def find_anchor1_by_color(custom_sct=None):
         best_val = -1
         best_box = None
         
-        # 3D 거리 보정용 다중 스케일 적용 (40% ~ 130%)
+        # 3D 거리 보정용 광대역 스케일 전개 (40% ~ 130%)
         scales = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
         for scale in scales:
-            w = int(template.shape[1] * scale)
-            h = int(template.shape[0] * scale)
-            if w < 10 or h < 10: continue
+            # 원근 왜곡 극복을 위한 2가지 종횡비 분기 생성 (1.0: 정면 뷰, 0.72: 측면 원근 압축 뷰)
+            aspect_multipliers = [1.0, 0.72]
             
-            resized = cv2.resize(template_smoothed, (w, h), interpolation=cv2.INTER_AREA)
-            res = cv2.matchTemplate(screen_smoothed, resized, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-            
-            # 3D 구조물 텍스처 대조 특성을 고려해 임계값을 안정적인 0.60으로 조율하여 미인식률 해결
-            if max_val >= 0.60 and max_val > best_val:
-                best_val = max_val
-                real_x = max_loc[0] + monitor["left"]
-                real_y = max_loc[1] + monitor["top"]
-                best_box = Box(real_x, real_y, w, h)
+            for aspect_mult in aspect_multipliers:
+                w = int(template.shape[1] * scale * aspect_mult)
+                h = int(template.shape[0] * scale)
+                if w < 10 or h < 10: continue
                 
+                resized = cv2.resize(template_smoothed, (w, h), interpolation=cv2.INTER_AREA)
+                res = cv2.matchTemplate(screen_smoothed, resized, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                
+                # 3D 구조물 텍스처 대조 특성을 고려해 임계값을 안정적인 0.60으로 조율하여 미인식률 해결
+                if max_val >= 0.60 and max_val > best_val:
+                    best_val = max_val
+                    real_x = max_loc[0] + monitor["left"]
+                    real_y = max_loc[1] + monitor["top"]
+                    best_box = Box(real_x, real_y, w, h)
+                    
         if best_box:
             return best_box
         return None

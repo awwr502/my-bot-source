@@ -2183,11 +2183,10 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
 
 def find_anchor1_by_color(custom_sct=None):
     """
-    [v27 원근 투영 왜곡 극복 - 비대칭 배율 압축 매칭 엔진]
-    3D 공간에서 장벽을 정면이 아닌 측면(빗각)에서 바라볼 때 발생하는 
-    가로 폭 압축 현상(Perspective Compression)을 수학적으로 극복합니다.
-    매치 탐색 시 가로 폭을 100%(정면) 및 72%(측면) 두 가지 비율로 비대칭 스케일링하여 
-    다각도에서 완벽하게 장벽(anchor1.png)을 포착해 냅니다.
+    [v28 정밀 그레이스케일 다중 배율 매칭 엔진 - 표지판 벽면 탐색용]
+    붉은색 'RESTRICTED AREA' 표지판의 고대비 텍스트 라인을 효과적으로 활용하기 위해,
+    가우시안 블러를 제거하고 원본의 선명한 외곽선 및 텍스트 패턴을 기준으로 
+    비대칭 배율 압축 매칭(정면/측면 왜곡 보정)을 수행합니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
@@ -2195,13 +2194,8 @@ def find_anchor1_by_color(custom_sct=None):
         sct_img = active_sct.grab(monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
         
-        # 3D 환경 텍스처 노이즈 감쇄를 위해 가벼운 가우시안 블러 적용
-        screen_smoothed = cv2.GaussianBlur(screen_gray, (3, 3), 0)
-        
         template = IMAGE_CACHE.get('anchor1.png')
         if template is None: return None
-        
-        template_smoothed = cv2.GaussianBlur(template, (3, 3), 0)
         
         best_val = -1
         best_box = None
@@ -2217,12 +2211,12 @@ def find_anchor1_by_color(custom_sct=None):
                 h = int(template.shape[0] * scale)
                 if w < 10 or h < 10: continue
                 
-                resized = cv2.resize(template_smoothed, (w, h), interpolation=cv2.INTER_AREA)
-                res = cv2.matchTemplate(screen_smoothed, resized, cv2.TM_CCOEFF_NORMED)
+                resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
+                res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(res)
                 
-                # 3D 구조물 텍스처 대조 특성을 고려해 임계값을 안정적인 0.60으로 조율하여 미인식률 해결
-                if max_val >= 0.60 and max_val > best_val:
+                # 표지판의 고대비 텍스트 특징이 명확하므로, 원본 매칭률 기준을 0.65 이상으로 상향 조율하여 정확도를 확보합니다.
+                if max_val >= 0.65 and max_val > best_val:
                     best_val = max_val
                     real_x = max_loc[0] + monitor["left"]
                     real_y = max_loc[1] + monitor["top"]

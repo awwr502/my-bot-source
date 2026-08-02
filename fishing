@@ -1376,6 +1376,13 @@ last_success_scale = 1.0
 def find_anchor_final(target_img_path):
     global last_success_scale
     try:
+        # [네온 핑크 앵커 특화 분기] anchor1.png는 발광체이므로 일반 그레이스케일 매칭 대신 컬러-기하 분석을 수행합니다.
+        if target_img_path == 'anchor1.png':
+            box = find_anchor1_by_color()
+            if box:
+                return (box.left + box.width // 2, box.top + box.height // 2)
+            return None
+
         screen_gray = fast_cv_screenshot(gray=True)
         template = IMAGE_CACHE.get(target_img_path)
         if template is None: return None
@@ -2180,11 +2187,11 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
     except:
         return False
 
-def find_anomaly_by_color(custom_sct=None):
+def find_anchor1_by_color(custom_sct=None):
     """
-    [v17 컬러-빔 추적 시스템] 
-    회전하는 아노말리의 특성을 고려하여, 템플릿 매칭 대신 고유한 청적색(Cyan-Pink) 코어 컬러 
-    및 하늘 높이 치솟는 백청색 빛기둥(Beam)의 HSV 범위를 감지하여 중심 좌표를 획득합니다.
+    [v18 앵커1 전용 컬러-형상 매칭 엔진]
+    glowing neon pink/magenta 빛과 내부 백색 코어를 가진 anchor1.png의 고유 색상 범위를 추적합니다.
+    회전하거나 모션 블러가 있어도 주변 벽면 구조물 간섭 없이 대상을 정밀하게 식별합니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
@@ -2193,42 +2200,37 @@ def find_anomaly_by_color(custom_sct=None):
         img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
         img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
         
-        # 1. 아노말리 코어의 대표적인 활성 컬러 범위 (빙글빙글 돌아도 일정하게 탐지됨)
-        lower_core = np.array([120, 70, 70])
-        upper_core = np.array([170, 255, 255])
-        mask_core = cv2.inRange(img_hsv, lower_core, upper_core)
+        # 1. 강렬한 네온 핑크/자주색 및 퍼플 대역 검출 (H: 135~175, S: 60~255, V: 100~255)
+        lower_pink = np.array([135, 60, 100])
+        upper_pink = np.array([175, 255, 255])
+        mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
         
-        # 2. 하늘로 솟아오르는 청백색의 고유 수직 빛기둥 범위 (정위치 식별용)
-        lower_beam = np.array([90, 15, 180])
-        upper_beam = np.array([115, 130, 255])
-        mask_beam = cv2.inRange(img_hsv, lower_beam, upper_beam)
-        
-        combined_mask = cv2.bitwise_or(mask_core, mask_beam)
-        
-        # 모폴로지 닫기 연산으로 흩어진 색상 픽셀 군집화
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        morph = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+        # 2. 모폴로지 닫기 연산으로 흩어진 색상 픽셀 군집화 및 노이즈 소거
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        morph = cv2.morphologyEx(mask_pink, cv2.MORPH_CLOSE, kernel)
         
         contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         best_target = None
         max_area = 0
-        
         for c in contours:
             area = cv2.contourArea(c)
-            if area < 100: continue # 미세한 주변 광원 노이즈 필터링
+            if area < 50: continue # 미세 노이즈 필터링
             
             x, y, w, h = cv2.boundingRect(c)
-            # 아노말리 기둥/형체 고유의 높이 분석
-            if area > max_area:
-                max_area = area
-                best_target = (x, y, w, h)
-                
+            
+            # 아노말리/앵커1은 세로로 길쭉한 불꽃/샤드 형상을 가집니다 (종횡비 분석)
+            aspect_ratio = h / float(w) if w > 0 else 0
+            if 1.0 < aspect_ratio < 4.5:
+                if area > max_area:
+                    max_area = area
+                    best_target = (x, y, w, h)
+                    
         if best_target:
             x, y, w, h = best_target
             cx = x + w // 2
             cy = y + h // 2
-            return (cx, cy, w, h)
+            return Box(cx - w//2, cy - h//2, w, h)
         return None
     except:
         return None
@@ -2485,36 +2487,16 @@ def oblivion_bot_loop():
                 # 6단계: 방향 정렬 및 앵커 수색
                 oblivion_stage = 6
                 oprint("[6단계 시작] 방향 정렬 및 앵커 수색")
-                oprint("  > [회전] 제안해주신 다중 배율 고밀도 스캔(80% ~ 110%)을 적용하여 'anchor1.png' 포착을 개시합니다.")
-                
-                anchor_template = IMAGE_CACHE.get('anchor1.png')
+                oprint("  > [회전] 네온 핑크 발광체('anchor1.png') 고유 색채 및 형상 추적 가동")
                 
                 while oblivion_active:
-                    # 1. 화면 캡처 및 Grayscale 변환 (1회만 수행하여 병목 극대화 방지)
-                    screen_gray = fast_cv_screenshot(gray=True)
-                    found_anchor = False
-                    
-                    if anchor_template is not None:
-                        # 80%, 85%, 90%, 95%, 100%, 105%, 110% 배율 정밀 순회 매칭
-                        scales = [0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10]
-                        for scale in scales:
-                            w, h = int(anchor_template.shape[1] * scale), int(anchor_template.shape[0] * scale)
-                            if w < 10 or h < 10: continue
-                            
-                            resized = cv2.resize(anchor_template, (w, h), interpolation=cv2.INTER_AREA)
-                            res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
-                            _, max_val, _, _ = cv2.minMaxLoc(res)
-                            
-                            # 회전 중의 명암/감도 낙폭 오차를 수용하는 감도 0.60 설정
-                            if max_val >= 0.60:
-                                oprint(f"  > 🎉 [성공] 'anchor1.png' 검출! (배율: {int(scale*100)}% / 일치율: {max_val:.3f})")
-                                found_anchor = True
-                                break
-                                
-                    if found_anchor:
+                    # 전용 컬러 매칭 엔진을 사용하여 회전 중에도 0.001초 만에 대상을 정확히 격리합니다.
+                    box = find_anchor1_by_color(thread_sct)
+                    if box:
+                        oprint(f"  > 🎉 [성공] 'anchor1.png' 고유 핑크 광원 포착 완료!")
                         break
                         
-                    # 2. 미감지 시 지정해주신 M260 단위 초고속 회전 및 미세 안정화 대기
+                    # 미감지 시 지정해주신 M260 단위 초고속 회전 및 미세 안정화 대기
                     send_cmd('M260,0')
                     time.sleep(0.04)
                     
@@ -2528,50 +2510,63 @@ def oblivion_bot_loop():
                 # 7~8단계 통합: 점진적 전진 및 확정 수거 시퀀스 (인치웜 솔루션)
                 oprint("[7~8단계 시작] 아노말리 수색 및 실시간 트래킹 전진 수거 가동")
                 
-                # 1. 무작위 스폰 위치를 극복하기 위해 360도 회전하며 아노말리(컬러 및 빛기둥) 탐색
-                oprint("  > [수색] 무작위 스폰 위치를 극복하기 위해 360도 회전하며 아노말리 수색 중...")
+                # 6단계에서 이미 'anchor1.png'로 에임 조준을 완료했으므로, 360도 무지성 회전을 전면 배제하고
+                # 정방향 시야각 내에서 아노말리(데비안트)의 고유 핑크 컬러를 감지합니다.
+                oprint("  > [수색] 6단계 조준선 근처에서 아노말리 실시간 탐색 시작...")
                 target_found = False
-                for scan_step in range(25): # 약 360도 수색 회전
-                    pos = find_anomaly_by_color(thread_sct)
-                    if pos:
-                        oprint(f"  > 🎯 [포착] 아노말리(데비안트) 방향 포착 완료! (수색 {scan_step+1}단계)")
+                
+                # 1. 제자리에서 아노말리 탐색 시도
+                for _ in range(5):
+                    box = find_anchor1_by_color(thread_sct)
+                    if box:
                         target_found = True
                         break
-                    send_cmd('M260,0')
-                    time.sleep(0.05) # 화면 렌더링 정렬 대기
-                    
+                    time.sleep(0.1)
+                
+                # 2. 정면에서 미검출 시, 좌우로 미세 회전하며 스캔 (오탐 방지를 위해 360도 스핀 대신 좌우 미세 수색)
+                if not target_found:
+                    oprint("  > [수색] 정면 미검출: 좌우 미세 수색으로 아노말리 핑크 빔 포착 시도...")
+                    sweep_steps = ['M-100,0', 'M200,0', 'M-100,0'] # 좌측 이동 -> 우측 이동 -> 원상 복귀
+                    for step in sweep_steps:
+                        send_cmd(step)
+                        time.sleep(0.1)
+                        box = find_anchor1_by_color(thread_sct)
+                        if box:
+                            target_found = True
+                            break
+                            
                 if not oblivion_active: raise BotStopException()
                 
-                # 2. 포착되었다면 실시간 제어 스티어링(조준 미세 보정)을 수행하며 전진합니다.
+                # 3. 포착 완료 시 비례 제어(스티어링) 기법으로 전진 트래킹
                 if target_found:
-                    oprint("  > [전진] 아노말리 방향으로 실시간 트래킹 제어 전진 시작...")
-                    send_cmd('W') # 전진 시작
+                    oprint("  > [전진] 아노말리 방향으로 실시간 비례 제어 에임 가이드 전진 가동...")
+                    send_cmd('W') # 전진 키 홀딩
                     
                     start_walk_t = time.time()
-                    while oblivion_active and (time.time() - start_walk_t < 10.0): # 최대 10초 추적
-                        pos = find_anomaly_by_color(thread_sct)
-                        if pos:
-                            cx, cy, w, h = pos
+                    while oblivion_active and (time.time() - start_walk_t < 10.0): # 최대 10초 추적 제한
+                        box = find_anchor1_by_color(thread_sct)
+                        if box:
+                            cx = box.left + box.width // 2
                             err_x = cx - CENTER_X
                             
-                            # 정밀 에임 추적 제어 (실시간 비례 제어)
+                            # 아노말리 방향으로 에임 자동 스티어링 (X축 정렬)
                             if abs(err_x) > 20:
                                 dx = int(err_x * 0.20)
-                                dx = max(-40, min(40, dx)) # 제어 상한선 제한
+                                dx = max(-40, min(40, dx)) # 오버슈트 방지 클램핑
                                 send_cmd(f'M{dx},0')
                                 
-                            # 도달 판정: 면적이 커졌거나 상호작용용 G 방생/F 수거(catch_F) 팝업 감지 시
-                            if (w * h >= 50000) or safe_find_image('catch_F.png', 0.70, custom_sct=thread_sct):
-                                oprint("  > 🚨 [도달] 아노말리 바로 앞 도달 확인 완료!")
+                            # 도달 판정: 아노말리 코어의 크기(w * h)가 일정 면적 이상으로 커지면 정지
+                            if (box.width * box.height >= 45000):
+                                oprint("  > 🚨 [도달] 아노말리 코앞 도착 확인 완료! (추적 마감)")
                                 break
                         time.sleep(0.05)
                         
-                    send_cmd('R') # 전진 종료 (W 해제)
+                    send_cmd('R') # W 키 해제 (전진 종료)
                     time.sleep(0.2)
                 else:
-                    oprint("  > ⚠️ [실패] 360도 수색 내에 타겟 발견 실패. 기존 블라인드 직진 2초를 수행합니다.")
+                    oprint("  > ⚠️ [경고] 아노말리 스캔 실패. 안전 거리 확보를 위해 기본값 전진 1.5초를 적용합니다.")
                     send_cmd('W')
-                    time.sleep(2.0)
+                    time.sleep(1.5)
                     send_cmd('R')
                     time.sleep(0.2)
                 

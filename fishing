@@ -2189,9 +2189,10 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
 
 def find_anchor1_by_color(custom_sct=None):
     """
-    [v20 정밀 그레이스케일 다중 배율 매칭 엔진]
-    네온 발광체의 색상 변동성에 영향을 받지 않도록 그레이스케일 매칭으로 복귀하되,
-    배경 오탐을 완벽히 차단하기 위해 촘촘한 배율(95%~140%)과 매우 높은 임계값(0.88)을 적용합니다.
+    [v21 광대역 가우시안 이진화 매칭 엔진]
+    3D 공간에서의 거리에 따른 극심한 크기 축소(40% 배율)를 지원하기 위해 
+    0.4부터 1.3까지 광대역 스케일을 전개하며, 배경의 철골/모래주머니 오탐을 차단하기 위해 
+    가우시안 적응형 이진화(Adaptive Thresholding)로 선명한 에지 실루엣만 추출하여 정밀 대조합니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
@@ -2202,22 +2203,31 @@ def find_anchor1_by_color(custom_sct=None):
         template = IMAGE_CACHE.get('anchor1.png')
         if template is None: return None
         
+        # 1. 모션 블러 소거를 위한 양방향 필터 및 가우시안 적응형 이진화 전처리 동기화 (외곽선 뼈대 추출)
+        screen_filtered = cv2.bilateralFilter(screen_gray, 5, 40, 40)
+        screen_bin = cv2.adaptiveThreshold(screen_filtered, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        
+        template_filtered = cv2.bilateralFilter(template, 5, 40, 40)
+        template_bin = cv2.adaptiveThreshold(template_filtered, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        
         best_val = -1
         best_box = None
         
-        # 원거리 조준용 기본 배율부터 접근 시의 확대 배율까지 커버 (95% ~ 140%)
-        scales = [0.95, 1.0, 1.05, 1.20, 1.40]
+        # 2. 광대역 스케일 촘촘히 전개 (원거리 40% 초소형 크기부터 밀착 130% 대형 크기까지 완벽 대응)
+        scales = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
         for scale in scales:
             w = int(template.shape[1] * scale)
             h = int(template.shape[0] * scale)
             if w < 10 or h < 10: continue
             
-            resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
-            res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
+            resized_t = cv2.resize(template_bin, (w, h), interpolation=cv2.INTER_AREA)
+            
+            # 외곽 실루엣 매칭 수행 (배경 노이즈가 모두 0으로 정제되어 오탐이 원천적으로 차단됨)
+            res = cv2.matchTemplate(screen_bin, resized_t, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             
-            # 임계값을 0.88로 엄격하게 유지하여 배경 구조물의 오탐을 철저하게 방어합니다.
-            if max_val >= 0.88 and max_val > best_val:
+            # 외곽선 실루엣 형태 정밀 부합 기준값 설정
+            if max_val >= 0.65 and max_val > best_val:
                 best_val = max_val
                 real_x = max_loc[0] + monitor["left"]
                 real_y = max_loc[1] + monitor["top"]
@@ -2475,7 +2485,8 @@ def oblivion_bot_loop():
                 oprint("  > [스킵] 'reward.png' 감지 완료! 좌클릭 홀딩을 해제합니다.")
                 send_cmd('U'); send_cmd('R'); time.sleep(0.15)
                 
-                oprint("  > [입력] 'R' 키 1회 입력 (카메라 초기 정렬)")
+                oprint("  > [입력] 'R' 키 1회 입력 (장전)")
+                send_cmd('r'); time.sleep(0.1); send_cmd('x'); time.sleep(0.2)
                 send_cmd('r'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
                 
                 # 6단계: 방향 정렬 및 앵커 수색

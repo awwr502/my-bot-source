@@ -2422,12 +2422,15 @@ def oblivion_bot_loop():
                 # 6단계: 방향 정렬 및 앵커 수색
                 oblivion_stage = 6
                 oprint("[6단계 시작] 방향 정렬 및 앵커 수색")
-                oprint("  > [회전] 'anchor1.png'(앵커) 포착될 때까지 마우스 우측 고속 회전")
+                oprint("  > [회전] 모션 블러가 제거된 '정지식 정밀 스캔' 기반 'anchor1.png' 추적 가동")
                 while oblivion_active:
-                    if find_img('anchor1.png', conf=0.70, full_screen=True):
+                    # 화면이 물리적으로 정지한 깨끗한 상태에서 스캔하여 블러 현상 극복 (감도 0.60 적용)
+                    if find_img('anchor1.png', conf=0.60, full_screen=True):
                         break
-                    send_cmd('M260,0')  # 고속 우회전
-                    time.sleep(0.02)
+                    # 회전각 스텝을 조절하여 앵커가 시야각 밖으로 튕겨 넘치지 않도록 조율
+                    send_cmd('M260,0')
+                    # 회전 명령 전송 후 그래픽 렌더링 안정화를 위한 최소 정지 시간 부여
+                    time.sleep(0.04)
                     
                 if not oblivion_active: raise BotStopException()
                 
@@ -2661,21 +2664,24 @@ def death_monitor_loop():
     
     with mss.mss() as death_sct:
         while True:
-            # 1단계부터 6단계 돌입 직전(사냥 액티브 대역)에서만 감시 가동
-            if not oblivion_active or oblivion_stage < 1 or oblivion_stage >= 6:
-                time.sleep(0.5)
-                continue
-                
             try:
+                # 1단계부터 6단계 돌입 직전(사냥 액티브 대역)에서만 감시 가동
+                if not oblivion_active or oblivion_stage < 1 or oblivion_stage >= 6:
+                    time.sleep(0.5)
+                    continue
+                    
                 # [고성능 적응형 이진화 & ROI 캐싱 스캔] 고정 위치의 텍스트(death.png)를 자가 학습하여 높은 정밀도로 감지합니다.
                 if safe_find_image('death.png', conf=0.70, custom_sct=death_sct):
                     bprint("\n🚨🚨🚨 [사망 감지] 캐릭터 사망(사망.png) 확인! 10단계 던전 재진입 복구 루틴을 트리거합니다. 🚨🚨🚨")
                     send_blynk_notification("💀 캐릭터 사망 감지! 던전 자동 재진입 시퀀스 가동")
                     death_trigger = True # 사망 복구 트리거 활성화
                     time.sleep(1.0)
-            except:
-                pass
-            time.sleep(0.2)
+                time.sleep(0.2)
+            except BotStopException:
+                # 매크로가 수동 정지될 때 발생하는 정지 예외를 안전하게 우회하여 스레드가 종료되는 것을 차단합니다.
+                time.sleep(0.5)
+            except Exception:
+                time.sleep(0.5)
 
 def fishing_bot(max_allowed_seconds):
     # check_char_popup을 전역 선언 목록에 추가합니다.
@@ -2686,8 +2692,8 @@ def fishing_bot(max_allowed_seconds):
     threading.Thread(target=animal_bot_loop, daemon=True, name="bot_thread_animal").start()
     threading.Thread(target=oblivion_bot_loop, daemon=True, name="bot_thread_oblivion").start()
     
-    # [사망 감시 스레드 가동] 던전 내 실시간 캐릭터 사망 상태를 백그라운드에서 감시하여 즉각 복구하도록 스레드를 할당합니다.
-    threading.Thread(target=death_monitor_loop, daemon=True, name="bot_thread_death").start()
+    # [사망 감시 스레드 가동] 백그라운드 모니터링 전용 스레드로 동작하여 매크로 종료 시 자동 정지 폭파 예외가 일어나는 것을 차단합니다.
+    threading.Thread(target=death_monitor_loop, daemon=True, name="monitor_thread_death").start()
     
     # 봇이 켜지자마자 가장 먼저 사진들부터 메모리에 싹 다 올립니다.
     preload_all_images()

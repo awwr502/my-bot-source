@@ -2189,10 +2189,9 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
 
 def find_anchor1_by_color(custom_sct=None):
     """
-    [v26 정밀 그레이스케일 매칭 엔진 - 회색 샌드백 장벽 전용]
-    사용자님께서 제안해주신 최적의 2단계 탐색 기법을 가동합니다.
-    회전하지 않는 고정형 구조물인 '회색 샌드백 벽(anchor1.png)'을 그레이스케일 매칭으로 1차 탐색하여 
-    오탐 없는 선제 에임 정렬의 고유 기준점으로 삼습니다.
+    [v26 정밀 그레이스케일 매칭 엔진 - 회색 샌드백 장벽 탐색용]
+    3D 환경의 명암 변화와 시점 왜곡을 극복하기 위해 매칭 임계값을 0.60으로 현실화하고,
+    미세한 노이즈를 필터링하여 오탐 없이 회색 샌드백 벽면(anchor1.png)을 정확히 포착합니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
@@ -2200,8 +2199,13 @@ def find_anchor1_by_color(custom_sct=None):
         sct_img = active_sct.grab(monitor)
         screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
         
+        # 3D 환경 텍스처 노이즈 감쇄를 위해 가벼운 가우시안 블러 적용
+        screen_smoothed = cv2.GaussianBlur(screen_gray, (3, 3), 0)
+        
         template = IMAGE_CACHE.get('anchor1.png')
         if template is None: return None
+        
+        template_smoothed = cv2.GaussianBlur(template, (3, 3), 0)
         
         best_val = -1
         best_box = None
@@ -2213,12 +2217,12 @@ def find_anchor1_by_color(custom_sct=None):
             h = int(template.shape[0] * scale)
             if w < 10 or h < 10: continue
             
-            resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
-            res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
+            resized = cv2.resize(template_smoothed, (w, h), interpolation=cv2.INTER_AREA)
+            res = cv2.matchTemplate(screen_smoothed, resized, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             
-            # 구조물 정밀 매칭 기준값 설정
-            if max_val >= 0.75 and max_val > best_val:
+            # 3D 구조물 텍스처 대조 특성을 고려해 임계값을 안정적인 0.60으로 조율하여 미인식률 해결
+            if max_val >= 0.60 and max_val > best_val:
                 best_val = max_val
                 real_x = max_loc[0] + monitor["left"]
                 real_y = max_loc[1] + monitor["top"]

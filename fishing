@@ -2189,10 +2189,12 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
 
 def find_anchor1_by_color(custom_sct=None):
     """
-    [v24 하이브리드 포스트-컬러 검증 엔진]
-    그레이스케일 다중 배율 매칭으로 형태를 추적하되, 갈색 나무 상자나 철골 구조물처럼 
-    형태는 유사하나 색상이 다른 오탐을 배제하기 위해 매칭된 영역의 '핑크색 화소 검증'을 수행합니다.
-    오직 실제로 핑크색 광원을 머금은 구역만 매치로 인정하므로 오진률을 원천 차단합니다.
+    [v25 초고정밀 하이브리드 포스트-에미시브 코어 검증 엔진]
+    그레이스케일 매칭으로 형태를 잡은 후보지 내에서, 3D 비발광 텍스처(어두운 핑크 꽃/잎 등)를 
+    완벽하게 필터링하기 위해 이중 에미시브(발광) 광원 검증을 도입합니다.
+    1차: 높은 채도(S>=90)와 밝기(V>=160)를 만족하는 '네온 핑크' 광원 밀도 검증
+    2차: 중심부에 오버익스포저된 고휘도 '백색 코어(White-hot core, V>=225, S<=100)'의 존재 유무 검증
+    형태가 유사한 꽃 텍스처는 스스로 빛을 내지 못하므로 2중 광원 필터에서 완전히 탈락합니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
@@ -2226,27 +2228,36 @@ def find_anchor1_by_color(custom_sct=None):
                 rx = max_loc[0]
                 ry = max_loc[1]
                 
-                # [포스트 컬러 검증 단계]
-                # 후보 영역의 HSV 서브 매트릭스를 크롭하여 핑크색 화소의 농도를 분석합니다.
-                crop_hsv = screen_hsv[ry:ry+h, rx:rx+w]
-                
-                # 핑크/보라 대역 검출 (매우 넉넉하고 안전한 범위 설정으로 유실 방지)
-                lower_pink = np.array([130, 40, 80])
-                upper_pink = np.array([175, 255, 255])
-                mask_pink = cv2.inRange(crop_hsv, lower_pink, upper_pink)
-                
-                pink_pixels = cv2.countNonZero(mask_pink)
-                
-                # 해당 박스 면적 대비 최소 2% 이상이 핑크색 화소여야 진짜 앵커로 승인
-                # 갈색 나무나 회색 철골 구조물은 핑크 화소가 0개이므로 완벽하게 탈락합니다!
-                min_required_pink = max(3, int((w * h) * 0.02))
-                
-                if pink_pixels >= min_required_pink:
-                    best_val = max_val
-                    real_x = rx + monitor["left"]
-                    real_y = ry + monitor["top"]
-                    best_box = Box(real_x, real_y, w, h)
+                # 후보지의 화면 높이가 비정상적으로 낮으면 배제 (바닥 반사광/무기 노이즈 차단)
+                if ry + h < monitor["height"] * 0.75:
                     
+                    # [포스트 에미시브 이중 검증 단계]
+                    # 후보 영역의 HSV 서브 매트릭스를 크롭하여 정밀 광원 분석을 가동합니다.
+                    crop_hsv = screen_hsv[ry:ry+h, rx:rx+w]
+                    
+                    # 1) 고진폭 네온 핑크 대역 필터링 (V값을 160 이상으로 대폭 상향하여 어두운 꽃/나뭇잎 디퓨즈 텍스처를 완벽 제거)
+                    lower_pink = np.array([135, 90, 160])
+                    upper_pink = np.array([175, 255, 255])
+                    mask_pink = cv2.inRange(crop_hsv, lower_pink, upper_pink)
+                    
+                    pink_pixels = cv2.countNonZero(mask_pink)
+                    
+                    # 2) 중심부 백색 실광원 코어 검증 (V >= 225, S <= 100) -> 발광체가 아니면 생기지 않는 카메라 포화(Saturated) 영역
+                    lower_white = np.array([0, 0, 225])
+                    upper_white = np.array([180, 100, 255])
+                    mask_white = cv2.inRange(crop_hsv, lower_white, upper_white)
+                    
+                    white_pixels = cv2.countNonZero(mask_white)
+                    
+                    # 형태 일치 2% 조건 충족 및 중심부에 최소 3픽셀 이상의 눈부신 백색 광원 코어가 고밀도로 뭉쳐있어야 최종 승인!
+                    min_required_pink = max(3, int((w * h) * 0.02))
+                    
+                    if pink_pixels >= min_required_pink and white_pixels >= 3:
+                        best_val = max_val
+                        real_x = rx + monitor["left"]
+                        real_y = ry + monitor["top"]
+                        best_box = Box(real_x, real_y, w, h)
+                        
         if best_box:
             return best_box
         return None

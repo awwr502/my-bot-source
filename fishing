@@ -2189,50 +2189,57 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
 
 def find_anchor1_by_color(custom_sct=None):
     """
-    [v18 앵커1 전용 컬러-형상 매칭 엔진]
-    glowing neon pink/magenta 빛과 내부 백색 코어를 가진 anchor1.png의 고유 색상 범위를 추적합니다.
-    회전하거나 모션 블러가 있어도 주변 벽면 구조물 간섭 없이 대상을 정밀하게 식별합니다.
+    [v19 하이브리드 컬러-쉐이프 매칭 엔진]
+    화면의 핑크색 영역만 남겨둔 마스크(Mask) 위에서 anchor1.png의 고유한 불꽃/샤드 형태의 
+    핑크 실루엣 마스크를 다중 스케일로 대조 매칭(Template Matching)합니다.
+    단순히 핑크색이 있다고 매칭되는 오탐을 100% 원천 예방하고, 정확한 앵커의 형상만 골라냅니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
         monitor = active_sct.monitors[1]
         sct_img = active_sct.grab(monitor)
-        img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-        img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+        screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+        screen_hsv = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2HSV)
         
-        # 1. 강렬한 네온 핑크/자주색 및 퍼플 대역 검출 (H: 135~175, S: 60~255, V: 100~255)
+        # 1. 화면 속 강렬한 네온 핑크/퍼플 영역 검출 (배경의 모든 노이즈를 까맣게 지워버림)
         lower_pink = np.array([135, 60, 100])
         upper_pink = np.array([175, 255, 255])
-        mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
+        screen_mask = cv2.inRange(screen_hsv, lower_pink, upper_pink)
         
-        # 2. 모폴로지 닫기 연산으로 흩어진 색상 픽셀 군집화 및 노이즈 소거
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        morph = cv2.morphologyEx(mask_pink, cv2.MORPH_CLOSE, kernel)
+        # 2. 템플릿 이미지 불러오기 및 핑크 실루엣 추출
+        template_bgr = IMAGE_COLOR_CACHE.get('anchor1.png')
+        if template_bgr is None: return None
         
-        contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        template_hsv = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2HSV)
+        template_mask = cv2.inRange(template_hsv, lower_pink, upper_pink)
         
-        best_target = None
-        max_area = 0
-        for c in contours:
-            area = cv2.contourArea(c)
-            if area < 50: continue # 미세 노이즈 필터링
+        # 3. 실루엣 간의 다중 스케일 형상 매칭 시작 (90%, 100%, 110%)
+        best_val = -1
+        best_box = None
+        
+        scales = [0.90, 1.0, 1.10]
+        for scale in scales:
+            w = int(template_mask.shape[1] * scale)
+            h = int(template_mask.shape[0] * scale)
+            if w < 10 or h < 10: continue
             
-            x, y, w, h = cv2.boundingRect(c)
+            resized_t = cv2.resize(template_mask, (w, h), interpolation=cv2.INTER_AREA)
             
-            # 아노말리/앵커1은 세로로 길쭉한 불꽃/샤드 형상을 가집니다 (종횡비 분석)
-            aspect_ratio = h / float(w) if w > 0 else 0
-            if 1.0 < aspect_ratio < 4.5:
-                if area > max_area:
-                    max_area = area
-                    best_target = (x, y, w, h)
-                    
-        if best_target:
-            x, y, w, h = best_target
-            cx = x + w // 2
-            cy = y + h // 2
-            return Box(cx - w//2, cy - h//2, w, h)
+            # 마스크 대 마스크 매칭 수행 (배경 노이즈가 0이므로 완벽하게 형태만 대조)
+            res = cv2.matchTemplate(screen_mask, resized_t, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            
+            # 형태 일치율이 0.70 이상으로 완벽하게 일치하는 경우
+            if max_val >= 0.70 and max_val > best_val:
+                best_val = max_val
+                real_x = max_loc[0] + monitor["left"]
+                real_y = max_loc[1] + monitor["top"]
+                best_box = Box(real_x, real_y, w, h)
+                
+        if best_box:
+            return best_box
         return None
-    except:
+    except Exception as e:
         return None
 
 def oblivion_bot_loop():

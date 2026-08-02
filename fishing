@@ -1430,7 +1430,8 @@ def find_anchor_final(target_img_path):
 def align_view_by_anchor(anchor_img):
     target = anchor_img[0] if isinstance(anchor_img, list) else anchor_img
     start_time = time.time()
-    DYNAMIC_P = P_GAIN * 0.85 # 오버슈트 방지 게인
+    # [에임 반응 속도 강화] 비례 제어 게인을 상향 조정하여 더 민첩하게 대상을 지향하도록 튜닝
+    DYNAMIC_P = 0.75
 
     while time.time() - start_time < 2.0 and (bot_active or oblivion_active):
         pos = find_anchor_final(target)
@@ -1444,11 +1445,10 @@ def align_view_by_anchor(anchor_img):
 
             dx, dy = int(err_x * DYNAMIC_P), int(err_y * DYNAMIC_P)
 
-            # [에임 극단적 튐 전면 차단 - 최대 스텝 클램핑]
-            # 조준선 오버랩이나 그래픽 노이즈로 인해 가짜 좌표(예: 350px 오차)가 잡히더라도, 
-            # 한 스텝당 이동 상한선을 최대 45픽셀로 강제 클램핑하여 화면이 휙 돌아가는 현상을 원천 방지합니다.
-            dx = max(-45, min(45, dx))
-            dy = max(-45, min(45, dy))
+            # [에임 극단적 튐 전면 차단 - 최대 스텝 클램핑 상향]
+            # 최대 보정각을 기존 45에서 95픽셀로 상향하여 조준선이 타겟 중앙으로 빠르게 흡착되게 만듭니다.
+            dx = max(-95, min(95, dx))
+            dy = max(-95, min(95, dy))
 
             # 불응기 최소화 (정지 성능 유지)
             if abs(dx) < 2: dx = 0
@@ -2608,11 +2608,11 @@ def oblivion_bot_loop():
                             cx = box.left + box.width // 2
                             err_x = cx - CENTER_X
                             
-                            # [초고속 반응성 제어 튜닝] 데드밴드를 10으로 좁히고, 비례 게인을 0.35로 올리며,
-                            # 1회 최대 스텝 각도를 65로 대폭 늘려 에임이 표지판 정렬 후 핑크 보상으로 전환되는 속도를 극대화합니다.
+                            # [초고속 조준 추적 가속] 비례 게인을 0.50으로 올려 조준선 보정 반응성을 올리고,
+                            # 1회 이동 스텝 상한을 95픽셀로 확대하여 보상 아노말리 방향으로 매우 빠르게 회전하게 조율합니다.
                             if abs(err_x) > 10:
-                                dx = int(err_x * 0.35)
-                                dx = max(-65, min(65, dx)) 
+                                dx = int(err_x * 0.50)
+                                dx = max(-95, min(95, dx)) 
                                 send_cmd(f'M{dx},0')
                                 
                         # [도달 판정] 보물상자 UI('treasure_box.png')가 화면에 뜨면 즉각 전진을 중단합니다.

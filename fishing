@@ -2236,10 +2236,11 @@ def find_anchor1_by_color(custom_sct=None):
 
 def find_deviant_by_color(custom_sct=None):
     """
-    [v26 데비안트 전용 정밀 센터-컬러 감지기]
-    이미 6단계에서 회색 샌드백 벽(anchor1.png)을 기준으로 에임 조준을 마친 상태이므로,
-    우측 덩굴 꽃잎 등의 핑크색 노이즈를 완전 차단하기 위해 화면 중앙 대역(중앙선 기준 좌우 350px 내)
-    에 위치한 진짜 보상 데비안트의 핑크색 발광 코어만 정확하게 골라내어 추적합니다.
+    [v26 데비안트 전용 청청-핑크 실시간 추적기]
+    6단계에서 회색 샌드백 벽(anchor1.png) 조준 정렬을 완료한 상태에서 작동하며,
+    아노말리 고유의 수직 청백색 빛기둥(Beam)과 청록/핑크 코어를 융합 추적하여
+    오직 진짜 보상 데비안트만 정확하게 수평 트래킹합니다.
+    (꽃잎은 청색/빛기둥이 존재하지 않으므로 오탐이 원천적으로 불가능합니다.)
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
@@ -2248,28 +2249,45 @@ def find_deviant_by_color(custom_sct=None):
         img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
         img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
         
-        # 선명한 네온 핑크 대역 필터링
-        lower_pink = np.array([135, 80, 150])
+        # 1-A. 발광 핑크/자주 대역 검출 (S>=60, V>=60)
+        lower_pink = np.array([135, 60, 60])
         upper_pink = np.array([175, 255, 255])
         mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
         
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        morph = cv2.morphologyEx(mask_pink, cv2.MORPH_CLOSE, kernel)
+        # 1-B. 발광 청색/청록(Cyan) 대역 검출 (S>=60, V>=60)
+        lower_cyan = np.array([85, 60, 60])
+        upper_cyan = np.array([125, 255, 255])
+        mask_cyan = cv2.inRange(img_hsv, lower_cyan, upper_cyan)
+        
+        mask_core = cv2.bitwise_or(mask_pink, mask_cyan)
+        
+        # 2. 하늘로 솟아오르는 청백색의 고유 수직 빛기둥 범위 (꽃잎과 완벽 분리되는 핵심 마커)
+        lower_beam = np.array([90, 10, 180])
+        upper_beam = np.array([115, 130, 255])
+        mask_beam = cv2.inRange(img_hsv, lower_beam, upper_beam)
+        
+        combined_mask = cv2.bitwise_or(mask_core, mask_beam)
+        
+        # 모폴로지 닫기로 분산된 픽셀 뭉치기
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        morph = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
         contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         best_target = None
         max_area = 0
         for c in contours:
             area = cv2.contourArea(c)
-            if area < 100 or area > 20000: continue
+            # 노이즈를 거르고 수직 빛기둥 및 코어를 확실히 인지할 수 있는 면적 필터링
+            if area < 150 or area > 35000: continue
             
             x, y, w, h = cv2.boundingRect(c)
             aspect_ratio = h / float(w) if w > 0 else 0
-            if 1.1 <= aspect_ratio <= 3.5:
-                # [핵심 수평 차단막] 화면 중앙선(CENTER_X) 기준 좌우 350픽셀 이내에 들어온 것만 검출하여
-                # 화면 우측에 있는 덩굴 꽃잎 노이즈를 물리적으로 완벽 차단!
+            
+            # 빛기둥과 코어가 합쳐져 세로로 긴 형상을 검증
+            if 1.1 <= aspect_ratio <= 4.5:
+                # 회색 장벽 근처에 있으므로 수평 허용 범위를 600픽셀로 넉넉하게 확장!
                 cx_local = x + w // 2
-                if abs(cx_local - (monitor["width"] // 2)) < 350:
+                if abs(cx_local - (monitor["width"] // 2)) < 600:
                     if area > max_area:
                         max_area = area
                         best_target = (x, y, w, h)

@@ -2187,48 +2187,43 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
     except:
         return False
 
-def find_anchor1_by_color(custom_sct=None):
-    """
-    [v30 파란 포탈 전용 고대비 컬러-기하 매칭 엔진]
-    glowing cyan/blue 테두리를 지닌 파란색 탈출 포탈(anchor1.png)을 
-    엄격한 블루/시안 HSV 범위 및 세로 직사각형 구조 분석을 통해 검출합니다.
+"""
+    [v31 정밀 그레이스케일 다중 배율 매칭 엔진 - 파란 포탈 탐색용]
+    사용자님의 요구에 맞추어 가우시안 블러를 완전히 제거한 순수 이미지 대조를 수행하며,
+    배경 오탐을 완벽히 차단하기 위해 0.70 정밀 임계값을 탑재하여 앵커를 검출합니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
         monitor = active_sct.monitors[1]
         sct_img = active_sct.grab(monitor)
-        img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-        img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+        screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
         
-        # 1. 포탈 고유의 진한 시안/블루 발광 대역 필터링 (H: 85~125, S: 100~255, V: 120~255) -> 적색 커튼 배제
-        lower_blue = np.array([85, 100, 120])
-        upper_blue = np.array([125, 255, 255])
-        mask_blue = cv2.inRange(img_hsv, lower_blue, upper_blue)
+        template = IMAGE_CACHE.get('anchor1.png')
+        if template is None: return None
         
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        morph = cv2.morphologyEx(mask_blue, cv2.MORPH_CLOSE, kernel)
-        contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best_val = -1
+        best_box = None
         
-        best_target = None
-        max_area = 0
-        for c in contours:
-            area = cv2.contourArea(c)
-            if area < 300 or area > 50000: continue
+        # 3D 거리 변동을 유연하게 수용하는 5단계 대칭 배율 검색
+        scales = [0.4, 0.6, 0.8, 1.0, 1.2]
+        for scale in scales:
+            w = int(template.shape[1] * scale)
+            h = int(template.shape[0] * scale)
+            if w < 10 or h < 10: continue
             
-            x, y, w, h = cv2.boundingRect(c)
-            aspect_ratio = h / float(w) if w > 0 else 0
+            resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
+            res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
             
-            # 포탈은 세로로 길쭉한 대형 직사각형 문 모양입니다 (1.2 ~ 2.5 배율)
-            if 1.2 <= aspect_ratio <= 2.5:
-                if area > max_area:
-                    max_area = area
-                    best_target = (x, y, w, h)
-                    
-        if best_target:
-            x, y, w, h = best_target
-            cx = x + w // 2
-            cy = y + h // 2
-            return Box(cx - w//2, cy - h//2, w, h)
+            # 오탐 차단을 위해 임계값을 요청하신 0.70으로 상향 설정
+            if max_val >= 0.70 and max_val > best_val:
+                best_val = max_val
+                real_x = max_loc[0] + monitor["left"]
+                real_y = max_loc[1] + monitor["top"]
+                best_box = Box(real_x, real_y, w, h)
+                
+        if best_box:
+            return best_box
         return None
     except:
         return None
@@ -2536,7 +2531,7 @@ def oblivion_bot_loop():
                 
                 oprint("  > [입력] 'R' 키 1회 입력 (장전)")
                 send_cmd('x'); time.sleep(0.1); send_cmd('R'); time.sleep(0.4)
-                send_cmd('r'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
+                send_cmd('r'); time.sleep(0.1); send_cmd('R'); time.sleep(0.8)
                 
                 # 6단계: 방향 정렬 및 앵커 수색
                 oblivion_stage = 6

@@ -3594,6 +3594,7 @@ def fishing_bot(max_allowed_seconds):
                 
                 current_active_key = None # 현재 물리적으로 누르고 있는 키 상태 추적 ('A', 'D', None)
                 missing_ui_count = 0
+                miss_count = 0 # QTE 소멸 판정용 누적 미스 카운터
                 
                 while bot_active:
                     if not bot_active: raise BotStopException()
@@ -3615,10 +3616,14 @@ def fishing_bot(max_allowed_seconds):
                         state = 1
                         break
 
-                    # 3. 비동기 스레드 풀을 활용한 4가지 QTE 동시 병렬 감시 (지연율 0ms)
+                    # 3. 비동기 스레드 풀을 활용한 4가지 QTE 동시 병렬 감시
+                    # (홀딩 중에는 게이지 영향으로 감도가 약간 떨어질 수 있으므로, 스캔 요구 한계치를 conf=0.60으로 내려 
+                    # 스레드가 항상 유효한 점수를 수집할 수 있도록 동적으로 허용합니다)
+                    scan_conf = 0.60 if current_active_key is not None else 0.75
+                    
                     futures = {
-                        qte_executor.submit(safe_find_image, 'fishing_hold_A.png', 0.75, None, None, True): 'HOLD_A',
-                        qte_executor.submit(safe_find_image, 'fishing_hold_D.png', 0.75, None, None, True): 'HOLD_D',
+                        qte_executor.submit(safe_find_image, 'fishing_hold_A.png', scan_conf, None, None, True): 'HOLD_A',
+                        qte_executor.submit(safe_find_image, 'fishing_hold_D.png', scan_conf, None, None, True): 'HOLD_D',
                         qte_executor.submit(safe_find_image, 'fishing_tap_A.png', 0.75, None, None, True): 'TAP_A',
                         qte_executor.submit(safe_find_image, 'fishing_tap_D.png', 0.75, None, None, True): 'TAP_D'
                     }
@@ -3636,8 +3641,14 @@ def fishing_bot(max_allowed_seconds):
                     best_action = max(qte_scores, key=qte_scores.get)
                     best_score = qte_scores[best_action]
                     
-                    # 4. 실시간 리액티브 물리 조작 분기
-                    if best_score >= 0.78:
+                    # 4. 실시간 리액티브 물리 조작 분기 (히스테리시스 임계치 융합)
+                    # 현재 키를 누르고 있는 중이라면 임계값 컷오프를 0.65로 하향 적용하고, 대기 중일 때는 0.78 엄격 기준 적용
+                    active_thresh = 0.65 if current_active_key is not None else 0.78
+                    
+                    if best_score >= active_thresh:
+                        # 감지 성공 시 즉시 실패 카운터 초기화 (가짜 릴리즈 방어)
+                        miss_count = 0
+                        
                         if best_action == 'HOLD_A':
                             if current_active_key != 'A':
                                 bprint(f"  > ⌨️ [QTE 홀딩] 'A' 키 계속 길게 누르기 시작 (일치율: {best_score:.3f})")
@@ -3662,21 +3673,26 @@ def fishing_bot(max_allowed_seconds):
                             send_cmd('R'); current_active_key = None
                             send_cmd('D'); time.sleep(0.04); send_cmd('R')
                     else:
-                        # 화면 상에서 QTE 프롬프트가 사라진 즉시 키를 해제 (딜레이 0ms)
+                        # QTE가 임계치 미만으로 떨어지면 미스 카운트 누적
                         if current_active_key is not None:
-                            bprint("  > ⌨️ [QTE 해제] 프롬프트 소멸 확인. 키 떼기")
-                            send_cmd('R')
-                            current_active_key = None
+                            miss_count += 1
                             
-                        # 낚시 인터페이스(fishing_mode) 소멸 여부 실시간 확인 (1.5초 이상 소멸 시 대기 상태 복귀)
-                        if not safe_find_image('fishing_mode.png', 0.70):
-                            missing_ui_count += 1
-                            if missing_ui_count >= 30:
-                                bprint("  > ⚠️ [실패] 낚시 인터페이스 1.5초간 미포착 -> 1단계 복귀")
-                                state = 1
-                                break
+                            # 연속 4회(약 0.1~0.15초) 이상 완전히 미달로 스캔되어야 진짜 소멸한 것으로 판정하여 릴리즈! (채터링 영구 박멸)
+                            if miss_count >= 4:
+                                bprint(f"  > ⌨️ [QTE 해제] 프롬프트 소멸 확인. 키 떼기 (연속 미스: {miss_count}회)")
+                                send_cmd('R')
+                                current_active_key = None
+                                miss_count = 0
                         else:
-                            missing_ui_count = 0
+                            # 낚시 인터페이스(fishing_mode) 소멸 여부 실시간 확인 (1.5초 이상 소멸 시 대기 상태 복귀)
+                            if not safe_find_image('fishing_mode.png', 0.70):
+                                missing_ui_count += 1
+                                if missing_ui_count >= 30:
+                                    bprint("  > ⚠️ [실패] 낚시 인터페이스 1.5초간 미포착 -> 1단계 복귀")
+                                    state = 1
+                                    break
+                            else:
+                                missing_ui_count = 0
                             
                     time.sleep(0.02) # 루프 제어 주기 (반응성 확보 및 CPU 균형)
 

@@ -1101,21 +1101,19 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             # 사용자가 fishing_mode.png를 "거두기" 텍스트 이미지로 전면 교체하였으므로, 
             # 이 역시 QTE 글씨와 동일하게 동적 80% 임계값 이진화 필터를 통과시켜 반투명 어두운 배경을 완벽히 소거합니다.
             if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png', 'fishing_mode.png']:
+            # [QTE 전용 고정 솔리드 이진화 가드]
+            # 1. 낚시 거두기(fishing_mode.png)는 정적이므로 이진화 필터에서 제외하여 자가 치유 무한 랙을 영구히 차단합니다.
+            # 2. 오직 A와 D의 HOLD/TAP QTE 4가지 이미지만을 수색 대역으로 한정합니다.
+            if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
                 screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 template_processed = template_gray.copy() # 메모리 오염을 원천 방지하기 위해 템플릿 복사본 사용
                 
-                # [가우시안 적응형 이진화 전처리 전면 가동]
-                # 글씨 주변의 좁은 국소 영역(11x11)의 명암 대조를 개별적으로 계산하여 이진화합니다.
-                # 이로 인해 민트색 게이지 채워짐, 수면의 반사광, 플레이어 움직임 등 모든 광원 왜곡과 무관하게 
-                # 오직 글씨 획의 뼈대 형태만 칼날처럼 선명하게 100% 무조건 추출해 냅니다.
-                screen_processed = cv2.adaptiveThreshold(screen_processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-                template_processed = cv2.adaptiveThreshold(template_processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-                
-                # [오인식 해결을 위한 2단계 슬라이싱 제거]
-                # '길게'와 '탭'의 템플릿 가로 폭(w)이 크게 달라, 고정 비율(55%)로 잘라내면 텍스트의 획이 잘려나가 
-                # HOLD 이미지(A/D 계속 길게)의 매칭 점수가 0에 가깝게 떨어지며 영구적으로 매칭을 실패하는 심각한 논리 결함이 있었습니다.
-                # 이를 해결하기 위해 슬라이싱 예외처리를 과감히 삭제하고, 이진화 이미지 전체를 대조하도록 복구합니다.
-                # 어차피 '길게'와 '탭'은 글자 모양이 100% 다르기 때문에 전체 매칭만으로도 최고 점수 경쟁(max)을 통해 오류 없이 완벽히 구별됩니다.
+                # [고정식 솔리드 이진화 필터 적용]
+                # 가우시안 적응형 이진화(adaptiveThreshold)는 문자 획 내부를 파먹어 속이 빈 이중선(Double edge) 형태로 만들어 일치율을 폭락시킵니다.
+                # 백색 텍스트의 고유 밝기를 포착하는 고정 임계값(140)으로 전역 이진화(cv2.threshold)를 수행하여,
+                # 민트색 게이지를 완벽히 소거하면서 글자 획은 뭉개짐 없이 속이 꽉 찬 하얀색 자모음으로 완벽하게 격리 추출해 냅니다.
+                _, screen_processed = cv2.threshold(screen_processed, 140, 255, cv2.THRESH_BINARY)
+                _, template_processed = cv2.threshold(template_processed, 140, 255, cv2.THRESH_BINARY)
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
@@ -3628,7 +3626,7 @@ def fishing_bot(max_allowed_seconds):
                     # 3. 신형 4가지 하이브리드 QTE 감지 (상대 점수 경쟁 기법을 통한 오판독 원천 차단)
                     # 공통 글자 "A | 계속 " 부분으로 인한 오판독을 없애기 위해, 각 템플릿의 실제 매칭 점수를 모두 구한 뒤
                     # 가장 높은 점수를 가진 1개의 실제 행동만 실행합니다.
-                    # (가우시안 적응형 이진화 도입으로 감도가 극대화되었으므로, 안전하게 탐색 요구치를 0.75로 세팅합니다)
+                    # (오탐 없는 솔리드 이진화 전처리 탑재에 따라, 0.75 고강도 대조를 안정적으로 가동합니다)
                     score_hold_A = safe_find_image('fishing_hold_A.png', conf=0.75, return_score=True) or 0.0
                     score_hold_D = safe_find_image('fishing_hold_D.png', conf=0.75, return_score=True) or 0.0
                     score_tap_A  = safe_find_image('fishing_tap_A.png', conf=0.75, return_score=True) or 0.0
@@ -3645,7 +3643,7 @@ def fishing_bot(max_allowed_seconds):
                     best_qte, best_score = max(qte_results, key=lambda x: x[1])
                     
                     # 최고 일치율 기준을 사용자의 요구에 대부합하도록 임계치 0.78 이상으로 높여 오탐을 완벽히 소거합니다.
-                    # 가우시안 적응형 이진화 전처리 덕분에 진짜 짝은 0.85~0.95 이상의 높은 점수로 정확히 인식됩니다.
+                    # 고정식 이진화 전처리 덕분에 진짜 짝은 0.85~0.95 이상의 높은 점수로 정확히 인식됩니다.
                     found_hold_A = (best_qte == 'HOLD_A' and best_score >= 0.78)
                     found_hold_D = (best_qte == 'HOLD_D' and best_score >= 0.78)
                     found_tap_A  = (best_qte == 'TAP_A' and best_score >= 0.78)

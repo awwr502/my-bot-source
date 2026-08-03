@@ -1114,31 +1114,11 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
                 _, screen_processed = cv2.threshold(screen_processed, screen_thresh, 255, cv2.THRESH_BINARY)
                 _, template_processed = cv2.threshold(template_processed, template_thresh, 255, cv2.THRESH_BINARY)
                 
-                # QTE 이미지인 경우에만 오탐 방지용 2단계 '우측 슬라이싱 검증'을 수행합니다 ("거두기" 텍스트는 전량 정밀 매칭 수행).
-                if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
-                    # 1단계: 전체 템플릿 매칭으로 정확한 UI의 시작 좌표(max_loc) 검출
-                    res_full = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
-                    _, max_val, _, max_loc = cv2.minMaxLoc(res_full)
-                    
-                    # 해당 QTE가 화면에 아예 존재하지 않는 상황인 경우 탈출
-                    if max_val < 0.4:
-                        if return_score:
-                            return max_val
-                        return None
-                        
-                    # 2단계: 공통 문자("A | 계속 ")를 배제하고 우측 고유 영역만 잘라내어 정밀 대조
-                    h, w = template_processed.shape[:2]
-                    crop_start_x = int(w * 0.55) # 우측 45% 지점 슬라이싱
-                    
-                    screen_patch = screen_processed[max_loc[1]:max_loc[1]+h, max_loc[0]:max_loc[0]+w]
-                    
-                    template_right = template_processed[:, crop_start_x:]
-                    screen_right = screen_patch[:, crop_start_x:]
-                    
-                    res_right = cv2.matchTemplate(screen_right, template_right, cv2.TM_CCOEFF_NORMED)
-                    _, right_score, _, _ = cv2.minMaxLoc(res_right)
-                    
-                    max_val = right_score
+                # [오인식 해결을 위한 2단계 슬라이싱 제거]
+                # '길게'와 '탭'의 템플릿 가로 폭(w)이 크게 달라, 고정 비율(55%)로 잘라내면 텍스트의 획이 잘려나가 
+                # HOLD 이미지(A/D 계속 길게)의 매칭 점수가 0에 가깝게 떨어지며 영구적으로 매칭을 실패하는 심각한 논리 결함이 있었습니다.
+                # 이를 해결하기 위해 슬라이싱 예외처리를 과감히 삭제하고, 이진화 이미지 전체를 대조하도록 복구합니다.
+                # 어차피 '길게'와 '탭'은 글자 모양이 100% 다르기 때문에 전체 매칭만으로도 최고 점수 경쟁(max)을 통해 오류 없이 완벽히 구별됩니다.
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)

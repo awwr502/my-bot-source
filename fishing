@@ -3414,20 +3414,29 @@ def fishing_bot(max_allowed_seconds):
                 frame_results = []
                 result_lock = threading.Lock()
 
-                # [분석관 스레드 함수 - 가우시안 적응형 이진화 매칭 버전]
-                # 물결의 백색 거품이나 명암 왜곡에 전혀 영향을 받지 않도록 화면과 템플릿 양측을 이진화하여 대조합니다.
-                def species_scanner(img_bin, template, species_type, name):
+                # [분석관 스레드 함수 - 정밀 그레이스케일 다중 배율 매칭 버전]
+                # 오동작을 유발하던 이진화를 완전히 제거하고, 사용자님의 오리지널 흑백 인식 방식을 100% 복원하되 미세한 해상도 왜곡을 극복하기 위해 다중 배율을 적용합니다.
+                def species_scanner(img_gray, template, species_type, name):
                     if template is None: return
                     
-                    # 템플릿 이미지 가우시안 적응형 이진화 전처리
-                    template_bin = cv2.adaptiveThreshold(template, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-                    
-                    res = cv2.matchTemplate(img_bin, template_bin, cv2.TM_CCOEFF_NORMED)
-                    _, max_val, _, _ = cv2.minMaxLoc(res)
+                    best_val = -1
+                    # 원거리/근거리 거리 편차 및 해상도 UI 배율 미세 편차(90%~110%)를 완전히 흡수하는 다중 스케일 정합성 대조
+                    scales = [0.90, 0.95, 1.0, 1.05, 1.10]
+                    for scale in scales:
+                        w = int(template.shape[1] * scale)
+                        h = int(template.shape[0] * scale)
+                        if w < 10 or h < 10: continue
+                        
+                        resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
+                        res = cv2.matchTemplate(img_gray, resized, cv2.TM_CCOEFF_NORMED)
+                        _, max_val, _, _ = cv2.minMaxLoc(res)
+                        
+                        if max_val > best_val:
+                            best_val = max_val
                     
                     # 컷오프를 넘든 안 넘든 일단 점수를 모두 기록
                     with result_lock:
-                        frame_results.append({"type": species_type, "name": name, "score": max_val})
+                        frame_results.append({"type": species_type, "name": name, "score": best_val})
 
                  # [추가] 정규직 스레드 7명을 미리 고용 (루프 진입 전 1회만 생성하여 생성 부하 제로화, 2종 추가에 따른 수 정렬)
                 species_executor = concurrent.futures.ThreadPoolExecutor(max_workers=7)
@@ -3468,21 +3477,18 @@ def fishing_bot(max_allowed_seconds):
                         
                     screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                     
-                    # [가우시안 적응형 이진화 화면 전처리 가동]
-                    # 물결 거품(백색 노이즈) 및 텍스처 배경을 완전히 까맣게 지워버리고 선명한 글자 윤곽선만 복원합니다.
-                    screen_bin = cv2.adaptiveThreshold(screen_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-                    
                     frame_results.clear() # 매 프레임마다 점수표 초기화
 
                     # 2. 정규직 스레드 풀에 7개의 작업을 동시에 투입 (스레드 생성 부하 없이 기존의 압도적인 병렬 속도 복구)
+                    # (이전의 불안정했던 이진화 필터를 완전히 걷어내고, 오리지널 흑백 화면을 다중 배율로 스캔하도록 인자를 매핑합니다)
                     futures = [
-                        species_executor.submit(species_scanner, screen_bin, IMAGE_CACHE.get('jellyfish.png'), "TARGET", "해파리"),
-                        species_executor.submit(species_scanner, screen_bin, IMAGE_CACHE.get('eel.png'), "TARGET", "전기뱀장어"),
-                        species_executor.submit(species_scanner, screen_bin, IMAGE_CACHE.get('none1.png'), "TRASH", "병어"),
-                        species_executor.submit(species_scanner, screen_bin, IMAGE_CACHE.get('none2.png'), "TRASH", "청어"),
-                        species_executor.submit(species_scanner, screen_bin, IMAGE_CACHE.get('none3.png'), "TRASH", "정어리"),
-                        species_executor.submit(species_scanner, screen_bin, IMAGE_CACHE.get('none4.png'), "TRASH", "노던파이크"),
-                        species_executor.submit(species_scanner, screen_bin, IMAGE_CACHE.get('none5.png'), "TRASH", "바라쿠다")
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('jellyfish.png'), "TARGET", "해파리"),
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('eel.png'), "TARGET", "전기뱀장어"),
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none1.png'), "TRASH", "병어"),
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none2.png'), "TRASH", "청어"),
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none3.png'), "TRASH", "정어리"),
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none4.png'), "TRASH", "노던파이크"),
+                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none5.png'), "TRASH", "바라쿠다")
                     ]
                     
                     # 7명의 연산이 모두 끝날 때까지 대기 (가장 오래 걸리는 1개 연산 시간만 소모됨)

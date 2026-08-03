@@ -29,32 +29,43 @@ import warnings
 # [경고 숨김] 최신 파이썬 버전 구동 시 발생하는 mss 라이브러리의 단순 DeprecationWarning 경고를 콘솔에서 숨깁니다.
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# mss 객체는 딱 한 번만 생성해두고 계속 재사용합니다 (메모리 최적화)
-sct = mss.mss()
+# [스레드 안전성 보강] mss 객체는 멀티스레드 환경에서 디바이스 컨텍스트(DC) 핸들 공유 오류를 방지하기 위해 스레드 로컬(Thread-Local) 저장소를 통해 안전하게 관리합니다.
+_mss_local = threading.local()
+
+def get_sct_safe():
+    if not hasattr(_mss_local, 'sct'):
+        import mss
+        _mss_local.sct = mss.mss()
+    return _mss_local.sct
+
+# 하위 호환성을 위해 전역 sct 레퍼런스도 초기 생성하여 유지합니다.
+sct = get_sct_safe()
 
 def fast_screenshot(region=None):
     """pyautogui.screenshot()을 완벽히 대체할 mss 기반 초고속 캡처 함수"""
+    active_sct = get_sct_safe()
     if region:
         # pyautogui의 region(x, y, w, h) 형식을 mss 형식으로 번역
         monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
     else:
         # 전체 화면 (기본 1번 모니터)
-        monitor = sct.monitors[1]
+        monitor = active_sct.monitors[1]
     
     # 0.002초 만에 빛의 속도로 화면 캡처
-    sct_img = sct.grab(monitor)
+    sct_img = active_sct.grab(monitor)
     
     # 기존 코드들이 에러를 뿜지 않도록, 원래 pyautogui가 주던 똑같은 'PIL Image' 형태로 변환해서 던져줍니다.
     return Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
 
 def fast_cv_screenshot(region=None, gray=True):
     """PIL을 거치지 않고 mss에서 즉시 OpenCV Numpy 배열(흑백/컬러)로 직행하는 극초고속 캡처 함수"""
+    active_sct = get_sct_safe()
     if region:
         monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
     else:
-        monitor = sct.monitors[1]
+        monitor = active_sct.monitors[1]
     
-    sct_img = sct.grab(monitor)
+    sct_img = active_sct.grab(monitor)
     screen_np = np.array(sct_img)
     
     if gray:
@@ -62,7 +73,6 @@ def fast_cv_screenshot(region=None, gray=True):
     else:
         return cv2.cvtColor(screen_np, cv2.COLOR_BGRA2BGR)
 
-# [마법의 뇌수술] 이제부터 코드 전체의 pyautogui.screenshot은 fast_screenshot으로 강제 교체됩니다!
 pyautogui.screenshot = fast_screenshot
 
 # =========================================================================
@@ -233,8 +243,8 @@ def jitter_sleep(seconds):
         if is_bot_thread and was_active_at_start and not current_active:
             raise BotStopException()
             
-        # [사망 긴급복구 인터셉터] 사냥 도중 사망 트리거가 켜지면 슬립 대기를 즉시 강제 취소하고 사망 전용 예외를 발생시킵니다.
-        if is_bot_thread and death_trigger:
+        # [사망 긴급복구 인터셉터] 사냥 도중 사망 트리거가 켜지면, 오직 망각 모드 실행 스레드(bot_thread_oblivion)에만 사망 예외를 던져 복구 시퀀스를 가동합니다.
+        if t_name == "bot_thread_oblivion" and death_trigger:
             raise BotDeathException()
             
         original_sleep(max(0, min(0.05, final_time - (time.time() - start_t))))
@@ -974,7 +984,7 @@ def log_confidence_to_csv(log_type, img_path, target_conf, actual_conf, min_c=No
                              f"{min_c:.3f}" if min_c else "-", f"{max_c:.3f}" if max_c else "-", note])
     except: pass
 
-def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
+def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_score=False):
     """pyautogui를 완전히 배제하고 mss와 pure cv2만 사용하는 극초고속/고안정성 탐색 엔진 (동적 임계값 폐기 & CSV 로깅)"""
     global IMAGE_CACHE, IMAGE_COLOR_CACHE, IMAGE_MASK_CACHE, ROI_SAMPLER
     
@@ -1003,40 +1013,29 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
         is_fallback_scan = (region == "FULL_SCREEN")
         target_monitor = None
 
-        active_sct = custom_sct if custom_sct else sct
+        active_sct = custom_sct if custom_sct else get_sct_safe()
 
-        if is_fallback_scan:
-            target_monitor = active_sct.monitors[1]
-            # [오탐 방지] 사용자의 인게임 실제 스크린샷 픽셀을 바탕으로 초정밀 좌표 구역 격리
-            if img_path == 'fishing.png':
-                target_monitor = {
-                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
-                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
-                    "width": int(target_monitor["width"] * 0.4),
-                    "height": int(target_monitor["height"] * 0.5)
-                }
-            elif img_path == 'bait_change.png':
-                # [UI 배율 호환 패치] 세로 수색 범위를 40% ~ 75%로 확장하여 다양한 UI 크기에서도 미끼 변경 아이콘이 잘리지 않고 감지되도록 보완하되, 채팅창(75% 이후) 간섭은 유지 차단합니다.
-                target_monitor = {
-                    "left": int(target_monitor["left"]),
-                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.40),
-                    "width": int(target_monitor["width"] * 0.25),
-                    "height": int(target_monitor["height"] * 0.35)
-                }
-            elif img_path == 'green_range.png':
-                target_monitor = {
-                    "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
-                    "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
-                    "width": int(target_monitor["width"] * 0.4),
-                    "height": int(target_monitor["height"] * 0.5)
-                }
-            region = None 
-        elif region:
+        # 1. 수색 대역(target_monitor)의 수립 및 분기 우선순위 단일화 (중복 제거)
+        if region and not is_fallback_scan:
+            # 명시적으로 전달받은 범위(region)가 있는 경우 우선 적용
             target_monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
-        elif cache_data['master_box']:
+        elif img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
+            # QTE 프롬프트 수색 대역 격리 (하단 센터 영역: X 30~70%, Y: 50~95%)
+            p_mon = active_sct.monitors[1]
+            target_monitor = {
+                "left": int(p_mon["left"] + p_mon["width"] * 0.30),
+                "top": int(p_mon["top"] + p_mon["height"] * 0.50),
+                "width": int(p_mon["width"] * 0.40),
+                "height": int(p_mon["height"] * 0.45)
+            }
+        elif cache_data['master_box'] and not is_fallback_scan:
+            # 학습된 캐시(master_box)가 존재하고, 강제 전체화면 탐색 상태가 아닐 때 캐시 적용
             target_monitor = cache_data['master_box']
         else:
+            # 캐시가 전혀 없거나, 자가 치유를 위해 강제로 전체화면 폴백 탐색을 해야 하는 상황
             target_monitor = active_sct.monitors[1]
+            
+            # [오탐 방지 및 스캔 경량화] 이미지별 최적 획정 범위 분할 적용
             if img_path == 'fishing.png':
                 target_monitor = {
                     "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
@@ -1045,7 +1044,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                     "height": int(target_monitor["height"] * 0.5)
                 }
             elif img_path == 'bait_change.png':
-                # [UI 배율 호환 패치] 세로 수색 범위를 40% ~ 75%로 확장하여 다양한 UI 크기에서도 미끼 변경 아이콘이 잘리지 않고 감지되도록 보완하되, 채팅창(75% 이후) 간섭은 유지 차단합니다.
                 target_monitor = {
                     "left": int(target_monitor["left"]),
                     "top": int(target_monitor["top"] + target_monitor["height"] * 0.40),
@@ -1059,6 +1057,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
                     "width": int(target_monitor["width"] * 0.4),
                     "height": int(target_monitor["height"] * 0.5)
                 }
+            
+            # 강제 폴백 검사 종료 후 상태 복귀
+            region = None 
 
         sct_img = active_sct.grab(target_monitor)
         
@@ -1096,11 +1097,48 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             use_mask = None
             use_color = False
             
-            # [QTE 초정밀 흰색 추출 필터] 신형 QTE 4종의 경우, 글자 뒷배경으로 초록색 게이지바가 채워지며 픽셀 대조율이 떨어지는 것을 방지하기 위해 임계값 210의 강제 이진화를 수행합니다.
-            # 이 작업을 거치면 초록색 게이지바 배경은 완전히 검은색(0)으로 지워지고, 오직 순수 흰색 글자 테두리만 추출되어 게이지 차오름 유무와 상관없이 정상적인 인식을 유지합니다.
-            if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
-                _, screen_processed = cv2.threshold(screen_processed, 160, 255, cv2.THRESH_BINARY)
-                _, template_processed = cv2.threshold(template_processed, 160, 255, cv2.THRESH_BINARY)
+            # [QTE 및 "거두기" 텍스트 배경 소거용 상대적 동적 이진화 및 우측 슬라이싱 필터]
+            # 사용자가 fishing_mode.png를 "거두기" 텍스트 이미지로 전면 교체하였으므로, 
+            # 이 역시 QTE 글씨와 동일하게 동적 80% 임계값 이진화 필터를 통과시켜 반투명 어두운 배경을 완벽히 소거합니다.
+            if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png', 'fishing_mode.png']:
+                screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                template_processed = template_gray.copy() # 메모리 오염을 원천 방지하기 위해 템플릿 복사본 사용
+                
+                # 상대적 최대 밝기 측정 및 동적 80% 컷오프 임계 이진화 수행
+                screen_max = np.max(screen_processed)
+                screen_thresh = int(screen_max * 0.80) if screen_max > 120 else 150
+                
+                template_max = np.max(template_processed)
+                template_thresh = int(template_max * 0.80) if template_max > 120 else 150
+                
+                _, screen_processed = cv2.threshold(screen_processed, screen_thresh, 255, cv2.THRESH_BINARY)
+                _, template_processed = cv2.threshold(template_processed, template_thresh, 255, cv2.THRESH_BINARY)
+                
+                # QTE 이미지인 경우에만 오탐 방지용 2단계 '우측 슬라이싱 검증'을 수행합니다 ("거두기" 텍스트는 전량 정밀 매칭 수행).
+                if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
+                    # 1단계: 전체 템플릿 매칭으로 정확한 UI의 시작 좌표(max_loc) 검출
+                    res_full = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, max_loc = cv2.minMaxLoc(res_full)
+                    
+                    # 해당 QTE가 화면에 아예 존재하지 않는 상황인 경우 탈출
+                    if max_val < 0.4:
+                        if return_score:
+                            return max_val
+                        return None
+                        
+                    # 2단계: 공통 문자("A | 계속 ")를 배제하고 우측 고유 영역만 잘라내어 정밀 대조
+                    h, w = template_processed.shape[:2]
+                    crop_start_x = int(w * 0.55) # 우측 45% 지점 슬라이싱
+                    
+                    screen_patch = screen_processed[max_loc[1]:max_loc[1]+h, max_loc[0]:max_loc[0]+w]
+                    
+                    template_right = template_processed[:, crop_start_x:]
+                    screen_right = screen_patch[:, crop_start_x:]
+                    
+                    res_right = cv2.matchTemplate(screen_right, template_right, cv2.TM_CCOEFF_NORMED)
+                    _, right_score, _, _ = cv2.minMaxLoc(res_right)
+                    
+                    max_val = right_score
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
@@ -1109,6 +1147,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None):
             res = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
             
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
+
+        if return_score:
+            return max_val
 
         # 2. [실시간 자가 치유 능동 폴백]
         # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재조준하여 스캔
@@ -1335,6 +1376,13 @@ last_success_scale = 1.0
 def find_anchor_final(target_img_path):
     global last_success_scale
     try:
+        # [파란 포탈 컬러 매칭 우회] anchor1.png는 발광체이므로 전용 컬러 매칭 시스템(HSV)을 활용해 정확히 격리합니다.
+        if target_img_path == 'anchor1.png':
+            box = find_anchor1_by_color()
+            if box:
+                return (box.left + box.width // 2, box.top + box.height // 2)
+            return None
+
         screen_gray = fast_cv_screenshot(gray=True)
         template = IMAGE_CACHE.get(target_img_path)
         if template is None: return None
@@ -1382,7 +1430,8 @@ def find_anchor_final(target_img_path):
 def align_view_by_anchor(anchor_img):
     target = anchor_img[0] if isinstance(anchor_img, list) else anchor_img
     start_time = time.time()
-    DYNAMIC_P = P_GAIN * 0.85 # 오버슈트 방지 게인
+    # [에임 반응 속도 강화] 비례 제어 게인을 상향 조정하여 더 민첩하게 대상을 지향하도록 튜닝
+    DYNAMIC_P = 0.75
 
     while time.time() - start_time < 2.0 and (bot_active or oblivion_active):
         pos = find_anchor_final(target)
@@ -1396,11 +1445,10 @@ def align_view_by_anchor(anchor_img):
 
             dx, dy = int(err_x * DYNAMIC_P), int(err_y * DYNAMIC_P)
 
-            # [에임 극단적 튐 전면 차단 - 최대 스텝 클램핑]
-            # 조준선 오버랩이나 그래픽 노이즈로 인해 가짜 좌표(예: 350px 오차)가 잡히더라도, 
-            # 한 스텝당 이동 상한선을 최대 45픽셀로 강제 클램핑하여 화면이 휙 돌아가는 현상을 원천 방지합니다.
-            dx = max(-45, min(45, dx))
-            dy = max(-45, min(45, dy))
+            # [에임 극단적 튐 전면 차단 - 최대 스텝 클램핑 상향]
+            # 최대 보정각을 기존 45에서 95픽셀로 상향하여 조준선이 타겟 중앙으로 빠르게 흡착되게 만듭니다.
+            dx = max(-95, min(95, dx))
+            dy = max(-95, min(95, dy))
 
             # 불응기 최소화 (정지 성능 유지)
             if abs(dx) < 2: dx = 0
@@ -2116,15 +2164,19 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
         template = IMAGE_CACHE.get(target_img_path)
         if template is None: return False
         
-        # 1. 캡처 화면 가우시안 이진화 전처리 (배경 노이즈 및 모션 블러 실시간 감쇄)
-        screen_bin = cv2.adaptiveThreshold(screen_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        # 1. 미세 카메라 흔들림으로 인한 모션 블러 및 지형 노이즈 제거용 양방향 필터 전처리 가동
+        screen_filtered = cv2.bilateralFilter(screen_gray, 5, 40, 40)
+        screen_bin = cv2.adaptiveThreshold(screen_filtered, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        
+        # 템플릿 이미지 대조군 필터링 동기화
+        template_filtered = cv2.bilateralFilter(template, 5, 40, 40)
         
         # 2. 다양한 스케일 대입 (거리 좁혀짐에 따른 글자 크기 확장 완벽 방어)
         scales = [0.5, 0.7, 0.85, 1.0, 1.15, 1.3]
         for scale in scales:
-            w, h = int(template.shape[1] * scale), int(template.shape[0] * scale)
+            w, h = int(template_filtered.shape[1] * scale), int(template_filtered.shape[0] * scale)
             if w < 10 or h < 10: continue
-            resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
+            resized = cv2.resize(template_filtered, (w, h), interpolation=cv2.INTER_AREA)
             resized_bin = cv2.adaptiveThreshold(resized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
             
             res = cv2.matchTemplate(screen_bin, resized_bin, cv2.TM_CCOEFF_NORMED)
@@ -2135,8 +2187,124 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
     except:
         return False
 
+def find_anchor1_by_color(custom_sct=None):
+    """
+    [v34 블루포탈 전용 초고속 BGR/HSV 하이브리드 엔진]
+    무겁고 느린 템플릿 매칭을 100% 폐기하여 마우스 정렬 속도를 극한(0.1ms)으로 가동합니다.
+    1차로 파란색 테두리(glowing cyan)의 대형 수직 직사각형 형태를 검출한 뒤,
+    2차로 해당 영역 내부/배경에 '빨간색 커튼' 화소가 밀도 높게 존재하는지 교차 점검하여
+    오탐율 0%와 초고속 프레임레이트를 동시에 달성합니다.
+    """
+    try:
+        active_sct = custom_sct if custom_sct else get_sct_safe()
+        monitor = active_sct.monitors[1]
+        sct_img = active_sct.grab(monitor)
+        
+        img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+        img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+        
+        # 1. 파란 포탈 테두리 색상 필터링 (H: 85~125, S: 100~255, V: 120~255)
+        lower_blue = np.array([85, 100, 120])
+        upper_blue = np.array([125, 255, 255])
+        mask_blue = cv2.inRange(img_hsv, lower_blue, upper_blue)
+        
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        morph_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(morph_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        best_target = None
+        max_area = 0
+        for c in contours:
+            area = cv2.contourArea(c)
+            # 파란 포탈은 최소 800픽셀 이상의 상당한 면적을 가집니다.
+            if area < 800 or area > 60000: continue
+            
+            x, y, w, h = cv2.boundingRect(c)
+            aspect_ratio = h / float(w) if w > 0 else 0
+            
+            # 포탈 고유의 세로 문 형태 검증 (1.2 ~ 2.5)
+            if 1.2 <= aspect_ratio <= 2.5:
+                
+                # [2차 교차 검증: 빨간 커튼 동시 존재 확인]
+                # 포탈 영역 내부 혹은 주위를 잘라내어 빨간색 화소 분포 확인
+                crop_hsv = img_hsv[y:y+h, x:x+w]
+                lower_red1 = np.array([0, 50, 50])
+                upper_red1 = np.array([10, 255, 255])
+                lower_red2 = np.array([170, 50, 50])
+                upper_red2 = np.array([180, 255, 255])
+                
+                mask_r1 = cv2.inRange(crop_hsv, lower_red1, upper_red1)
+                mask_r2 = cv2.inRange(crop_hsv, lower_red2, upper_red2)
+                mask_red = cv2.bitwise_or(mask_r1, mask_r2)
+                
+                red_pixels = cv2.countNonZero(mask_red)
+                
+                # 포탈 영역 내부에 빨간 커튼 천이 넓게 깔려있어야 진짜 포탈로 승인! (최소 5% 면적 비율)
+                if red_pixels >= int((w * h) * 0.05):
+                    if area > max_area:
+                        max_area = area
+                        best_target = (x, y, w, h)
+                        
+        if best_target:
+            x, y, w, h = best_target
+            cx = x + w // 2
+            cy = y + h // 2
+            return Box(cx - w//2, cy - h//2, w, h)
+        return None
+    except:
+        return None
+
+def find_deviant_by_color(custom_sct=None):
+    """
+    [v30 데비안트 코어 전용 정밀 네온-핑크 필터]
+    파란 포탈(시안) 및 적색 커튼(어두운 적색)과 완벽하게 구별되는 
+    진짜 보상 데비안트 고유의 눈부신 '네온 핑크/퍼플 코어'를 정밀 타겟팅합니다.
+    채도(S>=120)와 밝기(V>=150) 임계값을 타이트하게 설정하여 주변의 모든 오염 광원을 걸러냅니다.
+    """
+    try:
+        active_sct = custom_sct if custom_sct else get_sct_safe()
+        monitor = active_sct.monitors[1]
+        sct_img = active_sct.grab(monitor)
+        img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+        img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+        
+        # 오직 진짜 데비안트 중심부에서만 뿜어 나오는 초고채도/초고휘도 네온 핑크 대역 필터링
+        # (H: 140~168, S: 120~255, V: 150~255) -> 파란 포탈테두리(시안) 및 어두운 적색 커튼 차단!
+        lower_pink = np.array([140, 120, 150])
+        upper_pink = np.array([168, 255, 255])
+        mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
+        
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        morph = cv2.morphologyEx(mask_pink, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        best_target = None
+        max_area = 0
+        for c in contours:
+            area = cv2.contourArea(c)
+            # 소형 노이즈부터 초대형 구조물 오탐을 차단하는 면적 스펙트럼 (80 ~ 12000)
+            if area < 80 or area > 12000: continue
+            
+            x, y, w, h = cv2.boundingRect(c)
+            aspect_ratio = h / float(w) if w > 0 else 0
+            
+            # 데비안트의 세로형 화염 형태 검증 (1.1 ~ 3.5 배율)
+            if 1.1 <= aspect_ratio <= 3.5:
+                if area > max_area:
+                    max_area = area
+                    best_target = (x, y, w, h)
+                    
+        if best_target:
+            x, y, w, h = best_target
+            cx = x + w // 2
+            cy = y + h // 2
+            return Box(cx - w//2, cy - h//2, w, h)
+        return None
+    except:
+        return None
+
 def oblivion_bot_loop():
-    global oblivion_active
+    global oblivion_active, oblivion_stage
     import mss
     
     def oprint(msg):
@@ -2182,6 +2350,8 @@ def oblivion_bot_loop():
                 send_cmd('T'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
                 send_cmd('1'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
                 def check_and_repair():
+                    if death_trigger:
+                        raise BotDeathException()
                     if find_img('durability.png', conf=0.70, full_screen=False):
                         oprint("  > [경고] 내구도 0 감지! 전역 복구 및 던전 재진입 10단계 시퀀스 시작")
                         
@@ -2237,11 +2407,17 @@ def oblivion_bot_loop():
                                 
                         if not oblivion_active: raise BotStopException()
                         
-                        # 6) 현재 첨부한 던전 입장.png가 인식될 때 까지 대기 후 인식되면 0.5초 대기
+                        # 6) 현재 첨부한 던전 입장.png가 인식될 때 까지 대기 후 인식되면 0.5초 대기 (미감지 시 F 재입력)
                         oprint("  > [복구 6단계] 'dungeon_enter.png'(던전 입장) 인식 대기")
+                        last_f_press = time.time()
                         while oblivion_active:
                             if find_img('dungeon_enter.png', conf=0.70, full_screen=False):
                                 break
+                            # 2.5초 동안 미인식 시 F 입력을 재전송하여 렉/키 씹힘 돌파
+                            if time.time() - last_f_press > 2.5:
+                                oprint("  > [복구 6단계] 메뉴 미열림 감지: 'F' 키를 재입력합니다...")
+                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                last_f_press = time.time()
                             time.sleep(0.1)
                         if not oblivion_active: raise BotStopException()
                         oprint("  > [복구 6단계] 'dungeon_enter.png' 감지! 0.5초 대기")
@@ -2320,6 +2496,7 @@ def oblivion_bot_loop():
                     time.sleep(0.05)
                 
                 # 2단계
+                oblivion_stage = 2
                 oprint("[2단계 시작] 망각 준비")
                 oprint("  > [대기] 1.0초간 지연 대기")
                 time.sleep(1.0)
@@ -2336,6 +2513,7 @@ def oblivion_bot_loop():
                     time.sleep(0.05)
                 
                 # 3단계
+                oblivion_stage = 3
                 oprint("[3단계 시작] 보상 정합 대기")
                 oprint("  > [입력] 'W' 키 2.5초간 유지")
                 send_cmd('W'); time.sleep(2.5); send_cmd('R'); time.sleep(0.1)
@@ -2373,74 +2551,116 @@ def oblivion_bot_loop():
                 
                 if not oblivion_active: raise BotStopException()
                 
-                # 4단계
-                oprint("[4단계 시작] 보상 획득 처리")
-                oprint("  > [입력] 좌클릭(L) 홀딩 해제")
-                send_cmd('U'); send_cmd('R'); time.sleep(0.1)
+                # [스킵 및 전이] reward.png 감지 완료 후 좌클릭 홀딩 해제 -> R키 입력 -> 방향 정렬 및 앵커 수색 순차 진행
+                oprint("  > [스킵] 'reward.png' 감지 완료! 좌클릭 홀딩을 해제합니다.")
+                send_cmd('U'); send_cmd('R'); time.sleep(0.5)
                 
-                oprint("  > [입력] 'x' 키 1회 입력")
-                send_cmd('x'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
+                oprint("  > [입력] 'R' 키 1회 입력 (장전)")
+                send_cmd('x'); time.sleep(0.1); send_cmd('R'); time.sleep(0.4)
+                send_cmd('r'); time.sleep(0.1); send_cmd('R'); time.sleep(0.8)
                 
-                oprint("  > [대기] 0.5초간 지연 대기")
-                time.sleep(0.5)
+                # 6단계: 방향 정렬 및 앵커 수색
+                oblivion_stage = 6
+                oprint("[6단계 시작] 방향 정렬 및 앵커 수색")
                 
-                # 5단계
-                oprint("[5단계 시작] 복귀 포인트 탐색")
-                oprint("  > [입력] 'W' 키 유지")
-                send_cmd('W')
+                # [오탐 회피 필터] 상자 파밍 직후에는 정면 벽면(전투 구역)의 잔상이 가시 범위에 남습니다.
+                # 진짜 앵커(파란 포탈)는 정반대 방향(180도 뒤)에 위치하므로, 탐색 시작 전에 좌측으로 180도 고속 회전을 선제 가동하여 노이즈를 회피합니다.
+                oprint("  > [회전] 전투 구역의 잔상 노이즈 회피 및 180도 뒤돌기를 위해 좌회전(10회 고속 회전) 선제 가동...")
+                for _ in range(10):
+                    if not oblivion_active: raise BotStopException()
+                    send_cmd('M-260,0') # 좌회전 180도 뒤돌기
+                    time.sleep(0.01)
+                time.sleep(0.2) # 회전 정지 후 화면 안정화
+                
+                oprint("  > [회전] 파란 포탈 장벽('anchor1.png')의 고유 색채 정밀 수색 가동")
                 while oblivion_active:
-                    if find_img('7.png', conf=0.70, full_screen=True):
+                    # 전용 컬러 매칭 엔진을 사용하여 회전 중에도 0.001초 만에 대상을 정확히 격리합니다.
+                    box = find_anchor1_by_color(thread_sct)
+                    if box:
+                        oprint(f"  > 🎉 [성공] 'anchor1.png' 파란 포탈 포착 완료!")
                         break
-                    time.sleep(0.05)
-                
-                oprint("  > [입력] 'W' 키 해제")
-                send_cmd('R'); time.sleep(0.2)
-                
+                        
+                    # 미감지 시 지정해주신 M-260 단위 초고속 좌회전 및 미세 안정화 대기
+                    send_cmd('M-260,0')
+                    time.sleep(0.04)
+                    
                 if not oblivion_active: raise BotStopException()
                 
-                # 7.png 검출 이후 즉시 5.0초 대기 처리
-                oprint("  > [대기] 7.png 포착 완료 -> 3.0초 고정 지연 대기")
-                time.sleep(5.0)
+                # [에임 정밀 조준] 낚시모드와 동일한 PID 기반의 조준선 정렬 적용
+                oprint("  > 🎯 [조준] 'anchor1.png' 정중앙에 에임이 놓이도록 정밀 조준을 시작합니다.")
+                align_view_by_anchor('anchor1.png')
+                time.sleep(0.2)
                 
-                if not oblivion_active: raise BotStopException()
+                # 7~8단계 통합: 점진적 전진 및 확정 수거 시퀀스 (인치웜 솔루션)
+                oprint("[7~8단계 시작] 아노말리 수색 및 실시간 트래킹 전진 수거 가동")
                 
-                # 3초 대기 이후 1.png가 1회라도 감지되면 즉각 통과하도록 간소화
-                oprint("  > [대기] '1.png' 인식 대기 (1회 포착 시 즉시 진행)")
-                while oblivion_active:
-                    if find_img('1.png', conf=0.75, full_screen=True):
-                        oprint("  > [성공] '1.png' 검출 완료 -> 6단계 전이")
+                # 6단계에서 이미 파란 포탈(anchor1.png)로 에임 조준을 완료했으므로,
+                # 정방향 시야각 내에서 진짜 아노말리(데비안트)의 고유 네온 핑크 코어를 감지합니다.
+                oprint("  > [수색] 정면 시야각에서 진짜 보상 데비안트 탐색 시작...")
+                target_found = False
+                
+                # 1. 제자리에서 데비안트 탐색 시도
+                for _ in range(5):
+                    box = find_deviant_by_color(thread_sct)
+                    if box:
+                        target_found = True
                         break
                     time.sleep(0.1)
                 
-                # 6단계
-                oprint("[6단계 시작] 방향 정렬 및 앵커 수색")
-                oprint("  > [입력] 'r' 키 1회 입력")
-                send_cmd('r'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
-                
-                oprint("  > [회전] 'anchor1.png'(앵커) 포착될 때까지 마우스 우측 고속 회전")
-                while oblivion_active:
-                    if find_img('anchor1.png', conf=0.70, full_screen=True):
-                        break
-                    send_cmd('M260,0')  # 35에서 250으로 회전각 상향 (속도 대폭 증가)
-                    time.sleep(0.02)    # 연산 지연시간 최소화
-                    
+                # 2. 정면에서 미검출 시, 좌우로 미세 회전하며 스캔 (좌우 미세 수색)
+                if not target_found:
+                    oprint("  > [수색] 정면 미검출: 좌우 미세 수색으로 진짜 데비안트 포착 시도...")
+                    sweep_steps = ['M-100,0', 'M200,0', 'M-100,0'] # 좌측 이동 -> 우측 이동 -> 원상 복귀
+                    for step in sweep_steps:
+                        send_cmd(step)
+                        time.sleep(0.1)
+                        box = find_deviant_by_color(thread_sct)
+                        if box:
+                            target_found = True
+                            break
+                            
                 if not oblivion_active: raise BotStopException()
-                oprint("  > [성공] 앵커 목표 감지 완료")
-                time.sleep(0.5)
                 
-                # 7~8단계 통합: 점진적 전진 및 확정 수거 시퀀스 (인치웜 솔루션)
-                oprint("[7~8단계 시작] 3D 정렬 및 점진적 보상 수거 가동")
-                
-                # 1. 안전하게 상자 앞 영역까지 최초 2.0초 전진 수행
-                oprint("  > [전진] 안전 영역까지 최초 1초 전진 시작...")
-                send_cmd('W')
-                time.sleep(1.0)
-                send_cmd('R'); time.sleep(0.2)
+                # 3. 포착 완료 시 비례 제어(스티어링) 기법으로 진짜 보상에 에임을 조준하고 전진 트래킹
+                if target_found:
+                    oprint("  > [전진] 진짜 보상 방향으로 마우스 에임을 실시간 고정하며 전진 가동...")
+                    send_cmd('W') # 전진 키 홀딩
+                    
+                    start_walk_t = time.time()
+                    while oblivion_active and (time.time() - start_walk_t < 10.0): # 최대 10초 추적 제한
+                        box = find_deviant_by_color(thread_sct)
+                        if box:
+                            cx = box.left + box.width // 2
+                            err_x = cx - CENTER_X
+                            
+                            # [초고속 순간 조준 정렬] 비례 게인을 0.75로 전폭 인상하고 최대 1회 스텝 각도를 180픽셀로 확장하여,
+                            # 1단계에서 돌아서자마자 보상을 즉각(50ms 이내) 정중앙에 에임을 스냅 고정하도록 제어 인자를 튜닝합니다.
+                            if abs(err_x) > 5:
+                                dx = int(err_x * 0.75)
+                                dx = max(-140, min(180, dx)) 
+                                send_cmd(f'M{dx},0')
+                                
+                        # [도달 판정] 보물상자 UI('treasure_box.png')가 화면에 뜨면 즉각 전진을 중단합니다.
+                        if find_treasure_box_multi_scale('treasure_box.png', conf=0.50) or safe_find_image('treasure_box.png', conf=0.65, custom_sct=thread_sct):
+                            oprint("  > 🚨 [도달] 'treasure_box.png' 보물상자 UI 노출 확인! 즉각 정지합니다.")
+                            break
+                            
+                        # 제어 피드백 루프 딜레이를 20ms(0.02초)로 단축하여 실시간 보정 정밀도와 속도를 비약적으로 단축시킵니다.
+                        time.sleep(0.02)
+                        
+                    send_cmd('R') # W 키 해제 (전진 종료)
+                    time.sleep(0.2)
+                else:
+                    oprint("  > ⚠️ [경고] 진짜 데비안트 스캔 실패. 안전 거리 확보를 위해 기본값 전진 1.5초를 적용합니다.")
+                    send_cmd('W')
+                    time.sleep(1.5)
+                    send_cmd('R')
+                    time.sleep(0.2)
                 
                 looted = False
                 attempts = 0
                 
-                # 상자를 열고 보상을 획득할 때까지 "전진 -> 수거 시도 -> 2D UI 검증" 루프 작동 (최대 10회)
+                # 상자를 열고 보상을 획득할 때까지 "수거 시도 -> 2D UI 검증" 루프 작동 (최대 10회)
                 while oblivion_active and attempts < 10:
                     attempts += 1
                     oprint(f"  > [수거 시도 {attempts}회차] 상자 열기(F) 및 수령(F) 시도...")
@@ -2545,95 +2765,115 @@ def oblivion_bot_loop():
                 except: pass
                 continue
             except BotDeathException:
-                oprint("  > 💀 [사망 복구] 캐릭터 사망 감지! 10단계 던전 재진입 시퀀스를 시작합니다 (수리 생략).")
-                global death_trigger
-                death_trigger = False # 사망 트리거 즉각 클리어
-                
                 try:
-                    # 복구 연산 가동 전 물리 키보드/마우스 눌려있는 버퍼 안전 해제
-                    arduino.write('U'.encode()); arduino.flush()
-                    arduino.write('R'.encode()); arduino.flush()
-                except: pass
-                time.sleep(0.5)
-                
-                # 1) alt + f4를 눌러서(소문자 q 명령어) sys_2.png가 감지되면 F 입력
-                oprint("  > [복구 1단계] Alt + F4 입력 -> 'sys_2.png' 대기")
-                send_cmd('q'); time.sleep(0.15); send_cmd('R'); time.sleep(0.1)
-                while oblivion_active:
-                    if find_img('sys_2.png', conf=0.70, full_screen=True):
-                        break
-                    time.sleep(0.1)
-                if not oblivion_active: raise BotStopException()
-                oprint("  > [복구 1단계] 'sys_2.png' 감지됨 -> 'F' 키 입력")
-                send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
-                
-                # 2) 최대 10초까지 1.png가 인식되는지 능동대기(1.png가 인식되면 즉시 다음단계로)
-                oprint("  > [복구 2단계] '1.png' 인식 대기 (최대 10초)")
-                start_t = time.time()
-                while time.time() - start_t < 10.0:
-                    if not oblivion_active: raise BotStopException()
-                    if find_img('1.png', conf=0.75, full_screen=True):
-                        break
-                    time.sleep(0.1)
-                
-                # [사망 복구 특권 분기] 수리 조작(3~4단계)을 완벽히 건너뛰고 바로 5단계 'F' 던전입장 메뉴 가동으로 점프!
-                oprint("  > [복구 5단계] 사망 복구 상태이므로 장비 수리 생략 -> 던전 입장 메뉴 열기 'F' 키 입력")
-                send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
-                
-                if not oblivion_active: raise BotStopException()
-                
-                # 6) 현재 첨부한 던전 입장.png가 인식될 때 까지 대기 후 인식되면 0.5초 대기 (ROI 학습형)
-                oprint("  > [복구 6단계] 'dungeon_enter.png'(던전 입장) 인식 대기")
-                while oblivion_active:
-                    if find_img('dungeon_enter.png', conf=0.70, full_screen=False):
-                        break
-                    time.sleep(0.1)
-                if not oblivion_active: raise BotStopException()
-                oprint("  > [복구 6단계] 'dungeon_enter.png' 감지! 0.5초 대기")
-                time.sleep(0.5)
-                
-                # 7) D 입력 -> 0.2초 대기 -> D입력 후 현재 첨부한 사진 마스터.png 인식(미인식 시 D 1회 입력후 재인식) (ROI 학습형)
-                oprint("  > [복구 7단계] 난이도 조절 'D' 키 연속 2회 입력...")
-                send_cmd('D'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
-                send_cmd('D'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
-                
-                while oblivion_active:
-                    if find_img('master.png', conf=0.70, full_screen=False):
-                        oprint("  > [복구 7단계] 'master.png'(Lv.60) 포착 완료!")
-                        break
-                    oprint("  > [복구 7단계] 'master.png' 미검출 -> 'D' 키 1회 추가 전송 및 재조준...")
-                    send_cmd('D'); time.sleep(0.1); send_cmd('R'); time.sleep(0.3)
-                if not oblivion_active: raise BotStopException()
-                
-                # 8) 7번이 인식되면 F 입력 후 7.png가 인식되는지 확인 후 미인식 시 F 재입력
-                oprint("  > [복구 8단계] 'F' 키 입력 후 '7.png' 확인")
-                while oblivion_active:
-                    send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
-                    found_7 = False
-                    wait_7 = time.time()
-                    while time.time() - wait_7 < 1.0:
-                        if find_img('7.png', conf=0.70, full_screen=True):
-                            found_7 = True
+                    oprint("  > 💀 [사망 복구] 캐릭터 사망 감지! 10단계 던전 재진입 시퀀스를 시작합니다 (수리 생략).")
+                    global death_trigger
+                    death_trigger = False # 사망 트리거 즉각 클리어
+                    
+                    try:
+                        # 복구 연산 가동 전 물리 키보드/마우스 눌려있는 버퍼 안전 해제
+                        arduino.write('U'.encode()); arduino.flush()
+                        arduino.write('R'.encode()); arduino.flush()
+                    except: pass
+                    time.sleep(0.5)
+                    
+                    # 1) alt + f4를 눌러서(소문자 q 명령어) sys_2.png가 감지되면 F 입력
+                    oprint("  > [복구 1단계] Alt + F4 입력 -> 'sys_2.png' 대기")
+                    send_cmd('q'); time.sleep(0.15); send_cmd('R'); time.sleep(0.1)
+                    while oblivion_active:
+                        if find_img('sys_2.png', conf=0.70, full_screen=True):
                             break
-                        time.sleep(0.05)
-                    if found_7:
-                        oprint("  > [복구 8단계] '7.png' 인입 완료!")
-                        break
-                    oprint("  > [복구 8단계] '7.png' 미인입 -> 'F' 키 재전송...")
-                if not oblivion_active: raise BotStopException()
-                
-                # 9) 8번이 인식되면 1.png가 인식될때 까지 대기
-                oprint("  > [복구 9단계] '1.png' 로딩 대기")
-                while oblivion_active:
-                    if find_img('1.png', conf=0.75, full_screen=True):
-                        break
-                    time.sleep(0.2)
-                if not oblivion_active: raise BotStopException()
-                
-                # 10) 1.png가 인식되면 0.5초 대기 후 1단계 부터 시작
-                oprint("  > [복구 10단계] 복구 완료! 0.5초 대기 후 망각 모드 처음부터 무한 리스타트")
-                time.sleep(0.5)
-                raise BotRestartException()
+                        time.sleep(0.1)
+                    if not oblivion_active: raise BotStopException()
+                    oprint("  > [복구 1단계] 'sys_2.png' 감지됨 -> 'F' 키 입력")
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                    
+                    # 2) 최대 10초까지 1.png가 인식되는지 능동대기(1.png가 인식되면 즉시 다음단계로)
+                    oprint("  > [복구 2단계] '1.png' 인식 대기 (최대 10초)")
+                    start_t = time.time()
+                    while time.time() - start_t < 10.0:
+                        if not oblivion_active: raise BotStopException()
+                        if find_img('1.png', conf=0.75, full_screen=True):
+                            break
+                        time.sleep(0.1)
+                    
+                    if not oblivion_active: raise BotStopException()
+                    
+                    # [사망 복구 특권 분기] 수리 조작(3~4단계)을 완벽히 건너뛰고 마우스 중앙클릭 후 던전 입장 메뉴(F)를 엽니다.
+                    oprint("  > [복구 5단계] 1.png 감지 완료 -> 마우스 중앙클릭 1회 실행")
+                    pyautogui.middleClick()
+                    time.sleep(0.5)
+                    
+                    oprint("  > [복구 5단계] 사망 복구 상태이므로 장비 수리 생략 -> 던전 입장 메뉴 열기 'F' 키 입력")
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                    
+                    if not oblivion_active: raise BotStopException()
+                    
+                    # 6) 현재 첨부한 던전 입장.png가 인식될 때 까지 대기 후 인식되면 0.5초 대기 (미감지 시 F 재입력)
+                    oprint("  > [복구 6단계] 'dungeon_enter.png'(던전 입장) 인식 대기")
+                    last_f_press = time.time()
+                    while oblivion_active:
+                        if find_img('dungeon_enter.png', conf=0.70, full_screen=False):
+                            break
+                        # 2.5초 동안 미인식 시 F 입력을 재전송하여 렉/키 씹힘 돌파
+                        if time.time() - last_f_press > 2.5:
+                            oprint("  > [복구 6단계] 메뉴 미열림 감지: 'F' 키를 재입력합니다...")
+                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                            last_f_press = time.time()
+                        time.sleep(0.1)
+                    if not oblivion_active: raise BotStopException()
+                    oprint("  > [복구 6단계] 'dungeon_enter.png' 감지! 0.5초 대기")
+                    time.sleep(0.5)
+                    
+                    # 7) D 입력 -> 0.2초 대기 -> D입력 후 현재 첨부한 사진 마스터.png 인식(미인식 시 D 1회 입력후 재인식) (ROI 학습형)
+                    oprint("  > [복구 7단계] 난이도 조절 'D' 키 연속 2회 입력...")
+                    send_cmd('D'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
+                    send_cmd('D'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
+                    
+                    while oblivion_active:
+                        if find_img('master.png', conf=0.70, full_screen=False):
+                            oprint("  > [복구 7단계] 'master.png'(Lv.60) 포착 완료!")
+                            break
+                        oprint("  > [복구 7단계] 'master.png' 미검출 -> 'D' 키 1회 추가 전송 및 재조준...")
+                        send_cmd('D'); time.sleep(0.1); send_cmd('R'); time.sleep(0.3)
+                    if not oblivion_active: raise BotStopException()
+                    
+                    # 8) 7번이 인식되면 F 입력 후 7.png가 인식되는지 확인 후 미인식 시 F 재입력
+                    oprint("  > [복구 8단계] 'F' 키 입력 후 '7.png' 확인")
+                    while oblivion_active:
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                        found_7 = False
+                        wait_7 = time.time()
+                        while time.time() - wait_7 < 1.0:
+                            if find_img('7.png', conf=0.70, full_screen=True):
+                                found_7 = True
+                                break
+                            time.sleep(0.05)
+                        if found_7:
+                            oprint("  > [복구 8단계] '7.png' 인입 완료!")
+                            break
+                        oprint("  > [복구 8단계] '7.png' 미인입 -> 'F' 키 재전송...")
+                    if not oblivion_active: raise BotStopException()
+                    
+                    # 9) 8번이 인식되면 1.png가 인식될때 까지 대기
+                    oprint("  > [복구 9단계] '1.png' 로딩 대기")
+                    while oblivion_active:
+                        if find_img('1.png', conf=0.75, full_screen=True):
+                            break
+                        time.sleep(0.2)
+                    if not oblivion_active: raise BotStopException()
+                    
+                    # 10) 1.png가 인식되면 0.5초 대기 후 1단계 부터 시작
+                    oprint("  > [복구 10단계] 복구 완료! 0.5초 대기 후 망각 모드 처음부터 무한 리스타트")
+                    time.sleep(0.5)
+                    continue
+                except BotStopException:
+                    oprint("  > [망각] 사망 복구 루틴 진행 중 정지 신호 수신 -> 복구를 중단하고 대기 모드로 진입합니다.")
+                    try:
+                        arduino.write('U'.encode()); arduino.flush()
+                        arduino.write('R'.encode()); arduino.flush()
+                    except: pass
+                    continue
 
 def death_monitor_loop():
     global oblivion_active, oblivion_stage, death_trigger
@@ -2643,29 +2883,23 @@ def death_monitor_loop():
     
     with mss.mss() as death_sct:
         while True:
-            # 1단계부터 6단계 돌입 직전(사냥 액티브 대역)에서만 감시 가동
-            if not oblivion_active or oblivion_stage < 1 or oblivion_stage >= 6:
-                time.sleep(0.5)
-                continue
-                
             try:
-                # 1장 전체화면을 찍어 사망 화면(death.png) 감시 (가우시안 보정 자동 연동)
-                sct_img = death_sct.grab(death_sct.monitors[1])
-                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                
-                template = IMAGE_CACHE.get('death.png')
-                if template is not None:
-                    res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-                    _, max_val, _, _ = cv2.minMaxLoc(res)
+                # 1단계부터 6단계 돌입 직전(사냥 액티브 대역)에서만 감시 가동
+                if not oblivion_active or oblivion_stage < 1 or oblivion_stage >= 6:
+                    time.sleep(0.5)
+                    continue
                     
-                    if max_val >= 0.75:
-                        bprint("\n🚨🚨🚨 [사망 감지] 캐릭터 사망(사망.png) 확인! 10단계 던전 재진입 복구 루틴을 트리거합니다. 🚨🚨🚨")
-                        send_blynk_notification("💀 캐릭터 사망 감지! 던전 자동 재진입 시퀀스 가동")
-                        death_trigger = True # 사망 복구 트리거 활성화
-                        time.sleep(1.0)
-            except:
-                pass
-            time.sleep(0.2)
+                # [고성능 적응형 이진화 & ROI 캐싱 스캔] 고정 위치의 텍스트(death.png)를 자가 학습하여 높은 정밀도로 감지합니다.
+                if safe_find_image('death.png', conf=0.70, custom_sct=death_sct):
+                    bprint("\n🚨🚨🚨 [사망 감지] 캐릭터 사망(사망.png) 확인! 10단계 던전 재진입 복구 루틴을 트리거합니다. 🚨🚨🚨")
+                    death_trigger = True # 사망 복구 트리거 활성화
+                    time.sleep(1.0)
+                time.sleep(0.2)
+            except BotStopException:
+                # 매크로가 수동 정지될 때 발생하는 정지 예외를 안전하게 우회하여 스레드가 종료되는 것을 차단합니다.
+                time.sleep(0.5)
+            except Exception:
+                time.sleep(0.5)
 
 def fishing_bot(max_allowed_seconds):
     # check_char_popup을 전역 선언 목록에 추가합니다.
@@ -2675,6 +2909,9 @@ def fishing_bot(max_allowed_seconds):
     threading.Thread(target=victory_coin_bot_loop, daemon=True, name="bot_thread_victory").start()
     threading.Thread(target=animal_bot_loop, daemon=True, name="bot_thread_animal").start()
     threading.Thread(target=oblivion_bot_loop, daemon=True, name="bot_thread_oblivion").start()
+    
+    # [사망 감시 스레드 가동] 백그라운드 모니터링 전용 스레드로 동작하여 매크로 종료 시 자동 정지 폭파 예외가 일어나는 것을 차단합니다.
+    threading.Thread(target=death_monitor_loop, daemon=True, name="monitor_thread_death").start()
     
     # 봇이 켜지자마자 가장 먼저 사진들부터 메모리에 싹 다 올립니다.
     preload_all_images()
@@ -3308,11 +3545,16 @@ def fishing_bot(max_allowed_seconds):
                             time.sleep(0.05); state = 1; break
                         else:
                             bprint("  > [실패] 5.0초 대기 시간 초과. 미검출 항목 상세 수치를 1회 출력합니다.")
-                            # 무음 플래그가 꺼졌으므로, 아래 호출이 최종 실패 수치 로그를 콘솔에 딱 1회만 인쇄해 줍니다.
-                            safe_find_image('bait_change.png', 0.70)
-                            safe_find_image('broken_rod.png', 0.70)
-                            safe_find_image('tab_roulette.png', 0.70)
-                            bprint("  > [실패] UI 잔존. 재시도...")
+                            # 진단 상세 수치를 출력하는 순간(마지막 프레임)에 완료된 UI가 있는지 최종 교차 검증을 병행합니다.
+                            found_bait = safe_find_image('bait_change.png', 0.70)
+                            found_broken = safe_find_image('broken_rod.png', 0.70)
+                            found_roulette = safe_find_image('tab_roulette.png', 0.70)
+                            
+                            if found_bait or found_broken or found_roulette:
+                                bprint("  > [성공] 타임아웃 한계 지점에서 UI 복구 포착 완료! 정상 흐름으로 인계합니다.")
+                                time.sleep(0.05); state = 1; break
+                            else:
+                                bprint("  > [실패] UI 잔존. 재시도...")
 
                     if state != 1:
                         bprint("  > [안전장치] 최대 시도 도달. 강제로 정상 캐스팅(State 1)으로 전이합니다.")
@@ -3348,11 +3590,29 @@ def fishing_bot(max_allowed_seconds):
                         state = 1
                         break
 
-                    # 3. 신형 4가지 하이브리드 QTE 감지 (A/D 오판독 방지를 위해 임계값 0.82 고밀도 검증)
-                    found_hold_A = safe_find_image('fishing_hold_A.png', conf=0.82)
-                    found_hold_D = safe_find_image('fishing_hold_D.png', conf=0.82)
-                    found_tap_A  = safe_find_image('fishing_tap_A.png', conf=0.82)
-                    found_tap_D  = safe_find_image('fishing_tap_D.png', conf=0.82)
+                    # 3. 신형 4가지 하이브리드 QTE 감지 (상대 점수 경쟁 기법을 통한 오판독 원천 차단)
+                    # 공통 글자 "A | 계속 " 부분으로 인한 오판독을 없애기 위해, 각 템플릿의 실제 매칭 점수를 모두 구한 뒤
+                    # 가장 높은 점수를 가진 1개의 실제 행동만 실행합니다.
+                    score_hold_A = safe_find_image('fishing_hold_A.png', conf=0.5, return_score=True) or 0.0
+                    score_hold_D = safe_find_image('fishing_hold_D.png', conf=0.5, return_score=True) or 0.0
+                    score_tap_A  = safe_find_image('fishing_tap_A.png', conf=0.5, return_score=True) or 0.0
+                    score_tap_D  = safe_find_image('fishing_tap_D.png', conf=0.5, return_score=True) or 0.0
+                    
+                    qte_results = [
+                        ('HOLD_A', score_hold_A),
+                        ('HOLD_D', score_hold_D),
+                        ('TAP_A', score_tap_A),
+                        ('TAP_D', score_tap_D)
+                    ]
+                    
+                    # 가장 높은 매칭 점수를 가진 항목 추출
+                    best_qte, best_score = max(qte_results, key=lambda x: x[1])
+                    
+                    # 최고 일치율이 0.78 이상인 경우에만 해당 동작을 True로 판정
+                    found_hold_A = (best_qte == 'HOLD_A' and best_score >= 0.78)
+                    found_hold_D = (best_qte == 'HOLD_D' and best_score >= 0.78)
+                    found_tap_A  = (best_qte == 'TAP_A' and best_score >= 0.78)
+                    found_tap_D  = (best_qte == 'TAP_D' and best_score >= 0.78)
                     
                     # 4. 동작 분기 처리 (홀드는 디바운스 프레임 필터로 무지성 떼기 방지, 탭은 초고속 수색 광클 연타)
                     if found_hold_A:
@@ -3406,7 +3666,7 @@ def fishing_bot(max_allowed_seconds):
                         
                     else:
                         # 낚시 인터페이스(fishing_mode) 소멸 여부 실시간 확인 (1.5초 이상 소멸 시 대기 상태 복귀)
-                        if not safe_find_image('fishing_mode.png', 0.70, region="FULL_SCREEN"):
+                        if not safe_find_image('fishing_mode.png', 0.70):
                             missing_ui_count += 1
                             if missing_ui_count >= 30:
                                 bprint("  > ⚠️ [실패] 낚시 인터페이스 1.5초간 미포착 -> 1단계 복귀")

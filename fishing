@@ -3541,8 +3541,6 @@ def fishing_bot(max_allowed_seconds):
                 # QTE 전용 스레드 풀 생성 (병렬 처리용)
                 qte_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
                 
-                expected_qte_group = 'A' # 첫 QTE는 게임 규칙에 따라 무조건 'A'로 시작!
-                last_active_tap = None   # 직전에 실행한 탭 액션 기록 ('A', 'D', None)
                 current_active_key = None # 현재 물리적으로 누르고 있는 키 상태 추적 ('A', 'D', None)
                 missing_ui_count = 0
                 miss_count = 0 # QTE 소멸 판정용 누적 미스 카운터
@@ -3581,28 +3579,23 @@ def fishing_bot(max_allowed_seconds):
                         else:
                             miss_count += 1
                             
-                        # 3회 연속 미스(0.12초) 발생 시 즉시 키 떼기 및 다음 순서 키로 교차 전환
+                        # 3회 연속 미스(0.12초) 발생 시 즉시 키 떼기
                         if miss_count >= 3:
                             bprint(f"  > ⌨️ [QTE 해제] '{current_active_key}' 프롬프트 소멸 확인. 키 떼기 (연속 미스: {miss_count}회)")
                             send_cmd('R')
-                            # 다음 교차 순서로 그룹 강제 전환 (A -> D -> A)
-                            expected_qte_group = 'D' if current_active_key == 'A' else 'A'
                             current_active_key = None
                             miss_count = 0
                             
                     else:
-                        # [신규 QTE 탐색 단계 - 교차 상태 제어 적용]
-                        # 아무 키도 누르지 않고 있으므로, 다음으로 기대되는 교차 키 그룹만 활성화하여 비동기 스캔합니다.
-                        if expected_qte_group == 'A':
-                            futures = {
-                                qte_executor.submit(safe_find_image, 'fishing_hold_A.png', 0.75, None, None, True): 'HOLD_A',
-                                qte_executor.submit(safe_find_image, 'fishing_tap_A.png', 0.75, None, None, True): 'TAP_A'
-                            }
-                        else:
-                            futures = {
-                                qte_executor.submit(safe_find_image, 'fishing_hold_D.png', 0.75, None, None, True): 'HOLD_D',
-                                qte_executor.submit(safe_find_image, 'fishing_tap_D.png', 0.75, None, None, True): 'TAP_D'
-                            }
+                        # [신규 QTE 탐색 단계 - 광대역 전방위 검색]
+                        # 아무 키도 누르지 않고 있으므로, A -> A 나 D -> D 같은 랜덤 순서까지 모두 커버하기 위해
+                        # 비동기 스레드 풀을 가동하여 4가지 QTE를 동시에 실시간 병렬 탐색합니다!
+                        futures = {
+                            qte_executor.submit(safe_find_image, 'fishing_hold_A.png', 0.75, None, None, True): 'HOLD_A',
+                            qte_executor.submit(safe_find_image, 'fishing_hold_D.png', 0.75, None, None, True): 'HOLD_D',
+                            qte_executor.submit(safe_find_image, 'fishing_tap_A.png', 0.75, None, None, True): 'TAP_A',
+                            qte_executor.submit(safe_find_image, 'fishing_tap_D.png', 0.75, None, None, True): 'TAP_D'
+                        }
                         
                         qte_scores = {}
                         for future in concurrent.futures.as_completed(futures):
@@ -3616,12 +3609,6 @@ def fishing_bot(max_allowed_seconds):
                         # 가장 일치율이 높은 QTE 탐색
                         best_action = max(qte_scores, key=qte_scores.get)
                         best_score = qte_scores[best_action]
-                        
-                        # 탭(TAP) 연타 조작 중 완전히 소멸했을 때의 다음 키 교차 전이 판정 장치
-                        if last_active_tap is not None and best_score < 0.78:
-                            bprint(f"  > ⌨️ [QTE 탭 소멸] '{last_active_tap}' 연타 완료. 다음 교차 타겟 키로 전이합니다.")
-                            expected_qte_group = 'D' if last_active_tap == 'A' else 'A'
-                            last_active_tap = None
                         
                         # 실시간 리액티브 물리 조작 분기
                         if best_score >= 0.78:
@@ -3641,22 +3628,19 @@ def fishing_bot(max_allowed_seconds):
                                     
                             elif best_action == 'TAP_A':
                                 bprint(f"  > ⌨️ [QTE 탭] 'A' 키 탭 연타 입력 (일치율: {best_score:.3f})")
-                                send_cmd('R')
+                                send_cmd('R'); current_active_key = None
                                 send_cmd('A'); time.sleep(0.04); send_cmd('R')
-                                last_active_tap = 'A'
                                 
                             elif best_action == 'TAP_D':
                                 bprint(f"  > ⌨️ [QTE 탭] 'D' 키 탭 연타 입력 (일치율: {best_score:.3f})")
-                                send_cmd('R')
+                                send_cmd('R'); current_active_key = None
                                 send_cmd('D'); time.sleep(0.04); send_cmd('R')
-                                last_active_tap = 'D'
                         else:
                             # 낚시 인터페이스(fishing_mode) 소멸 여부 실시간 확인 (1.5초 이상 소멸 시 대기 상태 복귀)
                             if not safe_find_image('fishing_mode.png', 0.70):
                                 missing_ui_count += 1
                                 if missing_ui_count >= 30:
                                     bprint("  > ⚠️ [실패] 낚시 인터페이스 1.5초간 미포착 -> 1단계 복귀")
-                                    send_cmd('R')
                                     state = 1
                                     break
                             else:

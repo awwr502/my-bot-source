@@ -2595,8 +2595,8 @@ def oblivion_bot_loop():
                 oprint("[7~8단계 시작] 아노말리 수색 및 실시간 트래킹 전진 수거 가동")
                 
                 # 6단계에서 이미 파란 포탈(anchor1.png)로 에임 조준을 완료했으므로,
-                # 정방향 시야각 내에서 진짜 아노말리(데비안트)의 고유 네온 핑크 코어를 감지합니다.
-                oprint("  > [수색] 정면 시야각에서 진짜 보상 데비안트 탐색 시작...")
+                # 정방향 시야각 내에서 진짜 아노말리(데비안트)의 고유 핑크 컬러를 감지합니다.
+                oprint("  > [수색] 6단계 조준선 근처에서 아노말리 실시간 탐색 시작...")
                 target_found = False
                 
                 # 1. 제자리에서 데비안트 탐색 시도
@@ -2607,7 +2607,7 @@ def oblivion_bot_loop():
                         break
                     time.sleep(0.1)
                 
-                # 2. 정면에서 미검출 시, 좌우로 미세 회전하며 스캔 (좌우 미세 수색)
+                # 2. 정면에서 미검출 시, 좌우로 미세 회전하며 스캔 (오탐 방지를 위해 좌우 미세 수색)
                 if not target_found:
                     oprint("  > [수색] 정면 미검출: 좌우 미세 수색으로 진짜 데비안트 포착 시도...")
                     sweep_steps = ['M-100,0', 'M200,0', 'M-100,0'] # 좌측 이동 -> 우측 이동 -> 원상 복귀
@@ -2633,11 +2633,10 @@ def oblivion_bot_loop():
                             cx = box.left + box.width // 2
                             err_x = cx - CENTER_X
                             
-                            # [초고속 순간 조준 정렬] 비례 게인을 0.75로 전폭 인상하고 최대 1회 스텝 각도를 180픽셀로 확장하여,
-                            # 1단계에서 돌아서자마자 보상을 즉각(50ms 이내) 정중앙에 에임을 스냅 고정하도록 제어 인자를 튜닝합니다.
+                            # 진짜 보상 방향으로 에임 자동 스티어링 (X축 정렬)
                             if abs(err_x) > 5:
                                 dx = int(err_x * 0.75)
-                                dx = max(-140, min(180, dx)) 
+                                dx = max(-140, min(140, dx)) 
                                 send_cmd(f'M{dx},0')
                                 
                         # [도달 판정] 보물상자 UI('treasure_box.png')가 화면에 뜨면 즉각 전진을 중단합니다.
@@ -2645,7 +2644,6 @@ def oblivion_bot_loop():
                             oprint("  > 🚨 [도달] 'treasure_box.png' 보물상자 UI 노출 확인! 즉각 정지합니다.")
                             break
                             
-                        # 제어 피드백 루프 딜레이를 20ms(0.02초)로 단축하여 실시간 보정 정밀도와 속도를 비약적으로 단축시킵니다.
                         time.sleep(0.02)
                         
                     send_cmd('R') # W 키 해제 (전진 종료)
@@ -2663,21 +2661,73 @@ def oblivion_bot_loop():
                 # 상자를 열고 보상을 획득할 때까지 "수거 시도 -> 2D UI 검증" 루프 작동 (최대 10회)
                 while oblivion_active and attempts < 10:
                     attempts += 1
+                    
+                    # 2회차 시도부터는 매 수거 전에 장벽/포탈(anchor1.png) 및 진짜 보상 방향을 물리적으로 완전 재정렬합니다!
+                    if attempts > 1:
+                        # 1. 상자와의 거리 단축을 위해 0.5초 미세 전진
+                        oprint("  > [미검출] 보상 팝업 미확인. 상자와의 거리 단축을 위해 0.5초 미세 전진합니다.")
+                        send_cmd('W')
+                        time.sleep(0.5)
+                        send_cmd('R'); time.sleep(0.2)
+                        
+                        # 2. 파란 포탈(anchor1.png) 고속 탐색 및 정밀 에임 조준
+                        oprint(f"  > [수거 시도 {attempts}회차] 파란 포탈('anchor1.png') 재탐색 및 조준 정렬 시작...")
+                        while oblivion_active:
+                            pos = find_anchor_final('anchor1.png')
+                            if pos:
+                                break
+                            send_cmd('M-260,0') # 왼쪽으로 회전하며 수색
+                            time.sleep(0.04)
+                            
+                        align_view_by_anchor('anchor1.png')
+                        time.sleep(0.1)
+                        
+                        # 3. 진짜 데비안트 재스캔 및 오프셋 조준선 정렬
+                        oprint(f"  > [수거 시도 {attempts}회차] 진짜 보상 데비안트 재스캔 및 에임 조준선 고정...")
+                        target_found_retry = False
+                        for _ in range(5):
+                            box = find_deviant_by_color(thread_sct)
+                            if box:
+                                target_found_retry = True
+                                break
+                            time.sleep(0.1)
+                            
+                        if not target_found_retry:
+                            # 좌우 미세 수색
+                            sweep_steps = ['M-100,0', 'M200,0', 'M-100,0']
+                            for step in sweep_steps:
+                                send_cmd(step)
+                                time.sleep(0.1)
+                                box = find_deviant_by_color(thread_sct)
+                                if box:
+                                    target_found_retry = True
+                                    break
+                                    
+                        if target_found_retry:
+                            box = find_deviant_by_color(thread_sct)
+                            if box:
+                                cx = box.left + box.width // 2
+                                err_x = cx - CENTER_X
+                                if abs(err_x) > 10:
+                                    dx = int(err_x * 0.75)
+                                    dx = max(-140, min(140, dx)) 
+                                    send_cmd(f'M{dx},0')
+                                    time.sleep(0.15)
+                    
                     oprint(f"  > [수거 시도 {attempts}회차] 상자 열기(F) 및 수령(F) 시도...")
                     
                     # F 2회 연속 입력으로 상자 상호작용 및 습득 수행
                     send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
                     send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
                     
-                    # 보상 획득 팝업(reward_gain.png)이 정상적으로 떴는지 확인 (3초 대기 확인)
+                    # 보상 획득 팝업(reward_gain.png)이 정상적으로 떴는지 확인 (1초 대기 확인)
                     check_start = time.time()
-                    while time.time() - check_start < 3:
+                    while time.time() - check_start < 1:
                         if keyboard.is_pressed('['):
                             toggle_stop()
                             raise BotStopException()
                         
                         # [초정밀 상단-중앙 탐색대역 격리] 화면을 세로 3칸, 가로 2칸으로 6등분하여 오직 '상단 중앙 영역'만 정밀 타겟팅합니다.
-                        # (X축: 화면 가로 33.3% ~ 66.6% 대역, Y축: 화면 세로 상단 50% 대역) -> 가방, 채팅창 등 주변 텍스트 간섭 100% 원천 차단!
                         top_center_6th_region = (SCREEN_W // 3, 0, SCREEN_W // 3, SCREEN_H // 2)
                         if safe_find_image('reward_gain.png', conf=0.70, region=top_center_6th_region, custom_sct=thread_sct):
                             looted = True
@@ -2685,19 +2735,8 @@ def oblivion_bot_loop():
                         time.sleep(0.05)
                         
                     if looted:
-                        oprint("  > 🎉 [성공] 'reward_gain.png' 보상 수령 완료 팝업 감지! 수거 성공.")
+                        oprint(f"  > 🎉 [성공] 'reward_gain.png' 보상 수령 완료 팝업 감지! 수거 성공.")
                         break
-                    
-                    # 수령 실패 시 거리가 부족한 것으로 판단, 0.5초 추가 미세 전진 후 재시도
-                    oprint("  > [미검출] 보상 팝업 미확인. 상자와의 거리 단축을 위해 0.5초 미세 전진합니다.")
-                    send_cmd('W')
-                    time.sleep(0.5)
-                    send_cmd('R'); time.sleep(0.2)
-                    
-                if not oblivion_active: raise BotStopException()
-                
-                if not looted:
-                    oprint("  > ⚠️ [경고] 최대 수색 한계치 도달. 안전을 위해 다음 단계를 강제 강행합니다.")
                 
                 # 9단계
                 oprint("[9단계 시작] 인스턴스 재도전 접수")

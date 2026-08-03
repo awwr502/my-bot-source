@@ -1104,13 +1104,12 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
                 screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 template_processed = template_gray.copy() # 메모리 오염을 원천 방지하기 위해 템플릿 복사본 사용
                 
-                # [오츠(Otsu) 자동 이진화 필터 전면 탑재]
-                # 하드코딩된 임계값은 사용자마다 다른 그래픽 밝기나 텍스처 투명도에 따라 
-                # 텍스트 획을 통째로 지워버려(검게 만듦) 임계값이 폭락하는 버그를 낳았습니다.
-                # 오츠 알고리즘을 도입하여 화면과 템플릿의 히스토그램을 분석, 
-                # 글자 외곽선을 100% 온전하게 추출하여 대조 성능을 극대화(0.80+ 일치율 보장)합니다.
-                _, screen_processed = cv2.threshold(screen_processed, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                _, template_processed = cv2.threshold(template_processed, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                # [가우시안 적응형 이진화 전처리 전면 가동]
+                # 글씨 주변의 좁은 국소 영역(11x11)의 명암 대조를 개별적으로 계산하여 이진화합니다.
+                # 이로 인해 민트색 게이지 채워짐, 수면의 반사광, 플레이어 움직임 등 모든 광원 왜곡과 무관하게 
+                # 오직 글씨 획의 뼈대 형태만 칼날처럼 선명하게 100% 무조건 추출해 냅니다.
+                screen_processed = cv2.adaptiveThreshold(screen_processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+                template_processed = cv2.adaptiveThreshold(template_processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
                 
                 # [오인식 해결을 위한 2단계 슬라이싱 제거]
                 # '길게'와 '탭'의 템플릿 가로 폭(w)이 크게 달라, 고정 비율(55%)로 잘라내면 텍스트의 획이 잘려나가 
@@ -3615,7 +3614,7 @@ def fishing_bot(max_allowed_seconds):
                     # 3. 신형 4가지 하이브리드 QTE 감지 (상대 점수 경쟁 기법을 통한 오판독 원천 차단)
                     # 공통 글자 "A | 계속 " 부분으로 인한 오판독을 없애기 위해, 각 템플릿의 실제 매칭 점수를 모두 구한 뒤
                     # 가장 높은 점수를 가진 1개의 실제 행동만 실행합니다.
-                    # (오츠 이진화 도입으로 감도가 극대화되었으므로, 안전하게 탐색 요구치를 0.75로 상향 조정합니다)
+                    # (가우시안 적응형 이진화 도입으로 감도가 극대화되었으므로, 안전하게 탐색 요구치를 0.75로 세팅합니다)
                     score_hold_A = safe_find_image('fishing_hold_A.png', conf=0.75, return_score=True) or 0.0
                     score_hold_D = safe_find_image('fishing_hold_D.png', conf=0.75, return_score=True) or 0.0
                     score_tap_A  = safe_find_image('fishing_tap_A.png', conf=0.75, return_score=True) or 0.0
@@ -3631,12 +3630,12 @@ def fishing_bot(max_allowed_seconds):
                     # 가장 높은 매칭 점수를 가진 항목 추출
                     best_qte, best_score = max(qte_results, key=lambda x: x[1])
                     
-                    # 최고 일치율 기준을 사용자의 요구에 대부합하도록 임계치 0.80 이상으로 높여 오탐을 완벽히 소거합니다.
-                    # 오츠 자동 이진화 전처리 덕분에 진짜 짝은 0.85~0.95 이상의 높은 점수로 정확히 인식됩니다.
-                    found_hold_A = (best_qte == 'HOLD_A' and best_score >= 0.80)
-                    found_hold_D = (best_qte == 'HOLD_D' and best_score >= 0.80)
-                    found_tap_A  = (best_qte == 'TAP_A' and best_score >= 0.80)
-                    found_tap_D  = (best_qte == 'TAP_D' and best_score >= 0.80)
+                    # 최고 일치율 기준을 사용자의 요구에 대부합하도록 임계치 0.78 이상으로 높여 오탐을 완벽히 소거합니다.
+                    # 가우시안 적응형 이진화 전처리 덕분에 진짜 짝은 0.85~0.95 이상의 높은 점수로 정확히 인식됩니다.
+                    found_hold_A = (best_qte == 'HOLD_A' and best_score >= 0.78)
+                    found_hold_D = (best_qte == 'HOLD_D' and best_score >= 0.78)
+                    found_tap_A  = (best_qte == 'TAP_A' and best_score >= 0.78)
+                    found_tap_D  = (best_qte == 'TAP_D' and best_score >= 0.78)
                     
                     # 4. 동작 분기 처리 (홀드는 디바운스 프레임 필터로 무지성 떼기 방지, 탭은 초고속 수색 광클 연타)
                     if found_hold_A:

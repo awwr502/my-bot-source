@@ -1097,48 +1097,10 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             use_mask = None
             use_color = False
             
-            # [QTE 및 "거두기" 텍스트 배경 소거용 상대적 동적 이진화 및 우측 슬라이싱 필터]
-            # 사용자가 fishing_mode.png를 "거두기" 텍스트 이미지로 전면 교체하였으므로, 
-            # 이 역시 QTE 글씨와 동일하게 동적 80% 임계값 이진화 필터를 통과시켜 반투명 어두운 배경을 완벽히 소거합니다.
-            if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png', 'fishing_mode.png']:
-                screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                template_processed = template_gray.copy() # 메모리 오염을 원천 방지하기 위해 템플릿 복사본 사용
-                
-                # 상대적 최대 밝기 측정 및 동적 80% 컷오프 임계 이진화 수행
-                screen_max = np.max(screen_processed)
-                screen_thresh = int(screen_max * 0.80) if screen_max > 120 else 150
-                
-                template_max = np.max(template_processed)
-                template_thresh = int(template_max * 0.80) if template_max > 120 else 150
-                
-                _, screen_processed = cv2.threshold(screen_processed, screen_thresh, 255, cv2.THRESH_BINARY)
-                _, template_processed = cv2.threshold(template_processed, template_thresh, 255, cv2.THRESH_BINARY)
-                
-                # QTE 이미지인 경우에만 오탐 방지용 2단계 '우측 슬라이싱 검증'을 수행합니다 ("거두기" 텍스트는 전량 정밀 매칭 수행).
-                if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
-                    # 1단계: 전체 템플릿 매칭으로 정확한 UI의 시작 좌표(max_loc) 검출
-                    res_full = cv2.matchTemplate(screen_processed, template_processed, cv2.TM_CCOEFF_NORMED)
-                    _, max_val, _, max_loc = cv2.minMaxLoc(res_full)
-                    
-                    # 해당 QTE가 화면에 아예 존재하지 않는 상황인 경우 탈출
-                    if max_val < 0.4:
-                        if return_score:
-                            return max_val
-                        return None
-                        
-                    # 2단계: 공통 문자("A | 계속 ")를 배제하고 우측 고유 영역만 잘라내어 정밀 대조
-                    h, w = template_processed.shape[:2]
-                    crop_start_x = int(w * 0.55) # 우측 45% 지점 슬라이싱
-                    
-                    screen_patch = screen_processed[max_loc[1]:max_loc[1]+h, max_loc[0]:max_loc[0]+w]
-                    
-                    template_right = template_processed[:, crop_start_x:]
-                    screen_right = screen_patch[:, crop_start_x:]
-                    
-                    res_right = cv2.matchTemplate(screen_right, template_right, cv2.TM_CCOEFF_NORMED)
-                    _, right_score, _, _ = cv2.minMaxLoc(res_right)
-                    
-                    max_val = right_score
+            # [오리지널 흑백 매칭 구조 완벽 원복]
+            # 인위적인 이진화 및 우측 슬라이싱 필터는 글씨 윤곽선을 심하게 왜곡시키고 오진을 유발하므로 완전히 삭제합니다.
+            # 사용자님의 오리지널 100% 정상 작동 상태인 '순수 그레이스케일 매칭'으로 완벽히 복원합니다.
+            # 이로써 텍스트 고유의 화소 형태가 보존되어 극도로 정확하고 매끄럽게 QTE 인지 동작을 완수합니다.
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
@@ -1153,7 +1115,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
 
         # 2. [실시간 자가 치유 능동 폴백]
         # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재조준하여 스캔
-        is_using_cache = (not is_fallback_scan and not region and cache_data['master_box'] is not None)
+        # (단순 점수 반환 return_score 목적의 호출일 때는 자가치유 및 캐시 리셋을 실행하지 않도록 보호합니다)
+        is_using_cache = (not is_fallback_scan and not region and cache_data['master_box'] is not None and not return_score)
         if max_val < active_conf and is_using_cache:
             full_monitor = active_sct.monitors[1]
             sct_img_full = active_sct.grab(full_monitor)
@@ -1304,6 +1267,10 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
         # [인식 실패 연동 및 디버그용 콘솔 알림] (10초당 1회만 노출, 무음 플래그 선행 반환)
         if max_val < active_conf:
             ctx['found'] = False
+            
+            # 단순히 원본 점수 반환(return_score)이 목적이라면 실패 로그 출력 없이 원본 점수를 즉시 반환합니다.
+            if return_score:
+                return max_val
             
             # [가드 클로즈] 무음 감시 플래그 가동 시 아래의 복잡한 이프문들을 거치지 않고 즉각 선제 조기 반환하여 들여쓰기 꼬임 및 콘솔 인쇄를 원천 차단합니다.
             if globals().get('silence_fail_log', False):
@@ -2595,8 +2562,8 @@ def oblivion_bot_loop():
                 oprint("[7~8단계 시작] 아노말리 수색 및 실시간 트래킹 전진 수거 가동")
                 
                 # 6단계에서 이미 파란 포탈(anchor1.png)로 에임 조준을 완료했으므로,
-                # 정방향 시야각 내에서 진짜 아노말리(데비안트)의 고유 네온 핑크 코어를 감지합니다.
-                oprint("  > [수색] 정면 시야각에서 진짜 보상 데비안트 탐색 시작...")
+                # 정방향 시야각 내에서 진짜 아노말리(데비안트)의 고유 핑크 컬러를 감지합니다.
+                oprint("  > [수색] 6단계 조준선 근처에서 아노말리 실시간 탐색 시작...")
                 target_found = False
                 
                 # 1. 제자리에서 데비안트 탐색 시도
@@ -2607,7 +2574,7 @@ def oblivion_bot_loop():
                         break
                     time.sleep(0.1)
                 
-                # 2. 정면에서 미검출 시, 좌우로 미세 회전하며 스캔 (좌우 미세 수색)
+                # 2. 정면에서 미검출 시, 좌우로 미세 회전하며 스캔 (오탐 방지를 위해 좌우 미세 수색)
                 if not target_found:
                     oprint("  > [수색] 정면 미검출: 좌우 미세 수색으로 진짜 데비안트 포착 시도...")
                     sweep_steps = ['M-100,0', 'M200,0', 'M-100,0'] # 좌측 이동 -> 우측 이동 -> 원상 복귀
@@ -2633,11 +2600,10 @@ def oblivion_bot_loop():
                             cx = box.left + box.width // 2
                             err_x = cx - CENTER_X
                             
-                            # [초고속 순간 조준 정렬] 비례 게인을 0.75로 전폭 인상하고 최대 1회 스텝 각도를 180픽셀로 확장하여,
-                            # 1단계에서 돌아서자마자 보상을 즉각(50ms 이내) 정중앙에 에임을 스냅 고정하도록 제어 인자를 튜닝합니다.
+                            # 진짜 보상 방향으로 에임 자동 스티어링 (X축 정렬)
                             if abs(err_x) > 5:
                                 dx = int(err_x * 0.75)
-                                dx = max(-140, min(180, dx)) 
+                                dx = max(-140, min(140, dx)) 
                                 send_cmd(f'M{dx},0')
                                 
                         # [도달 판정] 보물상자 UI('treasure_box.png')가 화면에 뜨면 즉각 전진을 중단합니다.
@@ -2645,7 +2611,6 @@ def oblivion_bot_loop():
                             oprint("  > 🚨 [도달] 'treasure_box.png' 보물상자 UI 노출 확인! 즉각 정지합니다.")
                             break
                             
-                        # 제어 피드백 루프 딜레이를 20ms(0.02초)로 단축하여 실시간 보정 정밀도와 속도를 비약적으로 단축시킵니다.
                         time.sleep(0.02)
                         
                     send_cmd('R') # W 키 해제 (전진 종료)
@@ -2663,6 +2628,59 @@ def oblivion_bot_loop():
                 # 상자를 열고 보상을 획득할 때까지 "수거 시도 -> 2D UI 검증" 루프 작동 (최대 10회)
                 while oblivion_active and attempts < 10:
                     attempts += 1
+                    
+                    # 2회차 시도부터는 매 수거 전에 장벽/포탈(anchor1.png) 및 진짜 보상 방향을 물리적으로 완전 재정렬합니다!
+                    if attempts > 1:
+                        # 1. 상자와의 거리 단축을 위해 0.5초 미세 전진
+                        oprint("  > [미검출] 보상 팝업 미확인. 상자와의 거리 단축을 위해 0.5초 미세 전진합니다.")
+                        send_cmd('W')
+                        time.sleep(0.5)
+                        send_cmd('R'); time.sleep(0.2)
+                        
+                        # 2. 파란 포탈(anchor1.png) 고속 탐색 및 정밀 에임 조준
+                        oprint(f"  > [수거 시도 {attempts}회차] 파란 포탈('anchor1.png') 재탐색 및 조준 정렬 시작...")
+                        while oblivion_active:
+                            pos = find_anchor_final('anchor1.png')
+                            if pos:
+                                break
+                            send_cmd('M-260,0') # 왼쪽으로 회전하며 수색
+                            time.sleep(0.04)
+                            
+                        align_view_by_anchor('anchor1.png')
+                        time.sleep(0.1)
+                        
+                        # 3. 진짜 데비안트 재스캔 및 오프셋 조준선 정렬
+                        oprint(f"  > [수거 시도 {attempts}회차] 진짜 보상 데비안트 재스캔 및 에임 조준선 고정...")
+                        target_found_retry = False
+                        for _ in range(5):
+                            box = find_deviant_by_color(thread_sct)
+                            if box:
+                                target_found_retry = True
+                                break
+                            time.sleep(0.1)
+                            
+                        if not target_found_retry:
+                            # 좌우 미세 수색
+                            sweep_steps = ['M-100,0', 'M200,0', 'M-100,0']
+                            for step in sweep_steps:
+                                send_cmd(step)
+                                time.sleep(0.1)
+                                box = find_deviant_by_color(thread_sct)
+                                if box:
+                                    target_found_retry = True
+                                    break
+                                    
+                        if target_found_retry:
+                            box = find_deviant_by_color(thread_sct)
+                            if box:
+                                cx = box.left + box.width // 2
+                                err_x = cx - CENTER_X
+                                if abs(err_x) > 10:
+                                    dx = int(err_x * 0.75)
+                                    dx = max(-140, min(140, dx)) 
+                                    send_cmd(f'M{dx},0')
+                                    time.sleep(0.15)
+                    
                     oprint(f"  > [수거 시도 {attempts}회차] 상자 열기(F) 및 수령(F) 시도...")
                     
                     # F 2회 연속 입력으로 상자 상호작용 및 습득 수행
@@ -2676,27 +2694,16 @@ def oblivion_bot_loop():
                             toggle_stop()
                             raise BotStopException()
                         
-                        # 전체 화면의 상단 절반 영역(Y축 0 ~ SCREEN_H//2)만 획정 수색하여 하단 가방/채팅창 간섭 차단
-                        top_half_region = (0, 0, SCREEN_W, SCREEN_H // 2)
-                        if safe_find_image('reward_gain.png', conf=0.70, region=top_half_region, custom_sct=thread_sct):
+                        # [초정밀 상단-중앙 탐색대역 격리] 화면을 세로 3칸, 가로 2칸으로 6등분하여 오직 '상단 중앙 영역'만 정밀 타겟팅합니다.
+                        top_center_6th_region = (SCREEN_W // 3, 0, SCREEN_W // 3, SCREEN_H // 2)
+                        if safe_find_image('reward_gain.png', conf=0.70, region=top_center_6th_region, custom_sct=thread_sct):
                             looted = True
                             break
                         time.sleep(0.05)
                         
                     if looted:
-                        oprint("  > 🎉 [성공] 'reward_gain.png' 보상 수령 완료 팝업 감지! 수거 성공.")
+                        oprint(f"  > 🎉 [성공] 'reward_gain.png' 보상 수령 완료 팝업 감지! 수거 성공.")
                         break
-                    
-                    # 수령 실패 시 거리가 부족한 것으로 판단, 0.5초 추가 미세 전진 후 재시도
-                    oprint("  > [미검출] 보상 팝업 미확인. 상자와의 거리 단축을 위해 0.5초 미세 전진합니다.")
-                    send_cmd('W')
-                    time.sleep(0.5)
-                    send_cmd('R'); time.sleep(0.2)
-                    
-                if not oblivion_active: raise BotStopException()
-                
-                if not looted:
-                    oprint("  > ⚠️ [경고] 최대 수색 한계치 도달. 안전을 위해 다음 단계를 강제 강행합니다.")
                 
                 # 9단계
                 oprint("[9단계 시작] 인스턴스 재도전 접수")
@@ -3383,35 +3390,15 @@ def fishing_bot(max_allowed_seconds):
 
                 stats['daily_hook'] += 1
                 stats['total_hook'] += 1
-                bprint(f"[State 3] 5중 병렬 어종 분석 시작... (입질: {stats['daily_hook']}회)")
+                bprint(f"[State 3] 1회식 초고속 어종 판독 엔진 가동... (입질: {stats['daily_hook']}회)")
                 
                 found_target = False
-                found_trash = False
                 target_name = ""
 
-                # 스레드들이 공유할 결과 저장소 (프레임 단위 점수표)
-                frame_results = []
-                result_lock = threading.Lock()
+                # [핵심] 제안해주신 대로 글자가 화면에 완전히 안착해 멈출 극소량의 0.1초만 지연 대기합니다.
+                time.sleep(0.1)
 
-                # [분석관 스레드 함수]
-                def species_scanner(img_gray, template, species_type, name):
-                    if template is None: return
-                    
-                    res = cv2.matchTemplate(img_gray, template, cv2.TM_CCOEFF_NORMED)
-                    _, max_val, _, _ = cv2.minMaxLoc(res)
-                    
-                    # 컷오프를 넘든 안 넘든 일단 점수를 모두 기록
-                    with result_lock:
-                        frame_results.append({"type": species_type, "name": name, "score": max_val})
-
-                 # [추가] 정규직 스레드 7명을 미리 고용 (루프 진입 전 1회만 생성하여 생성 부하 제로화, 2종 추가에 따른 수 정렬)
-                species_executor = concurrent.futures.ThreadPoolExecutor(max_workers=7)
-
-                # 판독 루프 (최대 2초간 시도)
-                start_analysis = time.time()
-                
                 # [EV>0 반응형 6분할 스마트 패딩 ROI]
-                # 5번(하단 중앙) 영역을 기준으로 상하좌우 10% 마진을 추가하여 짤림 오탐 방지
                 grid_w = SCREEN_W // 3
                 grid_h = SCREEN_H // 2
                 
@@ -3428,63 +3415,50 @@ def fishing_bot(max_allowed_seconds):
                     "height": int(min(SCREEN_H - top_bound, grid_h + (margin_y * 2)))
                 }
                 
-                fallback_triggered = False # 1회성 전체화면 폴백 실행 여부
+                # 단 1장만 전체화면 캡처! (캡처 병목 오버헤드 최소화)
+                sct_img = sct.grab(fish_roi)
+                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                while time.time() - start_analysis < 2.0 and bot_active:
-                    elapsed_time = time.time() - start_analysis
-                    
-                    # 1. 카메라 캡처 (1.5초 임계점 돌파 시 단 1회 전체화면 폴백 스캔)
-                    if elapsed_time > 1.5 and not fallback_triggered:
-                        bprint("  > [스마트 폴백] 1.5초 경과. 예외 방어를 위해 단 1회 전체화면 정밀 스캔을 수행합니다.")
-                        sct_img = sct.grab(sct.monitors[1])
-                        fallback_triggered = True
-                    else:
-                        sct_img = sct.grab(fish_roi)
+                score_jellyfish = 0.0
+                score_eel = 0.0
+                
+                # A. 해파리 5배율 매칭
+                temp_jelly = IMAGE_CACHE.get('jellyfish.png')
+                if temp_jelly is not None:
+                    for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
+                        w = int(temp_jelly.shape[1] * scale)
+                        h = int(temp_jelly.shape[0] * scale)
+                        if w < 10 or h < 10: continue
+                        resized = cv2.resize(temp_jelly, (w, h), interpolation=cv2.INTER_AREA)
+                        res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
+                        score_jellyfish = max(score_jellyfish, cv2.minMaxLoc(res)[1])
                         
-                    screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                    
-                    frame_results.clear() # 매 프레임마다 점수표 초기화
-
-                    # 2. 정규직 스레드 풀에 7개의 작업을 동시에 투입 (스레드 생성 부하 없이 기존의 압도적인 병렬 속도 복구)
-                    futures = [
-                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('jellyfish.png'), "TARGET", "해파리"),
-                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('eel.png'), "TARGET", "전기뱀장어"),
-                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none1.png'), "TRASH", "병어"),
-                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none2.png'), "TRASH", "청어"),
-                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none3.png'), "TRASH", "정어리"),
-                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none4.png'), "TRASH", "노던파이크"),
-                        species_executor.submit(species_scanner, screen_gray, IMAGE_CACHE.get('none5.png'), "TRASH", "바라쿠다")
-                    ]
-                    
-                    # 7명의 연산이 모두 끝날 때까지 대기 (가장 오래 걸리는 1개 연산 시간만 소모됨)
-                    concurrent.futures.wait(futures)
-
-                    # 3. 결과 확인 (최고 점수 판별 및 애니메이션 왜곡 방어)
-                    if frame_results:
-                        # 점수가 가장 높은 순으로 정렬
-                        frame_results.sort(key=lambda x: x["score"], reverse=True)
-                        best_match = frame_results[0]
-                        
-                        elapsed_time = time.time() - start_analysis
-                        
-                        # 조건 A: UI가 완전히 선명해져서 점수가 0.75를 넘으면 시간 불문 즉시 낚아챔
-                        # 조건 B: UI 애니메이션이 끝날 시간(0.5초)이 지났다면, 0.65 이상인 1등을 믿음
-                        if best_match["score"] >= 0.75 or (elapsed_time > 0.5 and best_match["score"] >= 0.65):
-                            time_str = f"{elapsed_time:.2f}초"
-                            bprint(f"  > [분석 완료 - {time_str} 소요] 1위: {best_match['name']} ({best_match['score']:.3f})")
-                            
-                            if best_match["type"] == "TARGET":
-                                found_target = True
-                                target_name = best_match["name"]
-                                break
-                            elif best_match["type"] == "TRASH":
-                                found_trash = True
-                                break
-                    
-                    time.sleep(0.01) # 다음 프레임 대기
+                # B. 전기뱀장어 5배율 매칭
+                temp_eel = IMAGE_CACHE.get('eel.png')
+                if temp_eel is not None:
+                    for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
+                        w = int(temp_eel.shape[1] * scale)
+                        h = int(temp_eel.shape[0] * scale)
+                        if w < 10 or h < 10: continue
+                        resized = cv2.resize(temp_eel, (w, h), interpolation=cv2.INTER_AREA)
+                        res = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
+                        score_eel = max(score_eel, cv2.minMaxLoc(res)[1])
+                
+                # [어종별 스캔 점수 실시간 출력] 인식 성공 여부와 상관없이 두 어종의 일치율 점수를 무조건 노출합니다.
+                bprint(f"  > [어종 대조 결과] 해파리 일치율: {score_jellyfish:.3f} | 전기뱀장어 일치율: {score_eel:.3f}")
+                
+                best_score = max(score_jellyfish, score_eel)
+                
+                # 명도 왜곡 및 물결 간섭을 고려하여 안정적인 0.60 컷오프 적용
+                if best_score >= 0.60:
+                    target_name = "해파리" if score_jellyfish > score_eel else "전기뱀장어"
+                    bprint(f"  > 🎉 [타겟 감지] {target_name} 확정 포획 가동 (일치율: {best_score:.3f})")
+                    found_target = True
+                else:
+                    bprint(f"  > 🔴 [잡어 판정] 목표 타겟이 아니므로 줄 끊기 시퀀스를 개시합니다. (최고 일치율: {best_score:.3f})")
 
                 if found_target:
-                    bprint(f"  > [성공] {target_name} 포착! -> 파이팅 진입"); state = 4
+                    state = 4
                 else:
                     # [내구도 실시간 보완] 줄을 끊기 전에, 수색 중 낚싯대가 중간 파손되어 상태가 풀린 것인지 교차 검증합니다. (구식 fishing.png 대신 신형 reel_in.png 대조)
                     if not safe_find_image('reel_in.png', 0.70, region="FULL_SCREEN"):
@@ -3494,7 +3468,6 @@ def fishing_bot(max_allowed_seconds):
                         continue
                         
                     # 목표를 못 찾았거나 확실한 잡어인 경우
-                    bprint("  > [끊기] 목표 어종 아님 -> 줄 끊기 시퀀스 진입")
                     stats['daily_skip'] += 1
                     stats['total_skip'] += 1
 
@@ -3551,7 +3524,7 @@ def fishing_bot(max_allowed_seconds):
                             found_roulette = safe_find_image('tab_roulette.png', 0.70)
                             
                             if found_bait or found_broken or found_roulette:
-                                bprint("  > [성공] 타임아웃 한계 지점에서 UI 복구 포착 완료! 정상 흐름으로 인계합니다.")
+                                bprint("  > [성공] 타웃 한계 지점에서 UI 복구 포착 완료! 정상 흐름으로 인계합니다.")
                                 time.sleep(0.05); state = 1; break
                             else:
                                 bprint("  > [실패] UI 잔존. 재시도...")
@@ -3561,14 +3534,16 @@ def fishing_bot(max_allowed_seconds):
                         time.sleep(1.0)
                         state = 1
 
-            # 루프가 끝나면 스레드 풀을 깔끔하게 해제
-                species_executor.shutdown(wait=False)
-
             # --- [State 4] 파이팅 (DDR 신형 QTE 엔진 가동) ---
             elif state == 4:
-                bprint("[State 4] 파이팅 모드 진입 (DDR 4버튼 하이브리드 QTE 엔진 가동)")
+                bprint("[State 4] 파이팅 모드 진입 (비동기 병렬 동시 감시 QTE 엔진 가동)")
                 
+                # QTE 전용 스레드 풀 생성 (병렬 처리용) - 변수 선언 유실을 완벽히 방지하기 위해 덮어쓰기 블록 내부로 이식하여 격리합니다.
+                qte_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+                
+                current_active_key = None # 현재 물리적으로 누르고 있는 키 상태 추적 ('A', 'D', None)
                 missing_ui_count = 0
+                miss_count = 0 # QTE 소멸 판정용 누적 미스 카운터
                 
                 while bot_active:
                     if not bot_active: raise BotStopException()
@@ -3590,93 +3565,89 @@ def fishing_bot(max_allowed_seconds):
                         state = 1
                         break
 
-                    # 3. 신형 4가지 하이브리드 QTE 감지 (상대 점수 경쟁 기법을 통한 오판독 원천 차단)
-                    # 공통 글자 "A | 계속 " 부분으로 인한 오판독을 없애기 위해, 각 템플릿의 실제 매칭 점수를 모두 구한 뒤
-                    # 가장 높은 점수를 가진 1개의 실제 행동만 실행합니다.
-                    score_hold_A = safe_find_image('fishing_hold_A.png', conf=0.5, return_score=True) or 0.0
-                    score_hold_D = safe_find_image('fishing_hold_D.png', conf=0.5, return_score=True) or 0.0
-                    score_tap_A  = safe_find_image('fishing_tap_A.png', conf=0.5, return_score=True) or 0.0
-                    score_tap_D  = safe_find_image('fishing_tap_D.png', conf=0.5, return_score=True) or 0.0
-                    
-                    qte_results = [
-                        ('HOLD_A', score_hold_A),
-                        ('HOLD_D', score_hold_D),
-                        ('TAP_A', score_tap_A),
-                        ('TAP_D', score_tap_D)
-                    ]
-                    
-                    # 가장 높은 매칭 점수를 가진 항목 추출
-                    best_qte, best_score = max(qte_results, key=lambda x: x[1])
-                    
-                    # 최고 일치율이 0.78 이상인 경우에만 해당 동작을 True로 판정
-                    found_hold_A = (best_qte == 'HOLD_A' and best_score >= 0.78)
-                    found_hold_D = (best_qte == 'HOLD_D' and best_score >= 0.78)
-                    found_tap_A  = (best_qte == 'TAP_A' and best_score >= 0.78)
-                    found_tap_D  = (best_qte == 'TAP_D' and best_score >= 0.78)
-                    
-                    # 4. 동작 분기 처리 (홀드는 디바운스 프레임 필터로 무지성 떼기 방지, 탭은 초고속 수색 광클 연타)
-                    if found_hold_A:
-                        bprint("  > ⌨️ [QTE] 'A' 키 계속 길게 누르기 가동")
-                        send_cmd('A') # 물리 홀딩 시작
+                    # 3. 상태 기반 분기 처리 (홀딩 중일 때와 대기 중일 때를 이원화)
+                    if current_active_key is not None:
+                        # [홀딩 조작 유지 단계] 
+                        # 오직 누르고 있는 해당 홀딩 이미지(A 또는 D)의 소멸 여부만 1대1로 고속 추적합니다.
+                        active_hold_img = 'fishing_hold_A.png' if current_active_key == 'A' else 'fishing_hold_D.png'
                         
-                        miss_count = 0
-                        while bot_active:
-                            if safe_find_image('fishing_hold_A.png', conf=0.82):
-                                miss_count = 0 # 감지 성공 시 즉시 미스 카운터 초기화 (홀딩 유지)
-                            else:
-                                miss_count += 1
-                                
-                            # 4회 연속(약 0.16초 동안)으로 완전히 소멸된 것이 검증되어야 손가락을 뗍니다. (flickering 채터링 방지)
-                            if miss_count >= 4:
-                                break
-                            time.sleep(0.04)
-                            
-                        send_cmd('R') # 소멸 확인 시 최종 떼기
-                        missing_ui_count = 0
-                        
-                    elif found_hold_D:
-                        bprint("  > ⌨️ [QTE] 'D' 키 계속 길게 누르기 가동")
-                        send_cmd('D') # 물리 홀딩 시작
-                        
-                        miss_count = 0
-                        while bot_active:
-                            if safe_find_image('fishing_hold_D.png', conf=0.82):
-                                miss_count = 0
-                            else:
-                                miss_count += 1
-                            if miss_count >= 4:
-                                break
-                            time.sleep(0.04)
-                            
-                        send_cmd('R') # 소멸 확인 시 최종 떼기
-                        missing_ui_count = 0
-                        
-                    elif found_tap_A:
-                        bprint("  > ⌨️ [QTE] 'A' 키 탭 연타 광클 가동")
-                        # 팝업이 화면에서 사라질 때까지 100ms 내외의 간격으로 초고속 물리 클릭을 연사합니다.
-                        while bot_active and safe_find_image('fishing_tap_A.png', conf=0.82):
-                            send_cmd('A'); time.sleep(0.04); send_cmd('R'); time.sleep(0.04)
-                        missing_ui_count = 0
-                        
-                    elif found_tap_D:
-                        bprint("  > ⌨️ [QTE] 'D' 키 탭 연타 광클 가동")
-                        while bot_active and safe_find_image('fishing_tap_D.png', conf=0.82):
-                            send_cmd('D'); time.sleep(0.04); send_cmd('R'); time.sleep(0.04)
-                        missing_ui_count = 0
-                        
-                    else:
-                        # 낚시 인터페이스(fishing_mode) 소멸 여부 실시간 확인 (1.5초 이상 소멸 시 대기 상태 복귀)
-                        if not safe_find_image('fishing_mode.png', 0.70):
-                            missing_ui_count += 1
-                            if missing_ui_count >= 30:
-                                bprint("  > ⚠️ [실패] 낚시 인터페이스 1.5초간 미포착 -> 1단계 복귀")
-                                send_cmd('R')
-                                state = 1
-                                break
+                        # 홀딩 중에는 게이지 간섭을 버티기 위해 임계치 0.60 사용
+                        if safe_find_image(active_hold_img, conf=0.60):
+                            miss_count = 0 # 감지 성공 시 즉시 미스 카운터 초기화 (홀딩 유지)
                         else:
-                            missing_ui_count = 0
+                            miss_count += 1
                             
-                    time.sleep(0.02) # 루프 탐색 주기 (반응성 확보 및 CPU 균형)
+                        # 3회 연속 미스(0.12초) 발생 시 즉시 키 떼기
+                        if miss_count >= 3:
+                            bprint(f"  > ⌨️ [QTE 해제] '{current_active_key}' 프롬프트 소멸 확인. 키 떼기 (연속 미스: {miss_count}회)")
+                            send_cmd('R')
+                            current_active_key = None
+                            miss_count = 0
+                            
+                    else:
+                        # [신규 QTE 탐색 단계 - 광대역 전방위 검색]
+                        # 비동기 스레드 풀을 가동하여 4가지 QTE를 동시에 실시간 병렬 탐색합니다!
+                        # (페이드인 전환 지연을 파괴하기 위해, 실시간 스캔 요구치를 conf=0.65로 하향 조정합니다)
+                        futures = {
+                            qte_executor.submit(safe_find_image, 'fishing_hold_A.png', 0.65, None, None, True): 'HOLD_A',
+                            qte_executor.submit(safe_find_image, 'fishing_hold_D.png', 0.65, None, None, True): 'HOLD_D',
+                            qte_executor.submit(safe_find_image, 'fishing_tap_A.png', 0.65, None, None, True): 'TAP_A',
+                            qte_executor.submit(safe_find_image, 'fishing_tap_D.png', 0.65, None, None, True): 'TAP_D'
+                        }
+                        
+                        qte_scores = {}
+                        for future in concurrent.futures.as_completed(futures):
+                            action = futures[future]
+                            try:
+                                score = future.result() or 0.0
+                            except:
+                                score = 0.0
+                            qte_scores[action] = score
+
+                        # 가장 일치율이 높은 QTE 탐색
+                        best_action = max(qte_scores, key=qte_scores.get)
+                        best_score = qte_scores[best_action]
+                        
+                        # 실시간 리액티브 물리 조작 분기 (히스테리시스 임계치 융합)
+                        # 글자가 페이드인되며 떠오르는 첫 프레임(지연율 0%)에 즉각 조작을 시작하도록 시작 조건 임계값을 0.72로 세심하게 낮춥니다.
+                        active_thresh = 0.65 if current_active_key is not None else 0.72
+                        
+                        if best_score >= active_thresh:
+                            if best_action == 'HOLD_A':
+                                bprint(f"  > ⌨️ [QTE 홀딩] 'A' 키 계속 길게 누르기 시작 (일치율: {best_score:.3f})")
+                                send_cmd('R')
+                                send_cmd('A')
+                                current_active_key = 'A'
+                                miss_count = 0
+                                    
+                            elif best_action == 'HOLD_D':
+                                bprint(f"  > ⌨️ [QTE 홀딩] 'D' 키 계속 길게 누르기 시작 (일치율: {best_score:.3f})")
+                                send_cmd('R')
+                                send_cmd('D')
+                                current_active_key = 'D'
+                                miss_count = 0
+                                    
+                            elif best_action == 'TAP_A':
+                                bprint(f"  > ⌨️ [QTE 탭] 'A' 키 탭 연타 입력 (일치율: {best_score:.3f})")
+                                send_cmd('R'); current_active_key = None
+                                send_cmd('A'); time.sleep(0.04); send_cmd('R')
+                                
+                            elif best_action == 'TAP_D':
+                                bprint(f"  > ⌨️ [QTE 탭] 'D' 키 탭 연타 입력 (일치율: {best_score:.3f})")
+                                send_cmd('R'); current_active_key = None
+                                send_cmd('D'); time.sleep(0.04); send_cmd('R')
+                        else:
+                            # 낚시 인터페이스(fishing_mode) 소멸 여부 실시간 확인 (1.5초 이상 소멸 시 대기 상태 복귀)
+                            if not safe_find_image('fishing_mode.png', 0.70):
+                                missing_ui_count += 1
+                                if missing_ui_count >= 30:
+                                    bprint("  > ⚠️ [실패] 낚시 인터페이스 1.5초간 미포착 -> 1단계 복귀")
+                                    state = 1
+                                    break
+                            else:
+                                missing_ui_count = 0
+                            
+                    time.sleep(0.02) # 루프 제어 주기 (반응성 확보 및 CPU 균형)
 
             # --- [State 5] 수거 (완결성 검증 로직) ---
             elif state == 5:

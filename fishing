@@ -1097,19 +1097,10 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             use_mask = None
             use_color = False
             
-            # [QTE 전용 고정 솔리드 이진화 가드]
-            # 1. 낚시 거두기(fishing_mode.png)는 정적이므로 이진화 필터에서 제외하여 자가 치유 무한 랙을 영구히 차단합니다.
-            # 2. 오직 A와 D의 HOLD/TAP QTE 4가지 이미지만을 수색 대역으로 한정합니다.
-            if img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
-                screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                template_processed = template_gray.copy() # 메모리 오염을 원천 방지하기 위해 템플릿 복사본 사용
-                
-                # [고정식 솔리드 이진화 필터 적용]
-                # 가우시안 적응형 이진화(adaptiveThreshold)는 문자 획 내부를 파먹어 속이 빈 이중선(Double edge) 형태로 만들어 일치율을 폭락시킵니다.
-                # 백색 텍스트의 고유 밝기를 포착하는 고정 임계값(140)으로 전역 이진화(cv2.threshold)를 수행하여,
-                # 민트색 게이지를 완벽히 소거하면서 글자 획은 뭉개짐 없이 속이 꽉 찬 하얀색 자모음으로 완벽하게 격리 추출해 냅니다.
-                _, screen_processed = cv2.threshold(screen_processed, 140, 255, cv2.THRESH_BINARY)
-                _, template_processed = cv2.threshold(template_processed, 140, 255, cv2.THRESH_BINARY)
+            # [오리지널 흑백 매칭 구조 완벽 원복]
+            # 인위적인 이진화 및 우측 슬라이싱 필터는 글씨 윤곽선을 심하게 왜곡시키고 오진을 유발하므로 완전히 삭제합니다.
+            # 사용자님의 오리지널 100% 정상 작동 상태인 '순수 그레이스케일 매칭'으로 완벽히 복원합니다.
+            # 이로써 텍스트 고유의 화소 형태가 보존되어 극도로 정확하고 매끄럽게 QTE 인지 동작을 완수합니다.
 
         if use_mask is not None:
             # 투명 마스킹 매칭 시 규격화 수식 작동 (배경은 검정색이든 흰색이든 100% 무시!)
@@ -3652,7 +3643,10 @@ def fishing_bot(max_allowed_seconds):
                         
                         miss_count = 0
                         while bot_active:
-                            if safe_find_image('fishing_hold_A.png', conf=0.75):
+                            # [히스테리시스 유지 공학] 진입 시점에는 0.78로 엄격하게 잡았으나, 
+                            # 홀딩 중에는 민트색 게이지 영향으로 일치율이 0.65~0.73 대역으로 소폭 낙하합니다.
+                            # 홀딩 유지 임계값(conf)을 유연하게 0.60으로 세팅하여, 게이지가 가득 찰 때까지 키를 떼지 않고 꾹 누르고 있게 만듭니다.
+                            if safe_find_image('fishing_hold_A.png', conf=0.60):
                                 miss_count = 0 # 감지 성공 시 즉시 미스 카운터 초기화 (홀딩 유지)
                             else:
                                 miss_count += 1
@@ -3671,7 +3665,8 @@ def fishing_bot(max_allowed_seconds):
                         
                         miss_count = 0
                         while bot_active:
-                            if safe_find_image('fishing_hold_D.png', conf=0.75):
+                            # 홀딩 유지 임계값(conf)을 유연하게 0.60으로 세팅하여 게이지 영향으로 키가 도중에 떨어지는 현상을 완전히 해결합니다.
+                            if safe_find_image('fishing_hold_D.png', conf=0.60):
                                 miss_count = 0
                             else:
                                 miss_count += 1

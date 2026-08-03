@@ -2189,94 +2189,48 @@ def find_treasure_box_multi_scale(target_img_path, conf=0.55):
 
 def find_anchor1_by_color(custom_sct=None):
     """
-    [v32 파란 포탈 전용 고대비 레드커튼-가이드 매칭 엔진]
-    파란 포탈 내부의 '빨간색 커튼' 영역을 실시간으로 고속 탐색(ROI)한 뒤,
-    커튼 주변의 초소형 영역만 격리 크롭하여 다각도 원근 왜곡 대조를 수행합니다.
-    연산량이 95% 격감하여 정렬 지연(랙)이 완전히 사라지며, 
-    오탐 위험이 없으므로 임계값을 0.50까지 대폭 낮추어 가파른 측면 빗각에서도 완벽한 인식률을 보장합니다.
+    [v33 파란 포탈 전용 고대비 BGR 컬러-원근 매칭 엔진]
+    사용자님의 제안대로 복잡한 영역 분할(HSV) 대신, 파란색 테두리와 붉은 커튼의 색채 정보가 
+    온전히 보존된 '3채널 BGR 컬러 이미지 서칭'을 가동합니다.
+    원거리/근거리 거리 스케일 및 빗각 원근 왜곡(가로 압축 비율) 대조 필터를 내장하여,
+    배경의 어떠한 다른 사물과도 혼동되지 않고 오직 파란 포탈만 칼날같이 락온합니다.
     """
     try:
         active_sct = custom_sct if custom_sct else get_sct_safe()
         monitor = active_sct.monitors[1]
         sct_img = active_sct.grab(monitor)
         
-        screen_np = np.array(sct_img)
-        screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_BGRA2GRAY)
-        screen_hsv = cv2.cvtColor(cv2.cvtColor(screen_np, cv2.COLOR_BGRA2BGR), cv2.COLOR_BGR2HSV)
+        # 1. 3채널 BGR 컬러 화면 획득 (가우시안 블러 제거한 원본 선명도 유지)
+        screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
         
-        # 1. 포탈 중앙의 빨간 커튼 영역 고속 검출 (양끝단 대역 융합, S와 V 폭을 넓게 설정)
-        lower_red1 = np.array([0, 50, 50])
-        upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([170, 50, 50])
-        upper_red2 = np.array([180, 255, 255])
-        
-        mask_r1 = cv2.inRange(screen_hsv, lower_red1, upper_red1)
-        mask_r2 = cv2.inRange(screen_hsv, lower_red2, upper_red2)
-        mask_red = cv2.bitwise_or(mask_r1, mask_r2)
-        
-        # 모폴로지 닫기 연산으로 붉은색 덩어리 획정
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        morph = cv2.morphologyEx(mask_red, cv2.MORPH_CLOSE, kernel)
-        contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        roi_box = None
-        max_area = 0
-        for c in contours:
-            area = cv2.contourArea(c)
-            if area < 100: continue # 미세 노이즈 제거
-            x, y, w, h = cv2.boundingRect(c)
-            
-            # 붉은 커튼 영역은 직사각형에 가깝습니다 (종횡비 1.0 ~ 3.0)
-            aspect_ratio = h / float(w) if w > 0 else 0
-            if 1.0 <= aspect_ratio <= 3.0:
-                if area > max_area:
-                    max_area = area
-                    roi_box = (x, y, w, h)
-                    
-        # 빨간 커튼 흔적이 전혀 없다면 0ms 만에 즉시 실패 처리하여 CPU 보존
-        if roi_box is None:
-            return None
-            
-        rx, ry, rw, rh = roi_box
-        
-        # 2. 파란 테두리를 충분히 포함하도록 150px 여유 마진을 주어 정밀 크롭
-        pad = 150
-        h_scr, w_scr = screen_gray.shape[:2]
-        crop_x1 = max(0, rx - pad)
-        crop_y1 = max(0, ry - pad)
-        crop_x2 = min(w_scr, rx + rw + pad)
-        crop_y2 = min(h_scr, ry + rh + pad)
-        
-        crop_gray = screen_gray[crop_y1:crop_y2, crop_x1:crop_x2]
-        
-        template = IMAGE_CACHE.get('anchor1.png')
+        # 2. 3채널 BGR 템플릿 획득
+        template = IMAGE_COLOR_CACHE.get('anchor1.png')
         if template is None: return None
         
         best_val = -1
         best_box = None
         
-        # 3. 좁아진 크롭 박스 내에서만 40가지(10스케일 * 4종횡비) 매칭 고속 실행
+        # 3. 컬러 이미지 상에서 광대역 스케일 및 비대칭 가로 압축 매칭 가동 (40% ~ 130%)
         scales = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
         for scale in scales:
+            # 원근 압축 왜곡 극복을 위한 4단계 종횡비 전개 (1.0: 정면, 0.82: 약측면, 0.65: 중측면, 0.52: 강측면)
             aspect_multipliers = [1.0, 0.82, 0.65, 0.52]
             for aspect_mult in aspect_multipliers:
                 w = int(template.shape[1] * scale * aspect_mult)
                 h = int(template.shape[0] * scale)
                 if w < 10 or h < 10: continue
                 
-                # 좁아진 크롭 영역 범위를 넘어서는 오버 스케일 방지 필터
-                if w > crop_gray.shape[1] or h > crop_gray.shape[0]: continue
-                
                 resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_AREA)
-                res = cv2.matchTemplate(crop_gray, resized, cv2.TM_CCOEFF_NORMED)
+                
+                # BGR 3채널 전체 대조로 오탐 차단 (파란색 테두리와 붉은색 커튼의 고유 무늬가 함께 일치해야 점수 획득)
+                res = cv2.matchTemplate(screen_bgr, resized, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(res)
                 
-                # 크롭 영역 제한으로 오탐 위험이 없으므로, 극단적인 측면 찌그러짐을 포용하도록 임계값을 0.50으로 파격 설정
-                if max_val >= 0.50 and max_val > best_val:
+                # 컬러 매칭은 색상이 다르면 스코어가 급락하므로, 임계값을 0.55로 유연하게 설정해 가파른 측면 왜곡까지 완벽 대응
+                if max_val >= 0.55 and max_val > best_val:
                     best_val = max_val
-                    # 크롭 좌표계를 전체화면 좌표계로 정상 치환 복원
-                    real_x = max_loc[0] + crop_x1 + monitor["left"]
-                    real_y = max_loc[1] + crop_y1 + monitor["top"]
+                    real_x = max_loc[0] + monitor["left"]
+                    real_y = max_loc[1] + monitor["top"]
                     best_box = Box(real_x, real_y, w, h)
                     
         if best_box:

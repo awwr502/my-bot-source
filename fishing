@@ -3587,8 +3587,12 @@ def fishing_bot(max_allowed_seconds):
 
             # --- [State 4] 파이팅 (DDR 신형 QTE 엔진 가동) ---
             elif state == 4:
-                bprint("[State 4] 파이팅 모드 진입 (DDR 4버튼 하이브리드 QTE 엔진 가동)")
+                bprint("[State 4] 파이팅 모드 진입 (비동기 병렬 동시 감시 QTE 엔진 가동)")
                 
+                # QTE 전용 스레드 풀 생성 (병렬 처리용)
+                qte_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+                
+                current_active_key = None # 현재 물리적으로 누르고 있는 키 상태 추적 ('A', 'D', None)
                 missing_ui_count = 0
                 
                 while bot_active:
@@ -3611,99 +3615,72 @@ def fishing_bot(max_allowed_seconds):
                         state = 1
                         break
 
-                    # 3. 신형 4가지 하이브리드 QTE 감지 (상대 점수 경쟁 기법을 통한 오판독 원천 차단)
-                    # 공통 글자 "A | 계속 " 부분으로 인한 오판독을 없애기 위해, 각 템플릿의 실제 매칭 점수를 모두 구한 뒤
-                    # 가장 높은 점수를 가진 1개의 실제 행동만 실행합니다.
-                    # (오탐 없는 솔리드 이진화 전처리 탑재에 따라, 0.75 고강도 대조를 안정적으로 가동합니다)
-                    score_hold_A = safe_find_image('fishing_hold_A.png', conf=0.75, return_score=True) or 0.0
-                    score_hold_D = safe_find_image('fishing_hold_D.png', conf=0.75, return_score=True) or 0.0
-                    score_tap_A  = safe_find_image('fishing_tap_A.png', conf=0.75, return_score=True) or 0.0
-                    score_tap_D  = safe_find_image('fishing_tap_D.png', conf=0.75, return_score=True) or 0.0
+                    # 3. 비동기 스레드 풀을 활용한 4가지 QTE 동시 병렬 감시 (지연율 0ms)
+                    futures = {
+                        qte_executor.submit(safe_find_image, 'fishing_hold_A.png', 0.75, None, None, True): 'HOLD_A',
+                        qte_executor.submit(safe_find_image, 'fishing_hold_D.png', 0.75, None, None, True): 'HOLD_D',
+                        qte_executor.submit(safe_find_image, 'fishing_tap_A.png', 0.75, None, None, True): 'TAP_A',
+                        qte_executor.submit(safe_find_image, 'fishing_tap_D.png', 0.75, None, None, True): 'TAP_D'
+                    }
                     
-                    qte_results = [
-                        ('HOLD_A', score_hold_A),
-                        ('HOLD_D', score_hold_D),
-                        ('TAP_A', score_tap_A),
-                        ('TAP_D', score_tap_D)
-                    ]
+                    qte_scores = {}
+                    for future in concurrent.futures.as_completed(futures):
+                        action = futures[future]
+                        try:
+                            score = future.result() or 0.0
+                        except:
+                            score = 0.0
+                        qte_scores[action] = score
+
+                    # 가장 일치율이 높은 QTE 탐색
+                    best_action = max(qte_scores, key=qte_scores.get)
+                    best_score = qte_scores[best_action]
                     
-                    # 가장 높은 매칭 점수를 가진 항목 추출
-                    best_qte, best_score = max(qte_results, key=lambda x: x[1])
-                    
-                    # 최고 일치율 기준을 사용자의 요구에 대부합하도록 임계치 0.78 이상으로 높여 오탐을 완벽히 소거합니다.
-                    # 고정식 이진화 전처리 덕분에 진짜 짝은 0.85~0.95 이상의 높은 점수로 정확히 인식됩니다.
-                    found_hold_A = (best_qte == 'HOLD_A' and best_score >= 0.78)
-                    found_hold_D = (best_qte == 'HOLD_D' and best_score >= 0.78)
-                    found_tap_A  = (best_qte == 'TAP_A' and best_score >= 0.78)
-                    found_tap_D  = (best_qte == 'TAP_D' and best_score >= 0.78)
-                    
-                    # 4. 동작 분기 처리 (홀드는 디바운스 프레임 필터로 무지성 떼기 방지, 탭은 초고속 수색 광클 연타)
-                    if found_hold_A:
-                        bprint("  > ⌨️ [QTE] 'A' 키 계속 길게 누르기 가동")
-                        send_cmd('A') # 물리 홀딩 시작
-                        
-                        miss_count = 0
-                        while bot_active:
-                            # [임계값 0.60 복원 및 정교화] 게이지가 차오를 때의 스코어 하락(최저 0.63 대역)을 완전히 버티기 위해 
-                            # 홀딩 유지 임계값은 0.60으로 너그럽게 유지하여 중간 캔슬 현상을 완벽히 차단합니다.
-                            if safe_find_image('fishing_hold_A.png', conf=0.60):
-                                miss_count = 0 # 감지 성공 시 즉시 미스 카운터 초기화 (홀딩 유지)
-                            else:
-                                miss_count += 1
+                    # 4. 실시간 리액티브 물리 조작 분기
+                    if best_score >= 0.78:
+                        if best_action == 'HOLD_A':
+                            if current_active_key != 'A':
+                                bprint(f"  > ⌨️ [QTE 홀딩] 'A' 키 계속 길게 누르기 시작 (일치율: {best_score:.3f})")
+                                send_cmd('R') # 기존 키 떼기
+                                send_cmd('A') # 물리 A 키 홀딩
+                                current_active_key = 'A'
                                 
-                            # [초고속 즉시 릴리즈] 제한 임계 횟수를 3회(약 0.12초)로 대폭 좁혀, 
-                            # QTE 문구가 화면에서 소멸하는 순간 딜레이 없이 번개같이 물리 키를 떼도록 조율합니다.
-                            if miss_count >= 3:
-                                break
-                            time.sleep(0.04)
+                        elif best_action == 'HOLD_D':
+                            if current_active_key != 'D':
+                                bprint(f"  > ⌨️ [QTE 홀딩] 'D' 키 계속 길게 누르기 시작 (일치율: {best_score:.3f})")
+                                send_cmd('R') # 기존 키 떼기
+                                send_cmd('D') # 물리 D 키 홀딩
+                                current_active_key = 'D'
+                                
+                        elif best_action == 'TAP_A':
+                            bprint(f"  > ⌨️ [QTE 탭] 'A' 키 탭 입력 (일치율: {best_score:.3f})")
+                            send_cmd('R'); current_active_key = None
+                            send_cmd('A'); time.sleep(0.04); send_cmd('R')
                             
-                        send_cmd('R') # 소멸 확인 시 최종 떼기
-                        missing_ui_count = 0
-                        
-                    elif found_hold_D:
-                        bprint("  > ⌨️ [QTE] 'D' 키 계속 길게 누르기 가동")
-                        send_cmd('D') # 물리 홀딩 시작
-                        
-                        miss_count = 0
-                        while bot_active:
-                            # 홀딩 유지 임계값은 0.60으로 유지하여 중간 캔슬을 방어하고, 소멸 시 3회 미스(0.12초) 내에 즉시 떼도록 정교화합니다.
-                            if safe_find_image('fishing_hold_D.png', conf=0.60):
-                                miss_count = 0
-                            else:
-                                miss_count += 1
-                            if miss_count >= 3:
-                                break
-                            time.sleep(0.04)
-                            
-                        send_cmd('R') # 소멸 확인 시 최종 떼기
-                        missing_ui_count = 0
-                        
-                    elif found_tap_A:
-                        bprint("  > ⌨️ [QTE] 'A' 키 탭 연타 광클 가동")
-                        # 팝업이 화면에서 사라질 때까지 100ms 내외의 간격으로 초고속 물리 클릭을 연사합니다.
-                        while bot_active and safe_find_image('fishing_tap_A.png', conf=0.75):
-                            send_cmd('A'); time.sleep(0.04); send_cmd('R'); time.sleep(0.04)
-                        missing_ui_count = 0
-                        
-                    elif found_tap_D:
-                        bprint("  > ⌨️ [QTE] 'D' 키 탭 연타 광클 가동")
-                        while bot_active and safe_find_image('fishing_tap_D.png', conf=0.75):
-                            send_cmd('D'); time.sleep(0.04); send_cmd('R'); time.sleep(0.04)
-                        missing_ui_count = 0
-                        
+                        elif best_action == 'TAP_D':
+                            bprint(f"  > ⌨️ [QTE 탭] 'D' 키 탭 입력 (일치율: {best_score:.3f})")
+                            send_cmd('R'); current_active_key = None
+                            send_cmd('D'); time.sleep(0.04); send_cmd('R')
                     else:
+                        # 화면 상에서 QTE 프롬프트가 사라진 즉시 키를 해제 (딜레이 0ms)
+                        if current_active_key is not None:
+                            bprint("  > ⌨️ [QTE 해제] 프롬프트 소멸 확인. 키 떼기")
+                            send_cmd('R')
+                            current_active_key = None
+                            
                         # 낚시 인터페이스(fishing_mode) 소멸 여부 실시간 확인 (1.5초 이상 소멸 시 대기 상태 복귀)
                         if not safe_find_image('fishing_mode.png', 0.70):
                             missing_ui_count += 1
                             if missing_ui_count >= 30:
                                 bprint("  > ⚠️ [실패] 낚시 인터페이스 1.5초간 미포착 -> 1단계 복귀")
-                                send_cmd('R')
                                 state = 1
                                 break
                         else:
                             missing_ui_count = 0
                             
-                    time.sleep(0.02) # 루프 탐색 주기 (반응성 확보 및 CPU 균형)
+                    time.sleep(0.02) # 루프 제어 주기 (반응성 확보 및 CPU 균형)
+
+                qte_executor.shutdown(wait=False)
 
             # --- [State 5] 수거 (완결성 검증 로직) ---
             elif state == 5:

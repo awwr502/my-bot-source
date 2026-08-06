@@ -317,10 +317,10 @@ FUSION_CONF = {
     'dev_trait_header.png': 0.85,
     'trait.png': 0.70,
     
-    'item_A1.png': 0.95, 'item_B1.png': 0.95,
-    'item_A2.png': 0.95, 'item_B2.png': 0.95,
-    'item_C1.png': 0.95, 'item_C2.png': 0.95,
-    'item_D1.png': 0.95, 'item_D2.png': 0.95, 'item_D3.png': 0.95,
+    'item_A1.png': 0.90, 'item_B1.png': 0.90,
+    'item_A2.png': 0.90, 'item_B2.png': 0.90,
+    'item_C1.png': 0.90, 'item_C2.png': 0.90,
+    'item_D1.png': 0.90, 'item_D2.png': 0.90, 'item_D3.png': 0.95,
     
     'ability_label.png': 0.92,
     'tier_0.png': 0.72, 'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72,
@@ -3021,7 +3021,7 @@ def fusion_bot_loop():
                                     template = FUSION_CACHE.get(item_name)
                                     if template is None: continue
                                     
-                                    conf = FUSION_CONF.get(item_name, 0.92)
+                                    conf = FUSION_CONF.get(item_name, 0.90)
                                     if item_name in ['item_A2.png', 'item_B2.png', 'item_C2.png', 'item_D2.png', 'item_D3.png']: conf = min(conf, 0.88)
 
                                     res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)

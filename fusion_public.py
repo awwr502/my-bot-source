@@ -317,10 +317,10 @@ FUSION_CONF = {
     'dev_trait_header.png': 0.85,
     'trait.png': 0.70,
     
-    'item_A1.png': 0.95, 'item_B1.png': 0.95,
-    'item_A2.png': 0.95, 'item_B2.png': 0.95,
-    'item_C1.png': 0.95, 'item_C2.png': 0.95,
-    'item_D1.png': 0.95, 'item_D2.png': 0.95, 'item_D3.png': 0.95,
+    'item_A1.png': 0.90, 'item_B1.png': 0.90,
+    'item_A2.png': 0.90, 'item_B2.png': 0.90,
+    'item_C1.png': 0.90, 'item_C2.png': 0.90,
+    'item_D1.png': 0.90, 'item_D2.png': 0.90, 'item_D3.png': 0.95,
     
     'ability_label.png': 0.92,
     'tier_0.png': 0.72, 'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72,
@@ -2970,10 +2970,8 @@ def fusion_bot_loop():
                             bprint("  > [능동 대기] 인벤토리 UI 팝업 초고속 확인 중...")
                             wait_inv_start = time.time()
                             while bot_active and time.time() - wait_inv_start < 3.0:
-                                # [핵심] 능동 대기 시에도 아이템 및 체크마크 ROI 적용 (force_full 제거)
-                                if check_img('item_A1.png', thread_sct) or \
-                                   check_img('item_B1.png', thread_sct) or \
-                                   check_img('check_mark.png', thread_sct):
+                                # [핵심] 새로 추가된 감염물 전체와 체크마크 중 하나라도 검출되면 대기 없이 루프를 즉시 탈출합니다.
+                                if any(check_img(img, thread_sct) for img in ['item_A1.png', 'item_B1.png', 'item_C1.png', 'item_D1.png', 'item_A2.png', 'item_B2.png', 'item_C2.png', 'item_D2.png', 'item_D3.png', 'check_mark.png']):
                                     break
                                 time.sleep(0.05)
 
@@ -3021,7 +3019,7 @@ def fusion_bot_loop():
                                     template = FUSION_CACHE.get(item_name)
                                     if template is None: continue
                                     
-                                    conf = FUSION_CONF.get(item_name, 0.92)
+                                    conf = FUSION_CONF.get(item_name, 0.90)
                                     if item_name in ['item_A2.png', 'item_B2.png', 'item_C2.png', 'item_D2.png', 'item_D3.png']: conf = min(conf, 0.88)
 
                                     res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)

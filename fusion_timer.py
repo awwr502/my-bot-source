@@ -319,6 +319,8 @@ FUSION_CONF = {
     
     'item_A1.png': 0.95, 'item_B1.png': 0.95,
     'item_A2.png': 0.95, 'item_B2.png': 0.95,
+    'item_C1.png': 0.95, 'item_C2.png': 0.95,
+    'item_D1.png': 0.95, 'item_D2.png': 0.95, 'item_D3.png': 0.95,
     
     'ability_label.png': 0.92,
     'tier_0.png': 0.72, 'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72,
@@ -352,7 +354,8 @@ GRAY_IMAGES = [
 # [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
 GRAY_IMAGES.extend([c["img"] for c in MY_CHARACTERS])
 COLOR_IMAGES = [
-    'check_mark.png', 'item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png', 
+    'check_mark.png', 'item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png',
+    'item_C1.png', 'item_C2.png', 'item_D1.png', 'item_D2.png', 'item_D3.png',
     'level_5.png', 'fusion_start.png', 'select_3_3.png', 'dev_trait_header.png',
     'tier_0.png', 'tier_1.png', 'tier_2.png', 'tier_3.png', 'tier_4.png', 'dis_4.png'
 ]
@@ -3012,14 +3015,14 @@ def fusion_bot_loop():
                                     bprint("  > 🧠 [모드 4] 5/5 교차 페어링을 위한 정밀 판독 시작...")
                                 
                                 all_candidates = []
-                                search_items_mode4 = ['item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png']
+                                search_items_mode4 = ['item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png', 'item_C1.png', 'item_C2.png', 'item_D1.png', 'item_D2.png', 'item_D3.png']
                                 
                                 for item_name in search_items_mode4:
                                     template = FUSION_CACHE.get(item_name)
                                     if template is None: continue
                                     
                                     conf = FUSION_CONF.get(item_name, 0.92)
-                                    if item_name in ['item_A2.png', 'item_B2.png']: conf = min(conf, 0.88)
+                                    if item_name in ['item_A2.png', 'item_B2.png', 'item_C2.png', 'item_D2.png', 'item_D3.png']: conf = min(conf, 0.88)
 
                                     res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
                                     loc = np.where(res >= conf)

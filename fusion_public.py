@@ -20,6 +20,7 @@ import winsound
 import math
 import screen_brightness_control as sbc
 import hashlib
+import concurrent.futures
 
 # [네트워크 고속화] 매번 새로운 연결을 맺는 requests.post 대신 열려있는 통로(Session)를 사용합니다.
 # 이를 통해 DNS 조회 및 SSL 핸드쉐이크 시간을 0.1초 미만으로 단축합니다.
@@ -137,10 +138,14 @@ original_sleep = time.sleep
 bot_active = False
 bot_mode = 1 # 1: 단일 타이머, 2: 멀티 루프, 3: 자동 융합, 4: 5/5 복사, 5: 분별 모드
 original_brightness = [100] # 모니터 원래 밝기 복구용 저장소 (다중 모니터 대응 리스트)
+victory_active = False
+victory_mode = 2
+pending_victory_mode = False # 융합 완료 후 승리모드 전환을 위한 플래그
 enable_dimming = False # [수정] 기본값을 '꺼짐(False)'으로 변경했습니다. 단축키(-)를 눌러야 활성화됩니다.
 is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 char_thread_active = False # 수동 캐릭터 변경 스레드 제어 플래그
 char_inventory_memory = {} # 캐릭터별 인벤토리 탐색 위치 기억용 딕셔너리
+char_sub_modes = {} # 캐릭터별 특성 복사 모드 상태 기억용 (NORMAL / RECOVERY)
 ENABLE_POPUP_MAIN_CHECK = True # 자정 팝업 감지 기능 활성화 상태 변수
 current_logged_in_char = "5.png" # 현재 접속 중인 캐릭터 추적 변수 (초기값)
 
@@ -155,36 +160,22 @@ def restore_monitors_brightness(bright_data):
 
 # =====================================================================
 # 👑 [캐릭터 마스터 컨트롤러] 👑
-# 이제 로컬 폴더의 'my_characters.json' 파일을 통해 캐릭터를 관리합니다.
-# 파일이 없다면 기본 배열을 바탕으로 자동 생성됩니다.
+# 이곳에 캐릭터를 추가/수정/삭제하면 봇 전체의 모든 로직(단축키, 순서 등)이 100% 자동 적용됩니다!
+#  - img: 캡처해둔 파일명 (1.png, 5.png 등)
+#  - name: 로그에 출력될 예쁜 이름
+#  - hotkey: 수동 접속 단축키 (F5 ~ F11 등 자유 지정)
+#  - is_anchor: 타이머 보상을 수령할 앵커 캐릭터인지 (True는 파티에 딱 1명만!)
+#  - use_fusion: 모드 3, 4 (자동 융합) 사이클에 포함시킬지 여부
 # =====================================================================
-MY_CHARACTERS = []
-characters_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "my_characters.json")
-
-def load_characters_config():
-    global MY_CHARACTERS
-    try:
-        if os.path.exists(characters_config_path):
-            with open(characters_config_path, "r", encoding="utf-8") as f:
-                MY_CHARACTERS = json.load(f)
-        else:
-            default_chars = [
-                {"img": "13.png", "name": "캐릭1",  "hotkey": "F5", "is_anchor": False, "use_fusion": False},
-                {"img": "5.png",  "name": "캐릭2", "hotkey": "F6",  "is_anchor": True,  "use_fusion": True},
-                {"img": "8.png",  "name": "캐릭3", "hotkey": "F7",  "is_anchor": False, "use_fusion": True},
-                {"img": "9.png",  "name": "캐릭4", "hotkey": "F8",  "is_anchor": False, "use_fusion": True},
-                {"img": "10.png", "name": "캐릭5", "hotkey": "F9",  "is_anchor": False, "use_fusion": True},
-                {"img": "11.png", "name": "캐릭6", "hotkey": "F10", "is_anchor": False, "use_fusion": True},
-                {"img": "12.png", "name": "캐릭7", "hotkey": "F11", "is_anchor": False, "use_fusion": True}
-            ]
-            with open(characters_config_path, "w", encoding="utf-8") as f:
-                json.dump(default_chars, f, indent=4, ensure_ascii=False)
-            MY_CHARACTERS = default_chars
-    except Exception as e:
-        bprint(f"!!! [오류] my_characters.json 로드 실패: {e}")
-        MY_CHARACTERS = []
-
-load_characters_config()
+MY_CHARACTERS = [
+    {"img": "13.png", "name": "베릭핑크",  "hotkey": "F5", "is_anchor": False, "use_fusion": False},
+    {"img": "5.png",  "name": "베릭산성1", "hotkey": "F6",  "is_anchor": True,  "use_fusion": True},
+    {"img": "8.png",  "name": "베릭산성2", "hotkey": "F7",  "is_anchor": False, "use_fusion": True},
+    {"img": "9.png",  "name": "베릭산성3", "hotkey": "F8",  "is_anchor": False, "use_fusion": True},
+    {"img": "10.png", "name": "베릭유전1", "hotkey": "F9",  "is_anchor": False, "use_fusion": True},
+    {"img": "11.png", "name": "베릭유전2", "hotkey": "F10", "is_anchor": False, "use_fusion": True},
+    {"img": "12.png", "name": "베릭유전3", "hotkey": "F11", "is_anchor": False, "use_fusion": True}
+]
 
 # [1/5 자동화] 마스터 배열을 바탕으로 CHAR_NAMES 자동 생성
 CHAR_NAMES = {c["img"]: c["name"] for c in MY_CHARACTERS}
@@ -214,16 +205,15 @@ def toggle_dimming_setting():
             except: pass
 
 def jitter_sleep(seconds):
-    global bot_active, char_thread_active
-    # [핵심] 수동 캐릭터 변경 스레드(char_thread_active)가 돌아가고 있을 때는 에러를 발생시키지 않고 무사통과시킵니다!
-    if not bot_active and not char_thread_active: raise BotStopException() 
+    global bot_active, char_thread_active, victory_active
+    # bot_active, char_thread_active, victory_active 중 하나라도 켜져 있으면 대기 허용
+    if not bot_active and not char_thread_active and not victory_active: raise BotStopException() 
     jitter = random.uniform(-0.05, 0.05)
     final_time = max(0, seconds + jitter)
-    was_active_at_start = bot_active
     start_t = time.time()
     
     while time.time() - start_t < final_time:
-        if not bot_active and not char_thread_active:
+        if not bot_active and not char_thread_active and not victory_active:
             raise BotStopException()
         original_sleep(max(0, min(0.05, final_time - (time.time() - start_t))))
 
@@ -265,9 +255,9 @@ except Exception as e:
     sys.exit(1)
 
 def send_cmd(cmd, dx=None, dy=None):
-    global bot_active, char_thread_active
-    # 융합 매크로(bot_active)가 정지 상태여도, 수동 캐릭터 변경 스레드(char_thread_active)가 켜져 있다면 예외적으로 아두이노 명령을 허용합니다!
-    if not bot_active and not char_thread_active and cmd not in ['U', 'R']:
+    global bot_active, char_thread_active, victory_active
+    # bot_active, char_thread_active, 혹은 victory_active 중 하나라도 켜져 있다면 아두이노 명령을 허용합니다.
+    if not bot_active and not char_thread_active and not victory_active and cmd not in ['U', 'R']:
         raise BotStopException()
     
     if dx is not None and dy is not None:
@@ -286,28 +276,30 @@ def play_melody():
         original_sleep(0.3)
 
 def is_truly_tier_1(roi, x, y, h):
-    # [수정] 중앙(center_y)만 검사하면 3번 숫자의 패인 공간(빈틈)을 만나 1로 오탐할 수 있습니다.
-    # 전체 높이(y 부터 y+h 까지)를 모두 스캔하여 왼쪽에 픽셀이 하나라도 있으면 즉시 차단합니다!
+    # 모드 3, 4에서 사용하던 수평 검사(좌측 18픽셀 공백 검사) 로직을 사용합니다.
+    # 아래쪽 소개글("전기를 공급한다" 등)을 침범하여 오탐지되는 것을 방지하기 위해,
+    # 수직 검사 범위만 최상단에서 11픽셀 높이(y ~ y + 11)로 가두어 검사합니다.
     probe_x_start = max(0, x - 18)
     probe_x_end = max(0, x - 3)
+    
     probe_y_start = max(0, y)
-    probe_y_end = min(roi.shape[0], y + h)
+    probe_y_end = min(roi.shape[0], y + 11)
 
     if probe_x_start >= roi.shape[1]: return True
 
     sample_area = roi[probe_y_start:probe_y_end, probe_x_start:probe_x_end]
     if sample_area.size == 0: return True
 
-    # 숫자 몸통(밝은 픽셀)이 왼쪽에 감지되면 1이 아닙니다. 허용치를 40에서 50으로 살짝 조절하여 노이즈 대비.
+    # 숫자 몸통(밝은 픽셀)이 왼쪽에 감지되면 1이 아닙니다.
     if np.max(sample_area) > 50: 
         return False 
-    return True 
-
+    return True
+    
 # === [AI 비전 엔진 및 융합 환경 설정] ===
 FUSION_CONF = {
     'stop_btn.png': 0.85,
     '1.png': 0.75, '2.png': 0.75, '3.png': 0.75,
-    '6.png': 0.75, '7.png': 0.75, '14.png': 0.70,
+    '6.png': 0.75, '7.png': 0.75, '14.png': 0.65,
     'check_mark.png': 0.85,
     'get_reward.png': 0.85,
     'select_2_2.png': 0.85,
@@ -316,18 +308,33 @@ FUSION_CONF = {
     'level_5.png': 0.75,
     'fusion_material.png': 0.85,
     'select_0_2.png': 0.85,
+    'select_0_3.png': 0.85,
+    'select_3_3.png': 0.85,
     'popup_main.png': 0.85,
     'popup_char.png': 0.85, 
     'inv_title.png': 0.85,
+    'dev_list_btn.png': 0.85,
+    'dev_trait_header.png': 0.85,
     'trait.png': 0.70,
     
     'item_A1.png': 0.95, 'item_B1.png': 0.95,
     'item_A2.png': 0.95, 'item_B2.png': 0.95,
+    'item_C1.png': 0.95, 'item_C2.png': 0.95,
+    'item_D1.png': 0.95, 'item_D2.png': 0.95, 'item_D3.png': 0.95,
     
     'ability_label.png': 0.92,
-    'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72,
+    'tier_0.png': 0.72, 'tier_1.png': 0.72, 'tier_2.png': 0.72, 'tier_3.png': 0.72, 'tier_4.png': 0.72,
     'exit_notice.png': 0.85,
-    'bug_time.png': 0.85
+    'bug_time.png': 0.85,
+    'dis_4.png': 0.85,
+    'stop_pop.png': 0.85,
+    'hunt_pop.png': 0.85,
+    'empty_checkbox.png': 0.90,
+    'butterfly.png': 0.85,
+    'no_trait.png': 0.80,
+    'parent_title.png': 0.85,
+    'talent_header.png': 0.85,
+    'feedback_trait.png': 0.85
 }
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
@@ -338,17 +345,19 @@ FUSION_CACHE = {}
 GRAY_IMAGES = [
     'stop_btn.png', '1.png', '2.png', '3.png', 
     '6.png', '7.png', '14.png',
-    'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png',
-    'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png',
-    'exit_notice.png', 'bug_time.png'
+    'get_reward.png', 'select_2_2.png', 'chance.png', 'fusion_material.png', 'select_0_2.png', 'select_0_3.png',
+    'popup_main.png', 'popup_char.png', 'inv_title.png', 'ability_label.png', 'trait.png', 'dev_list_btn.png',
+    'exit_notice.png', 'bug_time.png', 'stop_pop.png', 'hunt_pop.png', 'empty_checkbox.png', 'butterfly.png', 
+    'no_trait.png', 'parent_title.png', 'talent_header.png', 'feedback_trait.png'
 ]
 
 # [3/5 자동화] 마스터 배열 캐릭터들을 이미지 스캔 풀(GRAY_IMAGES)에 자동 등록
 GRAY_IMAGES.extend([c["img"] for c in MY_CHARACTERS])
 COLOR_IMAGES = [
-    'check_mark.png', 'item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png', 
-    'level_5.png', 'fusion_start.png',
-    'tier_1.png', 'tier_2.png', 'tier_3.png', 'tier_4.png'
+    'check_mark.png', 'item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png',
+    'item_C1.png', 'item_C2.png', 'item_D1.png', 'item_D2.png', 'item_D3.png',
+    'level_5.png', 'fusion_start.png', 'select_3_3.png', 'dev_trait_header.png',
+    'tier_0.png', 'tier_1.png', 'tier_2.png', 'tier_3.png', 'tier_4.png', 'dis_4.png'
 ]
 target_images = GRAY_IMAGES + COLOR_IMAGES
 
@@ -399,6 +408,16 @@ GRAY_IMAGES.extend(dynamic_traits)
 for img in dynamic_traits:
     FUSION_CONF[img] = 0.92
 
+# 저장 폴더 내의 특성 파일명들을 동적으로 스캔하여 가장 높은 파일 번호를 자동 검출합니다.
+trait_numbers_found = []
+for f in dynamic_traits:
+    parts = f.split('_')
+    if len(parts) > 1:
+        num_part = parts[1].split('.')[0]
+        if num_part.isdigit():
+            trait_numbers_found.append(int(num_part))
+MAX_TRAIT_NUM = max(trait_numbers_found) if trait_numbers_found else 7
+
 # 2. 패치가 완료된 로컬 폴더에서 RAM으로 일괄 적재 (캐릭터 사진 포함)
 for img_name in target_images:
     full_path = os.path.join(base_dir, img_name)
@@ -415,6 +434,9 @@ for img_name in target_images:
     if img_array is not None:
         if img_name in GRAY_IMAGES:
             FUSION_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+            # [모드 6 전용 컬러 복사] 가치 특성 7종은 모드 5 등 타 모드와의 격리를 위해 모드 6 전용 컬러 버전을 "color_" 접두사로 분리 보관합니다.
+            if img_name.startswith('trait_') and img_name.endswith('.png'):
+                FUSION_CACHE[f"color_{img_name}"] = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         else:
             FUSION_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
@@ -689,9 +711,15 @@ def check_fusion_afk(thread_sct):
     return False
 
 def toggle_stop():
-    global bot_active, original_brightness, is_dimmed, char_thread_active
+    global bot_active, original_brightness, is_dimmed, char_thread_active, victory_active
     char_thread_active = False # 수동 캐릭터 변경 스레드도 함께 정지
-    if bot_active:
+    
+    # 정지 명령을 내리기 직전 매크로 중 하나라도 켜져 있었는지 상태 기억
+    was_running = bot_active or victory_active
+    
+    victory_active = False     # 승리코인 자동 루프도 정지 상태로 전환하도록 추가
+    
+    if was_running:
         print() # [복구] 강제 줄바꿈을 추가하여 \r 동적 타이머 라인과 텍스트가 겹치는 현상을 원천 차단합니다.
         bot_active = False
         bprint("\n=============================================")
@@ -703,6 +731,244 @@ def toggle_stop():
                 is_dimmed = False
                 bprint(f"  > ☀️ [화면 복구] 모니터 밝기를 원래대로({original_brightness}%) 되돌렸습니다.")
             except: pass
+
+def toggle_victory_start(mode=2):
+    global bot_active, victory_active, victory_mode
+    if bot_active: toggle_stop()
+    victory_active = True
+    victory_mode = mode
+    bprint("\n=============================================")
+    bprint(f"🟡 [승리코인 모드 {mode} 자동 연계 가동 시작]")
+    bprint("=============================================")
+
+def victory_coin_bot_loop():
+    global victory_active, victory_mode
+    state = 1
+    
+    def vprint(msg):
+        current_time = datetime.now().strftime("%H:%M:%S")
+        print(f"[{current_time}]{msg}")
+
+    # [이름 변경 적용] v_ 접두사 추가
+    VICTORY_CONF = {'v_1.png': 0.75, 'v_2.png': 0.75, 'v_3.png': 0.75, 'v_4.png': 0.70, 'v_5.png': 0.75, 'v_6.png': 0.70, 'v_7.png': 0.70, 'v_8.png': 0.70, 'v_9.png': 0.75}
+    VICTORY_CACHE = {}
+    
+    # [경로 변경] 융합봇의 폴더인 base_dir(fusion_imgs)에서 직접 읽어옵니다.
+    target_images = ['v_1.png', 'v_2.png', 'v_3.png', 'v_4.png', 'v_5.png', 'v_6.png', 'v_7.png', 'v_8.png', 'v_9.png']
+    
+    # ------------------ [보완 및 디버깅 로그 추가] ------------------
+    vprint("  > 🏆 [승리코인] 이미지 사전 적재 및 정밀 검증을 시작합니다...")
+    loaded_count = 0
+    for img_name in target_images:
+        full_path = os.path.join(base_dir, img_name)
+        if os.path.exists(full_path):
+            img_array = np.fromfile(full_path, np.uint8)
+            # [수정] 원본 fishing 봇과 동일하게 그레이스케일(IMREAD_GRAYSCALE)로 디코딩하여 인식률을 높입니다.
+            VICTORY_CACHE[img_name] = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+            if VICTORY_CACHE[img_name] is not None:
+                loaded_count += 1
+            else:
+                vprint(f"  > ⚠️ [경고] '{img_name}' 디코딩 실패 (파일이 손상되었을 수 있습니다)")
+        else:
+            # 파일이 진짜 없는 경우 화면에 파일 경로와 함께 에러 문구를 띄워줍니다.
+            vprint(f"  > ❌ [치명적 오류] '{img_name}' 파일이 존재하지 않습니다!")
+            vprint(f"    └ 예상 경로: {full_path}")
+            
+    vprint(f"  > 🏆 [승리코인] 총 {len(target_images)}개 중 {loaded_count}개 이미지 로딩 완료.")
+    # ----------------------------------------------------------------
+
+    def v_check_img(img_name, thread_sct):
+        global victory_active
+        if not victory_active or keyboard.is_pressed('['): 
+            victory_active = False # 단축키 수신 시 승리모드 플래그 꺼줌
+            raise BotStopException() 
+        template = VICTORY_CACHE.get(img_name)
+        if template is None: return False
+        
+        # [수정] 원본 fishing 봇과 완전히 동일하게 흑백(COLOR_BGRA2GRAY) 화면 캡처 후 매칭을 진행합니다.
+        sct_img = thread_sct.grab(thread_sct.monitors[1])
+        screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+        res = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(res)
+        return max_val >= VICTORY_CONF.get(img_name, 0.75)
+
+    def v_wait_vanish(img_name, thread_sct):
+        global victory_active
+        vprint(f"  > [대기] {img_name} 사라짐 대기 중...")
+        vanish_count = 0
+        while victory_active:
+            if not victory_active or keyboard.is_pressed('['): 
+                victory_active = False # 단축키 수신 시 승리모드 플래그 꺼줌
+                raise BotStopException()
+            if v_check_img(img_name, thread_sct): vanish_count = 0
+            else: vanish_count += 1
+            if vanish_count >= 5: break
+            time.sleep(0.05)
+
+    with mss.mss() as thread_sct:
+        while True:
+            try:
+                if not victory_active:
+                    original_sleep(0.1) # [수정] 커스텀 sleep 대신 순수 파이썬 대기를 사용하여 무한 예외 루프를 영구 차단합니다.
+                    state = 1
+                    continue
+                
+                if state == 1:
+                    vprint("  > [승리코인] 1단계: v_1 / v_2 탐색 중...")
+                    found = None
+                    for _ in range(11):
+                        if v_check_img('v_1.png', thread_sct): found = 'v_1.png'; break
+                        if v_check_img('v_2.png', thread_sct): found = 'v_2.png'; break
+                        time.sleep(0.05)
+                        
+                    if found:
+                        vprint(f"  > [능동 대기] {found} 사라질 때까지 F 키 반복 입력 시퀀스 작동 (제한: 6초)...")
+                        start_t = time.time()
+                        last_press_t = 0.0
+                        success = False
+                        
+                        while time.time() - start_t < 6.0 and victory_active:
+                            now = time.time()
+                            if now - last_press_t > 0.4:
+                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                last_press_t = now
+                            
+                            # 3회 연속 미검출 시 완전히 사라진 것으로 조기 판정
+                            vanish_count = 0
+                            for _ in range(3):
+                                if not v_check_img(found, thread_sct):
+                                    vanish_count += 1
+                                else:
+                                    break
+                                time.sleep(0.03)
+                                
+                            if vanish_count >= 3:
+                                success = True
+                                break
+                            time.sleep(0.05)
+                            
+                        if success:
+                            vprint(f"  > ✅ [완료] {found} 소멸 확인!")
+                            state = 2
+                        else:
+                            vprint("  > ⚠️ [진입 실패] F 상호작용 씹힘 감지 (유저 차단 등). 1단계로 되돌아가 재시도합니다.")
+                            state = 1
+                    else:
+                        vprint("  > [인식 실패] v_1.png / v_2.png 미발견. F 누르고 재탐색합니다.")
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        
+                elif state == 2:
+                    vprint("  > [승리코인] 2단계: v_3 탐색 중...")
+                    found = False
+                    for _ in range(11):
+                        if v_check_img('v_3.png', thread_sct): found = True; break
+                        time.sleep(0.05)
+                        
+                    if found:
+                        vprint("  > [능동 대기] v_3.png 사라질 때까지 F 키 반복 입력 시퀀스 작동 (제한: 6초)...")
+                        start_t = time.time()
+                        last_press_t = 0.0
+                        success = False
+                        
+                        while time.time() - start_t < 6.0 and victory_active:
+                            now = time.time()
+                            if now - last_press_t > 0.4:
+                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                last_press_t = now
+                            
+                            # 3회 연속 미검출 시 완전히 사라진 것으로 조기 판정
+                            vanish_count = 0
+                            for _ in range(3):
+                                if not v_check_img('v_3.png', thread_sct):
+                                    vanish_count += 1
+                                else:
+                                    break
+                                time.sleep(0.03)
+                                
+                            if vanish_count >= 3:
+                                success = True
+                                break
+                            time.sleep(0.05)
+                            
+                        if success:
+                            vprint("  > ✅ [완료] v_3.png 소멸 확인!")
+                            state = 3
+                        else:
+                            vprint("  > ⚠️ [매치 실패] v_3.png 소멸 적용 실패. 안전을 위해 1단계로 롤백합니다.")
+                            state = 1
+                    else:
+                        vprint("  > ❌ [인식 실패] v_3.png 미발견! 1단계(F 진입단계)로 롤백하여 다시 F 입력을 수행합니다.")
+                        state = 1
+                    
+                elif state == 3:
+                    if victory_mode == 2:
+                        vprint("  > [승리코인] 3단계: 2초 대기 후 v_1/v_9 탐색 (모드 2)")
+                        time.sleep(2.0)
+                        found_1 = False
+                        while victory_active:
+                            if v_check_img('v_1.png', thread_sct): found_1 = True; break
+                            time.sleep(0.1)
+                        if found_1:
+                            found_9 = False
+                            for _ in range(11):
+                                if v_check_img('v_9.png', thread_sct): found_9 = True; break
+                                time.sleep(0.05)
+                            if found_9:
+                                send_cmd('W'); time.sleep(3.0); send_cmd('R')
+                    state = 4
+                    
+                elif state == 4:
+                    vprint("  > [승리코인] 4단계: 보스 처치 대기 중...")
+                    target_success = 'v_4.png' if victory_mode == 1 else 'v_6.png'
+                    found_img = None
+                    while victory_active:
+                        if v_check_img(target_success, thread_sct): found_img = target_success; break
+                        if v_check_img('v_8.png', thread_sct): found_img = 'v_8.png'; break
+                        time.sleep(0.05) 
+                    if found_img == 'v_4.png':
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        v_wait_vanish('v_4.png', thread_sct); state = 5
+                    elif found_img == 'v_6.png':
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        v_wait_vanish('v_6.png', thread_sct); state = 8
+                    elif found_img == 'v_8.png': state = 7
+                        
+                elif state == 5:
+                    time.sleep(0.05); state = 6
+                elif state == 6:
+                    found = False
+                    for _ in range(11):
+                        if v_check_img('v_5.png', thread_sct): found = True; break
+                        time.sleep(0.05)
+                    if found:
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        v_wait_vanish('v_5.png', thread_sct)
+                    state = 7
+                elif state == 7:
+                    found = False
+                    for _ in range(11):
+                        if v_check_img('v_6.png', thread_sct): found = True; break
+                        time.sleep(0.05)
+                    if found:
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        v_wait_vanish('v_6.png', thread_sct)
+                    state = 8
+                elif state == 8:
+                    found = False
+                    for _ in range(11):
+                        if v_check_img('v_7.png', thread_sct): found = True; break
+                        time.sleep(0.05)
+                    if found:
+                        v_wait_vanish('v_7.png', thread_sct); time.sleep(0.05); state = 1
+                    else:
+                        send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                        
+            except BotStopException:
+                try:
+                    arduino.write('U'.encode()); arduino.flush()
+                    arduino.write('R'.encode()); arduino.flush()
+                except: pass
+                continue
 
 def toggle_start(mode=1):
     global bot_active, bot_mode, original_brightness, enable_dimming, is_dimmed
@@ -739,6 +1005,8 @@ def toggle_start(mode=1):
         bprint("🔥 [모드 4: 5/5 복사 모드 시작] 단축키(<) 입력 감지")
     elif mode == 5:
         bprint("🔍 [모드 5: 감염물 분별 모드 시작] 단축키(;) 입력 감지")
+    elif mode == 6:
+        bprint("🔵 [모드 6: 재료 복사 모드 시작] 단축키(>) 입력 감지")
     bprint("=============================================")
     
     # 매크로 새로 시작 시 캐릭터 인벤토리 탐색 기억 초기화
@@ -750,6 +1018,8 @@ def toggle_start(mode=1):
 # === [메인 융합 봇 루프] ===
 def fusion_bot_loop():
     global bot_active, bot_mode, current_logged_in_char
+    global pending_victory_mode 
+    
     state = 0
     fusion_end_time = 0.0
     char_index = 0
@@ -780,7 +1050,7 @@ def fusion_bot_loop():
                     continue
                 
                 # [4/5 자동화] 중앙 관리 배열(MY_CHARACTERS)에서 동적으로 교체 순서와 개수를 뽑아냅니다.
-                if bot_mode in [3, 4]:
+                if bot_mode in [3, 4, 6]:
                     # 융합 모드: 앵커가 아닌 서브 캐릭들을 먼저 배치하고, 앵커를 항상 배열의 [마지막]에 자동 배치!
                     sub_chars = [c["img"] for c in MY_CHARACTERS if c["use_fusion"] and not c["is_anchor"]]
                     anchor_chars = [c["img"] for c in MY_CHARACTERS if c["use_fusion"] and c["is_anchor"]]
@@ -961,7 +1231,15 @@ def fusion_bot_loop():
                                     bprint(f"  > 🛑 [보호] 5레벨 감염물. (인식률: {max_seen_5:.2f} / 시간: {lvl5_render_time:.2f}초 / 모드: {time_mode_str})")
                                 elif has_trait:
                                     identified_trait_name = "미등록 특성"
-                                    active_trait_files = [k for k in FUSION_CACHE.keys() if k.startswith('trait_') and FUSION_CACHE[k] is not None]
+                                    # 모드 5 한정: trait_1.png부터 trait_6.png까지만 수집하여 탐색 대상을 철저히 조율합니다.
+                                    active_trait_files = []
+                                    for k in FUSION_CACHE.keys():
+                                        if k.startswith('trait_') and k.endswith('.png'):
+                                            parts = k.split('_')
+                                            if len(parts) > 1:
+                                                num_str = parts[1].split('.')[0]
+                                                if num_str.isdigit() and 1 <= int(num_str) <= 6:
+                                                    active_trait_files.append(k)
                                     
                                     best_score = 0.0
                                     temp_scores = [] # 점수 계산을 위한 임시 리스트
@@ -1015,11 +1293,13 @@ def fusion_bot_loop():
                         run_discrimination_scan("1차")
                         if not bot_active: continue
                         
-                        bprint("  > [초점 확보] F키(버리기) 입력 및 절대좌표 클릭 진행...")
+                        bprint("  > [초점 확보] dis_4.png 탐색 및 클릭 진행 (F키 버그 우회)...")
                         
-                        # [핵심 수정 1] 판별 완료 직후 클라이언트 렉을 0.3초간 기다린 뒤, F키를 0.2초간 길고 확실하게 누릅니다.
                         time.sleep(0.2)
-                        send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        # send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        if check_img('dis_4.png', thread_sct):
+                            cx, cy = FUSION_ROI['dis_4.png']['last_pos']
+                            pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                         time.sleep(0.2)
                         
                         # [핵심 수정 2] 오류가 잦은 픽셀 탐색을 폐기하고, 빨간 박스 하단 여백의 가장 안전한 '절대 좌표'를 강제 클릭합니다.
@@ -1069,9 +1349,12 @@ def fusion_bot_loop():
                         run_discrimination_scan("2차")
                         if not bot_active: continue
                         
-                        bprint("  > [초점 확보] 2차 판별 후 F키(버리기) 입력 및 절대좌표 클릭 진행...")
+                        bprint("  > [초점 확보] 2차 판별 후 dis_4.png 탐색 및 클릭 진행 (F키 버그 우회)...")
                         time.sleep(0.2)
-                        send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        # send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        if check_img('dis_4.png', thread_sct):
+                            cx, cy = FUSION_ROI['dis_4.png']['last_pos']
+                            pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                         time.sleep(0.2)
                         
                         target_x, target_y = 488, 570
@@ -1087,7 +1370,10 @@ def fusion_bot_loop():
                         run_discrimination_scan("3차")
                         # 3차 판별 후 최종 정리 및 창 닫기
                         time.sleep(0.2)
-                        send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        # send_cmd('F'); time.sleep(0.2); send_cmd('R')
+                        if check_img('dis_4.png', thread_sct):
+                            cx, cy = FUSION_ROI['dis_4.png']['last_pos']
+                            pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
                         time.sleep(0.2)
                         
                         bprint("  > [포커스 복구]")
@@ -1098,15 +1384,13 @@ def fusion_bot_loop():
                         bprint("  > [초기화] ESC 2회 입력하여 모든 창을 닫고 안전하게 복귀합니다.")
                         send_cmd('E'); time.sleep(0.2); send_cmd('R')
                         time.sleep(0.2)
-                        send_cmd('E'); time.sleep(0.2); send_cmd('R')
-                        time.sleep(0.2)
 
                         bprint("  > 🛑 [종료] 감염물 분별 처리 완료."); toggle_stop(); continue
                 
                 # --- [State 0] 타이머 대기 및 카운트다운 ---
                 if state == 0:
-                    if bot_mode in [3, 4]:
-                        mode_name = "모드 3(깡 복사)" if bot_mode == 3 else "모드 4(5/5 복사)"
+                    if bot_mode in [3, 4, 6]:
+                        mode_name = "모드 3(깡 복사)" if bot_mode == 3 else ("모드 4(5/5 복사)" if bot_mode == 4 else "모드 6(재료 복사)")
                         anchor_img = char_images[anchor_idx] if loop_count > 0 else '5.png'
                         anchor_name = CHAR_NAMES.get(anchor_img, '앵커 캐릭')
                         bprint(f"✨ [{mode_name} 시작] 앵커({anchor_name}) 융합 보상 수령 및 세팅(State 7) 진입.")
@@ -1186,8 +1470,8 @@ def fusion_bot_loop():
                                 fusion_end_time = time.time() + 300.0 
                                 state = 1
                             
-                            elif bot_mode in [3, 4]:
-                                mode_name = "모드 3" if bot_mode == 3 else "모드 4"
+                            elif bot_mode in [3, 4, 6]:
+                                mode_name = "모드 3" if bot_mode == 3 else ("모드 4" if bot_mode == 4 else "모드 6(재료 복사)")
                                 bprint(f"⏳ [{mode_name}] 백그라운드 5분 타이머 가동! 즉시 지능형 자동 교체 진입.")
                                 fusion_end_time = time.time() + 300.0 
                                 state = 1
@@ -1316,7 +1600,12 @@ def fusion_bot_loop():
 
                 # --- [State 3] 캐릭터 지정 및 F 입력 ---
                 elif state == 3:
-                    target_char = char_images[char_index]
+                    # 승리 연계용 본캐 접속 시에는 강제로 13.png를 타겟으로 지정합니다.
+                    if pending_victory_mode:
+                        target_char = "13.png"
+                    else:
+                        target_char = char_images[char_index]
+                        
                     c_name = CHAR_NAMES.get(target_char, target_char)
                     bprint(f"  > [State 3] G 1회 입력 후 '{c_name}' 탐색 (진행: {char_index+1}/{loop_count})")
                     
@@ -1365,6 +1654,14 @@ def fusion_bot_loop():
                             wait_vanish('6.png', thread_sct)
                             bprint("  > [성공] 6.png 소멸 완료. 5단계 이동.")
                             current_logged_in_char = char_images[char_index]
+                            
+                            # 중복된 global 선언 줄을 지우고 깔끔하게 연계 플래그만 확인합니다.
+                            if pending_victory_mode:
+                                pending_victory_mode = False
+                                bprint("\n🏆 [융합+승리 연계] 본캐 접속 완료! 승리코인 모드 2를 자동으로 실행합니다.")
+                                toggle_victory_start(2)
+                                raise BotStopException()
+                                
                             state = 5
                             break
                         else:
@@ -1441,7 +1738,7 @@ def fusion_bot_loop():
                                                 bprint("  > ⚠️ [재시도] 2초 대기 초과. F키를 다시 입력합니다.")
                                         break
                                     else:
-                                        if bot_mode in [3, 4]:
+                                        if bot_mode in [3, 4, 6]:
                                             print("\r  > 14.png 탐색 중... (마우스 이동)\033[K", end="", flush=True)
                                             pyautogui.moveTo(CENTER_X, CENTER_Y)
                                             time.sleep(0.01)
@@ -1450,7 +1747,7 @@ def fusion_bot_loop():
                                         time.sleep(0.02)
                                 print() # 줄바꿈 복구
 
-                            if bot_mode in [3, 4]:
+                            if bot_mode in [3, 4, 6]:
                                 if go_to_state_6_next:
                                     go_to_state_6_next = False 
                                     c_name = CHAR_NAMES.get(char_images[char_index], char_images[char_index])
@@ -1489,8 +1786,8 @@ def fusion_bot_loop():
                             play_melody()
                             original_sleep(0.5)
                             
-                            if bot_mode in [3, 4]:
-                                mode_name = "모드 3" if bot_mode == 3 else "모드 4"
+                            if bot_mode in [3, 4, 6]:
+                                mode_name = "모드 3" if bot_mode == 3 else ("모드 4" if bot_mode == 4 else "모드 6")
                                 c_name = CHAR_NAMES.get(char_images[char_index], char_images[char_index])
                                 bprint(f"  > [{mode_name}] 앵커 캐릭 '{c_name}' 보상 수령으로 이동합니다.")
                                 state = 7
@@ -1515,6 +1812,8 @@ def fusion_bot_loop():
                     template_check = FUSION_CACHE.get('check_mark.png') # 변수 재선언
                     skip_setup = False 
                     is_machine_empty = False 
+                    skip_current_char = False
+                    reward_collected = False
 
                     while bot_active:
                         if not bot_active: raise BotStopException()
@@ -1593,31 +1892,192 @@ def fusion_bot_loop():
                         
                         if reward_found:
                             print() # 줄바꿈 복구
-                            bprint("  > [보상 있음] '획득' 창 확인 완료! F를 입력합니다.")
+                            bprint("  > [보상 있음] '획득' 창 확인 완료!")
                             
-                            while bot_active:
-                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
-                                bprint("  > [대기] get_reward.png 초고속 소멸 검증 중...")
+                            # [모드 6 결과 판독: F 입력 전 즉시 수령을 유예하고 특성 상세창을 엽니다]
+                            if bot_mode == 6:
+                                char_key = char_images[char_index]
+                                bprint("  > [모드 6 결과 판독] 보상 수령 전 특성 복사 여부를 먼저 정밀 판독합니다.")
                                 
-                                vanish_count = 0
-                                wait_start = time.time()
-                                while time.time() - wait_start < 5.0 and bot_active:
-                                    # [초가속 핵심 1] force_full=True 제거! 메모리에 저장된 좁은 구역(ROI)만 0.001초 만에 스캔합니다.
-                                    if check_img('get_reward.png', thread_sct):
-                                        vanish_count = 0
-                                    else:
-                                        vanish_count += 1
+                                clicked_list_btn = False
+                                while bot_active:
+                                    if check_img('dev_list_btn.png', thread_sct):
+                                        cx, cy = FUSION_ROI['dev_list_btn.png']['last_pos']
+                                        pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
+                                        bprint("  > 메뉴 버튼(dev_list_btn.png) 클릭 성공! 2초간 특성 탭(dev_trait_header.png) 검출 대기...")
                                         
-                                    # [초가속 핵심 2] 20회 -> 5회 연속 안 보이면 즉시 소멸 확정 (약 0.05초 소요)
-                                    if vanish_count >= 5:
-                                        break
-                                    time.sleep(0.01)
+                                        header_found = False
+                                        wait_h = time.time()
+                                        while time.time() - wait_h < 2.0 and bot_active:
+                                            if check_img('dev_trait_header.png', thread_sct):
+                                                header_found = True
+                                                break
+                                            time.sleep(0.05)
+                                            
+                                        if header_found:
+                                            clicked_list_btn = True
+                                            break
+                                        else:
+                                            bprint("  > ⚠️ [타임아웃] 2초 내에 특성 탭 인식 실패. 메뉴 버튼 재클릭 시도...")
+                                    else:
+                                        time.sleep(0.1)
+                                        # 예외 처리: 획득 창 자체가 닫힌 상태라면 무한 대기 방지 탈출
+                                        if not check_img('get_reward.png', thread_sct):
+                                            break
+                                        
+                                has_valuable_trait = False
+                                best_score = 0.0
+                                best_matched_file = None
+                                
+                                if clicked_list_btn:
+                                    bprint("  > 🔍 [결과 판독] 빨간 박스 영역 한정 실시간 양방향 절대 편차 대조를 시작합니다.")
                                     
-                                if vanish_count >= 5:
-                                    bprint("  > [완료] get_reward.png 완벽 소멸 확인!")
-                                    break
+                                    best_debug_scores = {i: 0.0 for i in range(1, MAX_TRAIT_NUM + 1)}
+                                    no_trait_score = 0.0
+                                    scan_start = time.time()
+                                    
+                                    # [빨간 박스 규격 반영] 잡특성 동시 발현을 감안하면서 노이즈를 배제하는 최적의 영역을 캡처합니다. (여유로운 세로 스캔 범위로 하단 컷오프 방지)
+                                    result_roi = {"left": 0, "top": 110, "width": 530, "height": 400}
+                                    
+                                    # [초고속 사전 연산] 루프 외부에서 가치 특성 N종의 7단계 스케일별 절대 편차 템플릿을 딱 한 번만 사전 생성하여 RAM 캐시에 적재합니다.
+                                    # 이로써 루프 내부에서의 무거운 리사이즈(cv2.resize) 및 중간값 연산 부하가 100% 제거됩니다!
+                                    precalculated_templates = {}
+                                    for t_idx in range(1, MAX_TRAIT_NUM + 1):
+                                        t_file = f"trait_{t_idx}.png"
+                                        template = FUSION_CACHE.get(t_file)
+                                        if template is None: continue
+                                        
+                                        template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
+                                        template_median = np.median(template_g)
+                                        template_diff = cv2.absdiff(template_g, int(template_median))
+                                        
+                                        precalculated_templates[t_idx] = []
+                                        for scale in [0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15]:
+                                            w = int(template_diff.shape[1] * scale)
+                                            h = int(template_diff.shape[0] * scale)
+                                            resized_t = cv2.resize(template_diff, (w, h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+                                            precalculated_templates[t_idx].append(resized_t)
+                                            
+                                    # [병렬 스레드 풀 고용] 프레임마다 스레드를 파괴/생성하는 오버헤드를 막기 위해 루프 외부에서 딱 한 번만 풀을 고용합니다.
+                                    with concurrent.futures.ThreadPoolExecutor(max_workers=max(7, MAX_TRAIT_NUM)) as executor:
+                                        # 페이드인 애니메이션 시간을 포함하여 1.5초 동안 모든 특성의 점수를 끝까지 누적합니다.
+                                        while time.time() - scan_start < 1.5 and bot_active:
+                                            # 1. '이 감염물은 특성이 없습니다' (no_trait.png) 매칭 진행 (유저님의 오리지널 100% 검증된 check_img 방식 활용)
+                                            # 만약 특성 없음이 포착되면, 다른 특성을 훑어볼 필요가 전혀 없으므로 즉시 복구 모드로 직행(Break)합니다!
+                                            if check_img('no_trait.png', thread_sct):
+                                                no_trait_score = 0.92
+                                                bprint("  > ⚠️ [특성 없음] '특성이 없습니다' 문구가 조기 감지되었습니다. 불필요한 스캔을 생략하고 즉시 탈출합니다.")
+                                                break
+                                            else:
+                                                no_trait_score = 0.20
+                                            
+                                            # 2. 가치 특성 N종 절대 편차 매칭 진행 (상단 불안정 영역 외 오탐지 배제 스캔 가동)
+                                            sct_img = thread_sct.grab(result_roi)
+                                            screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                                            
+                                            # 실시간 화면 배경 소멸 연산
+                                            screen_median = np.median(screen_gray)
+                                            screen_diff = cv2.absdiff(screen_gray, int(screen_median))
+                                            
+                                            # 병렬로 연산을 처리할 개별 특성 연산관 스레드 함수를 정의합니다.
+                                            def scan_worker(t_idx):
+                                                if t_idx not in precalculated_templates: return
+                                                
+                                                file_best_score = 0.0
+                                                for resized_template in precalculated_templates[t_idx]:
+                                                    if resized_template.shape[1] > screen_diff.shape[1] or resized_template.shape[0] > screen_diff.shape[0]:
+                                                        continue
+                                                        
+                                                    # 양방향 배경이 0으로 완전 동기화된 상태이므로, mask 없이 정규화 상관계수(TM_CCOEFF_NORMED)를 적용해 글자 뼈대 형태만 정밀 매칭합니다.
+                                                    res = cv2.matchTemplate(screen_diff, resized_template, cv2.TM_CCOEFF_NORMED)
+                                                    _, max_val, _, _ = cv2.minMaxLoc(res)
+                                                    
+                                                    if max_val > file_best_score:
+                                                        file_best_score = max_val
+                                                        
+                                                if file_best_score > best_debug_scores[t_idx]:
+                                                    best_debug_scores[t_idx] = file_best_score
+
+                                            # N종 특성 분석 스레드 병렬 일괄 투입!
+                                            futures = [executor.submit(scan_worker, t_idx) for t_idx in range(1, MAX_TRAIT_NUM + 1)]
+                                            concurrent.futures.wait(futures)
+                                            
+                                            time.sleep(0.02)
+                                        
+                                    # 3. 최종 정밀 가치 판정 분석 (절대 편차 감쇄 기반 엄격 형태 판정)
+                                    bprint("  > 📊 [결과 판독 실시간 정밀 검증 리포트]")
+                                    bprint(f"    └ [특성 없음] '이 감염물은 특성이 없습니다' 일치율: {no_trait_score:.4f} (기준값: 0.70)")
+                                    
+                                    # 3-1) 최고 정합 일치율 특성 선별
+                                    best_idx = max(best_debug_scores, key=best_debug_scores.get)
+                                    best_val = best_debug_scores[best_idx]
+                                    
+                                    if best_val >= 0.75:
+                                        has_valuable_trait = True
+                                        best_score = best_val
+                                        best_matched_file = f"trait_{best_idx}.png"
+                                    
+                                    # 1) '이 감염물은 특성이 없습니다' 문구가 감지된 경우 -> 100% 무조건 전수 실패 (RECOVERY)
+                                    if no_trait_score >= 0.80:
+                                        bprint("    └ ❌ [판독 결과] '특성 없음' 문구가 명확히 감지되어 전수 실패로 판정합니다.")
+                                        has_valuable_trait = False
+                                    else:
+                                        # 2) N종 가치 특성 중 하나라도 실시간 일치율이 0.70 이상으로 검출된 경우 -> 전수 성공! (NORMAL)
+                                        if has_valuable_trait:
+                                            t_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
+                                            bprint(f"    └ ✅ [판독 결과] 우리가 원하는 가치 특성 '{t_name}'이 정상 전수되었습니다! (편차 매칭율: {best_score:.4f} >= 0.80)")
+                                        else:
+                                            # 3) 특성은 있으나(이로치 등 잡특성), 우리가 원하지 않는 버리는 특성만 붙은 경우 -> 전수 실패! (RECOVERY)
+                                            bprint("    └ ❌ [판독 결과] 특성이 존재하지만, 우리가 원치 않는 잡특성/이로치 특성만 전수되었습니다.")
+                                            bprint(f"      (가치 특성 {MAX_TRAIT_NUM}종 중 어떤 것도 매칭 기준선인 0.80을 넘지 못해 전수 실패로 판정하고 RECOVERY 모드를 가동합니다.)")
+                                            has_valuable_trait = False
+                                            
+                                    # 상세 스코어 투명하게 리포트 출력
+                                    for t_idx in range(1, MAX_TRAIT_NUM + 1):
+                                        t_file = f"trait_{t_idx}.png"
+                                        t_name = TRAIT_NAMES.get(t_file, "이름 미등록")
+                                        if t_file in FUSION_CACHE:
+                                            match_status = "🎉합격" if best_debug_scores[t_idx] >= 0.70 else "❌미달"
+                                            bprint(f"      - [{match_status}] {t_file} ({t_name}) 최고 매칭율: {best_debug_scores[t_idx]:.4f}")
+                                            
+                                    # [E(ESC) 수령 이탈 오류 방지] 툴팁 상세 확인창 하단의 'F 감염물 획득' 버튼을 직접 입력해 보상을 수령하고 상세창을 닫습니다.
+                                    bprint("  > 💎 [판독 완료] 상세 확인창에서 수령 단축키(F)를 즉시 입력해 보상을 획득합니다.")
+                                    send_cmd('F'); time.sleep(0.15); send_cmd('R')
+                                    wait_vanish('dev_trait_header.png', thread_sct)
+                                    reward_collected = True
+                                
+                                if has_valuable_trait:
+                                    identified_trait_name = TRAIT_NAMES.get(best_matched_file, best_matched_file)
+                                    bprint(f"  > 🎉 [성공] NORMAL 상태로 복사 가동합니다.")
+                                    char_sub_modes[char_key] = "NORMAL"
                                 else:
-                                    bprint("  > [재시도] 5초 대기 초과! 획득 창이 닫히지 않아 F를 다시 입력합니다.")
+                                    bprint("  > 😭 [실패] RECOVERY 복구 상태로 전환합니다.")
+                                    char_sub_modes[char_key] = "RECOVERY"
+
+                            # 2. 보상 획득 및 획득 창 닫기 진행 (모드 6 이외의 일반 모드 전용)
+                            if not reward_collected:
+                                bprint("  > 보상 수령을 완료하기 위해 획득 단축키(F)를 입력합니다.")
+                                while bot_active:
+                                    send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                    bprint("  > [대기] get_reward.png의 소멸 검증 중...")
+                                    
+                                    vanish_count = 0
+                                    wait_start = time.time()
+                                    while time.time() - wait_start < 5.0 and bot_active:
+                                        if check_img('get_reward.png', thread_sct):
+                                            vanish_count = 0
+                                        else:
+                                            vanish_count += 1
+                                            
+                                        if vanish_count >= 5:
+                                            break
+                                        time.sleep(0.01)
+                                        
+                                    if vanish_count >= 5:
+                                        bprint("  > [완료] get_reward.png 완벽 소멸 확인!")
+                                        break
+                                    else:
+                                        bprint("  > [재시도] 5초 대기 초과! 획득 창이 닫히지 않아 F를 다시 입력합니다.")
                             
                             if check_popup_char(thread_sct):
                                 bprint("  > [꼬임 방지] F 입력 직후 팝업 간섭 감지! 루프를 재시작하여 보상을 다시 획득합니다.")
@@ -1721,32 +2181,813 @@ def fusion_bot_loop():
                     if not bot_active: continue
                     
                     if not skip_setup:
-                        # [단계 1.5] 융합 재료 슬롯 강제 클릭 (인벤토리 열기)
-                        bprint("  > 1.5. 융합 재료 슬롯(좌측)을 클릭하여 감염물 창을 엽니다.")
-                        pyautogui.moveTo(1150, 300); time.sleep(0.05); send_cmd('C')
+                        char_key = char_images[char_index]
+                        if char_key not in char_sub_modes:
+                            char_sub_modes[char_key] = "NORMAL"
                         
-                        bprint("  > [능동 대기] 인벤토리 UI 팝업 초고속 확인 중...")
-                        wait_inv_start = time.time()
-                        while bot_active and time.time() - wait_inv_start < 3.0:
-                            # [핵심] 능동 대기 시에도 아이템 및 체크마크 ROI 적용 (force_full 제거)
-                            if check_img('item_A1.png', thread_sct) or \
-                               check_img('item_B1.png', thread_sct) or \
-                               check_img('check_mark.png', thread_sct):
-                                break
-                            time.sleep(0.05)
+                        # [모드 6: 재료 복사 세팅 로직 진입]
+                        if bot_mode == 6:
+                            current_sub = char_sub_modes[char_key]
+                            bprint(f"  > 💡 [모드 6] 현재 상태: {current_sub} 세팅 시퀀스를 시작합니다.")
+                            
+                            # 부모 슬롯 메모리와 재료 슬롯 메모리 개별 분리 초기화
+                            if (char_key + "_parent") not in char_inventory_memory:
+                                char_inventory_memory[char_key + "_parent"] = (0, 0)
+                            if (char_key + "_material") not in char_inventory_memory:
+                                char_inventory_memory[char_key + "_material"] = (0, 0, 0)
+                            
+                            # 1단계: 부모 슬롯(F0 / 1짜리) 채우기
+                            bprint("  > [1/2 부모 세팅] 좌측 부모 슬롯 클릭 및 감염물 창 개방...")
+                            pyautogui.moveTo(1150, 300); time.sleep(0.1); send_cmd('C')
+                            
+                            # 최대 1초간 '감염물 선택' 타이틀(parent_title.png)이 인식될 때까지 대기
+                            wait_inv_start = time.time()
+                            opened = False
+                            while bot_active and time.time() - wait_inv_start < 1.0:
+                                if check_img('parent_title.png', thread_sct):
+                                    opened = True
+                                    break
+                                time.sleep(0.05)
+                                
+                            # 1초 내에 인식되지 않은 경우 보정 재클릭 수행 후 속행
+                            if not opened and bot_active:
+                                bprint("  > ⚠️ [개방 지연] '감염물 선택' 타이틀 미인식. 보정 재클릭을 수행합니다.")
+                                pyautogui.moveTo(1150, 300); time.sleep(0.05); send_cmd('C')
+                                
+                                # 재클릭 후 2차 검출 대기 (최대 1초)
+                                wait_inv_start = time.time()
+                                while bot_active and time.time() - wait_inv_start < 1.0:
+                                    if check_img('parent_title.png', thread_sct):
+                                        opened = True
+                                        break
+                                    time.sleep(0.05)
+                                    
+                            if opened:
+                                bprint("  > ✅ [확인] 인벤토리 창 개방 확인! 0.1초 안정화 대기 후 탐색을 개시합니다.")
+                                time.sleep(0.1)
 
-                        if not bot_active: continue
+                            # 모드 3/4와 동일하게 선제 스캔을 진행하기 위해 진입 직후 체크 해제를 보류하고 곧바로 탐색을 개시합니다.
+                            inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
+                            # 모드 6은 모든 감염물을 대상으로 삼으므로 템플릿 매칭을 생략하고, 고정 5x7 인벤토리 그리드를 직접 순회합니다.
+                            all_candidates = []
+                            for j in range(7):
+                                for i in range(5):
+                                    cx = 1400 + i * 95
+                                    cy = 220 + j * 95
+                                    all_candidates.append((cx, cy))
+                                        
+                            # [상->하->좌->우] 순서로 판별하기 위해 후보 좌표들을 모드 3/4와 동일하게 세밀 정렬합니다.
+                            all_candidates.sort(key=lambda c: (c[0] // 95, c[1]))
+                                        
+                            is_parent_rescan = False
+                            while bot_active:
+                                # 부모 슬롯 이미지 분석을 위한 인벤토리 화면(BGR)을 사전 정의 및 적재합니다.
+                                inv_roi = {"left": 960, "top": 0, "width": 960, "height": 1080}
+                                screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
+                                            
+                                # 체크마크 사전 스캔 (Y축 180 이상으로 제한하여 타이틀 오탐 완벽 차단)
+                                check_pts_global = []
+                                if template_check is not None and screen_bgr.shape[0] >= 180:
+                                    screen_bgr_restricted = screen_bgr[180:, :]
+                                    res_c = cv2.matchTemplate(screen_bgr_restricted, template_check, cv2.TM_CCOEFF_NORMED)
+                                    loc_c = np.where(res_c >= 0.85)
+                                    check_pts_global = [(pt[0] + 960, pt[1] + 180) for pt in zip(*loc_c[::-1])]
+                                            
+                                target_parents = []
+                                for cx, cy in all_candidates:
+                                    if len(target_parents) >= 2: break
+                                        
+                                    curr_sort_key = (cx // 95, cy)
+                                    mem_parent_x, mem_parent_y = char_inventory_memory[char_key + "_parent"]
+                                    if not is_parent_rescan and curr_sort_key < (mem_parent_x // 95, mem_parent_y):
+                                        continue # 이미 과거에 확인했던 위치이므로 즉시 패스
+                                        
+                                    # 체크마크가 이미 있는 슬롯은 탐색에서 제외
+                                    is_checked = any(math.hypot(cx - c[0], cy - c[1]) < 40 for c in check_pts_global)
+                                    if is_checked:
+                                        continue
+                                        
+                                    # [사용자 피드백 반영] 마우스를 올리기 전에 인벤토리 그리드의 형태 분포를 검사합니다.
+                                    rx = cx - 960
+                                    ry = cy
+                                    # 어긋난 좌표 마진을 보정하기 위해 탐색 면적을 80x80 규격으로 대폭 늘려 크롭합니다.
+                                    slot_roi = screen_bgr[max(0, ry - 40):min(screen_bgr.shape[0], ry + 40), max(0, rx - 40):min(screen_bgr.shape[1], rx + 40)]
+                                    
+                                    # [범용 채도-밝기 융합 필터] 감염물의 색상이나 종류에 상관없이 활성 상태의 화소만 정밀 검출합니다.
+                                    if slot_roi.size > 0:
+                                        b = slot_roi[:, :, 0].astype(int)
+                                        g = slot_roi[:, :, 1].astype(int)
+                                        r = slot_roi[:, :, 2].astype(int)
+                                        
+                                        # 삼원색 중 가장 높은 값과 가장 낮은 값의 편차(채도) 및 최고 밝기를 연산합니다.
+                                        max_c = np.maximum(np.maximum(r, g), b)
+                                        min_c = np.minimum(np.minimum(r, g), b)
+                                        saturation = max_c - min_c
+                                        
+                                        # 1) 채도가 45를 넘는 선명한 원색 화소이거나, 2) 채도가 낮아도 밝기가 140을 넘는 초고대비 화소만 집계합니다.
+                                        active_pixels = np.sum(((saturation > 45) & (max_c > 115)) | (max_c > 140))
+                                        
+                                        # 활성 화소가 최소 15개 미만인 빈칸 및 어둡게 비활성화된 슬롯은 철저하게 차단합니다.
+                                        if active_pixels < 15:
+                                            continue
+                                        
+                                    pyautogui.moveTo(cx, cy)
+                                    template_label = FUSION_CACHE.get('ability_label.png')
+                                    mon = thread_sct.monitors[1]
+                                    r_left = max(mon["left"], cx - 1100) # [동적 캡처 적용] 모드 3/4와 완전히 동일하게 마우스 위치 기준 좌측 1100px을 동적 캡처합니다.
+                                    r_top = mon["top"]
+                                    r_width = 1100
+                                    r_height = mon["height"]
+                                    tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
+                                    
+                                    label_found = False
+                                    lx, ly = 0, 0
+                                    wait_start = time.time()
+                                    while time.time() - wait_start < 1.0 and bot_active:
+                                        hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                        res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
+                                        _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                        if mv_l >= 0.80:
+                                            label_found = True; lx, ly = ml_l[0], ml_l[1]
+                                            break
+                                        time.sleep(0.05)
+                                
+                                    if not label_found:
+                                        fast_clear_tooltip(); continue
+                                        
+                                    time.sleep(0.05)
+                                    sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                    hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                    
+                                    # 융합 가능 횟수 판독 (실측 4번째 줄 120:152 범위 크롭)
+                                    label_w = template_label.shape[1]
+                                    col_x_start = lx + label_w
+                                    col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
+                                    col_y_start = max(0, ly - 20)
+                                    col_y_end = min(hover_gray.shape[0], ly + 150)
+                                    roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
+                                            
+                                    # 한글 글자(가, 회 등)의 수직 획 오탐을 방지하기 위해 우측 숫자 영역(240~360px)만 정밀 커팅
+                                    roi_num_gray = roi_col[120:152, 240:360]
+                                            
+                                    # [부모 검증 원상복구] 하드코딩된 is_f0 = True를 해제하고, 실제 1짜리(F0)인지 템플릿 매칭으로 정확하게 검증합니다.
+                                    # 이로써 야광 아이콘 때문에 120 필터를 통과한 어두운 0짜리(F1) 감염물도 툴팁 대조 단계에서 완벽하게 걸러집니다.
+                                    is_f0 = False
+                                    t1_img = FUSION_CACHE.get('tier_1.png')
+                                    if t1_img is not None and roi_num_gray.size > 0:
+                                        t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
+                                        res_n = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
+                                        _, best_score_n, _, max_loc_n = cv2.minMaxLoc(res_n)
+                                        if best_score_n >= FUSION_CONF.get('tier_1.png', 0.72):
+                                            t1_h = t1_img_g.shape[0]
+                                            if is_truly_tier_1(roi_num_gray, max_loc_n[0], max_loc_n[1], t1_h):
+                                                is_f0 = True
+                                            
+                                    # 특성 유무 및 가치 판독 (모드 5와 100% 동일하게 3단계 멀티스케일 매칭을 포함해 복사 이식)
+                                    has_any_trait = False
+                                    trait_x1 = max(0, lx - 10)
+                                    trait_x2 = lx + 200
+                                    trait_y1 = ly + 30
+                                    trait_y2 = ly + 300
+                                    roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                    
+                                    t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                    conf_trait = FUSION_CONF.get('trait.png', 0.70)
+                                    
+                                    if roi_trait_gray.size > 0:
+                                        for scale in [0.95, 1.0, 1.05]:
+                                            width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                            if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                cur_tr = np.max(res_t)
+                                                if cur_tr >= conf_trait:
+                                                    has_any_trait = True
+                                                    break
+                                                    
+                                    has_valuable_trait = False
+                                    if has_any_trait:
+                                        trait_name_x1 = max(0, lx - 10)
+                                        trait_name_x2 = lx + 360
+                                        trait_name_y1 = ly + 30
+                                        trait_name_y2 = ly + 300
+                                        roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
+                                        
+                                        temp_scores = []
+                                        if roi_trait_gray.size > 0:
+                                            for scale in [0.95, 1.0, 1.05]:
+                                                width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                                if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                    res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                    cur_tr = np.max(res_t)
+                                                    if cur_tr >= conf_trait:
+                                                        # 1번부터 N번 가치 특성 정밀 대조 시작
+                                                        for t_idx in range(1, MAX_TRAIT_NUM + 1):
+                                                            t_file = f"trait_{t_idx}.png"
+                                                            t_template = FUSION_CACHE.get(t_file)
+                                                            if t_template is None: continue
+                                                            
+                                                            t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                                            if roi_trait_name_gray.shape[0] >= t_template_g.shape[0] and roi_trait_name_gray.shape[1] >= t_template_g.shape[1]:
+                                                                best_score = 0.0
+                                                                for t_scale in [0.95, 1.0, 1.05]:
+                                                                    t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
+                                                                    if t_w <= roi_trait_name_gray.shape[1] and t_h <= roi_trait_gray.shape[0]:
+                                                                        res_st = cv2.matchTemplate(roi_trait_name_gray, cv2.resize(t_template_g, (t_w, t_h)), cv2.TM_CCOEFF_NORMED)
+                                                                        best_score = max(best_score, np.max(res_st))
+                                                                
+                                                                temp_scores.append((t_file, best_score))
+                                                        break
+                                                
+                                        # 점수순 내림차순 정렬 및 스마트 갭 판독
+                                        temp_scores.sort(key=lambda x: x[1], reverse=True)
+                                        if len(temp_scores) >= 1:
+                                            top1_file, top1_score = temp_scores[0]
+                                            top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
+                                            
+                                            if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
+                                                has_valuable_trait = True
+                                                    
+                                    if current_sub == "NORMAL":
+                                        # NORMAL 상태: 1~7 가치 특성 F0 1개 + 특성 없는 순정 F0 1개
+                                        # F0(is_f0가 True)인 경우에만 부모 후보로 등록합니다.
+                                        if is_f0:
+                                            already_has_trait_in_list = any(p[2] for p in target_parents)
+                                            if has_valuable_trait and not already_has_trait_in_list:
+                                                target_parents.append((cx, cy, True))
+                                                bprint("  > 🧬 [부모 채택] F0 가치 특성 감염물 확보 완료.")
+                                            elif not has_any_trait:
+                                                already_blank_in_list = any(not p[2] for p in target_parents)
+                                                if not already_blank_in_list:
+                                                    target_parents.append((cx, cy, False))
+                                                    bprint("  > 💎 [부모 채택] F0 순정 감염물 확보 완료.")
+                                    elif current_sub == "RECOVERY":
+                                        # RECOVERY 상태: 특성 없는 순정 깡 감염물 2개
+                                        if is_f0 and not has_any_trait:
+                                            target_parents.append((cx, cy, False))
+                                            bprint("  > 💎 [부모 채택] F0 순정 감염물 확보 완료.")
+                                            
+                                    fast_clear_tooltip()
+                                    
+                                if len(target_parents) >= 2:
+                                    char_inventory_memory[char_key + "_parent"] = (target_parents[-1][0], target_parents[-1][1])
+                                    break
+                                    
+                                mem_parent_x, mem_parent_y = char_inventory_memory[char_key + "_parent"]
+                                if not is_parent_rescan and (mem_parent_x > 0 or mem_parent_y > 0):
+                                    bprint("  > 🧠 [부모 리스캔] 기억된 위치 이후로 부모 짝을 찾지 못했습니다. 처음부터 1회 전체 스캔을 재진행합니다.")
+                                    is_parent_rescan = True
+                                    char_inventory_memory[char_key + "_parent"] = (0, 0)
+                                    continue
+                                else:
+                                    break
+                                
+                            if len(target_parents) < 2:
+                                bprint("  > 🛑 [부모 부족] 필요한 조건의 F0 부모가 없습니다. 캐릭터 스킵 시퀀스 진입.")
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R'); skip_current_char = True
+                            else:
+                                # [부모 기존 체크 해제 및 신규 클릭 무한 검증 루프] (모드 3/4와 일치화)
+                                bprint("  > 🔄 [부모 세팅] 부모 슬롯 2/2 완성 검증 루프 작동...")
+                                while bot_active:
+                                    # 1) 기존 체크마크 전부 해제 (부모 탐색 후에 비워줌)
+                                    dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
+                                    res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
+                                    loc_dc = np.where(res_dc >= 0.85)
+                                    pts_dc = list(zip(*loc_dc[::-1]))
+                                    
+                                    if len(pts_dc) > 0:
+                                        dc_unique = []
+                                        for ptd in pts_dc:
+                                            if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
+                                                dc_unique.append(ptd)
+                                        for ptd in dc_unique:
+                                            hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
+                                            pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
+                                        fast_clear_tooltip()
+                                        
+                                    # 2) 신규 채택한 부모 2개 클릭
+                                    for pt in target_parents:
+                                        pyautogui.moveTo(pt[0], pt[1]); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
+                                    fast_clear_tooltip()
+                                    
+                                    # 3) 2/2(select_2_2.png) 상태 검증
+                                    if check_img('select_2_2.png', thread_sct):
+                                        bprint("  > ✅ [확인] 부모 슬롯 2/2 세팅 완료.")
+                                        break
+                                    bprint("  > ⚠️ [재시도] 부모 슬롯 2/2 미달성. 다시 세팅을 시도합니다.")
+                                    time.sleep(0.2)
+                                    
+                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                wait_vanish('select_0_2.png', thread_sct)
+                                
+                                # 2단계: 재료 슬롯(F1 / 0짜리) 채우기
+                                bprint("  > [2/2 재료 세팅] 중앙 재료 슬롯 클릭 및 감염물 창 개방...")
+                                pyautogui.moveTo(1400, 450); time.sleep(0.1); send_cmd('C')
+                                
+                                # 최대 1초간 '선택 종류: 0/3' 표시(select_0_3.png)가 인식될 때까지 대기
+                                wait_inv_start = time.time()
+                                opened_mat = False
+                                while bot_active and time.time() - wait_inv_start < 1.0:
+                                    if check_img('select_0_3.png', thread_sct):
+                                        opened_mat = True
+                                        break
+                                    time.sleep(0.05)
+                                    
+                                # 1초 내에 인식되지 않은 경우 보정 재클릭 수행 후 속행
+                                if not opened_mat and bot_active:
+                                    bprint("  > ⚠️ [개방 지연] '선택 종류: 0/3' 표시 미인식. 보정 재클릭을 수행합니다.")
+                                    pyautogui.moveTo(1400, 450); time.sleep(0.05); send_cmd('C')
+                                    
+                                    # 재클릭 후 2차 검출 대기
+                                    wait_inv_start = time.time()
+                                    while bot_active and time.time() - wait_inv_start < 1.0:
+                                        if check_img('select_0_3.png', thread_sct):
+                                            opened_mat = True
+                                            break
+                                        time.sleep(0.05)
+                                        
+                                if opened_mat:
+                                    bprint("  > ✅ [확인] 인벤토리 창 개방 확인! 0.1초 안정화 대기 후 필터 전환을 시도합니다.")
+                                    time.sleep(0.1)
 
-                        # [단계 2] 기존 체크마크 해제 (모드 3/4 내부에서 후처리를 위해 단계 건너뜀)
-                        bprint("  > 2. 신규 감염물 탐색 후 체크 해제를 진행합니다.")
+                                # [사용자 피드백 반영] 나비 필터 아이콘(butterfly.png) 탐색 및 동적 타격
+                                bprint("  > 🦋 [필터 전환] 나비 아이콘(butterfly.png) 탐색 및 탭 전환 시도...")
+                                found_butterfly = False
+                                wait_bf = time.time()
+                                # 최초 1회는 전체화면 스캔으로 ROI를 생성하고, 이후에는 캐시 범위 초고속 타격을 수행합니다.
+                                while time.time() - wait_bf < 1.5 and bot_active:
+                                    if check_img('butterfly.png', thread_sct):
+                                        found_butterfly = True
+                                        cx, cy = FUSION_ROI['butterfly.png']['last_pos']
+                                        pyautogui.moveTo(cx, cy); time.sleep(0.05); send_cmd('C')
+                                        bprint("  > 🦋 [필터 성공] 나비 아이콘 클릭 완료! 감염물 리스트 전환 성공.")
+                                        
+                                        # 필터 전환 성공 후, 상단의 '감염물' 타이틀(parent_title.png)이 선명하게 감지될 때까지 탐색 대기
+                                        wait_title = time.time()
+                                        while bot_active and time.time() - wait_title < 1.5:
+                                            if check_img('parent_title.png', thread_sct):
+                                                break
+                                            time.sleep(0.03)
+                                            
+                                        # 탭 전환 연출의 완전한 안정화를 위해 0.2초 추가 대기 후 탐색을 개시합니다.
+                                        time.sleep(0.2)
+                                        break
+                                    time.sleep(0.05)
+                                    
+                                if not found_butterfly:
+                                    bprint("  > ⚠️ [필터 실패] 나비 아이콘을 검출하지 못했습니다. 기본 탭에서 분석을 진행합니다.")
+                                    
+                                is_material_rescan = False
+                                scroll_state = 0 # 0: 상단(스크롤 위), 1: 하단(스크롤 아래)
+                                target_materials = []
+                                char_inventory_memory[char_key + "_material"] = (0, 0, 0)
+                                
+                                while bot_active:
+                                    # 재료 인벤토리 화면을 사전 스캔하여 슬롯의 색상 및 이미지 매칭을 위한 화면 확보
+                                    screen_bgr = cv2.cvtColor(np.asarray(thread_sct.grab(inv_roi)), cv2.COLOR_BGRA2BGR)
+                                    
+                                    all_candidates = [] # 이전 부모 슬롯의 좌표 리스트 간섭을 막기 위해 리셋
+                                    
+                                    if current_sub == "NORMAL":
+                                        # [정상 모드] 베이스 재료인 item_A1/B1만 이미지 매칭으로 초고속 핀포인트 탐색 진행
+                                        X_OFFSET = 960
+                                        screen_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+                                        
+                                        for item_name in ['item_A1.png', 'item_B1.png']:
+                                            template = FUSION_CACHE.get(item_name)
+                                            if template is None: continue
+                                            
+                                            template_g = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) == 3 else template
+                                            conf = 0.82
+                                            
+                                            res = cv2.matchTemplate(screen_gray, template_g, cv2.TM_CCOEFF_NORMED)
+                                            loc = np.where(res >= conf)
+                                            h, w = template_g.shape[:2]
+                                            
+                                            for pt in zip(*loc[::-1]):
+                                                real_x = pt[0] + X_OFFSET
+                                                real_y = pt[1]
+                                                
+                                                raw_cx = real_x + w // 2
+                                                raw_cy = real_y + h // 2
+                                                
+                                                # [격자 자석 스냅 알고리즘]
+                                                grid_i = int(round((raw_cx - 1400) / 95.0))
+                                                grid_j = int(round((raw_cy - 315) / 95.0))
+                                                
+                                                if grid_i < 0 or grid_i > 4 or grid_j < 0 or grid_j > 5:
+                                                    continue
+                                                    
+                                                snap_cx = 1400 + grid_i * 95
+                                                snap_cy = 315 + grid_j * 95
+                                                
+                                                if not any(math.hypot(snap_cx - cp[0], snap_cy - cp[1]) < 40 for cp in all_candidates):
+                                                    all_candidates.append((snap_cx, snap_cy))
+                                                    
+                                    elif current_sub == "RECOVERY":
+                                        # [복구 모드] 5x6 탐색 진행
+                                        for j in range(6):
+                                            for i in range(5):
+                                                cx = 1400 + i * 95
+                                                cy = 315 + j * 95
+                                                all_candidates.append((cx, cy))
+                                                
+                                    # [세로 정렬 보존] 열(Column) 95픽셀 수치로 정확하게 세로 우선 정렬을 수행하여 중구난방 튀는 현상을 정밀 복구합니다.
+                                    all_candidates.sort(key=lambda c: ((c[0] - 1400) // 95, c[1]))
+                                        
+                                    # 체크마크 사전 스캔 (Y축 180 이상으로 제한하여 타이틀 오탐 완벽 차단)
+                                    check_pts_global = []
+                                    if template_check is not None and screen_bgr.shape[0] >= 180:
+                                        screen_bgr_restricted = screen_bgr[180:, :]
+                                        res_c = cv2.matchTemplate(screen_bgr_restricted, template_check, cv2.TM_CCOEFF_NORMED)
+                                        loc_c = np.where(res_c >= 0.85)
+                                        check_pts_global = [(pt[0] + 960, pt[1] + 180) for pt in zip(*loc_c[::-1])]
+                                    
+                                    for cx, cy in all_candidates:
+                                        if len(target_materials) >= 3: break
+                                        
+                                        curr_sort_key = ((cx - 1400) // 95, cy)
+                                        mem_mat_x, mem_mat_y, mem_scroll = char_inventory_memory[char_key + "_material"]
+                                        last_sort_key = ((mem_mat_x - 1400) // 95, mem_mat_y) if mem_mat_x > 0 else (0, 0)
+                                        if not is_material_rescan:
+                                            # 스크롤 상태가 이전 사이클에서 하단(1)이었다면 상단(0)은 무조건 패스
+                                            if scroll_state < mem_scroll:
+                                                continue
+                                            elif scroll_state == mem_scroll:
+                                                if curr_sort_key < last_sort_key:
+                                                    continue
+                                            
+                                        # 체크마크가 이미 있는 슬롯은 탐색에서 제외
+                                        is_checked = any(math.hypot(cx - c[0], cy - c[1]) < 40 for c in check_pts_global)
+                                        if is_checked:
+                                            continue
+                                            
+                                        rx = cx - 960
+                                        ry = cy - 5
+                                        # 테두리 및 반투명 배경 간섭을 피하기 위해 슬롯의 정중앙 40x40 영역만 정밀 크롭합니다.
+                                        slot_roi = screen_bgr[max(0, ry - 20):min(screen_bgr.shape[0], ry + 20), max(0, rx - 20):min(screen_bgr.shape[1], rx + 20)]
+                                        
+                                        if slot_roi.size > 0:
+                                            gray_roi = cv2.cvtColor(slot_roi, cv2.COLOR_BGR2GRAY)
+                                            max_val = np.max(gray_roi)
+                                            std_val = np.std(gray_roi)
+                                            
+                                            # 아웃포커싱된 뒷배경 비침은 표준편차 9.0을 넘지 못합니다.
+                                            # 실제 감염물(날카로운 텍스처 존재)이 들어있을 때만 이 기준선을 통과합니다.
+                                            if max_val < 75 and std_val < 9.0:
+                                                continue
+                                                
+                                        pyautogui.moveTo(cx, cy)
+                                        template_label = FUSION_CACHE.get('ability_label.png')
+                                        mon = thread_sct.monitors[1]
+                                        r_left = max(mon["left"], cx - 1100)
+                                        r_top = mon["top"]
+                                        r_width = 1100
+                                        r_height = mon["height"]
+                                        tooltip_roi = {"left": int(r_left), "top": int(r_top), "width": int(r_width), "height": int(r_height)}
+                                        
+                                        label_found = False
+                                        lx, ly = 0, 0
+                                        wait_start = time.time()
+                                        while time.time() - wait_start < 1.0 and bot_active:
+                                            hover_gray = cv2.cvtColor(np.asarray(thread_sct.grab(tooltip_roi)), cv2.COLOR_BGRA2GRAY)
+                                            res_l = cv2.matchTemplate(hover_gray, template_label, cv2.TM_CCOEFF_NORMED)
+                                            _, mv_l, _, ml_l = cv2.minMaxLoc(res_l)
+                                            if mv_l >= 0.80:
+                                                label_found = True; lx, ly = ml_l[0], ml_l[1]
+                                                break
+                                            time.sleep(0.05)
 
-                        if not bot_active: continue
+                                        if label_found:
+                                            time.sleep(0.05)
+                                            sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                            hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                            
+                                            talent_header_found = False
+                                            wait_th = time.time()
+                                            while time.time() - wait_th < 0.8 and bot_active:
+                                                if check_img('talent_header.png', thread_sct, force_full=True):
+                                                    talent_header_found = True
+                                                    break
+                                                time.sleep(0.05)
+                                                
+                                            is_target_level_1 = False
+                                            max_val_level = 0.0
+                                            
+                                            if talent_header_found:
+                                                anchor_x, anchor_y = FUSION_ROI['talent_header.png']['last_pos']
+                                                level_num_roi = {
+                                                    "left": int(anchor_x + 100),
+                                                    "top": int(anchor_y + 30),
+                                                    "width": 180,
+                                                    "height": 40
+                                                }
+                                                sct_level = thread_sct.grab(level_num_roi)
+                                                
+                                                screen_gray_level = cv2.cvtColor(np.array(sct_level), cv2.COLOR_BGRA2GRAY)
+                                                template_level_1 = FUSION_CACHE.get('feedback_trait.png')
+                                                
+                                                if template_level_1 is not None:
+                                                    template_level_1_g = cv2.cvtColor(template_level_1, cv2.COLOR_BGR2GRAY) if len(template_level_1.shape) == 3 else template_level_1
+                                                    res_level = cv2.matchTemplate(screen_gray_level, template_level_1_g, cv2.TM_CCOEFF_NORMED)
+                                                    _, max_val_level, _, _ = cv2.minMaxLoc(res_level)
+                                                    
+                                                    if max_val_level >= 0.75:
+                                                        is_target_level_1 = True
+                                                        
+                                            skip_deviant = False
+                                            skip_reason = ""
+                                            
+                                            if current_sub == "NORMAL":
+                                                if not is_target_level_1:
+                                                    skip_deviant = True
+                                                    skip_reason = f"NORMAL 모드 피드백 재능 필수 미달 (일치율: {max_val_level:.4f} < 0.78)"
+                                            elif current_sub == "RECOVERY":
+                                                already_has_trait = any(m[3] for m in target_materials)
+                                                blank_count = sum(1 for m in target_materials if not m[3])
+                                                
+                                                # 피드백이 없는 아이템인 경우: 오직 '가치 특성 캐리어' 후보만 가능합니다.
+                                                if not is_target_level_1:
+                                                    if already_has_trait:
+                                                        skip_deviant = True
+                                                        skip_reason = "RECOVERY 모드 가치 특성 캐리어 이미 확보됨 (피드백 없는 재료 스킵)"
+                                                # 피드백이 있는 아이템인 경우: '순정 피드백' 또는 '가치 특성 캐리어(피드백 포함)' 둘 다 가능하므로 
+                                                # 선제 필터를 패스시키고 하단의 상세 정밀 매칭 조건에서 확실하게 구분합니다.
+                                                        
+                                            if skip_deviant:
+                                                bprint(f"  > ⏭️ [스킵] {skip_reason}")
+                                                fast_clear_tooltip()
+                                                continue
+                                                
+                                            sct_frame = np.asarray(thread_sct.grab(tooltip_roi))
+                                            hover_gray = cv2.cvtColor(sct_frame, cv2.COLOR_BGRA2GRAY)
+                                            
+                                            label_w = template_label.shape[1]
+                                            col_x_start = lx + label_w
+                                            col_x_end = min(hover_gray.shape[1], lx + label_w + 360)
+                                            col_y_start = max(0, ly - 20)
+                                            col_y_end = min(hover_gray.shape[0], ly + 150)
+                                            roi_col = hover_gray[col_y_start:col_y_end, col_x_start:col_x_end]
+                                            roi_num_gray = roi_col[120:152, 240:360]
+                                            
+                                            is_f0 = False
+                                            is_f1 = False
+                                            
+                                            t1_img = FUSION_CACHE.get('tier_1.png')
+                                            t0_img = FUSION_CACHE.get('tier_0.png')
+                                            score_t1 = 0.0
+                                            score_t0 = 0.0
+                                            
+                                            if roi_num_gray.size > 0:
+                                                if t1_img is not None:
+                                                    t1_img_g = cv2.cvtColor(t1_img, cv2.COLOR_BGR2GRAY) if len(t1_img.shape) == 3 else t1_img
+                                                    res_t1 = cv2.matchTemplate(roi_num_gray, t1_img_g, cv2.TM_CCOEFF_NORMED)
+                                                    _, score_t1, _, max_loc_t1 = cv2.minMaxLoc(res_t1)
+                                                    
+                                                if t0_img is not None:
+                                                    t0_img_g = cv2.cvtColor(t0_img, cv2.COLOR_BGR2GRAY) if len(t0_img.shape) == 3 else t0_img
+                                                    res_t0 = cv2.matchTemplate(roi_num_gray, t0_img_g, cv2.TM_CCOEFF_NORMED)
+                                                    _, score_t0, _, _ = cv2.minMaxLoc(res_t0)
+                                                    
+                                                if score_t1 > score_t0 and score_t1 >= 0.65:
+                                                    t1_h = t1_img_g.shape[0] if t1_img is not None else 24
+                                                    if is_truly_tier_1(roi_num_gray, max_loc_t1[0], max_loc_t1[1], t1_h):
+                                                        is_f0 = True
+                                                elif score_t0 >= 0.65:
+                                                    is_f1 = True
+                                                    
+                                            if is_f0:
+                                                bprint(f"  > ⏭️ [스킵] 피드백은 있으나 융합 가능 횟수 1 발견. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                                fast_clear_tooltip()
+                                                continue
+                                            elif not is_f1:
+                                                bprint(f"  > 🛡️ [우선순위 구제] 피드백 확인 완료! 애매한 횟수(0.65 미만)를 0짜리(F1)로 자동 구제합니다. (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                                is_f1 = True
+                                                
+                                            has_any_trait = False
+                                            trait_x1 = max(0, lx - 10)
+                                            trait_x2 = lx + 200
+                                            trait_y1 = ly + 30
+                                            trait_y2 = ly + 300
+                                            roi_trait_gray = hover_gray[trait_y1:trait_y2, trait_x1:trait_x2]
+                                            
+                                            t_trait_g = cv2.cvtColor(FUSION_CACHE['trait.png'], cv2.COLOR_BGR2GRAY) if len(FUSION_CACHE['trait.png'].shape) == 3 else FUSION_CACHE['trait.png']
+                                            conf_trait = FUSION_CONF.get('trait.png', 0.70)
+                                            
+                                            if roi_trait_gray.size > 0:
+                                                for scale in [0.95, 1.0, 1.05]:
+                                                    width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                                    if width <= roi_trait_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                        res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                        cur_tr = np.max(res_t)
+                                                        if cur_tr >= conf_trait:
+                                                            has_any_trait = True
+                                                            break
+                                                    
+                                            has_valuable_trait = False
+                                            identified_trait_name = "미등록 특성"
+                                            best_score = 0.0
+                                            
+                                            if has_any_trait:
+                                                trait_name_x1 = max(0, lx - 10)
+                                                trait_name_x2 = lx + 430
+                                                trait_name_y1 = ly + 30
+                                                trait_name_y2 = ly + 300
+                                                roi_trait_name_gray = hover_gray[trait_name_y1:trait_name_y2, trait_name_x1:trait_name_x2]
+                                                
+                                                temp_scores = []
+                                                if roi_trait_gray.size > 0:
+                                                    for scale in [0.95, 1.0, 1.05]:
+                                                        width, height = int(t_trait_g.shape[1]*scale), int(t_trait_g.shape[0]*scale)
+                                                        if width <= roi_trait_name_gray.shape[1] and height <= roi_trait_gray.shape[0]:
+                                                            res_t = cv2.matchTemplate(roi_trait_gray, cv2.resize(t_trait_g, (width, height)), cv2.TM_CCOEFF_NORMED)
+                                                            cur_tr = np.max(res_t)
+                                                            if cur_tr >= conf_trait:
+                                                                # 실시간 화면 배경 소멸 연산 적용 (반투명 툴팁 배경 관통)
+                                                                screen_median = np.median(roi_trait_name_gray)
+                                                                screen_diff = cv2.absdiff(roi_trait_name_gray, int(screen_median))
+                                                                
+                                                                for t_idx in range(1, MAX_TRAIT_NUM + 1):
+                                                                    t_file = f"trait_{t_idx}.png"
+                                                                    t_template = FUSION_CACHE.get(t_file)
+                                                                    if t_template is None: continue
+                                                                    
+                                                                    t_template_g = cv2.cvtColor(t_template, cv2.COLOR_BGR2GRAY) if len(t_template.shape) == 3 else t_template
+                                                                    
+                                                                    # 템플릿 배경 소멸 연산
+                                                                    template_median = np.median(t_template_g)
+                                                                    template_diff = cv2.absdiff(t_template_g, int(template_median))
+                                                                    
+                                                                    if screen_diff.shape[0] >= t_template_g.shape[0] and screen_diff.shape[1] >= t_template_g.shape[1]:
+                                                                        file_best_score = 0.0
+                                                                        for t_scale in [0.95, 1.0, 1.05]:
+                                                                            t_w, t_h = int(t_template_g.shape[1]*t_scale), int(t_template_g.shape[0]*t_scale)
+                                                                            if t_w <= screen_diff.shape[1] and t_h <= roi_trait_gray.shape[0]:
+                                                                                resized_t = cv2.resize(template_diff, (t_w, t_h))
+                                                                                res_st = cv2.matchTemplate(screen_diff, resized_t, cv2.TM_CCOEFF_NORMED)
+                                                                                file_best_score = max(file_best_score, np.max(res_st))
+                                                                        
+                                                                        temp_scores.append((t_file, file_best_score))
+                                                                break
+                                                                
+                                                temp_scores.sort(key=lambda x: x[1], reverse=True)
+                                                if len(temp_scores) >= 1:
+                                                    top1_file, top1_score = temp_scores[0]
+                                                    top2_score = temp_scores[1][1] if len(temp_scores) > 1 else 0.0
+                                                    best_score = top1_score
+                                                
+                                                    if top1_score >= 0.80 or (top1_score >= 0.60 and (top1_score - top2_score) >= 0.1):
+                                                        has_valuable_trait = True
+                                                        identified_trait_name = TRAIT_NAMES.get(top1_file, top1_file)
+                                                    
+                                            if current_sub == "NORMAL":
+                                                if has_any_trait:
+                                                    bprint(f"  > ⏭️ [스킵] 융합 가능 횟수 0 스킵. 특성: '{identified_trait_name}' (신뢰도: {best_score:.2f})")
+                                                    fast_clear_tooltip()
+                                                    continue
+                                                else:
+                                                    bprint(f"  > 💎 [재료 채택] 융합 0짜리 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                                    target_materials.append((cx, cy, scroll_state, False)) # has_trait=False
+                                            elif current_sub == "RECOVERY":
+                                                already_has_trait_in_list = any(m[3] for m in target_materials)
+                                                blank_count = sum(1 for m in target_materials if not m[3])
+                                                
+                                                # 1. 가치 특성 캐리어 선택 조건 (목표 가치 특성을 가졌고, 아직 리스트에 특성 캐리어가 없을 때)
+                                                if has_valuable_trait and not already_has_trait_in_list:
+                                                    bprint(f"  > 🧬 [재료 채택] 융합 가능 횟수 0짜리 가치 특성 '{identified_trait_name}' 확보! (신뢰도: {best_score:.2f})")
+                                                    target_materials.append((cx, cy, scroll_state, True)) # has_trait=True
+                                                    
+                                                # 2. 순정 피드백 재료 선택 조건 (특성이 전혀 없고, 피드백 재능이 있으며, 아직 순정이 2개 미만일 때)
+                                                elif not has_any_trait and is_target_level_1 and blank_count < 2:
+                                                    bprint(f"  > 💎 [재료 채택] 융합 0짜리 피드백 순정 확보! (1짜리 신뢰도: {score_t1:.2f} / 0짜리 신뢰도: {score_t0:.2f})")
+                                                    target_materials.append((cx, cy, scroll_state, False)) # has_trait=False
+                                                    
+                                                else:
+                                                    # 위 조건들에 해당하지 않거나 각 슬롯별 정원이 초과된 경우 안전하게 스킵 처리합니다.
+                                                    bprint(f"  > ⏭️ [스킵] RECOVERY 조건에 맞지 않거나 해당 정원이 만석입니다. (피드백 유무: {is_target_level_1} / 특성: '{identified_trait_name}')")
+                                                    fast_clear_tooltip()
+                                                    continue
+                                                    
+                                            fast_clear_tooltip()
+                                            # 성공적으로 찾았으면 메모리 업데이트
+                                            char_inventory_memory[char_key + "_material"] = (cx, cy, scroll_state)
+                                        
+                                    if len(target_materials) >= 3:
+                                        break
+                                        
+                                    # 3개가 안 채워진 상태에서 한 뷰(5x6) 탐색이 끝난 경우 스크롤 연계 처리
+                                    if scroll_state == 0:
+                                        bprint("  > ⏬ [스크롤 이동] 상단 탐색 완료. 마우스 휠을 16회 내려 하단 탐색을 이어갑니다.")
+                                        pyautogui.moveTo(1400, 500)
+                                        for _ in range(16): pyautogui.scroll(-120); time.sleep(0.05)
+                                        time.sleep(0.3)
+                                        scroll_state = 1
+                                        continue
+                                    elif scroll_state == 1:
+                                        if not is_material_rescan:
+                                            bprint("  > 🧠 [메모리 리스캔] 재료가 부족합니다. 마우스 휠을 16회 올려 처음부터 1회 전체 스캔을 재진행합니다.")
+                                            pyautogui.moveTo(1400, 500)
+                                            for _ in range(16): pyautogui.scroll(120); time.sleep(0.05)
+                                            time.sleep(0.3)
+                                            is_material_rescan = True
+                                            scroll_state = 0
+                                            char_inventory_memory[char_key + "_material"] = (0, 0, 0)
+                                            continue
+                                        else:
+                                            bprint("  > 🛑 [탐색 종료] 재탐색까지 마쳤으나 필요한 재료가 부족합니다.")
+                                            break
+                                        
+                                if len(target_materials) < 3:
+                                    bprint("  > 🛑 [재료 부족] 캐릭터 스킵 시퀀스 진입.")
+                                    send_cmd('E'); time.sleep(0.15); send_cmd('R'); skip_current_char = True
+                                else:
+                                    # [핵심 수정] 물리 좌표 정렬이 아니라, "탐색(발견) 완료된 역순(가장 마지막에 찾은 최신 발견물 우선)"으로 리스트를 뒤집어 클릭을 집행합니다.
+                                    # 이로써 가장 마지막에 발견된(우하단 측) 감염물부터 거꾸로 3번째 -> 2번째 -> 1번째 순서대로 클릭 등록을 수행합니다.
+                                    target_materials.reverse()
+                                    
+                                    # 재료 슬롯 등록 일괄 클릭 (스크롤 오차 0% 완벽 동기화)
+                                    bprint("  > 🔄 [재료 투입] 선택된 재료 3개 클릭 중...")
+                                    current_scroll = scroll_state
+                                    
+                                    for idx, mt in enumerate(target_materials):
+                                        cx, cy, item_scroll, has_tr = mt
+                                        
+                                        # 내가 클릭하려는 감염물이 있는 스크롤 위치와 현재 스크롤 위치가 다르면 동기화 수행
+                                        if current_scroll != item_scroll:
+                                            pyautogui.moveTo(1400, 500)
+                                            if item_scroll == 1:
+                                                bprint("  > ⏬ [스크롤 맞춤] 하단 재료 클릭을 위해 휠을 내립니다.")
+                                                for _ in range(16): pyautogui.scroll(-120); time.sleep(0.05)
+                                            else:
+                                                bprint("  > ⏫ [스크롤 맞춤] 상단 재료 클릭을 위해 휠을 올립니다.")
+                                                for _ in range(16): pyautogui.scroll(120); time.sleep(0.05)
+                                            time.sleep(0.3)
+                                            current_scroll = item_scroll
+                                            
+                                        pyautogui.moveTo(cx, cy); time.sleep(0.08); send_cmd('C'); time.sleep(0.12)
+                                                
+                                        # 첫 번째 재료 클릭 시 노출되는 경고 팝업을 '2.png'를 사용해 최대 0.5초간 능동 대기합니다.
+                                        if idx == 0:
+                                            has_popup = False
+                                            popup_name = None
+                                                    
+                                            start_wait = time.time()
+                                            while time.time() - start_wait < 0.5 and bot_active:
+                                                if check_img('2.png', thread_sct, force_full=True):
+                                                    has_popup = True
+                                                    popup_name = '2.png'
+                                                    break
+                                                time.sleep(0.03)
+                                                        
+                                            if has_popup:
+                                                bprint("  > ⚠️ [경고 팝업 감지] 재료 소모 알림(2.png) 감지! '더 이상 표시 안 함' 체크 및 확인(F) 클릭...")
+                                                
+                                                if check_img('empty_checkbox.png', thread_sct):
+                                                    chk_x, chk_y = FUSION_ROI['empty_checkbox.png']['last_pos']
+                                                    pyautogui.moveTo(chk_x, chk_y, duration=0.1); time.sleep(0.05)
+                                                    send_cmd('C'); time.sleep(0.1)
+                                                else:
+                                                    bprint("  > ❌ [경고] 'empty_checkbox.png' 이미지를 검출하지 못해 임시 기본 글씨 좌표(910, 618)로 클릭을 우회합니다.")
+                                                    pyautogui.moveTo(910, 618, duration=0.1); time.sleep(0.05)
+                                                    send_cmd('C'); time.sleep(0.1)
+                                                    
+                                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                                wait_vanish_start = time.time()
+                                                while time.time() - wait_vanish_start < 0.5 and bot_active:
+                                                    if not check_img(popup_name, thread_sct, force_full=True):
+                                                        break
+                                                    time.sleep(0.03)
+                                                pyautogui.moveTo(cx, cy); time.sleep(0.05)
+                                                    
+                                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                    wait_vanish('select_0_3.png', thread_sct)
+                                    
+                        else:
+                            # [기존 모드 3, 4 세팅 진입]
+                            # [단계 1.5] 융합 재료 슬롯 강제 클릭 (인벤토리 열기)
+                            bprint("  > 1.5. 융합 재료 슬롯(좌측)을 클릭하여 감염물 창을 엽니다.")
+                            pyautogui.moveTo(1150, 300); time.sleep(0.05); send_cmd('C')
+                            
+                            bprint("  > [능동 대기] 인벤토리 UI 팝업 초고속 확인 중...")
+                            wait_inv_start = time.time()
+                            while bot_active and time.time() - wait_inv_start < 3.0:
+                                # [핵심] 능동 대기 시에도 아이템 및 체크마크 ROI 적용 (force_full 제거)
+                                if check_img('item_A1.png', thread_sct) or \
+                                   check_img('item_B1.png', thread_sct) or \
+                                   check_img('check_mark.png', thread_sct):
+                                    break
+                                time.sleep(0.05)
 
-                        # [단계 3] 신규 감염물 탐색 및 2개 클릭
-                        bprint("  > 3. 신규 감염물 탐색 및 페어링 중 (체크된 감염물 배제)...")
-                        search_attempts = 0 
-                        skip_current_char = False
-                        last_cx, last_cy = CENTER_X, CENTER_Y
+                            if not bot_active: continue
+
+                            # [단계 2] 기존 체크마크 해제 (모드 3/4 내부에서 후처리를 위해 단계 건너뜀)
+                            bprint("  > 2. 신규 감염물 탐색 후 체크 해제를 진행합니다.")
+
+                            if not bot_active: continue
+
+                            # [단계 3] 신규 감염물 탐색 및 2개 클릭
+                            bprint("  > 3. 신규 감염물 탐색 및 페어링 중 (체크된 감염물 배제)...")
+                            search_attempts = 0 
+                            skip_current_char = False
                         
                         # [메모리 초기화]
                         char_key = char_images[char_index]
@@ -1754,7 +2995,7 @@ def fusion_bot_loop():
                             char_inventory_memory[char_key] = (0, 0)
                         is_memory_rescan = False
                         
-                        while bot_active:
+                        while bot_active and bot_mode in [3, 4]:
                             if not bot_active: raise BotStopException()
                             pyautogui.moveTo(200, 500); time.sleep(0.25)
 
@@ -1774,14 +3015,14 @@ def fusion_bot_loop():
                                     bprint("  > 🧠 [모드 4] 5/5 교차 페어링을 위한 정밀 판독 시작...")
                                 
                                 all_candidates = []
-                                search_items_mode4 = ['item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png']
+                                search_items_mode4 = ['item_A1.png', 'item_B1.png', 'item_A2.png', 'item_B2.png', 'item_C1.png', 'item_C2.png', 'item_D1.png', 'item_D2.png', 'item_D3.png']
                                 
                                 for item_name in search_items_mode4:
                                     template = FUSION_CACHE.get(item_name)
                                     if template is None: continue
                                     
                                     conf = FUSION_CONF.get(item_name, 0.92)
-                                    if item_name in ['item_A2.png', 'item_B2.png']: conf = min(conf, 0.88)
+                                    if item_name in ['item_A2.png', 'item_B2.png', 'item_C2.png', 'item_D2.png', 'item_D3.png']: conf = min(conf, 0.88)
 
                                     res = cv2.matchTemplate(screen_bgr, template, cv2.TM_CCOEFF_NORMED)
                                     loc = np.where(res >= conf)
@@ -2214,8 +3455,11 @@ def fusion_bot_loop():
                             active_chars = loop_count - len(skipped_chars)
                             
                             if active_chars <= 0:
-                                bprint("  > 🛑 [알림] 모든 캐릭터의 재료가 소진되었습니다. 매크로를 자동 정지합니다.")
-                                toggle_stop()
+                                bprint("  > 🛑 [알림] 모든 캐릭터의 재료가 소진되었습니다.")
+                                bprint("  > 🏆 [승리 연계] 승리코인을 진행할 본캐(13.png)로 자동 접속합니다!")
+                                
+                                pending_victory_mode = True
+                                state = 1
                                 continue
                                 
                             bprint("  > [탈출 준비] 인벤토리 창 닫기 (inv_title.png 소멸 능동 대기)...")
@@ -2235,7 +3479,7 @@ def fusion_bot_loop():
                                     bprint("  > [꼬임 방지] 인벤토리 창이 닫히지 않았습니다. ESC 재입력...")
                                     time.sleep(0.1)
 
-                            if bot_mode in [3, 4]:
+                            if bot_mode in [3, 4, 6]:
                                 # [핵심 수정] 스킵 시에도 방금 건너뛴 녀석이 마지막 서브 캐릭터였는지 검사
                                 last_active_index = -1
                                 for i in range(anchor_idx - 1, -1, -1):
@@ -2274,86 +3518,87 @@ def fusion_bot_loop():
                             skipped_chars.discard(char_index)
 
                         # [단계 4] 2/2 선택 완료 대기 및 F 입력
-                        bprint("  > 4. 선택 완료(select_2_2.png) 창 대기 중...")
-                        wait_sel = time.time()
-                        while bot_active:
-                            if not bot_active: raise BotStopException()
-                            # [핵심] 2/2 확인용 select_2_2.png ROI 적용 (force_full 제거)
-                            if check_img('select_2_2.png', thread_sct):
-                                # [결함 방어] 2/2 상태가 되었더라도, 내가 클릭한 감염물(safe_pts)이 아닌 엉뚱한 곳에 버그성 체크가 발생했는지 무결성 교차 검증!
-                                dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
-                                res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
-                                loc_dc = np.where(res_dc >= 0.85)
-                                pts_dc = list(zip(*loc_dc[::-1]))
+                        if bot_mode in [3, 4]:
+                            bprint("  > 4. 선택 완료(select_2_2.png) 창 대기 중...")
+                            wait_sel = time.time()
+                            while bot_active:
+                                if not bot_active: raise BotStopException()
+                                # [핵심] 2/2 확인용 select_2_2.png ROI 적용 (force_full 제거)
+                                if check_img('select_2_2.png', thread_sct):
+                                    # [결함 방어] 2/2 상태가 되었더라도, 내가 클릭한 감염물(safe_pts)이 아닌 엉뚱한 곳에 버그성 체크가 발생했는지 무결성 교차 검증!
+                                    dc_sct = cv2.cvtColor(np.asarray(thread_sct.grab({"left": 960, "top": 0, "width": 960, "height": 1080})), cv2.COLOR_BGRA2BGR)
+                                    res_dc = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
+                                    loc_dc = np.where(res_dc >= 0.85)
+                                    pts_dc = list(zip(*loc_dc[::-1]))
 
-                                rogue_check_found = False
-                                rogue_pts = []
+                                    rogue_check_found = False
+                                    rogue_pts = []
 
-                                if len(pts_dc) > 0:
-                                    dc_unique = []
-                                    for ptd in pts_dc:
-                                        if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
-                                            dc_unique.append(ptd)
-                                            
-                                    for ptd in dc_unique:
-                                        abs_check_x = ptd[0] + 960
-                                        abs_check_y = ptd[1]
-                                        
-                                        is_safe = False
-                                        for sp in safe_pts:
-                                            # sp[0], sp[1]은 목표 감염물 이미지 인식 좌상단 좌표입니다.
-                                            # 체크마크가 타겟 감염물 반경 100픽셀 이내에 있는지 확인하여 본인이 맞는지 대조합니다.
-                                            if math.hypot(abs_check_x - sp[0], abs_check_y - sp[1]) < 100:
-                                                is_safe = True
-                                                break
+                                    if len(pts_dc) > 0:
+                                        dc_unique = []
+                                        for ptd in pts_dc:
+                                            if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique):
+                                                dc_unique.append(ptd)
                                                 
-                                        if not is_safe:
-                                            rogue_check_found = True
-                                            rogue_pts.append(ptd)
+                                        for ptd in dc_unique:
+                                            abs_check_x = ptd[0] + 960
+                                            abs_check_y = ptd[1]
                                             
-                                if rogue_check_found:
-                                    bprint("  > 🚨 [치명적 버그 방어] 의도하지 않은 과거 감염물에 버그성 체크마크가 발생했습니다!")
-                                    
-                                    # 화면에 실제로 잔여 v표시가 검출되는지 2차 확인 진행
-                                    check_res = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
-                                    check_loc = np.where(check_res >= 0.85)
-                                    check_pts = list(zip(*check_loc[::-1]))
-                                    
-                                    if len(check_pts) == 0:
-                                        bprint("  > 🔄 [v표시 미발견] 체크가 해제된 상태입니다. 올바른 감염물 2개를 다시 클릭합니다.")
-                                        for idx, (px, py, pcx, pcy) in enumerate(safe_pts):
-                                            pyautogui.moveTo(pcx, pcy); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
-                                        pyautogui.moveTo(200, 500); time.sleep(0.2)
-                                    else:
-                                        bprint("  > 🔄 [v표시 발견] 버그성 체크마크가 감지되었습니다. 우선 체크 해제부터 다시 정밀 진행합니다.")
-                                        dc_unique_err = []
-                                        for ptd in check_pts:
-                                            if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique_err):
-                                                dc_unique_err.append(ptd)
-                                        for ptd in dc_unique_err:
-                                            hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
-                                            pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
+                                            is_safe = False
+                                            for sp in safe_pts:
+                                                # sp[0], sp[1]은 목표 감염물 이미지 인식 좌상단 좌표입니다.
+                                                # 체크마크가 타겟 감염물 반경 100픽셀 이내에 있는지 확인하여 본인이 맞는지 대조합니다.
+                                                if math.hypot(abs_check_x - sp[0], abs_check_y - sp[1]) < 100:
+                                                    is_safe = True
+                                                    break
+                                                    
+                                            if not is_safe:
+                                                rogue_check_found = True
+                                                rogue_pts.append(ptd)
+                                                
+                                    if rogue_check_found:
+                                        bprint("  > 🚨 [치명적 버그 방어] 의도하지 않은 과거 감염물에 버그성 체크마크가 발생했습니다!")
                                         
-                                        pyautogui.moveTo(200, 500); time.sleep(0.2)
-                                        bprint("  > 🔄 버그 체크마크 해제 완료. 올바른 감염물 2개를 다시 정밀하게 클릭합니다.")
-                                        for idx, (px, py, pcx, pcy) in enumerate(safe_pts):
-                                            pyautogui.moveTo(pcx, pcy); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
-                                        pyautogui.moveTo(200, 500); time.sleep(0.2)
-                                    
-                                    wait_sel = time.time() # 2/2 대기 타이머 리셋
-                                    continue # F를 누르지 않고 while 루프로 돌아가 select_2_2.png 상태를 처음부터 재검증합니다.
+                                        # 화면에 실제로 잔여 v표시가 검출되는지 2차 확인 진행
+                                        check_res = cv2.matchTemplate(dc_sct, FUSION_CACHE['check_mark.png'], cv2.TM_CCOEFF_NORMED)
+                                        check_loc = np.where(check_res >= 0.85)
+                                        check_pts = list(zip(*check_loc[::-1]))
+                                        
+                                        if len(check_pts) == 0:
+                                            bprint("  > 🔄 [v표시 미발견] 체크가 해제된 상태입니다. 올바른 감염물 2개를 다시 클릭합니다.")
+                                            for idx, (px, py, pcx, pcy) in enumerate(safe_pts):
+                                                pyautogui.moveTo(pcx, pcy); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
+                                            pyautogui.moveTo(200, 500); time.sleep(0.2)
+                                        else:
+                                            bprint("  > 🔄 [v표시 발견] 버그성 체크마크가 감지되었습니다. 우선 체크 해제부터 다시 정밀 진행합니다.")
+                                            dc_unique_err = []
+                                            for ptd in check_pts:
+                                                if not any(math.hypot(ptd[0]-u[0], ptd[1]-u[1]) < 40 for u in dc_unique_err):
+                                                    dc_unique_err.append(ptd)
+                                            for ptd in dc_unique_err:
+                                                hx, hy = ptd[0] + 960 + 15, ptd[1] + 15
+                                                pyautogui.moveTo(hx, hy); time.sleep(0.02); send_cmd('C'); time.sleep(0.1)
+                                            
+                                            pyautogui.moveTo(200, 500); time.sleep(0.2)
+                                            bprint("  > 🔄 버그 체크마크 해제 완료. 올바른 감염물 2개를 다시 정밀하게 클릭합니다.")
+                                            for idx, (px, py, pcx, pcy) in enumerate(safe_pts):
+                                                pyautogui.moveTo(pcx, pcy); time.sleep(0.05); send_cmd('C'); time.sleep(0.1)
+                                            pyautogui.moveTo(200, 500); time.sleep(0.2)
+                                        
+                                        wait_sel = time.time() # 2/2 대기 타이머 리셋
+                                        continue # F를 누르지 않고 while 루프로 돌아가 select_2_2.png 상태를 처음부터 재검증합니다.
 
-                                bprint("  > [성공] 2/2 선택 완료 및 무결성 검증 통과! F를 입력하여 선택창을 닫습니다.")
-                                send_cmd('F'); time.sleep(0.05); send_cmd('R')
-                                wait_vanish('select_2_2.png', thread_sct)
-                                break
-                                
-                            if time.time() - wait_sel > 1.0:
-                                bprint("  > [재시도] 2/2 선택창 미탐(서버 렉). 마지막 감염물 재클릭 시도...")
-                                pyautogui.moveTo(last_cx, last_cy); time.sleep(0.05); send_cmd('C')
-                                pyautogui.moveTo(200, 500); time.sleep(0.25) 
-                                wait_sel = time.time()
-                            time.sleep(0.1)
+                                    bprint("  > [성공] 2/2 선택 완료 및 무결성 검증 통과! F를 입력하여 선택창을 닫습니다.")
+                                    send_cmd('F'); time.sleep(0.05); send_cmd('R')
+                                    wait_vanish('select_2_2.png', thread_sct)
+                                    break
+                                    
+                                if time.time() - wait_sel > 1.0:
+                                    bprint("  > [재시도] 2/2 선택창 미탐(서버 렉). 마지막 감염물 재클릭 시도...")
+                                    pyautogui.moveTo(last_cx, last_cy); time.sleep(0.05); send_cmd('C')
+                                    pyautogui.moveTo(200, 500); time.sleep(0.25) 
+                                    wait_sel = time.time()
+                                time.sleep(0.1)
 
                     if not bot_active: continue
                     
@@ -2435,13 +3680,13 @@ def fusion_bot_loop():
                             if check_img('stop_btn.png', thread_sct):
                                 bprint("  > [성공] stop_btn.png 전환 완료! ESC 탈출을 위해 State 1로 배턴을 넘깁니다.")
                                 
-                                current_anchor = 5
-                                if 5 in skipped_chars:
+                                current_anchor = anchor_idx
+                                if anchor_idx in skipped_chars:
                                     current_anchor = 0
-                                    while current_anchor in skipped_chars and current_anchor < 5:
+                                    while current_anchor in skipped_chars and current_anchor < anchor_idx:
                                         current_anchor += 1
                                         
-                                if bot_mode in [3, 4] and char_index == current_anchor:
+                                if bot_mode in [3, 4, 6] and char_index == current_anchor:
                                     fusion_end_time = time.time() + 300.0
                                     bprint("  > ⏱️ [타이머 갱신] 앵커 캐릭터 융합 가동 시작! 5분(300초) 타이머가 설정되었습니다.")
                                 break
@@ -2504,7 +3749,7 @@ def fusion_bot_loop():
                     # [단계 5] 사이클 마무리 및 분기
                     active_chars = loop_count - len(skipped_chars)
                     
-                    if bot_mode in [3, 4]:
+                    if bot_mode in [3, 4, 6]:
                         if active_chars == 1:
                             c_name = CHAR_NAMES.get(char_images[char_index], "캐릭")
                             bprint(f"  > 👑 [단일 생존] 마지막 남은 '{c_name}' 입니다! 접속 해제 없이 즉시 대기 모드로 돌입합니다.")
@@ -2722,24 +3967,76 @@ def force_change_character(char_key):
 
         bprint(f"✅ '{c_name}' 수동 캐릭터 변경 시퀀스가 종료되었습니다.\n")
 
+def stop_popup_monitor():
+    global bot_active, bot_mode
+    with mss.mss() as monitor_sct:
+        while True:
+            try:
+                if bot_active and bot_mode in [3, 4, 6]:
+                    # 1. 중단 팝업 검증
+                    if check_img('stop_pop.png', monitor_sct, force_full=True):
+                        bprint("  > 🚨 [중단 팝업 감지] 비동기 감시기가 '중단' 확인 팝업을 감지했습니다! ESC를 1회 입력합니다.")
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        
+                        wait_t = time.time()
+                        while bot_active and time.time() - wait_t < 3.0:
+                            if not check_img('stop_pop.png', monitor_sct, force_full=True):
+                                break
+                            time.sleep(0.05)
+                        bprint("  > 🔄 [복구 완료] '중단' 확인 팝업 해제 완료.")
+                        
+                    # 2. 포위 사냥 팝업 검증
+                    if check_img('hunt_pop.png', monitor_sct, force_full=True):
+                        bprint("  > 🚨 [포위 사냥 감지] 로그인 직후 우측 '포위 사냥' 알림을 감지했습니다! ESC를 1회 입력합니다.")
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        
+                        wait_t = time.time()
+                        while bot_active and time.time() - wait_t < 3.0:
+                            if not check_img('hunt_pop.png', monitor_sct, force_full=True):
+                                break
+                            time.sleep(0.05)
+                        bprint("  > 🔄 [복구 완료] '포위 사냥' 알림 해제 완료.")
+                original_sleep(0.15)
+            except Exception:
+                original_sleep(0.15)
+
 # === [시작점 및 단축키 설정] ===
 def main_bot():
     threading.Thread(target=fusion_bot_loop, daemon=True).start()
+    threading.Thread(target=victory_coin_bot_loop, daemon=True).start()
+    threading.Thread(target=stop_popup_monitor, daemon=True).start()
     
     keyboard.add_hotkey('[', toggle_stop)
     keyboard.add_hotkey(']', lambda: toggle_start(1)) # 모드 1: 타이머만
+    keyboard.add_hotkey('>', lambda: toggle_start(6)) # 모드 6: 재료 복사 모드
     keyboard.add_hotkey('?', lambda: toggle_start(3)) # 모드 3: 지능형 융합
     keyboard.add_hotkey('<', lambda: toggle_start(4)) # 모드 4: 5/5 지능형 복사
+    keyboard.add_hotkey(';', lambda: toggle_start(5)) # 모드 5: 감염물 분별
     keyboard.add_hotkey('-', toggle_dimming_setting) # 모니터 절전 토글
+    
+    # [5/5 자동화] 중앙 관리 배열(MY_CHARACTERS)을 스캔하여 수동 캐릭터 단축키를 자동으로 생성합니다!
+    for c in MY_CHARACTERS:
+        if c.get("hotkey"):
+            # 람다 클로저 충돌을 피하기 위해 k=c["img"]로 변수 바인딩
+            keyboard.add_hotkey(c["hotkey"], lambda k=c["img"]: threading.Thread(target=force_change_character, args=(k,), daemon=True).start())
 
     bprint("\n=========================================")
     bprint(" 🚀 원스휴먼 스마트 융합 봇 가동 준비 🚀")
     bprint("=========================================")
     bprint(" [ : 정지 (대기 상태)")
     bprint(" ] : 융합 타이머(기본) 시작")
+    bprint(" > : 재료 복사 모드 시작")
     bprint(" ? : 깡 복사 모드 시작")
     bprint(" < : 5/5 복사 모드 시작")
+    bprint(" ; : 감염물 분별 모드 시작")
     bprint(" - : 모니터 절전(밝기 0%) 자동 켜기/끄기")
+    bprint(" ---------------------------------------")
+    bprint(" [수동 캐릭터 변경 단축키]")
+    
+    # 생성된 단축키를 메뉴판에 보기 좋게 자동 출력
+    for c in MY_CHARACTERS:
+        if c.get("hotkey"):
+            bprint(f" {c['hotkey']:<4} : {c['name']}")
     bprint("=========================================\n")
 
     while True:

@@ -139,6 +139,7 @@ def dump_blackbox_log(reason):
 class BotStopException(Exception): pass
 class BotRestartException(Exception): pass
 class BotDeathException(Exception): pass # [사망복구] 사망 복구 전용 예외 클래스 신설
+class BotDurabilityException(Exception): pass # [내구도복구] 내구도 전용 예외 클래스 신설
 
 # 모든 time.sleep 에 일괄적으로 +-0.005초 랜덤 딜레이 적용
 original_sleep = time.sleep
@@ -147,6 +148,7 @@ animal_active = False # [동물포획] 전역 상태 변수 추가
 oblivion_active = False # [망각모드] 전역 상태 변수 추가
 oblivion_stage = 0      # [사망감시] 망각모드 진행 단계 트래커
 death_trigger = False   # [사망복구] 캐릭터 사망 복구 신호 트리거
+durability_trigger = False # [내구도복구] 캐릭터 내구도 0 신호 트리거
 silence_fail_log = False # [대기수색] 수색 대기 중 실패 로그 무음 처리용 플래그
 victory_mode = 1 # 승리코인 모드 선택 변수 (1 또는 2)
 original_brightness = 100 # [화면 밝기] 모니터 원래 밝기 복구용 저장소
@@ -246,6 +248,10 @@ def jitter_sleep(seconds):
         # [사망 긴급복구 인터셉터] 사냥 도중 사망 트리거가 켜지면, 오직 망각 모드 실행 스레드(bot_thread_oblivion)에만 사망 예외를 던져 복구 시퀀스를 가동합니다.
         if t_name == "bot_thread_oblivion" and death_trigger:
             raise BotDeathException()
+
+        # [내구도 긴급수리 인터셉터] 사냥/루팅 도중 내구도 0 트리거가 켜지면, 오직 망각 모드 실행 스레드(bot_thread_oblivion)에만 내구도 예외를 던집니다.
+        if t_name == "bot_thread_oblivion" and globals().get('durability_trigger', False):
+            raise BotDurabilityException()
             
         original_sleep(max(0, min(0.05, final_time - (time.time() - start_t))))
 
@@ -1089,8 +1095,15 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             template_processed = template_gray
             use_mask = mask
             use_color = False
+
+        # D. 하늘색 번개 형상 아이콘(cyan_icon.png)의 경우: 컬러 정보(BGR) 기반 매칭 강제 가동 (ROI 자동 연동)
+        elif img_path == 'cyan_icon.png' and template_color is not None:
+            screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+            template_processed = template_color
+            use_mask = None
+            use_color = True
             
-        # D. 그 외 모든 일반 UI/문자열: 기존의 검증된 Grayscale 매칭 사용
+        # E. 그 외 모든 일반 UI/문자열: 기존의 검증된 Grayscale 매칭 사용
         else:
             screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
             template_processed = template_gray
@@ -1128,6 +1141,10 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
                 screen_bgr_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
                 sb_f, sg_f, sr_f = cv2.split(screen_bgr_f)
                 screen_processed_f = cv2.subtract(sg_f, cv2.max(sr_f, sb_f))
+
+            elif img_path == 'cyan_icon.png' and template_color is not None:
+                        screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
+
             elif img_path in MASK_UI_LIST and mask is not None:
                 screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
             else:
@@ -1154,7 +1171,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
 
         # 3. [기존 가우시안 적응형 이진화 대피소 복구]
         # 지정된 4개 마스크 대상 외의 다른 일반 이미지 매칭 실패 시, 이전의 가우시안 적응형 이진화를 안정적으로 수행합니다.
-        if max_val < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png':
+        if max_val < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png' and img_path != 'cyan_icon.png':
             s_gray = screen_processed
             t_gray = template_processed
             
@@ -2297,6 +2314,7 @@ def oblivion_bot_loop():
                 oprint("=== 망각 모드 시퀀스 시작 ===")
                 
                 # 1단계
+                oblivion_stage = 1
                 oprint("[1단계 시작] 이동 및 소멸 검증")
                 
                 # [물약 팝업 방어막] 던전 입장 직후 뜨는 '감염물' UI 안내창(potion.png)이 소멸할 때까지 안전 대기 수행
@@ -2304,10 +2322,13 @@ def oblivion_bot_loop():
                 time.sleep(1.0) # 입장 직후 팝업이 로딩되어 렌더링될 때까지 안전 대기
                 
                 # 감염물 팝업이 화면에 떠 있는 동안에는 어떠한 입력도 보내지 않고 소멸할 때까지 유휴 대기합니다.
+                has_printed_inf = False
                 while oblivion_active:
                     if not find_img('Infectious.png', conf=0.70, full_screen=False):
                         break
-                    oprint("  > [대기] 'Infectious.png'(감염물 팝업) 잔존 확인... 완전 소멸 시까지 동작을 일시 정지합니다.")
+                    if not has_printed_inf:
+                        oprint("  > [대기] 'Infectious.png'(감염물 팝업) 잔존 확인... 완전 소멸 시까지 동작을 일시 정지합니다.")
+                        has_printed_inf = True
                     time.sleep(0.2)
                     
                 if not oblivion_active: raise BotStopException()
@@ -2485,23 +2506,10 @@ def oblivion_bot_loop():
                 oprint("  > [입력] 'W' 키 2.5초간 유지")
                 send_cmd('W'); time.sleep(2.5); send_cmd('R'); time.sleep(0.1)
 
-                # E키 누르기 전, 좌클릭 1회 입력 및 0.5초 선행 내구도 검증
-                oprint("  > [입력] E키 선행 무기 상태 판별용 1번키 1회 실행")
-                send_cmd('1'); time.sleep(0.1); send_cmd('U'); send_cmd('R'); time.sleep(0.1)
-                
-                oprint("  > [대기] 0.5초간 무기 내구도 이상 유무 선행 감시...")
-                has_broken = False
-                check_start = time.time()
-                while time.time() - check_start < 0.5:
-                    if not oblivion_active: raise BotStopException()
-                    if find_img('durability.png', conf=0.70, full_screen=False):
-                        has_broken = True
-                        break
-                    time.sleep(0.05)
-                
-                # 내구도 0 감지 시 즉시 수리 및 던전 재진입 전역 복구 가동 (복구 후 1단계 무한 리스타트)
-                if has_broken:
-                    check_and_repair()
+                # 하늘색 번개 형상 아이콘(cyan_icon.png)이 검출되면 'X' 키 1회 입력
+                if find_img('cyan_icon.png', conf=0.80, full_screen=False):
+                    oprint("  > [감지] 저주인형 아이콘(cyan_icon.png) 포착! 'X' 키 1회 전송")
+                    send_cmd('X'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
                 
                 oprint("  > [입력] 'E' 키 1회 클릭")
                 send_cmd('e'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
@@ -2558,152 +2566,155 @@ def oblivion_bot_loop():
                 align_view_by_anchor('anchor1.png')
                 time.sleep(0.2)
                 
-                # 7~8단계 통합: 점진적 전진 및 확정 수거 시퀀스 (인치웜 솔루션)
+                # 7~8단계 통합: 보상 수거 시퀀스 (자가 정렬 및 동적 추적 주행)
                 oprint("[7~8단계 시작] 아노말리 수색 및 실시간 트래킹 전진 수거 가동")
-                
-                # 6단계에서 이미 파란 포탈(anchor1.png)로 에임 조준을 완료했으므로,
-                # 정방향 시야각 내에서 진짜 아노말리(데비안트)의 고유 핑크 컬러를 감지합니다.
-                oprint("  > [수색] 6단계 조준선 근처에서 아노말리 실시간 탐색 시작...")
-                target_found = False
-                
-                # 1. 제자리에서 데비안트 탐색 시도
-                for _ in range(5):
-                    box = find_deviant_by_color(thread_sct)
-                    if box:
-                        target_found = True
-                        break
-                    time.sleep(0.1)
-                
-                # 2. 정면에서 미검출 시, 좌우로 미세 회전하며 스캔 (오탐 방지를 위해 좌우 미세 수색)
-                if not target_found:
-                    oprint("  > [수색] 정면 미검출: 좌우 미세 수색으로 진짜 데비안트 포착 시도...")
-                    sweep_steps = ['M-100,0', 'M200,0', 'M-100,0'] # 좌측 이동 -> 우측 이동 -> 원상 복귀
-                    for step in sweep_steps:
-                        send_cmd(step)
-                        time.sleep(0.1)
-                        box = find_deviant_by_color(thread_sct)
-                        if box:
-                            target_found = True
-                            break
-                            
-                if not oblivion_active: raise BotStopException()
-                
-                # 3. 포착 완료 시 비례 제어(스티어링) 기법으로 진짜 보상에 에임을 조준하고 전진 트래킹
-                if target_found:
-                    oprint("  > [전진] 진짜 보상 방향으로 마우스 에임을 실시간 고정하며 전진 가동...")
-                    send_cmd('W') # 전진 키 홀딩
-                    
-                    start_walk_t = time.time()
-                    while oblivion_active and (time.time() - start_walk_t < 10.0): # 최대 10초 추적 제한
-                        box = find_deviant_by_color(thread_sct)
-                        if box:
-                            cx = box.left + box.width // 2
-                            err_x = cx - CENTER_X
-                            
-                            # 진짜 보상 방향으로 에임 자동 스티어링 (X축 정렬)
-                            if abs(err_x) > 5:
-                                dx = int(err_x * 0.75)
-                                dx = max(-140, min(140, dx)) 
-                                send_cmd(f'M{dx},0')
-                                
-                        # [도달 판정] 보물상자 UI('treasure_box.png')가 화면에 뜨면 즉각 전진을 중단합니다.
-                        if find_treasure_box_multi_scale('treasure_box.png', conf=0.50) or safe_find_image('treasure_box.png', conf=0.65, custom_sct=thread_sct):
-                            oprint("  > 🚨 [도달] 'treasure_box.png' 보물상자 UI 노출 확인! 즉각 정지합니다.")
-                            break
-                            
-                        time.sleep(0.02)
-                        
-                    send_cmd('R') # W 키 해제 (전진 종료)
-                    time.sleep(0.2)
-                else:
-                    oprint("  > ⚠️ [경고] 진짜 데비안트 스캔 실패. 안전 거리 확보를 위해 기본값 전진 1.5초를 적용합니다.")
-                    send_cmd('W')
-                    time.sleep(1.5)
-                    send_cmd('R')
-                    time.sleep(0.2)
                 
                 looted = False
                 attempts = 0
                 
-                # 상자를 열고 보상을 획득할 때까지 "수거 시도 -> 2D UI 검증" 루프 작동 (최대 10회)
-                while oblivion_active and attempts < 10:
-                    attempts += 1
+                while oblivion_active and not looted:
+                    # 1단계: 파란 포탈(anchor1.png) 정렬 및 에임 락온
+                    oprint("  > [정렬] 'anchor1.png'(파란 포탈) 수색 및 초기 정렬...")
                     
-                    # 2회차 시도부터는 매 수거 전에 장벽/포탈(anchor1.png) 및 진짜 보상 방향을 물리적으로 완전 재정렬합니다!
-                    if attempts > 1:
-                        # 1. 상자와의 거리 단축을 위해 0.5초 미세 전진
-                        oprint("  > [미검출] 보상 팝업 미확인. 상자와의 거리 단축을 위해 0.5초 미세 전진합니다.")
-                        send_cmd('W')
-                        time.sleep(0.5)
-                        send_cmd('R'); time.sleep(0.2)
-                        
-                        # 2. 파란 포탈(anchor1.png) 고속 탐색 및 정밀 에임 조준
-                        oprint(f"  > [수거 시도 {attempts}회차] 파란 포탈('anchor1.png') 재탐색 및 조준 정렬 시작...")
+                    # 만약 처음 시도하는 거라면 큰 회전으로 찾기
+                    if attempts == 0:
                         while oblivion_active:
                             pos = find_anchor_final('anchor1.png')
-                            if pos:
-                                break
-                            send_cmd('M-260,0') # 왼쪽으로 회전하며 수색
+                            if pos: break
+                            send_cmd('M-260,0') # 왼쪽으로 수색 회전
                             time.sleep(0.04)
-                            
                         align_view_by_anchor('anchor1.png')
                         time.sleep(0.1)
-                        
-                        # 3. 진짜 데비안트 재스캔 및 오프셋 조준선 정렬
-                        oprint(f"  > [수거 시도 {attempts}회차] 진짜 보상 데비안트 재스캔 및 에임 조준선 고정...")
-                        target_found_retry = False
+                    else:
+                        # 리트라이 회차(가까운 거리)일 때는 에임이 요동치는 현상(와리가리)을 방지하기 위해,
+                        # 360도 무지성 회전과 무거운 align_view_by_anchor를 생략하고 
+                        # 미세 수색(좌우 100px)만 빠르게 돌려 0.1초 만에 포탈을 낚아챕니다.
+                        portal_found = False
                         for _ in range(5):
+                            if find_anchor_final('anchor1.png'):
+                                portal_found = True; break
+                            time.sleep(0.05)
+                        if not portal_found:
+                            # 정면에서 안 보이면 좌우를 가볍게 훑음
+                            for step in ['M-80,0', 'M160,0', 'M-80,0']:
+                                send_cmd(step); time.sleep(0.1)
+                                if find_anchor_final('anchor1.png'):
+                                    portal_found = True; break
+                                    
+                        # 정렬 역시 요동침을 완전히 억제하기 위해 단 1회의 댐핑 게인(0.40) 미세 보정만 적용합니다.
+                        pos = find_anchor_final('anchor1.png')
+                        if pos:
+                            err_x = pos[0] - CENTER_X
+                            dx = int(err_x * 0.40) # 오버슈트 방지용 댐핑 게인 적용
+                            send_cmd(f'M{dx},0')
+                            time.sleep(0.1)
+
+                    # 2단계: 진짜 데비안트(발광 핑크) 정밀 수색 및 락온
+                    oprint("  > [수색] 정면 시야각에서 진짜 보상 데비안트 탐색 시작...")
+                    target_found = False
+                    for _ in range(5):
+                        box = find_deviant_by_color(thread_sct)
+                        if box:
+                            target_found = True; break
+                        time.sleep(0.1)
+                        
+                    if not target_found:
+                        oprint("  > [수색] 정면 미검출: 좌우 미세 수색으로 진짜 데비안트 포착 시도...")
+                        sweep_steps = ['M-100,0', 'M200,0', 'M-100,0']
+                        for step in sweep_steps:
+                            send_cmd(step); time.sleep(0.1)
                             box = find_deviant_by_color(thread_sct)
                             if box:
-                                target_found_retry = True
-                                break
-                            time.sleep(0.1)
+                                target_found = True; break
+
+                    # 3단계: 전진 주행 (데비안트 락온 및 실시간 에임 고정 유지)
+                    if target_found:
+                        # 수색에 완벽 성공했으므로, 실패 카운트(attempts)를 즉시 0으로 초기화합니다! (무한 자율 복구 보장)
+                        if attempts > 0:
+                            oprint("  > 🎉 [성공] 진짜 보상 재검출 완료! 실패 카운트를 0으로 초기화하고 재전진을 개시합니다.")
+                            attempts = 0
                             
-                        if not target_found_retry:
-                            # 좌우 미세 수색
-                            sweep_steps = ['M-100,0', 'M200,0', 'M-100,0']
-                            for step in sweep_steps:
-                                send_cmd(step)
-                                time.sleep(0.1)
-                                box = find_deviant_by_color(thread_sct)
-                                if box:
-                                    target_found_retry = True
-                                    break
-                                    
-                        if target_found_retry:
+                        # 최대 전진 시간을 사용자 요구에 부합하도록 5초로 하향 조정합니다.
+                        oprint("  > [전진] 진짜 보상 방향으로 에임을 고정한 채 최대 5초간 전진 시작...")
+                        send_cmd('W') # 전진 키 누름
+                        
+                        start_walk_t = time.time()
+                        box_detected = False
+                        
+                        # 최대 5.0초 동안 전진을 누르고 가면서도, 실시간으로 보상물체를 찾아 미끄러지듯 조준을 보정해 나갑니다!
+                        while oblivion_active:
+                            # 전진 시간 상한을 8초로 타이트하게 세팅합니다.
+                            if time.time() - start_walk_t > 8.0:
+                                oprint("  > ⚠️ [경고] 최대 8초간 전진했으나 상자 미검출. 조준선 재정렬을 위해 전진을 멈춥니다.")
+                                break
+                            
+                            # [와리가리 흔들림 원천 차단 필터]
+                            # 전진 도중 오직 진짜 보상 데비안트의 고유 핑크색(find_deviant_by_color)만 연속 추적합니다!
+                            # 파란 포탈(anchor1)로 되돌아가 조준점을 맞추는 복구 분기를 전면 제거하여,
+                            # 포탈과 데비안트 사이에서 에임이 매 프레임 교차하며 요동치는 현상을 영구히 박멸합니다.
                             box = find_deviant_by_color(thread_sct)
                             if box:
                                 cx = box.left + box.width // 2
                                 err_x = cx - CENTER_X
+                                
+                                # 가속 상태에서도 에임이 미쳐 날뛰며 요동치지 않도록, 0.40의 비틀림 댐핑 보정식을 실시간 연속 전송합니다!
                                 if abs(err_x) > 10:
-                                    dx = int(err_x * 0.75)
-                                    dx = max(-140, min(140, dx)) 
+                                    dx = int(err_x * 0.40)
+                                    dx = max(-65, min(65, dx))
                                     send_cmd(f'M{dx},0')
-                                    time.sleep(0.15)
-                    
-                    oprint(f"  > [수거 시도 {attempts}회차] 상자 열기(F) 및 수령(F) 시도...")
-                    
-                    # F 2회 연속 입력으로 상자 상호작용 및 습득 수행
-                    send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.2)
-                    send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
-                    
-                    # 보상 획득 팝업(reward_gain.png)이 정상적으로 떴는지 확인 (1초 대기 확인)
-                    check_start = time.time()
-                    while time.time() - check_start < 1:
-                        if keyboard.is_pressed('['):
-                            toggle_stop()
-                            raise BotStopException()
+                                    
+                            # 실시간으로 보물상자 텍스트('treasure_box.png') 출현 감시
+                            if find_treasure_box_multi_scale('treasure_box.png', conf=0.50) or safe_find_image('treasure_box.png', conf=0.65, custom_sct=thread_sct):
+                                oprint("  > 🚨 [도달] 'treasure_box.png' 보물상자 UI 노출 확인! 즉각 정지합니다.")
+                                box_detected = True
+                                break
+                            time.sleep(0.05)
+                            
+                        send_cmd('R') # W 키 해제 (정지)
+                        time.sleep(0.2)
                         
-                        # [초정밀 상단-중앙 탐색대역 격리] 화면을 세로 3칸, 가로 2칸으로 6등분하여 오직 '상단 중앙 영역'만 정밀 타겟팅합니다.
-                        top_center_6th_region = (SCREEN_W // 3, 0, SCREEN_W // 3, SCREEN_H // 2)
-                        if safe_find_image('reward_gain.png', conf=0.70, region=top_center_6th_region, custom_sct=thread_sct):
-                            looted = True
+                        if box_detected:
+                            # 상자 정면에 확실히 도달한 경우에만 획득(F) 수거 시도 실행!
+                            attempts += 1
+                            oprint(f"  > [수거 시도 {attempts}회차] 상자 열기(F) 1회 실행 후 'reward_gain.png'(획득) 확인...")
+                            
+                            # 1. 일단 상자 열기 F 1회 전송
+                            send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                            
+                            # 2. 1.5초 동안 '획득' 이미지(reward_gain.png)가 뜨는지 감지 (0.1초 간격 루프)
+                            is_acquired = False
+                            for _ in range(15):
+                                if keyboard.is_pressed('['):
+                                    toggle_stop()
+                                    raise BotStopException()
+                                
+                                # 상단 중앙 영역만 획정 수색
+                                top_center_6th_region = (SCREEN_W // 3, 0, SCREEN_W // 3, SCREEN_H // 2)
+                                if safe_find_image('reward_gain.png', conf=0.70, region=top_center_6th_region, custom_sct=thread_sct):
+                                    is_acquired = True
+                                    break
+                                time.sleep(0.1)
+                                
+                            if is_acquired:
+                                oprint(f"  > 🎉 [성공] 'reward_gain.png' 보상 감지 완료! F를 한 번 더 눌러 아이템을 수령합니다.")
+                                send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                                looted = True
+                                break
+                            else:
+                                oprint("  > ⚠️ [실패] 1.5초간 'reward_gain.png' 미검출. 다시 anchor1.png 단계부터 정렬을 재개합니다.")
+                                looted = False
+                        else:
+                            # 상자를 발견하지 못하고 시간초과된 경우, 자동으로 루프 처음으로 돌아가 재정렬을 가동합니다.
+                            pass
+                    else:
+                        # 360도/좌우 수색에도 보상을 완전히 놓친 경우, 안전을 위해 기본 전진 1.5초를 누적해 시야를 좁힙니다.
+                        attempts += 1
+                        oprint(f"  > ⚠️ [경고] 진짜 데비안트 탐색 실패 ({attempts}/10). 안전 전진 1.5초 후 재정렬을 가동합니다.")
+                        send_cmd('W'); time.sleep(1.5); send_cmd('R'); time.sleep(0.2)
+                        
+                        if attempts >= 10:
+                            oprint("  > ❌ [실패] 수색 및 수거 10회 연속 실패. 강제 진행을 위해 수거 단계를 마감합니다.")
                             break
-                        time.sleep(0.05)
-                        
-                    if looted:
-                        oprint(f"  > 🎉 [성공] 'reward_gain.png' 보상 수령 완료 팝업 감지! 수거 성공.")
-                        break
                 
                 # 9단계
                 oprint("[9단계 시작] 인스턴스 재도전 접수")
@@ -2764,13 +2775,27 @@ def oblivion_bot_loop():
                     arduino.write('R'.encode()); arduino.flush()
                 except: pass
                 continue
-            except BotRestartException:
-                oprint("  > 🔄 [망각 복구] 수리 및 던전 재진입 시퀀스가 정상 완료되었습니다! 1단계부터 무한 루프를 완전히 새로 구동합니다.")
+            except BotDurabilityException:
                 try:
-                    arduino.write('U'.encode()); arduino.flush()
-                    arduino.write('R'.encode()); arduino.flush()
-                except: pass
-                continue
+                    oprint("  > 🔧 [내구도 복구] 캐릭터 내구도 0 감지! 비동기 트리거에 의해 장비 수리 및 던전 재진입 시퀀스를 강제 가동합니다.")
+                    global durability_trigger
+                    durability_trigger = False # 트리거 즉각 클리어
+                    
+                    try:
+                        # 복구 연산 가동 전 물리 키보드/마우스 눌려있는 버퍼 안전 해제
+                        arduino.write('U'.encode()); arduino.flush()
+                        arduino.write('R'.encode()); arduino.flush()
+                    except: pass
+                    time.sleep(0.5)
+                    
+                    check_and_repair()
+                except BotStopException:
+                    oprint("  > [망각] 내구도 복구 루틴 진행 중 정지 신호 수신 -> 복구를 중단하고 대기 모드로 진입합니다.")
+                    try:
+                        arduino.write('U'.encode()); arduino.flush()
+                        arduino.write('R'.encode()); arduino.flush()
+                    except: pass
+                    continue
             except BotDeathException:
                 try:
                     oprint("  > 💀 [사망 복구] 캐릭터 사망 감지! 10단계 던전 재진입 시퀀스를 시작합니다 (수리 생략).")
@@ -2897,10 +2922,19 @@ def death_monitor_loop():
                     continue
                     
                 # [고성능 적응형 이진화 & ROI 캐싱 스캔] 고정 위치의 텍스트(death.png)를 자가 학습하여 높은 정밀도로 감지합니다.
+                # 1. 사망 감시
                 if safe_find_image('death.png', conf=0.70, custom_sct=death_sct):
                     bprint("\n🚨🚨🚨 [사망 감지] 캐릭터 사망(사망.png) 확인! 10단계 던전 재진입 복구 루틴을 트리거합니다. 🚨🚨🚨")
                     death_trigger = True # 사망 복구 트리거 활성화
                     time.sleep(1.0)
+                
+                # 2. 내구도 감시 (전역 ROI 캐시 자동 연동)
+                elif safe_find_image('durability.png', conf=0.70, custom_sct=death_sct):
+                    bprint("\n🚨🚨🚨 [내구도 감지] 장비 내구도 0(durability.png) 확인! 즉각 수리 및 재진입 시퀀스를 예약합니다. 🚨🚨🚨")
+                    global durability_trigger
+                    durability_trigger = True
+                    time.sleep(1.0)
+                    
                 time.sleep(0.2)
             except BotStopException:
                 # 매크로가 수동 정지될 때 발생하는 정지 예외를 안전하게 우회하여 스레드가 종료되는 것을 차단합니다.

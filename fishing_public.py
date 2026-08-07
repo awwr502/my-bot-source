@@ -1589,20 +1589,23 @@ def afk_monitor_loop():
                         
                         # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
                         def check_ui(img_name, conf):
-                            temp = IMAGE_CACHE.get(img_name)
-                            if temp is None: return False
-                            sct_img_ui = afk_sct.grab(afk_sct.monitors[1])
-                            screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
-                            return cv2.minMaxLoc(cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED))[1] >= conf
+                            if img_name == 'fishing_mode.png':
+                                # 요구사항: fishing_mode.png만 전체화면 풀스크린으로 강제 탐색
+                                return safe_find_image(img_name, conf=conf, region="FULL_SCREEN", custom_sct=afk_sct) is not None
+                            else:
+                                # 요구사항: 그 외 UI(fishing, specific_B, catch_F)는 최적화된 ROI로 탐색
+                                return safe_find_image(img_name, conf=conf, custom_sct=afk_sct) is not None
 
                         found_fishing = check_ui('fishing.png', 0.75)
-                        time.sleep(0.5) # 0.5초 딜레이
+                        time.sleep(0.3)
+                        found_fishing_mode = check_ui('fishing_mode.png', 0.70)
+                        time.sleep(0.3) 
                         found_specific_b = check_ui('specific_B.png', 0.78)
-                        time.sleep(0.5)
+                        time.sleep(0.3)
                         found_catch = check_ui('catch_F.png', 0.70) # 수거 창 잔존 여부 확인
                         
-                        # 셋 중 하나라도 발견되면 완전히 사라질 때까지 알맞은 키 반복
-                        if found_fishing or found_specific_b or found_catch:
+                        # 넷 중 하나라도 발견되면 완전히 사라질 때까지 알맞은 키 반복
+                        if found_fishing or found_fishing_mode or found_specific_b or found_catch:
                             bprint("  > 잔존 UI(낚시/보관/수거) 확인 -> 알맞은 키(F 또는 ESC)로 강제 회수 루프 진입")
                             while True:
                                 # 1. 수거 창이 발견되면 F 입력
@@ -1614,11 +1617,11 @@ def afk_monitor_loop():
                                             break
                                         time.sleep(0.1)
                                 # 2. 낚시나 보관함 창이 발견되면 ESC(E) 입력
-                                elif check_ui('fishing.png', 0.75) or check_ui('specific_B.png', 0.78):
+                                elif check_ui('fishing.png', 0.75) or check_ui('fishing_mode.png', 0.70) or check_ui('specific_B.png', 0.78):
                                     send_cmd('E'); time.sleep(0.1); send_cmd('R')
                                     wait_start = time.time()
                                     while time.time() - wait_start < 1.5:
-                                        if not check_ui('fishing.png', 0.75) and not check_ui('specific_B.png', 0.78):
+                                        if not check_ui('fishing.png', 0.75) and not check_ui('fishing_mode.png', 0.70) and not check_ui('specific_B.png', 0.78):
                                             break
                                         time.sleep(0.1)
                                 # 3. 모두 사라졌으면 루프 탈출

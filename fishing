@@ -2626,25 +2626,32 @@ def oblivion_bot_loop():
                             oprint("  > 🎉 [성공] 진짜 보상 재검출 완료! 실패 카운트를 0으로 초기화하고 재전진을 개시합니다.")
                             attempts = 0
                             
-                        oprint("  > [전진] 진짜 보상 방향으로 에임을 고정한 채 'treasure_box.png' 노출 시까지 무제한 전진 시작...")
+                        oprint("  > [전진] 진짜 보상 방향으로 에임을 고정한 채 최대 10초간 전진 시작...")
                         send_cmd('W') # 전진 키 누름
                         
                         start_walk_t = time.time()
                         box_detected = False
                         
-                        # treasure_box.png가 뜰 때까지 W를 유지하며, 동시에 보상물체(혹은 앵커)를 찾으면서 정확히 조준을 보정해 나갑니다!
+                        # 최대 10.0초 동안 전진을 누르고 가면서도, 실시간으로 보상물체 혹은 포탈을 찾아 미끄러지듯 조준을 보정해 나갑니다!
                         while oblivion_active:
-                            # 8초 이상 전진했는데도 상자 텍스트가 안 보인다면, 각도가 꼬였거나 끼인 것이므로 루프를 이탈해 재정렬을 유도합니다.
-                            if time.time() - start_walk_t > 8.0:
-                                oprint("  > ⚠️ [경고] 8초간 전진했으나 상자 미검출. 안정적인 조준선 재정렬을 위해 일시 전진을 멈춥니다.")
+                            # 10초 이상 전진했는데도 상자 텍스트가 안 보인다면, 각도가 꼬였거나 끼인 것이므로 루프를 이탈해 재정렬을 유도합니다.
+                            if time.time() - start_walk_t > 10.0:
+                                oprint("  > ⚠️ [경고] 최대 10초간 전진했으나 상자 미검출. 안정적인 조준선 재정렬을 위해 일시 전진을 멈춥니다.")
                                 break
-                                
-                            box = find_deviant_by_color(thread_sct)
-                            if box:
-                                cx = box.left + box.width // 2
-                                err_x = cx - CENTER_X
-                                
-                                # 댐핑 게인(0.40)과 빠른 반응 주기를 사용하여 전진 중 에임이 요동치지 않고 보상에 미끄러지듯 고정되게 조율합니다.
+                            
+                            # 1순위로 핑크색 데비안트 코어를 찾고, 너무 가까워져 놓치게 되면 2순위로 파란 포탈(anchor1)을 찾아 무중단 보정을 가합니다.
+                            box_or_pos = find_deviant_by_color(thread_sct)
+                            tx = None
+                            if box_or_pos:
+                                tx = box_or_pos.left + box_or_pos.width // 2
+                            else:
+                                pos = find_anchor_final('anchor1.png')
+                                if pos:
+                                    tx = pos[0]
+                                    
+                            if tx is not None:
+                                err_x = tx - CENTER_X
+                                # 가속 상태에서도 에임이 미쳐 날뛰며 요동치지 않도록, 0.40의 비틀림 댐핑 보정식을 실시간 연속 전송합니다!
                                 if abs(err_x) > 10:
                                     dx = int(err_x * 0.40)
                                     dx = max(-65, min(65, dx))

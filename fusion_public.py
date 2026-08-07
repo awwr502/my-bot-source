@@ -518,6 +518,31 @@ def check_img(img_name, thread_sct, force_full=False):
                     if int(np.mean(b)) - int(np.mean(r)) < 30: return False
 
             h, w = template.shape[:2]
+            
+            # [지능형 상호 교차 검증] 캐릭터 카드 간의 99% 완벽한 교차 매칭 검증 가동
+            if img_name in CHAR_IMG_NAMES:
+                matched_roi = screen_processed[max_loc[1]:max_loc[1]+h, max_loc[0]:max_loc[0]+w]
+                best_score = max_val
+                best_match_name = img_name
+                        
+                for other_img in CHAR_IMG_NAMES:
+                    if other_img == img_name: continue
+                    other_template = FUSION_CACHE.get(other_img)
+                    if other_template is None: continue
+                            
+                    # 구조와 규격을 완벽하게 일치시켜 대조하기 위해 리사이즈하여 비교합니다.
+                    resized_other = cv2.resize(other_template, (w, h))
+                    res_other = cv2.matchTemplate(matched_roi, resized_other, cv2.TM_CCOEFF_NORMED)
+                    _, max_val_other, _, _ = cv2.minMaxLoc(res_other)
+                            
+                    if max_val_other > best_score:
+                        best_score = max_val_other
+                        best_match_name = other_img
+                                
+                if best_match_name != img_name:
+                    # 내 이미지보다 다른 캐릭터의 이미지가 더 높은 점수로 매칭되었다면 기각합니다.
+                    return False
+
             real_x = max_loc[0] + monitor["left"]
             real_y = max_loc[1] + monitor["top"]
             

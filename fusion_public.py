@@ -2635,7 +2635,7 @@ def fusion_bot_loop():
                                             # 실제 감염물(날카로운 텍스처 존재)이 들어있을 때만 이 기준선을 통과합니다.
                                             if max_val < 75 and std_val < 9.0:
                                                 continue
-                                                
+
                                         pyautogui.moveTo(cx, cy)
                                         template_label = FUSION_CACHE.get('ability_label.png')
                                         mon = thread_sct.monitors[1]

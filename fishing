@@ -139,6 +139,7 @@ def dump_blackbox_log(reason):
 class BotStopException(Exception): pass
 class BotRestartException(Exception): pass
 class BotDeathException(Exception): pass # [사망복구] 사망 복구 전용 예외 클래스 신설
+class BotDurabilityException(Exception): pass # [내구도복구] 내구도 전용 예외 클래스 신설
 
 # 모든 time.sleep 에 일괄적으로 +-0.005초 랜덤 딜레이 적용
 original_sleep = time.sleep
@@ -147,6 +148,7 @@ animal_active = False # [동물포획] 전역 상태 변수 추가
 oblivion_active = False # [망각모드] 전역 상태 변수 추가
 oblivion_stage = 0      # [사망감시] 망각모드 진행 단계 트래커
 death_trigger = False   # [사망복구] 캐릭터 사망 복구 신호 트리거
+durability_trigger = False # [내구도복구] 캐릭터 내구도 0 신호 트리거
 silence_fail_log = False # [대기수색] 수색 대기 중 실패 로그 무음 처리용 플래그
 victory_mode = 1 # 승리코인 모드 선택 변수 (1 또는 2)
 original_brightness = 100 # [화면 밝기] 모니터 원래 밝기 복구용 저장소
@@ -246,6 +248,10 @@ def jitter_sleep(seconds):
         # [사망 긴급복구 인터셉터] 사냥 도중 사망 트리거가 켜지면, 오직 망각 모드 실행 스레드(bot_thread_oblivion)에만 사망 예외를 던져 복구 시퀀스를 가동합니다.
         if t_name == "bot_thread_oblivion" and death_trigger:
             raise BotDeathException()
+
+        # [내구도 긴급수리 인터셉터] 사냥/루팅 도중 내구도 0 트리거가 켜지면, 오직 망각 모드 실행 스레드(bot_thread_oblivion)에만 내구도 예외를 던집니다.
+        if t_name == "bot_thread_oblivion" and globals().get('durability_trigger', False):
+            raise BotDurabilityException()
             
         original_sleep(max(0, min(0.05, final_time - (time.time() - start_t))))
 
@@ -2308,6 +2314,7 @@ def oblivion_bot_loop():
                 oprint("=== 망각 모드 시퀀스 시작 ===")
                 
                 # 1단계
+                oblivion_stage = 1
                 oprint("[1단계 시작] 이동 및 소멸 검증")
                 
                 # [물약 팝업 방어막] 던전 입장 직후 뜨는 '감염물' UI 안내창(potion.png)이 소멸할 때까지 안전 대기 수행
@@ -2498,24 +2505,6 @@ def oblivion_bot_loop():
                 oprint("[3단계 시작] 보상 정합 대기")
                 oprint("  > [입력] 'W' 키 2.5초간 유지")
                 send_cmd('W'); time.sleep(2.5); send_cmd('R'); time.sleep(0.1)
-
-                # E키 누르기 전, 좌클릭 1회 입력 및 0.5초 선행 내구도 검증
-                oprint("  > [입력] E키 선행 무기 상태 판별용 1번키 1회 실행")
-                send_cmd('1'); time.sleep(0.1); send_cmd('U'); send_cmd('R'); time.sleep(0.1)
-                
-                oprint("  > [대기] 0.5초간 무기 내구도 이상 유무 선행 감시...")
-                has_broken = False
-                check_start = time.time()
-                while time.time() - check_start < 0.5:
-                    if not oblivion_active: raise BotStopException()
-                    if find_img('durability.png', conf=0.70, full_screen=False):
-                        has_broken = True
-                        break
-                    time.sleep(0.05)
-                
-                # 내구도 0 감지 시 즉시 수리 및 던전 재진입 전역 복구 가동 (복구 후 1단계 무한 리스타트)
-                if has_broken:
-                    check_and_repair()
 
                 # 하늘색 번개 형상 아이콘(cyan_icon.png)이 검출되면 'X' 키 1회 입력
                 if find_img('cyan_icon.png', conf=0.80, full_screen=False):
@@ -2786,13 +2775,27 @@ def oblivion_bot_loop():
                     arduino.write('R'.encode()); arduino.flush()
                 except: pass
                 continue
-            except BotRestartException:
-                oprint("  > 🔄 [망각 복구] 수리 및 던전 재진입 시퀀스가 정상 완료되었습니다! 1단계부터 무한 루프를 완전히 새로 구동합니다.")
+            except BotDurabilityException:
                 try:
-                    arduino.write('U'.encode()); arduino.flush()
-                    arduino.write('R'.encode()); arduino.flush()
-                except: pass
-                continue
+                    oprint("  > 🔧 [내구도 복구] 캐릭터 내구도 0 감지! 비동기 트리거에 의해 장비 수리 및 던전 재진입 시퀀스를 강제 가동합니다.")
+                    global durability_trigger
+                    durability_trigger = False # 트리거 즉각 클리어
+                    
+                    try:
+                        # 복구 연산 가동 전 물리 키보드/마우스 눌려있는 버퍼 안전 해제
+                        arduino.write('U'.encode()); arduino.flush()
+                        arduino.write('R'.encode()); arduino.flush()
+                    except: pass
+                    time.sleep(0.5)
+                    
+                    check_and_repair()
+                except BotStopException:
+                    oprint("  > [망각] 내구도 복구 루틴 진행 중 정지 신호 수신 -> 복구를 중단하고 대기 모드로 진입합니다.")
+                    try:
+                        arduino.write('U'.encode()); arduino.flush()
+                        arduino.write('R'.encode()); arduino.flush()
+                    except: pass
+                    continue
             except BotDeathException:
                 try:
                     oprint("  > 💀 [사망 복구] 캐릭터 사망 감지! 10단계 던전 재진입 시퀀스를 시작합니다 (수리 생략).")
@@ -2919,10 +2922,19 @@ def death_monitor_loop():
                     continue
                     
                 # [고성능 적응형 이진화 & ROI 캐싱 스캔] 고정 위치의 텍스트(death.png)를 자가 학습하여 높은 정밀도로 감지합니다.
+                # 1. 사망 감시
                 if safe_find_image('death.png', conf=0.70, custom_sct=death_sct):
                     bprint("\n🚨🚨🚨 [사망 감지] 캐릭터 사망(사망.png) 확인! 10단계 던전 재진입 복구 루틴을 트리거합니다. 🚨🚨🚨")
                     death_trigger = True # 사망 복구 트리거 활성화
                     time.sleep(1.0)
+                
+                # 2. 내구도 감시 (전역 ROI 캐시 자동 연동)
+                elif safe_find_image('durability.png', conf=0.70, custom_sct=death_sct):
+                    bprint("\n🚨🚨🚨 [내구도 감지] 장비 내구도 0(durability.png) 확인! 즉각 수리 및 재진입 시퀀스를 예약합니다. 🚨🚨🚨")
+                    global durability_trigger
+                    durability_trigger = True
+                    time.sleep(1.0)
+                    
                 time.sleep(0.2)
             except BotStopException:
                 # 매크로가 수동 정지될 때 발생하는 정지 예외를 안전하게 우회하여 스레드가 종료되는 것을 차단합니다.

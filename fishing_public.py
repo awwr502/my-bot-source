@@ -1078,17 +1078,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             use_mask = None
             use_color = False
             
-        # B. 녹색 찌의 경우: 기존 특화 추출식 사용
-        elif img_path == 'green_float.png' and template_color is not None:
-            screen_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-            sb, sg, sr = cv2.split(screen_bgr)
-            screen_processed = cv2.subtract(sg, cv2.max(sr, sb))
-            
-            tb, tg, tr = cv2.split(template_color)
-            template_processed = cv2.subtract(tg, cv2.max(tr, tb))
-            use_mask = None
-            use_color = True
-            
         # C. 지정된 4개 이미지의 경우: 배경을 100% 생략하는 투명 마스크 매칭 강제 가동 (수동 투명화/자동 획 마스크 공용)
         elif img_path in MASK_UI_LIST and mask is not None:
             screen_processed = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
@@ -1137,10 +1126,6 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             if img_path in ['bait_change.png', 'broken_rod.png', 'throw_btn.png']:
                 screen_gray_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2GRAY)
                 screen_processed_f = cv2.bilateralFilter(screen_gray_f, 5, 50, 50)
-            elif img_path == 'green_float.png' and template_color is not None:
-                screen_bgr_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
-                sb_f, sg_f, sr_f = cv2.split(screen_bgr_f)
-                screen_processed_f = cv2.subtract(sg_f, cv2.max(sr_f, sb_f))
 
             elif img_path == 'cyan_icon.png' and template_color is not None:
                         screen_processed_f = cv2.cvtColor(np.array(sct_img_full), cv2.COLOR_BGRA2BGR)
@@ -1171,7 +1156,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
 
         # 3. [기존 가우시안 적응형 이진화 대피소 복구]
         # 지정된 4개 마스크 대상 외의 다른 일반 이미지 매칭 실패 시, 이전의 가우시안 적응형 이진화를 안정적으로 수행합니다.
-        if max_val < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png' and img_path != 'cyan_icon.png':
+        if max_val < active_conf and img_path not in MASK_UI_LIST and img_path != 'cyan_icon.png':
             s_gray = screen_processed
             t_gray = template_processed
             
@@ -1208,7 +1193,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             _, max_val_re, _, max_loc_re = cv2.minMaxLoc(res_re)
             
             # 재검증 시에도 일반 이미지인 경우 기존 가우시안 적응형 이진화 가동
-            if max_val_re < active_conf and img_path not in MASK_UI_LIST and img_path != 'green_float.png':
+            if max_val_re < active_conf and img_path not in MASK_UI_LIST:
                 sr_gray = re_processed
                 tr_gray = template_processed
                 sr_bin = cv2.adaptiveThreshold(sr_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)

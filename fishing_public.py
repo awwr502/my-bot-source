@@ -1574,10 +1574,10 @@ def afk_monitor_loop():
                         
                         # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
                         def check_ui(img_name, conf):
-                                # 모든 UI(fishing, fishing_mode, specific_B, catch_F)를 최적화된 ROI로 탐색하도록 통일
-                                return safe_find_image(img_name, conf=conf, custom_sct=afk_sct) is not None
+                            # 모든 UI(fishing, fishing_mode, specific_B, catch_F)를 최적화된 ROI로 탐색하도록 통일
+                            return safe_find_image(img_name, conf=conf, custom_sct=afk_sct) is not None
 
-                            found_fishing = check_ui('fishing.png', 0.75)
+                        found_fishing = check_ui('fishing.png', 0.75)
                         time.sleep(0.3)
                         found_fishing_mode = check_ui('fishing_mode.png', 0.70)
                         time.sleep(0.3) 

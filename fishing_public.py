@@ -1589,14 +1589,10 @@ def afk_monitor_loop():
                         
                         # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
                         def check_ui(img_name, conf):
-                            if img_name == 'fishing_mode.png':
-                                # 요구사항: fishing_mode.png만 전체화면 풀스크린으로 강제 탐색
-                                return safe_find_image(img_name, conf=conf, region="FULL_SCREEN", custom_sct=afk_sct) is not None
-                            else:
-                                # 요구사항: 그 외 UI(fishing, specific_B, catch_F)는 최적화된 ROI로 탐색
+                                # 모든 UI(fishing, fishing_mode, specific_B, catch_F)를 최적화된 ROI로 탐색하도록 통일
                                 return safe_find_image(img_name, conf=conf, custom_sct=afk_sct) is not None
 
-                        found_fishing = check_ui('fishing.png', 0.75)
+                            found_fishing = check_ui('fishing.png', 0.75)
                         time.sleep(0.3)
                         found_fishing_mode = check_ui('fishing_mode.png', 0.70)
                         time.sleep(0.3) 
@@ -2466,7 +2462,11 @@ def oblivion_bot_loop():
                 check_start = time.time()
                 while time.time() - check_start < 0.5:
                     if not oblivion_active: raise BotStopException()
-                    check_and_repair()
+                    globals()['is_repairing_active'] = True
+                    try:
+                        check_and_repair()
+                    finally:
+                        globals()['is_repairing_active'] = False
                     time.sleep(0.05)
                 
                 oprint("  > [입력] 'D' 키 0.5초간 유지")
@@ -2511,8 +2511,8 @@ def oblivion_bot_loop():
 
                 # 하늘색 번개 형상 아이콘(cyan_icon.png)이 검출되면 'X' 키 1회 입력
                 if find_img('cyan_icon.png', conf=0.80, full_screen=False):
-                    oprint("  > [감지] 저주인형 아이콘(cyan_icon.png) 포착! 'X' 키 1회 전송")
-                    send_cmd('X'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
+                    oprint("  > [감지] 저주인형 아이콘(cyan_icon.png) 포착! 'x' 키 1회 전송")
+                    send_cmd('x'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
                 
                 oprint("  > [입력] 'E' 키 1회 클릭")
                 send_cmd('e'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
@@ -2771,6 +2771,9 @@ def oblivion_bot_loop():
                 
                 oprint("=== 사이클 정상 완료! ===")
                 
+            except BotRestartException:
+                oprint("  > 🔄 [재시작] 장비 수리 및 재진입 완료! 망각 모드 처음부터 다시 무한 리스타트합니다.")
+                continue
             except BotStopException:
                 oprint("  > [망각] 정지 신호를 감지하여 작동을 취소하고 정지합니다.")
                 try:
@@ -2789,9 +2792,13 @@ def oblivion_bot_loop():
                         arduino.write('U'.encode()); arduino.flush()
                         arduino.write('R'.encode()); arduino.flush()
                     except: pass
-                    time.sleep(0.5)
                     
-                    check_and_repair()
+                    globals()['is_repairing_active'] = True
+                    try:
+                        time.sleep(0.5)
+                        check_and_repair()
+                    finally:
+                        globals()['is_repairing_active'] = False
                 except BotStopException:
                     oprint("  > [망각] 내구도 복구 루틴 진행 중 정지 신호 수신 -> 복구를 중단하고 대기 모드로 진입합니다.")
                     try:
@@ -2799,6 +2806,11 @@ def oblivion_bot_loop():
                         arduino.write('R'.encode()); arduino.flush()
                     except: pass
                     continue
+                 
+                except BotRestartException:
+                    oprint("  > 🔄 [재시작] 내구도 복구 완료 후 루프 재시작 트리거 접수.")
+                    continue
+
             except BotDeathException:
                 try:
                     oprint("  > 💀 [사망 복구] 캐릭터 사망 감지! 10단계 던전 재진입 시퀀스를 시작합니다 (수리 생략).")
@@ -2931,8 +2943,8 @@ def death_monitor_loop():
                     death_trigger = True # 사망 복구 트리거 활성화
                     time.sleep(1.0)
                 
-                # 2. 내구도 감시 (전역 ROI 캐시 자동 연동)
-                elif safe_find_image('durability.png', conf=0.70, custom_sct=death_sct):
+                # 2. 내구도 감시 (전역 ROI 캐시 자동 연동 및 중복 트리거 차단)
+                elif not globals().get('is_repairing_active', False) and not globals().get('durability_trigger', False) and safe_find_image('durability.png', conf=0.70, custom_sct=death_sct):
                     bprint("\n🚨🚨🚨 [내구도 감지] 장비 내구도 0(durability.png) 확인! 즉각 수리 및 재진입 시퀀스를 예약합니다. 🚨🚨🚨")
                     global durability_trigger
                     durability_trigger = True

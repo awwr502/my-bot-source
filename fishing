@@ -2981,6 +2981,7 @@ def fishing_bot(max_allowed_seconds):
     bprint("(작동: ] , 정지: [ , 릴레이모드: ; , 승리모드1: > , 승리모드2: ? , 동물포획: ' , 망각모드: < )")
 
     cast_fail_count = 0 # 연속 캐스팅 실패 감지용 카운터
+    fishing_miss_count = 0 # fishing.png 연속 소멸 감지용 카운터
     
     # [워치독] 상태 추적용 변수 초기화
     last_state = state
@@ -3355,6 +3356,7 @@ def fishing_bot(max_allowed_seconds):
                 if found_ui:
                     bprint("  > [성공] fishing.png 포착 -> 즉시 2단계 전이")
                     state = 2
+                    fishing_miss_count = 0 # 진입 시 연속 소멸 카운터 초기화
                     # 첫 번째 캐스팅에 성공하여 정상 낚시 상태에 진입했으므로 팝업 감시를 종료합니다.
                     if check_char_popup:
                         bprint("  > 🔒 [감시 해제] 첫 번째 캐스팅 성공이 확인되어 인게임 자정 팝업 감시를 비활성화합니다.")
@@ -3394,9 +3396,30 @@ def fishing_bot(max_allowed_seconds):
             # --- [State 2] 입질 확인 ---
             elif state == 2:
                 if not bot_active: raise BotStopException()
-                if safe_find_image('green_float.png', 0.80):
-                    bprint("  > [!] 입질 확인! 챔질(C)!"); send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                    time.sleep(0.2); state = 3
+                
+                # 1. 즉각 감지: green_float.png가 감지되면 바로 챔질
+                if safe_find_image('green_float.png', 0.75):
+                    bprint("  > [!] 입질 확인 (green_float.png 감지)! 챔질(C)!")
+                    send_cmd('C'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.2)
+                    state = 3
+                    fishing_miss_count = 0
+                    continue
+
+                # 2. 이중 백업 감지: fishing.png가 화면에서 사라졌는지 5회 연속 소멸 검증 (오작동 차단)
+                if safe_find_image('fishing.png', 0.78) is None:
+                    fishing_miss_count += 1
+                    time.sleep(0.02)
+                else:
+                    fishing_miss_count = 0 # 다시 보이면 카운트 리셋
+
+                if fishing_miss_count >= 5:
+                    bprint("  > [!] 입질 확인 (fishing.png 소멸 감지)! 챔질(C)!")
+                    send_cmd('C'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.2)
+                    state = 3
+                    fishing_miss_count = 0
+                    continue
 
             # --- [State 3] 어종 판별 및 줄 끊기 (5중 병렬 스캔 엔진) ---
             elif state == 3:

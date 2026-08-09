@@ -1574,7 +1574,7 @@ def afk_monitor_loop():
                         
                         # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
                         def check_ui(img_name, conf):
-                            # 모든 UI(fishing, fishing_mode, specific_B, catch_F)를 최적화된 ROI로 탐색하도록 통일
+                            # 모든 UI(fishing, fishing_mode, specific_B, catch_F, green_float)를 최적화된 ROI로 탐색하도록 통일
                             return safe_find_image(img_name, conf=conf, custom_sct=afk_sct) is not None
 
                         found_fishing = check_ui('fishing.png', 0.75)
@@ -1584,10 +1584,12 @@ def afk_monitor_loop():
                         found_specific_b = check_ui('specific_B.png', 0.78)
                         time.sleep(0.3)
                         found_catch = check_ui('catch_F.png', 0.70) # 수거 창 잔존 여부 확인
+                        time.sleep(0.3)
+                        found_green_float = check_ui('green_float.png', 0.75)
                         
-                        # 넷 중 하나라도 발견되면 완전히 사라질 때까지 알맞은 키 반복
-                        if found_fishing or found_fishing_mode or found_specific_b or found_catch:
-                            bprint("  > 잔존 UI(낚시/보관/수거) 확인 -> 알맞은 키(F 또는 ESC)로 강제 회수 루프 진입")
+                        # 다섯 중 하나라도 발견되면 완전히 사라질 때까지 알맞은 키 반복
+                        if found_fishing or found_fishing_mode or found_specific_b or found_catch or found_green_float:
+                            bprint("  > 잔존 UI(낚시/보관/수거/입질중) 확인 -> 알맞은 키(F 또는 ESC)로 강제 회수 루프 진입")
                             while True:
                                 # 1. 수거 창이 발견되면 F 입력
                                 if check_ui('catch_F.png', 0.70):
@@ -1597,12 +1599,12 @@ def afk_monitor_loop():
                                         if not check_ui('catch_F.png', 0.70):
                                             break
                                         time.sleep(0.1)
-                                # 2. 낚시나 보관함 창이 발견되면 ESC(E) 입력
-                                elif check_ui('fishing.png', 0.75) or check_ui('fishing_mode.png', 0.80) or check_ui('specific_B.png', 0.78):
+                                # 2. 낚시, 보관함 창, 혹은 입질 중이 발견되면 ESC(E) 입력
+                                elif check_ui('fishing.png', 0.75) or check_ui('fishing_mode.png', 0.80) or check_ui('specific_B.png', 0.78) or check_ui('green_float.png', 0.75):
                                     send_cmd('E'); time.sleep(0.1); send_cmd('R')
                                     wait_start = time.time()
                                     while time.time() - wait_start < 1.5:
-                                        if not check_ui('fishing.png', 0.75) and not check_ui('fishing_mode.png', 0.80) and not check_ui('specific_B.png', 0.78):
+                                        if not check_ui('fishing.png', 0.75) and not check_ui('fishing_mode.png', 0.80) and not check_ui('specific_B.png', 0.78) and not check_ui('green_float.png', 0.75):
                                             break
                                         time.sleep(0.1)
                                 # 3. 모두 사라졌으면 루프 탈출
@@ -2981,6 +2983,7 @@ def fishing_bot(max_allowed_seconds):
     bprint("(작동: ] , 정지: [ , 릴레이모드: ; , 승리모드1: > , 승리모드2: ? , 동물포획: ' , 망각모드: < )")
 
     cast_fail_count = 0 # 연속 캐스팅 실패 감지용 카운터
+    fishing_miss_count = 0 # fishing.png 연속 소멸 감지용 카운터
     
     # [워치독] 상태 추적용 변수 초기화
     last_state = state
@@ -3355,6 +3358,7 @@ def fishing_bot(max_allowed_seconds):
                 if found_ui:
                     bprint("  > [성공] fishing.png 포착 -> 즉시 2단계 전이")
                     state = 2
+                    fishing_miss_count = 0 # 진입 시 연속 소멸 카운터 초기화
                     # 첫 번째 캐스팅에 성공하여 정상 낚시 상태에 진입했으므로 팝업 감시를 종료합니다.
                     if check_char_popup:
                         bprint("  > 🔒 [감시 해제] 첫 번째 캐스팅 성공이 확인되어 인게임 자정 팝업 감시를 비활성화합니다.")
@@ -3394,9 +3398,30 @@ def fishing_bot(max_allowed_seconds):
             # --- [State 2] 입질 확인 ---
             elif state == 2:
                 if not bot_active: raise BotStopException()
-                if safe_find_image('green_float.png', 0.80):
-                    bprint("  > [!] 입질 확인! 챔질(C)!"); send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                    time.sleep(0.2); state = 3
+                
+                # 1. 즉각 감지: green_float.png가 감지되면 바로 챔질
+                if safe_find_image('green_float.png', 0.75):
+                    bprint("  > [!] 입질 확인 (green_float.png 감지)! 챔질(C)!")
+                    send_cmd('C'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.2)
+                    state = 3
+                    fishing_miss_count = 0
+                    continue
+
+                # 2. 이중 백업 감지: fishing.png가 화면에서 사라졌는지 5회 연속 소멸 검증 (오작동 차단)
+                if safe_find_image('fishing.png', 0.78) is None:
+                    fishing_miss_count += 1
+                    time.sleep(0.02)
+                else:
+                    fishing_miss_count = 0 # 다시 보이면 카운트 리셋
+
+                if fishing_miss_count >= 5:
+                    bprint("  > [!] 입질 확인 (fishing.png 소멸 감지)! 챔질(C)!")
+                    send_cmd('C'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.2)
+                    state = 3
+                    fishing_miss_count = 0
+                    continue
 
             # --- [State 3] 어종 판별 및 줄 끊기 (5중 병렬 스캔 엔진) ---
             elif state == 3:

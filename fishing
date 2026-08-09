@@ -3394,7 +3394,7 @@ def fishing_bot(max_allowed_seconds):
             # --- [State 2] 입질 확인 ---
             elif state == 2:
                 if not bot_active: raise BotStopException()
-                if safe_find_image('green_float.png', 0.62):
+                if safe_find_image('green_float.png', 0.80):
                     bprint("  > [!] 입질 확인! 챔질(C)!"); send_cmd('C'); time.sleep(0.1); send_cmd('R')
                     time.sleep(0.2); state = 3
 

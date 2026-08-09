@@ -3611,8 +3611,8 @@ def fishing_bot(max_allowed_seconds):
                         else:
                             miss_count += 1
                             
-                        # 3회 연속 미스(0.12초) 발생 시 즉시 키 떼기
-                        if miss_count >= 3:
+                        # 5회 연속 미스(0.20초) 발생 시 즉시 키 떼기
+                        if miss_count >= 5:
                             bprint(f"  > ⌨️ [QTE 해제] '{current_active_key}' 프롬프트 소멸 확인. 키 떼기 (연속 미스: {miss_count}회)")
                             send_cmd('R')
                             current_active_key = None
@@ -3623,10 +3623,10 @@ def fishing_bot(max_allowed_seconds):
                         # 비동기 스레드 풀을 가동하여 4가지 QTE를 동시에 실시간 병렬 탐색합니다!
                         # (페이드인 전환 지연을 파괴하기 위해, 실시간 스캔 요구치를 conf=0.65로 하향 조정합니다)
                         futures = {
-                            qte_executor.submit(safe_find_image, 'fishing_hold_A.png', 0.65, None, None, True): 'HOLD_A',
-                            qte_executor.submit(safe_find_image, 'fishing_hold_D.png', 0.65, None, None, True): 'HOLD_D',
-                            qte_executor.submit(safe_find_image, 'fishing_tap_A.png', 0.65, None, None, True): 'TAP_A',
-                            qte_executor.submit(safe_find_image, 'fishing_tap_D.png', 0.65, None, None, True): 'TAP_D'
+                            qte_executor.submit(safe_find_image, 'fishing_hold_A.png', 0.70, None, None, True): 'HOLD_A',
+                            qte_executor.submit(safe_find_image, 'fishing_hold_D.png', 0.70, None, None, True): 'HOLD_D',
+                            qte_executor.submit(safe_find_image, 'fishing_tap_A.png', 0.70, None, None, True): 'TAP_A',
+                            qte_executor.submit(safe_find_image, 'fishing_tap_D.png', 0.70, None, None, True): 'TAP_D'
                         }
                         
                         qte_scores = {}

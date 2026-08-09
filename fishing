@@ -1574,22 +1574,38 @@ def afk_monitor_loop():
                         
                         # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
                         def check_ui(img_name, conf):
-                            # 모든 UI(fishing, fishing_mode, specific_B, catch_F, green_float)를 최적화된 ROI로 탐색하도록 통일
-                            return safe_find_image(img_name, conf=conf, custom_sct=afk_sct) is not None
+                            # [스레드 안전 자율화] 병렬 스레드 구동 시 mss 공유 충돌을 예방하기 위해 
+                            # custom_sct를 생략하여 각 스레드가 전역 스레드 로컬(get_sct_safe) 객체를 개별 사용하도록 유도하며,
+                            # 좁은 ROI 오탐 방지를 위해 무조건 전체 화면(FULL_SCREEN) 모드로 스캔합니다.
+                            return safe_find_image(img_name, conf=conf, region="FULL_SCREEN", custom_sct=None) is not None
 
-                        found_fishing = check_ui('fishing.png', 0.75)
-                        time.sleep(0.3)
-                        found_fishing_mode = check_ui('fishing_mode.png', 0.80)
-                        time.sleep(0.3) 
-                        found_specific_b = check_ui('specific_B.png', 0.78)
-                        time.sleep(0.3)
-                        found_catch = check_ui('catch_F.png', 0.70) # 수거 창 잔존 여부 확인
-                        time.sleep(0.3)
-                        found_green_float = check_ui('green_float.png', 0.75)
+                        # [병렬 초고속 스캔 엔진] 5개 UI 검사를 동시 다발적으로 병렬 수색하여 무의미한 1.2초의 대기 시간을 0.05초로 극대화 단축합니다.
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as cleanup_executor:
+                            futures = {
+                                cleanup_executor.submit(check_ui, 'fishing.png', 0.75): 'fishing',
+                                cleanup_executor.submit(check_ui, 'fishing_mode.png', 0.80): 'fishing_mode',
+                                cleanup_executor.submit(check_ui, 'specific_B.png', 0.78): 'specific_b',
+                                cleanup_executor.submit(check_ui, 'catch_F.png', 0.70): 'catch_f',
+                                cleanup_executor.submit(check_ui, 'green_float.png', 0.75): 'green_float'
+                            }
+                            
+                            results = {}
+                            for future in concurrent.futures.as_completed(futures):
+                                ui_name = futures[future]
+                                try:
+                                    results[ui_name] = future.result()
+                                except:
+                                    results[ui_name] = False
+                                    
+                        found_fishing = results.get('fishing', False)
+                        found_fishing_mode = results.get('fishing_mode', False)
+                        found_specific_b = results.get('specific_b', False)
+                        found_catch = results.get('catch_f', False)
+                        found_green_float = results.get('green_float', False)
                         
                         # 다섯 중 하나라도 발견되면 완전히 사라질 때까지 알맞은 키 반복
                         if found_fishing or found_fishing_mode or found_specific_b or found_catch or found_green_float:
-                            bprint("  > 잔존 UI(낚시/보관/수거/입질중) 확인 -> 알맞은 키(F 또는 ESC)로 강제 회수 루프 진입")
+                            bprint("  > 잔존 UI(낚시/보관/수거/녹색찌) 확인 -> 알맞은 키(F 또는 ESC)로 강제 회수 루프 진입")
                             while True:
                                 # 1. 수거 창이 발견되면 F 입력
                                 if check_ui('catch_F.png', 0.70):
@@ -1599,7 +1615,7 @@ def afk_monitor_loop():
                                         if not check_ui('catch_F.png', 0.70):
                                             break
                                         time.sleep(0.1)
-                                # 2. 낚시, 보관함 창, 혹은 입질 중이 발견되면 ESC(E) 입력
+                                # 2. 낚시, 보관함 창, 혹은 녹색 찌가 발견되면 ESC(E) 입력
                                 elif check_ui('fishing.png', 0.75) or check_ui('fishing_mode.png', 0.80) or check_ui('specific_B.png', 0.78) or check_ui('green_float.png', 0.75):
                                     send_cmd('E'); time.sleep(0.1); send_cmd('R')
                                     wait_start = time.time()

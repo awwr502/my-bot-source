@@ -1576,10 +1576,17 @@ def afk_monitor_loop():
                         
                         # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
                         def check_ui(img_name, conf):
-                            # 잠수방지 전용 특화: fishing_mode.png와 green_float.png에 대해서는 강제로 투명 마스크 매칭을 가동합니다.
-                            # 기존에 강제 적용되어 있던 전체화면("FULL_SCREEN") 스캔을 해제하고, 오탐 방지를 위해 학습된 동적 ROI(region=None)로 복구합니다.
-                            use_force_mask = img_name in ['fishing.png', 'fishing_mode.png', 'green_float.png']
-                            return safe_find_image(img_name, conf=conf, region=None, custom_sct=None, force_mask=use_force_mask) is not None
+                            temp = IMAGE_CACHE.get(img_name)
+                            if temp is None: return False
+                            # 멀티스레드 환경에서 디바이스 컨텍스트 공유 오류를 차단하기 위해 스레드 로컬 mss를 통해 전체화면을 캡처합니다.
+                            local_sct = get_sct_safe()
+                            sct_img_ui = local_sct.grab(local_sct.monitors[1])
+                            screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
+                            
+                            # 100% 순수 전체화면 흑백 기본 템플릿 매칭 수행 (자가 치유 오탐 및 ROI 파괴 차단)
+                            res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
+                            _, max_val, _, _ = cv2.minMaxLoc(res)
+                            return max_val >= conf
 
                         # [병렬 초고속 스캔 엔진] 5개 UI 검사를 동시 다발적으로 병렬 수색하여 무의미한 1.2초의 대기 시간을 0.05초로 극대화 단축합니다.
                         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as cleanup_executor:

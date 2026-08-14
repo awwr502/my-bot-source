@@ -3547,8 +3547,8 @@ def fishing_bot(max_allowed_seconds):
                 
                 best_score = max(score_jellyfish, score_eel)
                 
-                # 명도 왜곡 및 물결 간섭을 고려하여 안정적인 0.70 컷오프 적용
-                if best_score >= 0.70:
+                # 명도 왜곡 및 물결 간섭을 고려하여 안정적인 0.60 컷오프 적용
+                if best_score >= 0.60:
                     target_name = "해파리" if score_jellyfish > score_eel else "전기뱀장어"
                     bprint(f"  > 🎉 [타겟 감지] {target_name} 확정 포획 가동 (일치율: {best_score:.3f})")
                     found_target = True
@@ -3558,13 +3558,16 @@ def fishing_bot(max_allowed_seconds):
                 if found_target:
                     state = 4
                 else:
-                    # [내구도 실시간 보완] 줄을 끊기 전에, 수색 중 낚싯대가 중간 파손되어 상태가 풀린 것인지 교차 검증합니다. (구식 fishing.png 대신 신형 reel_in.png 대조)
-                    if not safe_find_image('reel_in.png', 0.70, region="FULL_SCREEN"):
-                        bprint("  > ⚠️ [파괴 감지] 어종 판별 도중 낚싯대 파손 감지! 줄 끊기를 취소하고 신형 장착 로직을 수행합니다.")
-                        auto_equip_rod()
-                        state = 1
-                        continue
-                        
+                    # [내구도 실시간 보완] 줄을 끊기 전에, 수색 중 낚싯대가 파손되어 상태가 풀린 것인지 최종 검증합니다.
+                    # fishing_mode.png, reel_in.png 둘 중 하나라도 보이면 정상 진행하며, 둘 다 안 보일 때 bait_change.png, broken_rod.png 둘 중 하나라도 보이면 낚싯대 파쇄로 판정합니다.
+                    is_fishing_active = safe_find_image('fishing_mode.png', 0.70) or safe_find_image('reel_in.png', 0.70)
+                    if not is_fishing_active:
+                        if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70):
+                            bprint("  > ⚠️ [파괴 감지] 어종 판별 도중 낚싯대 파손 감지! 줄 끊기를 취소하고 신형 장착 로직을 수행합니다.")
+                            auto_equip_rod()
+                            state = 1
+                            continue
+                            
                     # 목표를 못 찾았거나 확실한 잡어인 경우
                     stats['daily_skip'] += 1
                     stats['total_skip'] += 1
@@ -3572,6 +3575,7 @@ def fishing_bot(max_allowed_seconds):
                     escape_attempts = 0
                     while bot_active and escape_attempts < 4:
                         if keyboard.is_pressed(']'): state = 1; break
+                        
                         bprint(f"  > [시도] ESC 누르기 (0.5초)... (시도 {escape_attempts + 1}/4)")
                         send_cmd('E'); time.sleep(0.5); send_cmd('R')
                         escape_attempts += 1
@@ -3602,7 +3606,8 @@ def fishing_bot(max_allowed_seconds):
                                 raise BotStopException()
                             
                             # 세 개 중 하나라도 발견되면 즉시 탈출 (found_bait는 1단계 진입 시 자동 판별되므로 공통 해제)
-                            if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70) or safe_find_image('tab_roulette.png', 0.70):
+                            # 교차 검사 추가: 낚시 UI 자체가 화면에서 완전히 소멸한 경우에도 복구 성공으로 동시 인정하여 대기 유실 시간을 최적화합니다.
+                            if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70) or safe_find_image('tab_roulette.png', 0.70) or (not safe_find_image('fishing.png', 0.70) and not safe_find_image('fishing_mode.png', 0.70)):
                                 found_restored = True
                                 break
                             time.sleep(0.08) # 0.08초 주기로 고속 스캔
@@ -3625,19 +3630,6 @@ def fishing_bot(max_allowed_seconds):
                                 bprint("  > [성공] 타웃 한계 지점에서 UI 복구 포착 완료! 정상 흐름으로 인계합니다.")
                                 time.sleep(0.05); state = 1; break
                             else:
-                                # [추가 예방] 만약 줄 끊기 오작동으로 인해 시스템 설정 메뉴(sys_1.png)가 열려 있다면 즉시 ESC로 안전하게 닫습니다.
-                                if safe_find_image('sys_1.png', 0.70):
-                                    bprint("  > ⚙️ [설정 메뉴 닫기] 잘못 열린 시스템 메뉴창(sys_1.png)을 ESC로 강제 닫기 합니다.")
-                                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                                    time.sleep(0.8)
-                                    state = 1; break
-
-                                # [핵심 보완 로직] 대기자세 아이콘들은 보이지 않으나, 실제 파이팅/낚시 UI(fishing.png)가 완전히 꺼졌는지 교차 점검합니다.
-                                # 이 보완을 통해 낚싯대 파손 애니메이션 중간에 ESC가 무한 연타되며 메뉴창이 열리는 현상을 완벽히 구출합니다.
-                                if not safe_find_image('fishing.png', 0.70) and not safe_find_image('fishing_mode.png', 0.70):
-                                    bprint("  > 🎉 [구출] 대기 아이콘은 감지되지 않았으나, 인게임 낚시 UI가 소멸된 것이 물리적으로 증명되었습니다. 정상 캐스팅 단계로 즉시 인계합니다.")
-                                    time.sleep(0.05); state = 1; break
-                                    
                                 bprint("  > [실패] UI 잔존. 재시도...")
 
                     if state != 1:

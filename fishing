@@ -3303,19 +3303,13 @@ def fishing_bot(max_allowed_seconds):
                     send_cmd('E'); time.sleep(0.1); send_cmd('R')
                     time.sleep(0.1)
                     
-                # 2. 최대 6초 동안 기본 탐색 (ROI 엔진)
-                while time.time() - wait_bait_start < 6.0 and bot_active:
-                    # 정상 조준 상태인 경우 (정상 상태 UI인 bait_change.png 또는 broken_rod.png 감지 시) 성공으로 판정하고 즉시 캐스팅 진행
-                    if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70):
-                        found_bait = True
-                        break
-                    
-                    # 낚싯대가 아예 파손되었거나 해제된 맨손 상태인 경우 (tab_roulette.png 감지 시) 즉각 루프를 탈출하여 장착 로직 호출
-                    score_tab = safe_find_image('tab_roulette.png', return_score=True)
-                    if score_tab is not None and score_tab >= 0.70:
-                        bprint(f"  > ⚡ [최적화] 맨손 상태(tab_roulette.png) 감지! 일치율: {score_tab:.3f} / 컷오프: 0.70 | 무의미한 대기 없이 즉시 장착 시퀀스로 진입합니다.")
-                        break
-                    time.sleep(0.05)
+                # 2. [구조 단순화] 오진을 유발하는 tab_roulette.png 대조를 완전히 배제하고, 루프 최대 대기 시간을 직관적으로 '1.5초'로 고정합니다.
+                    # 1.5초 동안 낚싯대 UI를 계속 찾으며, 발견 즉시 루프를 탈출하고 감지되지 않을 시 장착 로직을 수행합니다.
+                    while time.time() - wait_bait_start < 1.5 and bot_active:
+                        if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70):
+                            found_bait = True
+                            break
+                        time.sleep(0.05)
 
                 # 3. 미발견 시 전체화면 강제 탐색 (딱 1회)
                 if not found_bait and bot_active:
@@ -3588,7 +3582,7 @@ def fishing_bot(max_allowed_seconds):
                 if found_target:
                     state = 4
                 else:
-                    # [내구도 실시간 보완] 어종 판별 후 최대 1초간 fishing_mode.png 또는 reel_in.png가 뜰 때까지 동적 대기합니다.
+                    # [내구도 실시간 보완] 어종 판별 후 최대 1.0초간 fishing_mode.png 또는 reel_in.png가 유지되는지 대기하며 확인합니다.
                     is_fishing_active = False
                     wait_active_start = time.time()
                     while time.time() - wait_active_start < 1.0:
@@ -3597,21 +3591,12 @@ def fishing_bot(max_allowed_seconds):
                             break
                         time.sleep(0.05)
                         
-                    # 1초 동안 낚시 인터페이스가 뜨지 않았다면, 낚싯대 파손 애니메이션(맨손 상태)이 완전히 안착할 수 있도록 최대 0.5초의 추가 여유를 주며 tab_roulette.png를 확인합니다.
+                    # 1초 동안 대기했음에도 낚시 인터페이스가 완전히 소멸했다면, 이미 낚시가 강제 종료된 상황(파손 혹은 해제)입니다.
+                    # 이 상태에서 ESC를 누르면 시스템창이 무조건 열리므로, 안전을 위해 ESC를 생략하고 즉시 캐스팅 단계로 전이합니다.
                     if not is_fishing_active:
-                        found_broke = False
-                        wait_broke_start = time.time()
-                        while time.time() - wait_broke_start < 0.5:
-                            if safe_find_image('tab_roulette.png', 0.70):
-                                found_broke = True
-                                break
-                            time.sleep(0.05)
-                            
-                        if found_broke:
-                            bprint("  > ⚠️ [파괴 감지] 어종 판별 도중 낚싯대 파손 감지! 즉시 새 낚싯대 장착 로직을 수행합니다.")
-                            auto_equip_rod()
-                            state = 1
-                            continue
+                        bprint("  > ⚠️ [상태 감지] 낚시 UI가 이미 소멸되어 있습니다 (파손 또는 해제). 안전을 위해 ESC 입력을 건너뛰고 캐스팅 단계로 복귀합니다.")
+                        state = 1
+                        continue
                             
                     # 목표를 못 찾았거나 확실한 잡어인 경우
                     stats['daily_skip'] += 1
@@ -3635,7 +3620,7 @@ def fishing_bot(max_allowed_seconds):
                         
                         if reset_by_notice: break
                         
-                        # 줄 끊기 타격 후 정상 낚시 대기 자세 혹은 완전 맨손(tab_roulette) 상태가 되었는지 최대 5.0초간 감시
+                        # 줄 끊기 타격 후 정상 낚시 대기 자세 혹은 완전 맨손 상태가 되었는지 최대 5.0초간 감시
                         bprint("  > [대기] 낚시 상태 초기화 감시 중 (최대 5.0초)...")
                         
                         global silence_fail_log
@@ -3650,7 +3635,7 @@ def fishing_bot(max_allowed_seconds):
                                 toggle_stop()
                                 raise BotStopException()
                             
-                            # 과도기 도중 조기 탈출을 막기 위해, 확실한 복구 완료 상태(낚싯대 대기 상태 또는 파손 맨손)가 정립될 때만 루프를 통과시킵니다.
+                            # 과도기 도중 조기 탈출을 막기 위해, 확실한 복구 완료 상태(낚싯대 대기 또는 맨손 완료)가 정립될 때만 루프를 통과시킵니다.
                             if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70) or safe_find_image('tab_roulette.png', 0.70):
                                 found_restored = True
                                 break

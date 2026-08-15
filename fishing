@@ -3466,25 +3466,22 @@ def fishing_bot(max_allowed_seconds):
             elif state == 3:
                 if not bot_active: raise BotStopException()
 
-                # [내구도 시스템 대응] 어종 판별 전 낚싯대 파괴 여부 선행 검사
-                bprint("  > [내구도 검사] 챔질 후 애니메이션 안정화 및 낚싯대(reel_in.png) 확인 중...")
+                # [즉시 진입 및 파손 통합] 중복 스레드를 제거하고, 챔질 직후 맨손 가이드와 낚싯대 상태를 1.0초간 초고속(ROI) 동시 탐색합니다.
+                bprint("  > [내구도 검사] 챔질 후 애니메이션 안정화 및 낚싯대 상태 확인 중...")
                 rod_found = False
                 
-                # [ROI 고속 활용] 전체 화면(FULL_SCREEN) 검색을 제거하고 학습된 고속 ROI만 매칭하여 프리징 및 성능 저하를 방지합니다.
                 check_start = time.time()
-                while time.time() - check_start < 1.5 and bot_active:
-                    # 챔질 직후 맨손 가이드(tab_roulette.png)가 바로 검출되면 즉시 파손으로 판정하고 검사를 중단합니다.
+                while time.time() - check_start < 1.0 and bot_active:
+                    # 챔질 직후 맨손 가이드(tab_roulette.png)가 검출되면 즉시 루프를 탈출하고 장착 시퀀스로 전이합니다.
                     if safe_find_image('tab_roulette.png', 0.70):
                         bprint("  > ⚠️ [실시간 파괴 감지] 챔질 후 맨손 가이드(tab_roulette.png)가 검출되었습니다!")
                         rod_found = False
                         break
+                    # 낚싯대가 무사히 장착된 상태라면 즉시 루프를 탈출하고 대기 시간 없이 곧바로 어종 판별로 진입합니다.
                     if safe_find_image('reel_in.png', 0.70):
-                        # 찰나의 인식 오류를 방지하기 위해 0.1초 대기 후 재확증을 거칩니다.
-                        time.sleep(0.1)
-                        if safe_find_image('reel_in.png', 0.70) and not safe_find_image('tab_roulette.png', 0.70):
-                            rod_found = True
-                            break
-                    time.sleep(0.05)
+                        rod_found = True
+                        break
+                    time.sleep(0.03)
 
                 if not rod_found:
                     bprint("  > ⚠️ [파괴 감지] 낚싯대가 부서졌습니다! 검증된 자동 장착 로직을 실행합니다.")
@@ -3668,6 +3665,14 @@ def fishing_bot(max_allowed_seconds):
                 while bot_active:
                     if not bot_active: raise BotStopException()
                     if check_exit_notification():
+                        state = 1
+                        break
+
+                    # [맨손/파손 실시간 인터셉터] 전기뱀장어 검출 직후 파손되었거나, 전투 도중 예기치 않게 부러진 경우 맨손 가이드(tab_roulette.png)를 즉시 감지하여 안전하게 복구합니다.
+                    if safe_find_image('tab_roulette.png', 0.70):
+                        bprint("  > ⚠️ [실시간 파괴 감지] 전투 도중 맨손 가이드(tab_roulette.png)가 검출되었습니다!")
+                        send_cmd('R')
+                        auto_equip_rod()
                         state = 1
                         break
                         

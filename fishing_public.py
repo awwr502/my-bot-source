@@ -2559,21 +2559,19 @@ def oblivion_bot_loop():
                     oprint("  > [감지] 저주인형 아이콘(cyan_icon.png) 포착! 'x' 키 1회 전송")
                     send_cmd('x'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
                 
-                oprint("  > [입력] 'E' 키 1회 클릭")
+                oprint("  > [입력] 'E' 키 1회 클릭")                
                 send_cmd('e'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
-                
-                oprint("  > [입력] 좌클릭(L) 홀딩 가동 및 비동기 수직 반동 상쇄 제어...")
                 
                 oprint("  > [입력] 좌클릭(L) 홀딩 가동 및 마우스 잠금 우회 반동 제어...")
                 
                 # 비동기 반동 제어용 제어 플래그
                 left_holding_active = True
                 
-                # 0.15초마다 순간적으로 마우스 클릭을 풀어 시점 잠금을 해제한 뒤, 아래로 강하게 끌어내립니다.
-                # (에임이 위로 뜨면 수치를 30, 40 등으로 늘리시고 아래로 박히면 15, 10 등으로 줄여 튜닝 가능합니다)
-                PULL_DOWN_DY = 50
+                # 시리얼 parseInt 렉이 완전히 해결되었으므로, 5~8픽셀 수준으로도 시점을 부드럽고 강력하게 끌어내립니다.
+                # 여전히 위로 솟구치면 값을 12, 15 등으로 늘리시고, 바닥으로 처박히면 3, 2 등으로 줄이시면 됩니다.
+                PULL_DOWN_DY = 6
                 
-                # 무거운 스캔 렉과 하드웨어 클릭 락(Lock)을 동시에 우회하는 비동기 초정밀 우회 스레드 가동
+                # 아두이노의 parseInt 1초 지연 마비 버그를 종결 문자(공백 및 \n) 주입으로 완벽히 해결한 초정밀 스레드
                 def anti_recoil_worker():
                     nonlocal left_holding_active
                     while oblivion_active and left_holding_active:
@@ -2581,14 +2579,14 @@ def oblivion_bot_loop():
                         send_cmd('U')
                         time.sleep(0.01)
                         
-                        # 2. 락이 풀린 찰나에 마우스를 아래로 훅 내림
-                        send_cmd(f'M0,{PULL_DOWN_DY}')
+                        # 2. 값 뒤에 공백과 \n을 실어 보내 아두이노의 1초 대기 렉을 0ms로 무력화하고 아래로 내림
+                        send_cmd(f'M0,{PULL_DOWN_DY} \n')
                         time.sleep(0.01)
                         
                         # 3. 즉시 다시 좌클릭 홀딩 복구 (게이지 끊김 방지)
                         send_cmd('L')
                         
-                        # 4. 0.15초 간격으로 이 우회 보정을 주기적으로 수행
+                        # 4. 0.15초 주기로 정밀하게 에임 보정 수행
                         time.sleep(0.15)
                         
                 threading.Thread(target=anti_recoil_worker, daemon=True).start()

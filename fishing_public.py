@@ -2564,26 +2564,39 @@ def oblivion_bot_loop():
                 
                 oprint("  > [입력] 좌클릭(L) 홀딩 가동 및 비동기 수직 반동 상쇄 제어...")
                 
+                oprint("  > [입력] 좌클릭(L) 홀딩 가동 및 마우스 잠금 우회 반동 제어...")
+                
                 # 비동기 반동 제어용 제어 플래그
                 left_holding_active = True
                 
-                # 총기 반동 세기에 맞추어 피드백 수치 조율 (0.02초 초고주파로 돌기 때문에 3~5px만 줘도 아주 강력하게 끌어내립니다)
-                # 만약 총이 여전히 위로 솟구치면 값을 6, 7 등으로 늘리시고, 아래로 처박히면 3, 2 등으로 줄이시면 됩니다.
-                PULL_DOWN_DY = 20
+                # 0.15초마다 순간적으로 마우스 클릭을 풀어 시점 잠금을 해제한 뒤, 아래로 강하게 끌어내립니다.
+                # (에임이 위로 뜨면 수치를 30, 40 등으로 늘리시고 아래로 박히면 15, 10 등으로 줄여 튜닝 가능합니다)
+                PULL_DOWN_DY = 15
                 
-                # 메인 스레드의 무거운 이미지 탐색 렉에 간섭받지 않고, 마우스만 초고주파(50Hz)로 부드럽게 끌어내리는 단독 비동기 일꾼 생성
+                # 무거운 스캔 렉과 하드웨어 클릭 락(Lock)을 동시에 우회하는 비동기 초정밀 우회 스레드 가동
                 def anti_recoil_worker():
                     nonlocal left_holding_active
                     while oblivion_active and left_holding_active:
+                        # 1. 0.01초 동안 순간적으로 클릭 해제 (마우스 이동 락 해제)
+                        send_cmd('U')
+                        time.sleep(0.01)
+                        
+                        # 2. 락이 풀린 찰나에 마우스를 아래로 훅 내림
                         send_cmd(f'M0,{PULL_DOWN_DY}')
-                        time.sleep(0.01) # 정확히 20ms 간격으로 지연 없이 마우스 보정 주입
+                        time.sleep(0.01)
+                        
+                        # 3. 즉시 다시 좌클릭 홀딩 복구 (게이지 끊김 방지)
+                        send_cmd('L')
+                        
+                        # 4. 0.15초 간격으로 이 우회 보정을 주기적으로 수행
+                        time.sleep(0.15)
                         
                 threading.Thread(target=anti_recoil_worker, daemon=True).start()
                 
-                send_cmd('L') # 좌클릭 홀딩 시작
+                send_cmd('L') # 최초 좌클릭 홀딩 시작
                 check_and_repair() # 홀딩 시작 직후 1차 즉시 검사
                 
-                # 메인 스레드는 렉 걱정 없이 오직 보상 등장 여부와 수리 팝업만 감시합니다.
+                # 메인 스레드는 상자 출현과 수리 대기만 수행합니다.
                 while oblivion_active:
                     check_and_repair() # 홀딩 유지 도중 실시간 지속 검사
                     

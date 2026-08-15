@@ -2559,50 +2559,26 @@ def oblivion_bot_loop():
                     oprint("  > [감지] 저주인형 아이콘(cyan_icon.png) 포착! 'x' 키 1회 전송")
                     send_cmd('x'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
                 
-                oprint("  > [입력] 'E' 키 1회 클릭")                
+                oprint("  > [입력] 'E' 키 1회 클릭")
                 send_cmd('e'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
                 
-                oprint("  > [입력] 좌클릭(L) 홀딩 가동 및 마우스 잠금 우회 반동 제어...")
-                
-                # 비동기 반동 제어용 제어 플래그
-                left_holding_active = True
-                
-                # 시리얼 parseInt 렉이 완전히 해결되었으므로, 5~8픽셀 수준으로도 시점을 부드럽고 강력하게 끌어내립니다.
-                # 여전히 위로 솟구치면 값을 12, 15 등으로 늘리시고, 바닥으로 처박히면 3, 2 등으로 줄이시면 됩니다.
-                PULL_DOWN_DY = 6
-                
-                # 아두이노의 parseInt 1초 지연 마비 버그를 종결 문자(공백 및 \n) 주입으로 완벽히 해결한 초정밀 스레드
-                def anti_recoil_worker():
-                    nonlocal left_holding_active
-                    while oblivion_active and left_holding_active:
-                        # 1. 0.01초 동안 순간적으로 클릭 해제 (마우스 이동 락 해제)
-                        send_cmd('U')
-                        time.sleep(0.01)
-                        
-                        # 2. 값 뒤에 공백과 \n을 실어 보내 아두이노의 1초 대기 렉을 0ms로 무력화하고 아래로 내림
-                        send_cmd(f'M0,{PULL_DOWN_DY} \n')
-                        time.sleep(0.01)
-                        
-                        # 3. 즉시 다시 좌클릭 홀딩 복구 (게이지 끊김 방지)
-                        send_cmd('L')
-                        
-                        # 4. 0.15초 주기로 정밀하게 에임 보정 수행
-                        time.sleep(0.15)
-                        
-                threading.Thread(target=anti_recoil_worker, daemon=True).start()
-                
-                send_cmd('L') # 최초 좌클릭 홀딩 시작
+                oprint("  > [입력] 좌클릭(L) 홀딩 가동 및 수직/수평 복합 반동 상쇄 제어...")
+                send_cmd('L')
                 check_and_repair() # 홀딩 시작 직후 1차 즉시 검사
                 
-                # 메인 스레드는 상자 출현과 수리 대기만 수행합니다.
+                # 수직/수평 반동을 완전히 상쇄하기 위해 매 루프마다 마우스를 아래(10) 및 우측(3)으로 동시에 부드럽게 끌어내립니다.
+                PULL_RIGHT_DX = 4  # 우측 이동 값 (오른쪽으로 3픽셀)
+                PULL_DOWN_DY = 15  # 하향 이동 값 (아래로 10픽셀)
+                
                 while oblivion_active:
                     check_and_repair() # 홀딩 유지 도중 실시간 지속 검사
                     
                     if find_img('reward.png', conf=0.70, full_screen=False):
                         break
-                    time.sleep(0.05)
-                    
-                left_holding_active = False # 보상 획득 시 반동 제어 스레드 안전 종료
+                        
+                    # 단 한 번의 마우스 제어 명령(M)으로 아래와 오른쪽을 동시 이동시켜 부드럽고 완벽한 대각선 복합 반동 보정을 가동합니다.
+                    send_cmd(f'M{PULL_RIGHT_DX},{PULL_DOWN_DY}')
+                    time.sleep(0.02)
                 
                 if not oblivion_active: raise BotStopException()
                 

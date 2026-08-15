@@ -3600,15 +3600,15 @@ def fishing_bot(max_allowed_seconds):
                 if found_target:
                     state = 4
                 else:
-                    # [내구도 실시간 보완] 줄을 끊기 전에, 수색 중 낚싯대가 파손되어 상태가 풀린 것인지 최종 검증합니다.
-                    # fishing_mode.png, reel_in.png 둘 중 하나라도 보이면 정상 진행하며, 둘 다 안 보일 때  tab_roulette.png가 보이면 낚싯대 파쇄로 판정합니다.
+                    # [내구도 실시간 보완 및 즉각 자동 복구]
+                    # 어종 판별이 끝난 후 낚시 인터페이스 UI가 전혀 보이지 않는다면, 렉이나 애니메이션 지연 검사(tab_roulette)를 기다릴 필요 없이 즉시 낚싯대 파손 상황으로 확정 판정합니다.
+                    # 곧바로 낚싯대 자동 장착 로직(auto_equip_rod)으로 진입시켜 모션 딜레이를 흡수하며 안전하게 예비 낚싯대를 스왑합니다.
                     is_fishing_active = safe_find_image('fishing_mode.png', 0.70) or safe_find_image('reel_in.png', 0.70)
                     if not is_fishing_active:
-                        if safe_find_image('tab_roulette.png', 0.70):
-                            bprint("  > ⚠️ [파괴 감지] 어종 판별 도중 낚싯대 파손 감지! 줄 끊기를 취소하고 신형 장착 로직을 수행합니다.")
-                            auto_equip_rod()
-                            state = 1
-                            continue
+                        bprint("  > ⚠️ [파괴 감지] 어종 판별 도중 낚싯대 파손 감지! 즉시 새 낚싯대 장착 로직을 수행합니다.")
+                        auto_equip_rod()
+                        state = 1
+                        continue
                             
                     # 목표를 못 찾았거나 확실한 잡어인 경우
                     stats['daily_skip'] += 1

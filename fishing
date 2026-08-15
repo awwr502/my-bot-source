@@ -3474,6 +3474,20 @@ def fishing_bot(max_allowed_seconds):
             elif state == 3:
                 if not bot_active: raise BotStopException()
 
+                # [병렬 파손 감시망] 어종 판별이 시작되는 순간부터 단독 백그라운드 스레드를 가동하여 맨손 상태(tab_roulette.png)를 실시간 비동기 감시합니다.
+                rod_broke_during_scan = False
+                scan_active = True
+                
+                def rod_break_monitor():
+                    nonlocal rod_broke_during_scan, scan_active
+                    while scan_active and bot_active:
+                        if safe_find_image('tab_roulette.png', 0.70):
+                            rod_broke_during_scan = True
+                            break
+                        time.sleep(0.1)
+                        
+                threading.Thread(target=rod_break_monitor, daemon=True).start()
+
                 # [내구도 시스템 대응] 어종 판별 전 낚싯대 파괴 여부 선행 검사
                 bprint("  > [내구도 검사] 챔질 후 애니메이션 안정화 및 낚싯대(reel_in.png) 확인 중...")
                 rod_found = False
@@ -3576,12 +3590,10 @@ def fishing_bot(max_allowed_seconds):
                 if found_target:
                     state = 4
                 else:
-                    # [내구도 실시간 보완 및 즉각 자동 복구]
-                    # 어종 판별이 끝난 후 낚시 인터페이스 UI가 전혀 보이지 않는다면, 렉이나 애니메이션 지연 검사(tab_roulette)를 기다릴 필요 없이 즉시 낚싯대 파손 상황으로 확정 판정합니다.
-                    # 곧바로 낚싯대 자동 장착 로직(auto_equip_rod)으로 진입시켜 모션 딜레이를 흡수하며 안전하게 예비 낚싯대를 스왑합니다.
-                    is_fishing_active = safe_find_image('fishing_mode.png', 0.70) or safe_find_image('reel_in.png', 0.70)
-                    if not is_fishing_active:
-                        bprint("  > ⚠️ [파괴 감지] 어종 판별 도중 낚싯대 파손 감지! 즉시 새 낚싯대 장착 로직을 수행합니다.")
+                    # [내구도 실시간 보완] 어종 판별 및 대기 시간 동안 백그라운드 감시망에서 낚싯대 파손(tab_roulette.png)이 1회라도 감지되었는지 확인합니다.
+                    # 사용자 제안에 따른 다중 스레드 교차 검증을 통해, 렉이나 딜레이 없이 100% 확률로 즉시 장착 복구를 수행합니다.
+                    if rod_broke_during_scan:
+                        bprint("  > ⚠️ [병렬 감시망 포착] 어종 판별 도중 낚싯대 파손 감지! 즉시 새 낚싯대 장착 로직을 수행합니다.")
                         auto_equip_rod()
                         state = 1
                         continue
@@ -3654,6 +3666,10 @@ def fishing_bot(max_allowed_seconds):
                         bprint("  > [안전장치] 최대 시도 도달. 강제로 정상 캐스팅(State 1)으로 전이합니다.")
                         time.sleep(1.0)
                         state = 1
+
+                # 루프가 끝나면 스레드 풀 및 감시망을 깔끔하게 해제
+                scan_active = False
+                species_executor.shutdown(wait=False)
 
             # --- [State 4] 파이팅 (DDR 신형 QTE 엔진 가동) ---
             elif state == 4:

@@ -2562,14 +2562,22 @@ def oblivion_bot_loop():
                 oprint("  > [입력] 'E' 키 1회 클릭")
                 send_cmd('e'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
                 
-                oprint("  > [입력] 좌클릭(L) 홀딩 가동")
+                oprint("  > [입력] 좌클릭(L) 홀딩 가동 및 수직 반동 상쇄 제어...")
                 send_cmd('L')
                 check_and_repair() # 홀딩 시작 직후 1차 즉시 검사
                 
+                # 좌클릭을 유지하는 동안 마우스를 아래로 지속적으로 끌어내려 총기/상호작용 수직 반동을 상쇄시킵니다.
+                # 에임이 아래로 가라앉으면 값을 2나 1로 줄이시고, 여전히 위로 뜨면 4나 5로 늘려 본인 총기에 맞춤 튜닝이 가능합니다.
+                PULL_DOWN_DY = 3
+                
                 while oblivion_active:
                     check_and_repair() # 홀딩 유지 도중 실시간 지속 검사
+                    
                     if find_img('reward.png', conf=0.70, full_screen=False):
                         break
+                        
+                    # 0.05초 간격으로 마우스를 아래로 3픽셀씩 당겨 수직 상승 반동력을 무력화합니다.
+                    send_cmd(f'M0,{PULL_DOWN_DY}')
                     time.sleep(0.05)
                 
                 if not oblivion_active: raise BotStopException()

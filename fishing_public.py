@@ -2562,23 +2562,36 @@ def oblivion_bot_loop():
                 oprint("  > [입력] 'E' 키 1회 클릭")
                 send_cmd('e'); time.sleep(0.1); send_cmd('R'); time.sleep(0.1)
                 
-                oprint("  > [입력] 좌클릭(L) 홀딩 가동 및 수직 반동 상쇄 제어...")
-                send_cmd('L')
+                oprint("  > [입력] 좌클릭(L) 홀딩 가동 및 비동기 수직 반동 상쇄 제어...")
+                
+                # 비동기 반동 제어용 제어 플래그
+                left_holding_active = True
+                
+                # 총기 반동 세기에 맞추어 피드백 수치 조율 (0.02초 초고주파로 돌기 때문에 3~5px만 줘도 아주 강력하게 끌어내립니다)
+                # 만약 총이 여전히 위로 솟구치면 값을 6, 7 등으로 늘리시고, 아래로 처박히면 3, 2 등으로 줄이시면 됩니다.
+                PULL_DOWN_DY = 5
+                
+                # 메인 스레드의 무거운 이미지 탐색 렉에 간섭받지 않고, 마우스만 초고주파(50Hz)로 부드럽게 끌어내리는 단독 비동기 일꾼 생성
+                def anti_recoil_worker():
+                    nonlocal left_holding_active
+                    while oblivion_active and left_holding_active:
+                        send_cmd(f'M0,{PULL_DOWN_DY}')
+                        time.sleep(0.02) # 정확히 20ms 간격으로 지연 없이 마우스 보정 주입
+                        
+                threading.Thread(target=anti_recoil_worker, daemon=True).start()
+                
+                send_cmd('L') # 좌클릭 홀딩 시작
                 check_and_repair() # 홀딩 시작 직후 1차 즉시 검사
                 
-                # 좌클릭을 유지하는 동안 마우스를 아래로 지속적으로 끌어내려 총기/상호작용 수직 반동을 상쇄시킵니다.
-                # 에임이 아래로 가라앉으면 값을 2나 1로 줄이시고, 여전히 위로 뜨면 4나 5로 늘려 본인 총기에 맞춤 튜닝이 가능합니다.
-                PULL_DOWN_DY = 10
-                
+                # 메인 스레드는 렉 걱정 없이 오직 보상 등장 여부와 수리 팝업만 감시합니다.
                 while oblivion_active:
                     check_and_repair() # 홀딩 유지 도중 실시간 지속 검사
                     
                     if find_img('reward.png', conf=0.70, full_screen=False):
                         break
-                        
-                    # 0.01초 간격으로 마우스를 아래로 3픽셀씩 당겨 수직 상승 반동력을 무력화합니다.
-                    send_cmd(f'M0,{PULL_DOWN_DY}')
-                    time.sleep(0.01)
+                    time.sleep(0.05)
+                    
+                left_holding_active = False # 보상 획득 시 반동 제어 스레드 안전 종료
                 
                 if not oblivion_active: raise BotStopException()
                 

@@ -999,7 +999,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
     template_color = IMAGE_COLOR_CACHE.get(img_path)
     
     # [인식 엔진 근본 개선] 신형 reel_in.png 및 맨손 상태 가이드(tab_roulette)에 대해 배경을 100% 생략하는 자동 투명 마스킹 매칭을 가동합니다.
-    MASK_UI_LIST = ['broken_rod.png', 'fishing.png', 'green_range.png', 'reel_in.png', 'tab_roulette.png']
+    MASK_UI_LIST = ['broken_rod.png', 'fishing.png', 'green_range.png', 'reel_in.png', 'fishing_mode.png']
     if force_mask:
         MASK_UI_LIST.append(img_path)
     
@@ -1054,14 +1054,15 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             target_monitor = active_sct.monitors[1]
             
             # [오탐 방지 및 스캔 경량화] 이미지별 최적 획정 범위 분할 적용
-            if img_path == 'fishing.png':
+            if img_path in ['fishing.png']:
                 target_monitor = {
                     "left": int(target_monitor["left"] + target_monitor["width"] * 0.3),
                     "top": int(target_monitor["top"] + target_monitor["height"] * 0.5),
                     "width": int(target_monitor["width"] * 0.4),
                     "height": int(target_monitor["height"] * 0.5)
                 }
-            elif img_path == 'bait_change.png':
+            elif img_path in ['bait_change.png', 'tab_roulette.png', 'fishing_mode.png']:
+                # "Esc 메뉴" 가이드도 미끼 변경 아이콘과 완전히 같은 좌측 하단 대역(X 0~25%, Y 40~75%)으로 수색 대역을 공유해 오탐을 원천 차단합니다.
                 target_monitor = {
                     "left": int(target_monitor["left"]),
                     "top": int(target_monitor["top"] + target_monitor["height"] * 0.40),
@@ -1076,14 +1077,14 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
                     "height": int(target_monitor["height"] * 0.5)
                 }
             
-            # 강제 폴백 검사 종료 후 상태 복귀
-            region = None 
+        # 강제 폴백 검사 종료 후 상태 복귀
+        region = None  
 
         sct_img = active_sct.grab(target_monitor)
         
         # 1. 색상 분석 및 정합성 매치 분기 처리
         # A. 낚싯대 상태 감지용 3개 중요 이미지: 양방향 필터 전처리 단독 가동 (높은 일치율 복구 완료)
-        if img_path in ['bait_change.png', 'broken_rod.png', 'throw_btn.png']:
+        if img_path in ['bait_change.png', 'broken_rod.png', 'throw_btn.png', 'fishing_mode.png']:
             screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
             screen_processed = cv2.bilateralFilter(screen_gray, 5, 50, 50)
             template_processed = template_gray
@@ -1129,8 +1130,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
 
         # 2. [실시간 자가 치유 능동 폴백]
         # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재조준하여 스캔
-        # (단순 점수 반환 return_score 목적의 호출일 때는 자가치유 및 캐시 리셋을 실행하지 않도록 보호합니다)
-        is_using_cache = (not is_fallback_scan and not region and cache_data['master_box'] is not None and not return_score)
+        # [구조 결함 해결] master_box가 최초 학습 전(None)이라도 첫 탐색 실패 시 즉시 전체 화면으로 폴백하여 자율 복구 및 좌표 자동 학습을 수행할 수 있도록 보완합니다.
+        is_using_cache = (not is_fallback_scan and not region and not return_score)
         if max_val < active_conf and is_using_cache:
             full_monitor = active_sct.monitors[1]
             sct_img_full = active_sct.grab(full_monitor)
@@ -1593,13 +1594,9 @@ def afk_monitor_loop():
                             sct_img_ui = local_sct.grab(local_sct.monitors[1])
                             screen_gray_ui = cv2.cvtColor(np.array(sct_img_ui), cv2.COLOR_BGRA2GRAY)
                             
-                            # 사전 캐싱된 투명 마스크가 존재하면 배경 차단 투명 마스크 매칭(TM_CCORR_NORMED)을 자동 가동하며, 없으면 기존 그레이스케일 매칭을 수행합니다.
-                            mask = IMAGE_MASK_CACHE.get(img_name)
-                            if mask is not None:
-                                res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCORR_NORMED, mask=mask)
-                            else:
-                                res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
-                                
+                            # [오탐 방지] 전체 화면을 수색할 때는 밝은 바닷물이나 하늘 영역에서 마스크 매칭의 점수 왜곡(오탐)이 발생할 우려가 매우 큽니다.
+                            # 따라서 오직 형태 대조력이 가장 엄격하여 물결을 글자로 오진할 확률이 전혀 없는 표준 그레이스케일 매칭만 가동합니다.
+                            res = cv2.matchTemplate(screen_gray_ui, temp, cv2.TM_CCOEFF_NORMED)
                             _, max_val, _, _ = cv2.minMaxLoc(res)
                             return max_val >= conf
 
@@ -2415,8 +2412,8 @@ def oblivion_bot_loop():
                                 oprint("  > [복구 5단계] 내구도 0 재감지! 3단계(수리) 재수행...")
                                 continue
                             else:
-                                oprint("  > [복구 5단계] 수리 완료 확인 -> 'F' 키 입력")
-                                send_cmd('F'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5)
+                                oprint("  > [복구 5단계] 수리 완료 확인 -> 장전 후 'F' 키 입력")
+                                send_cmd('r'); time.sleep(0.1); send_cmd('R'); time.sleep(2.0); send_cmd('F'); time.sleep(0.1);
                                 break
                                 
                         if not oblivion_active: raise BotStopException()
@@ -2568,7 +2565,7 @@ def oblivion_bot_loop():
                 
                 # 수직/수평 반동을 완전히 상쇄하기 위해 매 루프마다 마우스를 아래(10) 및 우측(3)으로 동시에 부드럽게 끌어내립니다.
                 PULL_RIGHT_DX = 4  # 우측 이동 값 (오른쪽으로 3픽셀)
-                PULL_DOWN_DY = 15  # 하향 이동 값 (아래로 10픽셀)
+                PULL_DOWN_DY = 12  # 하향 이동 값 (아래로 10픽셀)
                 
                 while oblivion_active:
                     check_and_repair() # 홀딩 유지 도중 실시간 지속 검사
@@ -3178,14 +3175,14 @@ def fishing_bot(max_allowed_seconds):
                 
                 # (0) [우선 실행] 상호작용 (F) 수거 시도 (상자 근처 오작동 방지)
                 # 수거창([G] 방생)이 화면에 실제로 남아있을 때만 F를 입력하고, 그 외에는 블라인드 F 입력을 스킵하여 상자가 열리는 것을 원천 차단합니다.
-                if safe_find_image('catch_F.png', 0.70):
+                if safe_find_image('catch_F.png', 0.75):
                     bprint("  > [분석 0단계] 수거창 감지! F 입력으로 수거를 시도합니다.")
                     send_cmd('F'); time.sleep(0.2); send_cmd('R'); time.sleep(1.0)
                 else:
                     bprint("  > [분석 0단계] 수거창 미감지. 불필요한 상자 개방을 막기 위해 F 입력을 건너뜁니다.")
                 
                 # UI 상태를 확인하여 복구 여부를 판별합니다. (fishing.png 임계값도 안전한 0.78로 동기화, 시스템 메뉴가 열려 있다면 복구 실패 처리)
-                if not safe_find_image('catch_F.png', 0.70) and not safe_find_image('specific_B.png', 0.78) and not safe_find_image('fishing.png', 0.75) and not safe_find_image('fishing_mode.png', 0.80):
+                if not safe_find_image('catch_F.png', 0.75) and not safe_find_image('specific_B.png', 0.78) and not safe_find_image('fishing.png', 0.75) and not safe_find_image('fishing_mode.png', 0.80):
                     if safe_find_image('sys_1.png', 0.70):
                         bprint("  > [분석] 시스템 메뉴창(sys_1.png)이 감지되었습니다. 추가 복구 작업을 수행합니다.")
                         recovered = False
@@ -3210,11 +3207,11 @@ def fishing_bot(max_allowed_seconds):
                                 break
 
                     # (1) 수거 창(F) 잔존 꼬임
-                    if safe_find_image('catch_F.png', 0.70):
+                    if safe_find_image('catch_F.png', 0.75):
                         bprint("  > [분석 1단계] 수거 창(F) 미처리. 강제 획득 시도")
                         for _ in range(10):
                             send_cmd('F'); time.sleep(0.2); send_cmd('R'); time.sleep(1.0)
-                            if not safe_find_image('catch_F.png', 0.70):
+                            if not safe_find_image('catch_F.png', 0.75):
                                 recovered = True; break
                     
                     # (2) 보관함 창(B) 잔존 꼬임
@@ -3307,15 +3304,10 @@ def fishing_bot(max_allowed_seconds):
                     time.sleep(0.1)
                     
                 # 2. 최대 6초 동안 기본 탐색 (ROI 엔진)
-                while time.time() - wait_bait_start < 6.0 and bot_active:
-                    # 정상 조준 상태인 경우 (정상 상태 UI인 bait_change.png 또는 broken_rod.png 감지 시) 성공으로 판정하고 즉시 캐스팅 진행
+                # 1.5초 동안 낚싯대 UI를 계속 찾으며, 발견 즉시 루프를 탈출하고 감지되지 않을 시 장착 로직을 수행합니다.
+                while time.time() - wait_bait_start < 1.5 and bot_active:
                     if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70):
                         found_bait = True
-                        break
-                    
-                    # 낚싯대가 아예 파손되었거나 해제된 맨손 상태인 경우 (tab_roulette.png 감지 시) 즉각 루프를 탈출하여 장착 로직 호출
-                    if safe_find_image('tab_roulette.png', 0.70):
-                        bprint("  > ⚡ [최적화] 맨손 상태(tab_roulette.png) 감지! 무의미한 대기 없이 즉시 장착 시퀀스로 진입합니다.")
                         break
                     time.sleep(0.05)
 
@@ -3474,18 +3466,22 @@ def fishing_bot(max_allowed_seconds):
             elif state == 3:
                 if not bot_active: raise BotStopException()
 
-                # [내구도 시스템 대응] 어종 판별 전 낚싯대 파괴 여부 선행 검사
-                bprint("  > [내구도 검사] 챔질 후 애니메이션 안정화 및 낚싯대(reel_in.png) 확인 중...")
+                # [즉시 진입 및 파손 통합] 중복 스레드를 제거하고, 챔질 직후 맨손 가이드와 낚싯대 상태를 1.0초간 초고속(ROI) 동시 탐색합니다.
+                bprint("  > [내구도 검사] 챔질 후 애니메이션 안정화 및 낚싯대 상태 확인 중...")
                 rod_found = False
                 
-                # [다중 UI 맹점 해결] reel_in.png가 화면에 두 군데 뜰 때 발생하는 ROI 시야 협착(오탐)을 방지하기 위해,
-                # 이 구간에 한해 강제로 전체 화면(FULL_SCREEN) 스캔을 지시합니다. 대기 시간은 원래 속도인 1.0초로 복구합니다.
                 check_start = time.time()
-                while time.time() - check_start < 2.5 and bot_active:
-                    if safe_find_image('reel_in.png', 0.70, region="FULL_SCREEN"):
+                while time.time() - check_start < 1.0 and bot_active:
+                    # 챔질 직후 맨손 가이드(tab_roulette.png)가 검출되면 즉시 루프를 탈출하고 장착 시퀀스로 전이합니다.
+                    if safe_find_image('tab_roulette.png', 0.70):
+                        bprint("  > ⚠️ [실시간 파괴 감지] 챔질 후 맨손 가이드(tab_roulette.png)가 검출되었습니다!")
+                        rod_found = False
+                        break
+                    # 낚싯대가 무사히 장착된 상태라면 즉시 루프를 탈출하고 대기 시간 없이 곧바로 어종 판별로 진입합니다.
+                    if safe_find_image('reel_in.png', 0.70):
                         rod_found = True
                         break
-                    time.sleep(0.05)
+                    time.sleep(0.03)
 
                 if not rod_found:
                     bprint("  > ⚠️ [파괴 감지] 낚싯대가 부서졌습니다! 검증된 자동 장착 로직을 실행합니다.")
@@ -3576,13 +3572,24 @@ def fishing_bot(max_allowed_seconds):
                 if found_target:
                     state = 4
                 else:
-                    # [내구도 실시간 보완 및 즉각 자동 복구]
-                    # 어종 판별이 끝난 후 낚시 인터페이스 UI가 전혀 보이지 않는다면, 렉이나 애니메이션 지연 검사(tab_roulette)를 기다릴 필요 없이 즉시 낚싯대 파손 상황으로 확정 판정합니다.
-                    # 곧바로 낚싯대 자동 장착 로직(auto_equip_rod)으로 진입시켜 모션 딜레이를 흡수하며 안전하게 예비 낚싯대를 스왑합니다.
-                    is_fishing_active = safe_find_image('fishing_mode.png', 0.70) or safe_find_image('reel_in.png', 0.70)
+                    # [내구도 실시간 보완] 어종 판별 후 최대 1.0초간 fishing_mode.png 또는 reel_in.png가 유지되는지 대기하며 확인합니다.
+                    # 단, 대기 도중이라도 낚시대 파손(tab_roulette.png)이 검출되면 파손된 상태이므로 즉시 대기를 해제하고 복구 시퀀스로 갑니다.
+                    is_fishing_active = False
+                    wait_active_start = time.time()
+                    while time.time() - wait_active_start < 1.0:
+                        if safe_find_image('tab_roulette.png', 0.70):
+                            bprint("  > ⚠️ [실시간 파괴 감지] 어종 판별 단계에서 낚시대 파손(tab_roulette.png)이 검출되었습니다!")
+                            is_fishing_active = False
+                            break
+                        if safe_find_image('fishing_mode.png', 0.70) or safe_find_image('reel_in.png', 0.70):
+                            is_fishing_active = True
+                            break
+                        time.sleep(0.05)
+                        
+                    # 1초 동안 대기했음에도 낚시 인터페이스가 완전히 소멸했다면, 이미 낚시가 강제 종료된 상황(파손 혹은 해제)입니다.
+                    # 이 상태에서 ESC를 누르면 시스템창이 무조건 열리므로, 안전을 위해 ESC를 생략하고 즉시 캐스팅 단계로 전이합니다.
                     if not is_fishing_active:
-                        bprint("  > ⚠️ [파괴 감지] 어종 판별 도중 낚싯대 파손 감지! 즉시 새 낚싯대 장착 로직을 수행합니다.")
-                        auto_equip_rod()
+                        bprint("  > ⚠️ [상태 감지] 낚시 UI가 이미 소멸되어 있습니다 (파손 또는 해제). 안전을 위해 ESC 입력을 건너뛰고 캐스팅 단계로 복귀합니다.")
                         state = 1
                         continue
                             
@@ -3594,8 +3601,8 @@ def fishing_bot(max_allowed_seconds):
                     while bot_active and escape_attempts < 4:
                         if keyboard.is_pressed(']'): state = 1; break
                         
-                        bprint(f"  > [시도] ESC 누르기 (0.5초)... (시도 {escape_attempts + 1}/4)")
-                        send_cmd('E'); time.sleep(0.5); send_cmd('R')
+                        bprint(f"  > [시도] ESC 누르기 (0.1초)... (시도 {escape_attempts + 1}/4)")
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         escape_attempts += 1
                         
                         # 알림 감시 루프
@@ -3608,7 +3615,7 @@ def fishing_bot(max_allowed_seconds):
                         
                         if reset_by_notice: break
                         
-                        # 줄 끊기 타격 후 정상 낚시 대기 자세(bait_change 또는 broken_rod) 혹은 완전 맨손(tab_roulette) 상태가 되었는지 최대 5.0초간 감시
+                        # 줄 끊기 타격 후 정상 낚시 대기 자세 혹은 완전 맨손 상태가 되었는지 최대 5.0초간 감시
                         bprint("  > [대기] 낚시 상태 초기화 감시 중 (최대 5.0초)...")
                         
                         global silence_fail_log
@@ -3623,9 +3630,8 @@ def fishing_bot(max_allowed_seconds):
                                 toggle_stop()
                                 raise BotStopException()
                             
-                            # 세 개 중 하나라도 발견되면 즉시 탈출 (found_bait는 1단계 진입 시 자동 판별되므로 공통 해제)
-                            # 교차 검사 추가: 낚시 UI 자체가 화면에서 완전히 소멸한 경우에도 복구 성공으로 동시 인정하여 대기 유실 시간을 최적화합니다.
-                            if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70) or safe_find_image('tab_roulette.png', 0.70) or (not safe_find_image('fishing.png', 0.70) and not safe_find_image('fishing_mode.png', 0.70)):
+                            # 과도기 도중 조기 탈출을 막기 위해, 확실한 복구 완료 상태(낚싯대 대기 또는 맨손 완료)가 정립될 때만 루프를 통과시킵니다.
+                            if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70) or safe_find_image('tab_roulette.png', 0.70):
                                 found_restored = True
                                 break
                             time.sleep(0.08) # 0.08초 주기로 고속 스캔
@@ -3638,17 +3644,7 @@ def fishing_bot(max_allowed_seconds):
                             bprint("  > [완료] UI 소멸 및 대기 상태 복구 완료. 줄 끊기 성공.")
                             time.sleep(0.05); state = 1; break
                         else:
-                            bprint("  > [실패] 5.0초 대기 시간 초과. 미검출 항목 상세 수치를 1회 출력합니다.")
-                            # 진단 상세 수치를 출력하는 순간(마지막 프레임)에 완료된 UI가 있는지 최종 교차 검증을 병행합니다.
-                            found_bait = safe_find_image('bait_change.png', 0.70)
-                            found_broken = safe_find_image('broken_rod.png', 0.70)
-                            found_roulette = safe_find_image('tab_roulette.png', 0.70)
-                            
-                            if found_bait or found_broken or found_roulette:
-                                bprint("  > [성공] 타웃 한계 지점에서 UI 복구 포착 완료! 정상 흐름으로 인계합니다.")
-                                time.sleep(0.05); state = 1; break
-                            else:
-                                bprint("  > [실패] UI 잔존. 재시도...")
+                            bprint("  > [실패] UI 잔존. 재시도...")
 
                     if state != 1:
                         bprint("  > [안전장치] 최대 시도 도달. 강제로 정상 캐스팅(State 1)으로 전이합니다.")
@@ -3671,9 +3667,17 @@ def fishing_bot(max_allowed_seconds):
                     if check_exit_notification():
                         state = 1
                         break
+
+                    # [맨손/파손 실시간 인터셉터] 전기뱀장어 검출 직후 파손되었거나, 전투 도중 예기치 않게 부러진 경우 맨손 가이드(tab_roulette.png)를 즉시 감지하여 안전하게 복구합니다.
+                    if safe_find_image('tab_roulette.png', 0.70):
+                        bprint("  > ⚠️ [실시간 파괴 감지] 전투 도중 맨손 가이드(tab_roulette.png)가 검출되었습니다!")
+                        send_cmd('R')
+                        auto_equip_rod()
+                        state = 1
+                        break
                         
                     # 1. 성공 수거창 감지 시 즉각 5단계 전이
-                    if safe_find_image('catch_F.png', 0.70):
+                    if safe_find_image('catch_F.png', 0.75):
                         bprint("  > 🎉 [성공] 수거 창(catch_F.png) 포착! 5단계(수거)로 전이합니다.")
                         send_cmd('R')
                         state = 5

@@ -2569,14 +2569,14 @@ def oblivion_bot_loop():
                 
                 # 총기 반동 세기에 맞추어 피드백 수치 조율 (0.02초 초고주파로 돌기 때문에 3~5px만 줘도 아주 강력하게 끌어내립니다)
                 # 만약 총이 여전히 위로 솟구치면 값을 6, 7 등으로 늘리시고, 아래로 처박히면 3, 2 등으로 줄이시면 됩니다.
-                PULL_DOWN_DY = 5
+                PULL_DOWN_DY = 20
                 
                 # 메인 스레드의 무거운 이미지 탐색 렉에 간섭받지 않고, 마우스만 초고주파(50Hz)로 부드럽게 끌어내리는 단독 비동기 일꾼 생성
                 def anti_recoil_worker():
                     nonlocal left_holding_active
                     while oblivion_active and left_holding_active:
                         send_cmd(f'M0,{PULL_DOWN_DY}')
-                        time.sleep(0.02) # 정확히 20ms 간격으로 지연 없이 마우스 보정 주입
+                        time.sleep(0.01) # 정확히 20ms 간격으로 지연 없이 마우스 보정 주입
                         
                 threading.Thread(target=anti_recoil_worker, daemon=True).start()
                 

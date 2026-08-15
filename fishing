@@ -3588,18 +3588,26 @@ def fishing_bot(max_allowed_seconds):
                 if found_target:
                     state = 4
                 else:
-                   # [내구도 실시간 보완] 어종 판별 후 최대 1.5초간 fishing_mode.png 또는 reel_in.png가 뜰 때까지 동적 대기합니다.
+                    # [내구도 실시간 보완] 어종 판별 후 최대 1초간 fishing_mode.png 또는 reel_in.png가 뜰 때까지 동적 대기합니다.
                     is_fishing_active = False
                     wait_active_start = time.time()
-                    while time.time() - wait_active_start < 1.5:
-                        if safe_find_image('fishing_mode.png', 0.80) or safe_find_image('reel_in.png', 0.70):
+                    while time.time() - wait_active_start < 1.0:
+                        if safe_find_image('fishing_mode.png', 0.70) or safe_find_image('reel_in.png', 0.70):
                             is_fishing_active = True
                             break
                         time.sleep(0.05)
                         
-                    # 1초 동안 낚시 인터페이스가 뜨지 않았다면 tab_roulette.png(맨손 상태)를 스캔하여 낚싯대 파손 여부를 판정합니다.
+                    # 1초 동안 낚시 인터페이스가 뜨지 않았다면, 낚싯대 파손 애니메이션(맨손 상태)이 완전히 안착할 수 있도록 최대 0.5초의 추가 여유를 주며 tab_roulette.png를 확인합니다.
                     if not is_fishing_active:
-                        if safe_find_image('tab_roulette.png', 0.70):
+                        found_broke = False
+                        wait_broke_start = time.time()
+                        while time.time() - wait_broke_start < 0.5:
+                            if safe_find_image('tab_roulette.png', 0.70):
+                                found_broke = True
+                                break
+                            time.sleep(0.05)
+                            
+                        if found_broke:
                             bprint("  > ⚠️ [파괴 감지] 어종 판별 도중 낚싯대 파손 감지! 즉시 새 낚싯대 장착 로직을 수행합니다.")
                             auto_equip_rod()
                             state = 1
@@ -3627,7 +3635,7 @@ def fishing_bot(max_allowed_seconds):
                         
                         if reset_by_notice: break
                         
-                        # 줄 끊기 타격 후 정상 낚시 대기 자세(bait_change 또는 broken_rod) 혹은 완전 맨손(tab_roulette) 상태가 되었는지 최대 5.0초간 감시
+                        # 줄 끊기 타격 후 정상 낚시 대기 자세 혹은 완전 맨손(tab_roulette) 상태가 되었는지 최대 5.0초간 감시
                         bprint("  > [대기] 낚시 상태 초기화 감시 중 (최대 5.0초)...")
                         
                         global silence_fail_log
@@ -3642,8 +3650,7 @@ def fishing_bot(max_allowed_seconds):
                                 toggle_stop()
                                 raise BotStopException()
                             
-                            # 세 개 중 하나라도 발견되면 즉시 탈출 (found_bait는 1단계 진입 시 자동 판별되므로 공통 해제)
-                            # 교차 검사 추가: 낚시 UI 자체가 화면에서 완전히 소멸한 경우에도 복구 성공으로 동시 인정하여 대기 유실 시간을 최적화합니다.
+                            # 과도기 도중 조기 탈출을 막기 위해, 확실한 복구 완료 상태(낚싯대 대기 상태 또는 파손 맨손)가 정립될 때만 루프를 통과시킵니다.
                             if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70) or safe_find_image('tab_roulette.png', 0.70):
                                 found_restored = True
                                 break
@@ -3657,17 +3664,7 @@ def fishing_bot(max_allowed_seconds):
                             bprint("  > [완료] UI 소멸 및 대기 상태 복구 완료. 줄 끊기 성공.")
                             time.sleep(0.05); state = 1; break
                         else:
-                            bprint("  > [실패] 5.0초 대기 시간 초과. 미검출 항목 상세 수치를 1회 출력합니다.")
-                            # 진단 상세 수치를 출력하는 순간(마지막 프레임)에 완료된 UI가 있는지 최종 교차 검증을 병행합니다.
-                            found_bait = safe_find_image('bait_change.png', 0.70)
-                            found_broken = safe_find_image('broken_rod.png', 0.70)
-                            found_roulette = safe_find_image('tab_roulette.png', 0.70)
-                            
-                            if found_bait or found_broken or found_roulette:
-                                bprint("  > [성공] 타웃 한계 지점에서 UI 복구 포착 완료! 정상 흐름으로 인계합니다.")
-                                time.sleep(0.05); state = 1; break
-                            else:
-                                bprint("  > [실패] UI 잔존. 재시도...")
+                            bprint("  > [실패] UI 잔존. 재시도...")
 
                     if state != 1:
                         bprint("  > [안전장치] 최대 시도 도달. 강제로 정상 캐스팅(State 1)으로 전이합니다.")

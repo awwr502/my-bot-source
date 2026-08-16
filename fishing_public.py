@@ -197,6 +197,7 @@ def toggle_relay_start():
     global bot_active, victory_active, animal_active, oblivion_active, run_start_time, bot_mode, char_index, original_brightness, is_dimmed, char_start_time, char_pure_run_time
     if victory_active or animal_active or oblivion_active: toggle_stop()
     bot_active = True
+    bot_mode = 3 # [핵심 버그 수정] 릴레이 모드를 시작할 때 내부 봇 모드 변수를 3으로 정상 대입하여 전환이 정상 트리거되도록 수정합니다.
     
     # [스마트 순환 메모리] 모든 사이클이 끝난 상태(인덱스 초과)에서만 0(본캐)으로 리셋합니다.
     # 진행 중 일시정지한 상태라면 기존 char_index를 그대로 유지하여 이어서 진행합니다.
@@ -1636,34 +1637,22 @@ def afk_monitor_loop():
                                         if not check_ui('catch_F.png', 0.70):
                                             break
                                         time.sleep(0.1)
-                                # 2. 낚시 모드(fishing_mode.png)가 발견되면 확실한 종료를 위해 ESC(E) 2회 입력
-                                elif check_ui('fishing_mode.png', 0.80):
-                                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                                    time.sleep(0.2) # 키보드 버퍼 입력 씹힘 방지용 미세 지연
+                                # 2. 낚시, 보관함 창, 혹은 녹색 찌가 발견되면 ESC(E) 입력
+                                elif check_ui('fishing.png', 0.75) or check_ui('fishing_mode.png', 0.80) or check_ui('specific_B.png', 0.78) or check_ui('green_float.png', 0.75):
                                     send_cmd('E'); time.sleep(0.1); send_cmd('R')
                                     wait_start = time.time()
                                     while time.time() - wait_start < 1.5:
-                                        if not check_ui('fishing_mode.png', 0.80):
+                                        if not check_ui('fishing.png', 0.75) and not check_ui('fishing_mode.png', 0.80) and not check_ui('specific_B.png', 0.78) and not check_ui('green_float.png', 0.75):
                                             break
                                         time.sleep(0.1)
-                                
-                                # 3. 그 외 일반 낚시창, 보관함 창, 혹은 녹색 찌가 발견되면 ESC(E) 1회 입력
-                                elif check_ui('fishing.png', 0.75) or check_ui('specific_B.png', 0.78) or check_ui('green_float.png', 0.75):
-                                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                                    wait_start = time.time()
-                                    while time.time() - wait_start < 1.5:
-                                        if not check_ui('fishing.png', 0.75) and not check_ui('specific_B.png', 0.78) and not check_ui('green_float.png', 0.75):
-                                            break
-                                        time.sleep(0.1)
-                                        
-                                # 4. 모두 사라졌으면 루프 탈출
+                                # 3. 모두 사라졌으면 루프 탈출
                                 else:
                                     break
                             bprint("  > [성공] UI 회수 완료.")
                         
-                        # [패치 반영] ESC 타격 시 낚싯대를 아예 장착 해제하므로, 모션 대기를 생략하고 1초 안전 대기만 수행합니다.
-                        bprint("  > [대기] 낚싯대 해제에 따른 1초 안정화 대기...")
-                        time.sleep(1.0)
+                        # [패치 반영] ESC 타격 시 낚싯대를 아예 장착 해제하므로, 모션 대기를 생략하고 0.5초 안전 대기만 수행합니다.
+                        bprint("  > [대기] 낚싯대 해제에 따른 0.5초 안정화 대기...")
+                        time.sleep(0.5)
 
                         # 위치 보정 (S 0.8초 -> W 0.8초)
                         bprint("  > [보정] 해제 완료. 위치 보정(S->W) 수행...")

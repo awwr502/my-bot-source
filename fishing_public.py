@@ -1651,8 +1651,24 @@ def afk_monitor_loop():
                             bprint("  > [성공] UI 회수 완료.")
                         
                         # [패치 반영] ESC 타격 시 낚싯대를 아예 장착 해제하므로, 모션 대기를 생략하고 0.5초 안전 대기만 수행합니다.
-                        bprint("  > [대기] 낚싯대 해제에 따른 0.5초 안정화 대기...")
-                        time.sleep(0.5)
+                        bprint("  > [대기] UI 회수 완료 후 낚싯대 활성화 대기 (최대 3.0초)...")
+                        wait_start_t = time.time()
+                        found_rod_ui = False
+                        while time.time() - wait_start_t < 3.0 and bot_active:
+                            # [피기백 스마트 방어막] 잠수방지 해제 대기 중 예기치 않게 시스템창(sys_1.png)이 뜬 경우, 즉시 ESC로 닫고 대기를 유지합니다.
+                            if safe_find_image('sys_1.png', 0.70):
+                                bprint("  > ⚠️ [ESC 안전 방어막] 잠수방지 해제 대기 중 시스템창(sys_1.png) 감지! 즉시 강제 닫기 실행.")
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                continue
+                            if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70):
+                                found_rod_ui = True
+                                break
+                            time.sleep(0.05)
+                        
+                        if found_rod_ui:
+                            bprint(f"  > ✅ [감지] 낚싯대 인지 완료 ({round(time.time() - wait_start_t, 2)}초 소요). 위치 보정으로 이행합니다.")
+                        else:
+                            bprint("  > ⚠️ [타임아웃] 3초간 낚싯대 감지 실패. 안전을 위해 위치 보정을 강제 진행합니다.")
 
                         # 위치 보정 (S 0.8초 -> W 0.8초)
                         bprint("  > [보정] 해제 완료. 위치 보정(S->W) 수행...")
@@ -3172,87 +3188,61 @@ def fishing_bot(max_allowed_seconds):
                 dump_blackbox_log(f"워치독_상태{state}_{reason_str}") # [블랙박스 트리거 추가]
                 force_watchdog_reason = None # 사유 초기화
                 
+                bprint("  > [복구 1단계] 잔존 UI 정밀 감시 및 개별 알맞은 키(ESC / F) 회수 작동...")
+                
+                # 1. 수거창(catch_F) 확인 및 회수
+                if safe_find_image('catch_F.png', 0.70):
+                    bprint("  > [복구] 수거창(catch_F) 잔존 감지 -> 'F' 키 회수 진행")
+                    send_cmd('F'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.5)
+
+                # 2. 낚시 모드(fishing_mode) 확인 및 ESC 2회 연속 회수 (연타 씹힘 방지)
+                if safe_find_image('fishing_mode.png', 0.80):
+                    bprint("  > [복구] 낚시모드(fishing_mode) 잔존 감지 -> 'ESC' 2회 연속 연타")
+                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.2)
+                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.5)
+
+                # 3. 보관함(specific_B) 확인 및 회수
+                if safe_find_image('specific_B.png', 0.78):
+                    bprint("  > [복구] 보관함(specific_B) 잔존 감지 -> 'ESC' 키 회수 진행")
+                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.5)
+
+                # 4. 일반 낚시 UI(fishing) 또는 녹색 찌(green_float) 확인 및 회수
+                if safe_find_image('fishing.png', 0.75) or safe_find_image('green_float.png', 0.75):
+                    bprint("  > [복구] 낚시 화면/녹색찌 감지 -> 'ESC' 키 회수 진행")
+                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.5)
+
+                bprint("  > [복구 2단계] 낚싯대 소지 또는 맨손 상태 검증 대기 (최대 4.0초)...")
                 recovered = False
-                
-                # (0) [우선 실행] 상호작용 (F) 수거 시도 (상자 근처 오작동 방지)
-                # 수거창([G] 방생)이 화면에 실제로 남아있을 때만 F를 입력하고, 그 외에는 블라인드 F 입력을 스킵하여 상자가 열리는 것을 원천 차단합니다.
-                if safe_find_image('catch_F.png', 0.75):
-                    bprint("  > [분석 0단계] 수거창 감지! F 입력으로 수거를 시도합니다.")
-                    send_cmd('F'); time.sleep(0.2); send_cmd('R'); time.sleep(1.0)
-                else:
-                    bprint("  > [분석 0단계] 수거창 미감지. 불필요한 상자 개방을 막기 위해 F 입력을 건너뜁니다.")
-                
-                # UI 상태를 확인하여 복구 여부를 판별합니다. (fishing.png 임계값도 안전한 0.78로 동기화, 시스템 메뉴가 열려 있다면 복구 실패 처리)
-                if not safe_find_image('catch_F.png', 0.75) and not safe_find_image('specific_B.png', 0.78) and not safe_find_image('fishing.png', 0.75) and not safe_find_image('fishing_mode.png', 0.80):
+                wait_start_t = time.time()
+                while time.time() - wait_start_t < 4.0 and bot_active:
+                    # [피기백 스마트 방어막] 스마트 복구 대기 중 예기치 않게 시스템창(sys_1.png)이 가로막는 경우, 즉시 ESC로 닫고 대기를 유지합니다.
                     if safe_find_image('sys_1.png', 0.70):
-                        bprint("  > [분석] 시스템 메뉴창(sys_1.png)이 감지되었습니다. 추가 복구 작업을 수행합니다.")
-                        recovered = False
-                    else:
+                        bprint("  > ⚠️ [ESC 안전 방어막] 스마트 복구 대기 중 시스템창(sys_1.png) 노출 감지! 즉시 강제 닫기 실행.")
+                        send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                        continue
+                    # 복구 완료를 증명할 세 핵심 UI 상태(낚시 준비완료, 파손 대기, 맨손가이드) 중 하나가 포착되면 복구 성공!
+                    if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70) or safe_find_image('tab_roulette.png', 0.70):
                         recovered = True
-                        bprint("  > [성공] 선제 F 입력으로 화면 복구 완료")
+                        break
+                    time.sleep(0.1)
 
-                # F 입력만으로 복구되지 않았을 경우 기존 분석 로직 진입
-                if not recovered:
-                    # (0-1) 시스템 메뉴창(sys_1.png) 진입 상태 해결
-                    if safe_find_image('sys_1.png', 0.70):
-                        bprint("  > [분석 0-1단계] 시스템 메뉴창(sys_1.png) 감지! ESC(E) 입력으로 메뉴 닫기 시도...")
-                        for _ in range(5):
-                            send_cmd('E'); time.sleep(0.2); send_cmd('R'); time.sleep(1.0)
-                            if not safe_find_image('sys_1.png', 0.70):
-                                recovered = True
-                                bprint("  > [성공] 시스템 메뉴창이 닫혔습니다. 인게임 포커스 및 자세 복구를 위해 좌클릭(C)을 실행합니다.")
-                                send_cmd('0'); time.sleep(0.1); send_cmd('R')
-                                time.sleep(0.5)
-                                send_cmd('C'); time.sleep(0.1); send_cmd('R')
-                                time.sleep(0.5) # 캐릭터 자세 변화 및 UI 갱신 대기 시간 부여
-                                break
-
-                    # (1) 수거 창(F) 잔존 꼬임
-                    if safe_find_image('catch_F.png', 0.75):
-                        bprint("  > [분석 1단계] 수거 창(F) 미처리. 강제 획득 시도")
-                        for _ in range(10):
-                            send_cmd('F'); time.sleep(0.2); send_cmd('R'); time.sleep(1.0)
-                            if not safe_find_image('catch_F.png', 0.75):
-                                recovered = True; break
-                    
-                    # (2) 보관함 창(B) 잔존 꼬임
-                    elif safe_find_image('specific_B.png', 0.78):
-                        bprint("  > [분석 2단계] 보관함 UI(B) 잔존. 강제 종료(ESC) 시도")
-                        for _ in range(10):
-                            send_cmd('E'); time.sleep(0.2); send_cmd('R'); time.sleep(1.0)
-                            if not safe_find_image('specific_B.png', 0.78):
-                                recovered = True; break
-                                
-                    # (3) 낚시 UI 잔존 꼬임
-                    elif safe_find_image('fishing.png', 0.78) or safe_find_image('fishing_mode.png', 0.80):
-                        bprint("  > [분석 3단계] 낚시 모드 잔존. 강제 취소(ESC) 시도")
-                        for _ in range(10):
-                            send_cmd('E'); time.sleep(0.2); send_cmd('R'); time.sleep(1.0)
-                            if not safe_find_image('fishing.png', 0.78) and not safe_find_image('fishing_mode.png', 0.80):
-                                recovered = True; break
-                                
-                    # (4) 기타 원인불명 (시점 꼬임 등) -> 위치 보정
-                    else:
-                        bprint("  > [분석 4단계] 원인불명(시점 꼬임 등). 위치 보정(S->W) 수행")
-                        # F 입력은 0단계에서 선행되었으므로 S->W 시퀀스만 실행합니다.
-                        send_cmd('S'); time.sleep(1.0); send_cmd('R'); time.sleep(0.2)
-                        send_cmd('W'); time.sleep(1.0); send_cmd('R'); time.sleep(0.5)
-                        recovered = True # 블라인드 처리 후 일단 재시도해봄
-                    
-                # 결과 판정 및 후속 조치
                 if recovered:
-                    bprint("  > [성공] 자가 복구 완료! 봇 초기화 상태로 복귀합니다.")
-                    send_blynk_notification("✅ 복구 완료. 낚시 재개")
-                    state = -1 # 사진 검증 상태로 강제 전환하여 처음부터 깔끔하게 재시작
-                    last_state = -1
+                    bprint("  > 🎉 [스마트 복구 성공] 화면 정리가 완료되어 캐스팅 단계(State 1)로 즉시 롤백합니다.")
+                    send_blynk_notification("✅ 스마트 복구 완료. 낚시 재개")
+                    state = 1
+                    last_state = 1
                     state_start_time = time.time()
                 else:
-                    bprint("  > [실패] 10회 시도에도 화면이 지워지지 않음. 봇을 강제 정지합니다.")
-                    send_blynk_notification("❌ 복구 실패. 봇 강제 정지됨")
-                    dump_blackbox_log("워치독_자가복구_최종실패") # [블랙박스 트리거 추가]
+                    bprint("  > ❌ [스마트 복구 실패] 화면 지우기에 실패하여 오작동 방지를 위해 봇을 안전하게 정지합니다.")
+                    send_blynk_notification("❌ 스마트 복구 실패. 봇 안전 정지")
+                    dump_blackbox_log("워치독_스마트복구_최종실패")
                     toggle_stop()
-                    state_start_time = time.time()
-                    
+
                 continue
 
             if state == -1 or keyboard.is_pressed(']'):
@@ -3417,7 +3407,12 @@ def fishing_bot(max_allowed_seconds):
                              if cast_fail_count >= 2:
                                  bprint("  > ⚠️ [연속 실패 방어] 캐릭터 동작 잠금 감지! 프리징 해제를 위해 ESC 1회 강제 타격.")
                                  send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                                 time.sleep(1.0)
+                                 time.sleep(0.18)
+                                 # 강제 해제 ESC 타격 중 예기치 않게 시스템창이 열린 경우 즉각 차단
+                                 if safe_find_image('sys_1.png', 0.70):
+                                     bprint("  > ⚠️ [ESC 안전 방어막] 프리징 탈출 중 시스템창(sys_1.png) 감지! 즉시 강제 닫기 실행.")
+                                     send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                 time.sleep(0.8)
                              
                              # 연속 5회 실패 시 미끼 부족/위치 꼬임으로 판단하고 스마트 복구 강제 실행
                              if cast_fail_count >= 5:
@@ -3578,8 +3573,13 @@ def fishing_bot(max_allowed_seconds):
                     is_fishing_active = False
                     wait_active_start = time.time()
                     while time.time() - wait_active_start < 1.0:
+                        # [피기백 스마트 방어막] 검증 대기 도중 예기치 않게 시스템 메뉴창(sys_1.png)이 뜬 경우 즉시 닫습니다.
+                        if safe_find_image('sys_1.png', 0.70):
+                            bprint("  > ⚠️ [ESC 안전 방어막] 검증 대기 중 시스템창(sys_1.png) 노출 감지! 즉시 강제 닫기 실행.")
+                            send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                            continue
                         if safe_find_image('tab_roulette.png', 0.70):
-                            bprint("  > ⚠️ [실시간 파괴 감지] 어종 판별 단계에서 낚시대 파손(tab_roulette.png)이 검출되었습니다!")
+                            bprint("  > ⚠️ [실시간 파괴 감지] 어종 판별 단계에서 맨손 가이드(tab_roulette.png)가 검출되었습니다!")
                             is_fishing_active = False
                             break
                         if safe_find_image('fishing_mode.png', 0.70) or safe_find_image('reel_in.png', 0.70):
@@ -3630,7 +3630,13 @@ def fishing_bot(max_allowed_seconds):
                                 silence_fail_log = False
                                 toggle_stop()
                                 raise BotStopException()
-                            
+                                
+                            # [피기백 스마트 방어막] 대기 중에 예기치 않게 시스템 메뉴창(sys_1.png)이 뜬 경우, 즉각 ESC로 닫고 대기 루프를 유지합니다.
+                            if safe_find_image('sys_1.png', 0.70):
+                                bprint("  > ⚠️ [ESC 안전 방어막] 줄 끊기 대기 중 시스템창(sys_1.png) 노출 감지! 즉시 강제 닫기 실행.")
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                continue
+                                
                             # 과도기 도중 조기 탈출을 막기 위해, 확실한 복구 완료 상태(낚싯대 대기 또는 맨손 완료)가 정립될 때만 루프를 통과시킵니다.
                             if safe_find_image('bait_change.png', 0.70) or safe_find_image('broken_rod.png', 0.70) or safe_find_image('tab_roulette.png', 0.70):
                                 found_restored = True
@@ -3789,7 +3795,12 @@ def fishing_bot(max_allowed_seconds):
                     if time.time() - wait_f_start > 5.0: 
                         bprint("  > ⚠️ [버그 감지] 물고기 들고 멈춤 버그 감지! 강제 해제(ESC)를 1회 실행합니다.")
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                        time.sleep(0.8)
+                        time.sleep(0.18)
+                        # 프리징 해제 타격 중 예기치 않게 시스템창이 열린 경우 즉각 차단
+                        if safe_find_image('sys_1.png', 0.70):
+                            bprint("  > ⚠️ [ESC 안전 방어막] 물고기 멈춤 탈출 중 시스템창(sys_1.png) 감지! 즉시 강제 닫기 실행.")
+                            send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                        time.sleep(0.6)
                         state = 1
                         break
                     time.sleep(0.1)
@@ -3855,7 +3866,12 @@ def fishing_bot(max_allowed_seconds):
                     send_cmd('E'); time.sleep(0.1); send_cmd('R')
                     time.sleep(0.3)
                     send_cmd('E'); time.sleep(0.1); send_cmd('R')
-                    time.sleep(0.5)
+                    time.sleep(0.18)
+                    # 오작동 예방 타격 중 예기치 않게 시스템창이 열린 경우 즉각 차단
+                    if safe_find_image('sys_1.png', 0.70):
+                        bprint("  > ⚠️ [ESC 안전 방어막] 상자 오작동 탈출 중 시스템창(sys_1.png) 감지! 즉시 강제 닫기 실행.")
+                        send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                    time.sleep(0.3)
                     state = 1
                     continue
 
@@ -4070,6 +4086,11 @@ def fishing_bot(max_allowed_seconds):
                         vanish_start = time.time()
                         is_vanished = False
                         while time.time() - vanish_start < 1.5 and bot_active:
+                            # [피기백 스마트 방어막] 보관함 UI 소멸 대기 중 예기치 않게 시스템 메뉴창이 가로막는 경우, 즉시 ESC로 닫고 대기를 유지합니다.
+                            if safe_find_image('sys_1.png', 0.70):
+                                bprint("  > ⚠️ [ESC 안전 방어막] 보관함 닫기 대기 중 시스템창(sys_1.png) 노출 감지! 즉시 강제 닫기 실행.")
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                continue
                             if not safe_find_image('specific_B.png', 0.75):
                                 is_vanished = True
                                 break

@@ -943,10 +943,11 @@ def preload_all_images():
                 # 1. 기존 레거시 함수 호환용 Grayscale 적재
                 img_gray = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
                 if img_gray is not None:
-                    # [어종 템플릿 자동 소벨 필터 생성] 얇은 폰트가 깨지지 않도록 부드러운 경계선(Sobel Magnitude) 상태로 사전 처리하여 적재합니다.
+                    # [어종 템플릿 소벨 경계선 최적화] 노이즈 제거용 가우시안 블러 후 부드러운 경계선(Sobel Magnitude) 상태로 사전 처리하여 적재합니다.
                     if filename in ['jellyfish.png', 'eel.png']:
-                        sobel_x = cv2.Sobel(img_gray, cv2.CV_32F, 1, 0, ksize=3)
-                        sobel_y = cv2.Sobel(img_gray, cv2.CV_32F, 0, 1, ksize=3)
+                        blur = cv2.GaussianBlur(img_gray, (3, 3), 0)
+                        sobel_x = cv2.Sobel(blur, cv2.CV_32F, 1, 0, ksize=3)
+                        sobel_y = cv2.Sobel(blur, cv2.CV_32F, 0, 1, ksize=3)
                         grad_mag = cv2.magnitude(sobel_x, sobel_y)
                         img_gray = np.uint8(cv2.normalize(grad_mag, None, 0, 255, cv2.NORM_MINMAX))
                             
@@ -3524,18 +3525,19 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [소벨 엣지 강도 매칭 엔진] 
-                # 캐니 엣지처럼 1픽셀 실선으로 깎지 않고, 글자의 부드러운 그라데이션 경계선(Sobel)을 추출합니다.
-                # 명암 변화가 없는 밝은 백색 바닷물이나 어두운 물결은 완전히 무시(검은색)되면서도, 글자의 형태적 마찰력은 부드럽게 유지되어 높은 일치율을 회복합니다.
-                sobel_x = cv2.Sobel(screen_gray, cv2.CV_32F, 1, 0, ksize=3)
-                sobel_y = cv2.Sobel(screen_gray, cv2.CV_32F, 0, 1, ksize=3)
+                # [소벨 엣지 강도 매칭 엔진 - 노이즈 차단형] 
+                # 소벨 필터 적용 전, 3x3 가우시안 블러를 가동하여 미세한 물결의 하이라이트 및 거품 텍스처 노이즈를 먼저 제거합니다.
+                # 이를 통해 배경 노이즈로 인한 일치율 저하를 막고, 순수 글자 경계선만 남겨 점수를 크게 상향시킵니다.
+                screen_blur = cv2.GaussianBlur(screen_gray, (3, 3), 0)
+                sobel_x = cv2.Sobel(screen_blur, cv2.CV_32F, 1, 0, ksize=3)
+                sobel_y = cv2.Sobel(screen_blur, cv2.CV_32F, 0, 1, ksize=3)
                 grad_mag = cv2.magnitude(sobel_x, sobel_y)
                 screen_processed = np.uint8(cv2.normalize(grad_mag, None, 0, 255, cv2.NORM_MINMAX))
 
                 score_jellyfish = 0.0
                 score_eel = 0.0
 
-                # A. 해파리 5배율 매칭 (소벨 경계선 대조)
+                # A. 해파리 5배율 매칭 (노이즈 차단형 소벨)
                 temp_jelly_processed = IMAGE_CACHE.get('jellyfish.png')
                 if temp_jelly_processed is not None:
                     for scale in [0.95, 1.0, 1.05]:
@@ -3544,11 +3546,10 @@ def fishing_bot(max_allowed_seconds):
                         if w < 10 or h < 10: continue
                         resized = cv2.resize(temp_jelly_processed, (w, h), interpolation=cv2.INTER_AREA)
                         
-                        # 그라디언트 강도 매칭 시에도 TM_CCOEFF_NORMED가 대조군 사이의 명암 불일치를 보정하여 최상의 결과를 냅니다.
                         res = cv2.matchTemplate(screen_processed, resized, cv2.TM_CCOEFF_NORMED)
                         score_jellyfish = max(score_jellyfish, cv2.minMaxLoc(res)[1])
                         
-                # B. 전기뱀장어 5배율 매칭 (소벨 경계선 대조)
+                # B. 전기뱀장어 5배율 매칭 (노이즈 차단형 소벨)
                 temp_eel_processed = IMAGE_CACHE.get('eel.png')
                 if temp_eel_processed is not None:
                     for scale in [0.95, 1.0, 1.05]:

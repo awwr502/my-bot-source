@@ -943,14 +943,10 @@ def preload_all_images():
                 # 1. 기존 레거시 함수 호환용 Grayscale 적재
                 img_gray = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
                 if img_gray is not None:
-                    # [어종 템플릿 자동 모사] 'jellyfish.png', 'eel.png'의 경우, 부팅 시 외곽 경계선 복사 패딩(Padding)을 적용하여 넓은 화면에서의 CLAHE 명암 균일화 상태를 모사한 뒤 저장합니다.
+                    # [어종 템플릿 자동 엣지 생성] 저해상도 폰트 손상을 방지하기 위해 미세 블러 후 캐니 엣지(Canny Edge) 상태로 변환하여 RAM에 적재합니다.
                     if filename in ['jellyfish.png', 'eel.png']:
-                        padded = cv2.copyMakeBorder(img_gray, 50, 50, 50, 50, cv2.BORDER_REPLICATE)
-                        padded_median = cv2.medianBlur(padded, 5)
-                        padded_bilateral = cv2.bilateralFilter(padded_median, 5, 50, 50)
-                        clahe_pre = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-                        padded_clahe = clahe_pre.apply(padded_bilateral)
-                        img_gray = padded_clahe[50:-50, 50:-50]
+                        blur = cv2.GaussianBlur(img_gray, (3, 3), 0)
+                        img_gray = cv2.Canny(blur, 100, 200)
                             
                     IMAGE_CACHE[filename] = img_gray
                     count += 1
@@ -3526,44 +3522,31 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [5대 방해요소 무력화 하이브리드 필터]
-                # 1) 미디언 블러(Median Blur)로 물고기 주변의 자잘한 거품(임펄스 노이즈)과 포말을 박멸합니다.
-                # 2) 양방향 필터(Bilateral)로 주변 구조물의 복잡한 질감을 뭉개되, 글자의 외곽선은 예리하게 보존합니다.
-                # 3) CLAHE(적응형 대비 제한 평활화)로 낮의 백색 바닷물과 밤의 어두운 명암 차이를 극복하고 로컬 대비를 극대화합니다.
-                screen_median = cv2.medianBlur(screen_gray, 5)
-                screen_bilateral = cv2.bilateralFilter(screen_median, 5, 50, 50)
-                
-                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-                screen_processed = clahe.apply(screen_bilateral)
+                # [저해상도 텍스트 전용 캐니 엣지 엔진] 
+                # 미디언 블러나 CLAHE는 얇은 폰트를 뭉개버리므로 제거하고, 미세 가우시안 블러와 강한 캐니 엣지(100, 200) 필터를 사용합니다.
+                # 이를 통해 밝은 백색 바닷물과 밤의 어두운 물결은 완전히 소멸(검은색)시키고, 글자의 정밀한 외곽선만 복구합니다.
+                screen_blur = cv2.GaussianBlur(screen_gray, (3, 3), 0)
+                screen_processed = cv2.Canny(screen_blur, 100, 200)
 
                 score_jellyfish = 0.0
                 score_eel = 0.0
 
-                # A. 해파리 5배율 매칭 (CLAHE 대비 극대화 매칭 적용)
-                temp_jelly = IMAGE_CACHE.get('jellyfish.png')
-                if temp_jelly is not None:
-                    # 템플릿 이미지에도 동일한 필터 파이프라인 동기화 적용
-                    temp_jelly_median = cv2.medianBlur(temp_jelly, 5)
-                    temp_jelly_bilateral = cv2.bilateralFilter(temp_jelly_median, 5, 50, 50)
-                    temp_jelly_processed = clahe.apply(temp_jelly_bilateral)
-                    
-                    for scale in [0.95, 1.0, 1.05]: # 불필요한 스케일 대역을 제거하여 CPU 부하 경감
+                # A. 해파리 5배율 매칭 (엣지 맵 대조)
+                temp_jelly_processed = IMAGE_CACHE.get('jellyfish.png')
+                if temp_jelly_processed is not None:
+                    for scale in [0.95, 1.0, 1.05]:
                         w = int(temp_jelly_processed.shape[1] * scale)
                         h = int(temp_jelly_processed.shape[0] * scale)
                         if w < 10 or h < 10: continue
                         resized = cv2.resize(temp_jelly_processed, (w, h), interpolation=cv2.INTER_AREA)
                         
-                        # 전처리가 완료된 대비 이미지 간 상관계수 표준화 매칭 수행
+                        # 엣지 맵 매칭에는 TM_CCOEFF_NORMED가 가장 신뢰도가 높습니다.
                         res = cv2.matchTemplate(screen_processed, resized, cv2.TM_CCOEFF_NORMED)
                         score_jellyfish = max(score_jellyfish, cv2.minMaxLoc(res)[1])
                         
-                # B. 전기뱀장어 5배율 매칭 (CLAHE 대비 극대화 매칭 적용)
-                temp_eel = IMAGE_CACHE.get('eel.png')
-                if temp_eel is not None:
-                    temp_eel_median = cv2.medianBlur(temp_eel, 5)
-                    temp_eel_bilateral = cv2.bilateralFilter(temp_eel_median, 5, 50, 50)
-                    temp_eel_processed = clahe.apply(temp_eel_bilateral)
-                    
+                # B. 전기뱀장어 5배율 매칭 (엣지 맵 대조)
+                temp_eel_processed = IMAGE_CACHE.get('eel.png')
+                if temp_eel_processed is not None:
                     for scale in [0.95, 1.0, 1.05]:
                         w = int(temp_eel_processed.shape[1] * scale)
                         h = int(temp_eel_processed.shape[0] * scale)

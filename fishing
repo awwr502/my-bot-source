@@ -3517,39 +3517,51 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [정규화 전처리] 하얀색 바닷물 반사로 인해 수축된 명도 대비(Contrast)를 0~255 범위로 강제 확장하여 글자 윤곽선을 복구합니다.
-                screen_norm = cv2.normalize(screen_gray, None, 0, 255, cv2.NORM_MINMAX)
+                # [5대 방해요소 무력화 하이브리드 필터]
+                # 1) 미디언 블러(Median Blur)로 물고기 주변의 자잘한 거품(임펄스 노이즈)과 포말을 박멸합니다.
+                # 2) 양방향 필터(Bilateral)로 주변 구조물의 복잡한 질감을 뭉개되, 글자의 외곽선은 예리하게 보존합니다.
+                # 3) CLAHE(적응형 대비 제한 평활화)로 낮의 백색 바닷물과 밤의 어두운 명암 차이를 극복하고 로컬 대비를 극대화합니다.
+                screen_median = cv2.medianBlur(screen_gray, 5)
+                screen_bilateral = cv2.bilateralFilter(screen_median, 5, 50, 50)
                 
+                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+                screen_processed = clahe.apply(screen_bilateral)
+
                 score_jellyfish = 0.0
                 score_eel = 0.0
-                
-                # A. 해파리 5배율 매칭 (정규화 대조 매칭 적용)
+
+                # A. 해파리 5배율 매칭 (CLAHE 대비 극대화 매칭 적용)
                 temp_jelly = IMAGE_CACHE.get('jellyfish.png')
                 if temp_jelly is not None:
-                    temp_jelly_norm = cv2.normalize(temp_jelly, None, 0, 255, cv2.NORM_MINMAX)
+                    # 템플릿 이미지에도 동일한 필터 파이프라인 동기화 적용
+                    temp_jelly_median = cv2.medianBlur(temp_jelly, 5)
+                    temp_jelly_bilateral = cv2.bilateralFilter(temp_jelly_median, 5, 50, 50)
+                    temp_jelly_processed = clahe.apply(temp_jelly_bilateral)
                     
-                    for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
-                        w = int(temp_jelly_norm.shape[1] * scale)
-                        h = int(temp_jelly_norm.shape[0] * scale)
+                    for scale in [0.95, 1.0, 1.05]: # 불필요한 스케일 대역을 제거하여 CPU 부하 경감
+                        w = int(temp_jelly_processed.shape[1] * scale)
+                        h = int(temp_jelly_processed.shape[0] * scale)
                         if w < 10 or h < 10: continue
-                        resized = cv2.resize(temp_jelly_norm, (w, h), interpolation=cv2.INTER_AREA)
+                        resized = cv2.resize(temp_jelly_processed, (w, h), interpolation=cv2.INTER_AREA)
                         
-                        # 오탐 판별력이 가장 우수한 규격화 상관계수 매칭(TM_CCOEFF_NORMED) 수행
-                        res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
+                        # 전처리가 완료된 대비 이미지 간 상관계수 표준화 매칭 수행
+                        res = cv2.matchTemplate(screen_processed, resized, cv2.TM_CCOEFF_NORMED)
                         score_jellyfish = max(score_jellyfish, cv2.minMaxLoc(res)[1])
                         
-                # B. 전기뱀장어 5배율 매칭
+                # B. 전기뱀장어 5배율 매칭 (CLAHE 대비 극대화 매칭 적용)
                 temp_eel = IMAGE_CACHE.get('eel.png')
                 if temp_eel is not None:
-                    temp_eel_norm = cv2.normalize(temp_eel, None, 0, 255, cv2.NORM_MINMAX)
+                    temp_eel_median = cv2.medianBlur(temp_eel, 5)
+                    temp_eel_bilateral = cv2.bilateralFilter(temp_eel_median, 5, 50, 50)
+                    temp_eel_processed = clahe.apply(temp_eel_bilateral)
                     
-                    for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
-                        w = int(temp_eel_norm.shape[1] * scale)
-                        h = int(temp_eel_norm.shape[0] * scale)
+                    for scale in [0.95, 1.0, 1.05]:
+                        w = int(temp_eel_processed.shape[1] * scale)
+                        h = int(temp_eel_processed.shape[0] * scale)
                         if w < 10 or h < 10: continue
-                        resized = cv2.resize(temp_eel_norm, (w, h), interpolation=cv2.INTER_AREA)
+                        resized = cv2.resize(temp_eel_processed, (w, h), interpolation=cv2.INTER_AREA)
                         
-                        res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
+                        res = cv2.matchTemplate(screen_processed, resized, cv2.TM_CCOEFF_NORMED)
                         score_eel = max(score_eel, cv2.minMaxLoc(res)[1])
                 
                 # [어종별 스캔 점수 실시간 출력] 인식 성공 여부와 상관없이 두 어종의 일치율 점수를 무조건 노출합니다.

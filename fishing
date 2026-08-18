@@ -3526,64 +3526,81 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [어종 실시간 3회 교차 감시 루프 - 초고속 하이퍼 최적화 버전]
-                # 사용자님의 정렬 배율 로그(0.98~1.03)를 완벽히 반영하여 불필요한 배율 탐색을 73% 걷어내고,
-                # 프레임 안정화 딜레이를 0.1초에서 0.06초로 압축하여 체감 수색 시간을 비약적으로 단축시킵니다.
+                # [어종 총 7종 선착순 레이스 탐색 엔진]
+                # 실시간으로 화면의 명암을 규격화한 뒤, 대상 어종 2종과 잡어 5종(none1~5)을 0.04초 간격으로 병렬 스캔합니다.
+                # 페이드인 도중 가장 먼저 임계치(0.60)를 돌파하는 이미지를 정답으로 즉각 확정 짓고 0.1초 만에 조기 탈출합니다.
                 score_jellyfish = 0.0
                 best_scale_jelly = 1.0
                 score_eel = 0.0
                 best_scale_eel = 1.0
                 
-                for attempt in range(3):
-                    # 실시간 수색 화면 캡처 및 배경 차분 정규화
+                # 감시 대상 분기 수립
+                targets = {'jellyfish.png': 'JELLY', 'eel.png': 'EEL'}
+                trash_fishes = ['none1.png', 'none2.png', 'none3.png', 'none4.png', 'none5.png']
+                
+                race_start_time = time.time()
+                winner_found = False
+                
+                # 최대 1.2초 동안 페이드인 투명도 상승 흐름을 실시간 추적하며 레이스를 펼칩니다.
+                while time.time() - race_start_time < 1.2 and bot_active:
                     sct_img = sct.grab(fish_roi)
                     screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                    screen_norm = cv2.normalize(screen_gray, None, 0, 255, cv2.NORM_MINMAX)
                     
-                    screen_bg = cv2.blur(screen_gray, (15, 15))
-                    screen_sub = cv2.subtract(screen_gray, screen_bg)
-                    screen_norm = cv2.normalize(screen_sub, None, 0, 255, cv2.NORM_MINMAX)
+                    # 1. 대상 어종 2종 우선 정합성 레이스 스캔
+                    for img_name, fish_type in targets.items():
+                        temp = IMAGE_CACHE.get(img_name)
+                        if temp is not None:
+                            temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
+                            for scale in [0.98, 1.0, 1.03]:
+                                w = int(temp_norm.shape[1] * scale)
+                                h = int(temp_norm.shape[0] * scale)
+                                if w < 10 or h < 10: continue
+                                resized = cv2.resize(temp_norm, (w, h), interpolation=cv2.INTER_AREA)
+                                
+                                res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
+                                score = cv2.minMaxLoc(res)[1]
+                                
+                                if score >= 0.60:
+                                    # 파일명이 아닌 실제 한글 어종 명칭으로 매핑하여 콘솔에 직관적으로 출력합니다.
+                                    display_name = "해파리" if fish_type == 'JELLY' else "뱀장어"
+                                    bprint(f"  > 🎉 [레이스 승리] 대상 어종 '{display_name}' 검출 성공! (일치율: {score:.3f} / 배율: {scale:.2f})")
+                                    if fish_type == 'JELLY':
+                                        score_jellyfish = score
+                                        best_scale_jelly = scale
+                                    else:
+                                        score_eel = score
+                                        best_scale_eel = scale
+                                    winner_found = True
+                                    break
+                            if winner_found: break
+                    if winner_found: break
                     
-                    # A. 해파리 매칭 스캔
-                    temp_jelly = IMAGE_CACHE.get('jellyfish.png')
-                    if temp_jelly is not None:
-                        temp_jelly_norm = cv2.normalize(temp_jelly, None, 0, 255, cv2.NORM_MINMAX)
-                        
-                        # [초고속 최적화 1] 탐색 배율을 사용자님의 실제 검출 배율인 핵심 3단계로 압축하여 CPU 연산 부하를 극한으로 낮춥니다.
-                        for scale in [0.98, 1.0, 1.03]:
-                            w = int(temp_jelly_norm.shape[1] * scale)
-                            h = int(temp_jelly_norm.shape[0] * scale)
-                            if w < 10 or h < 10: continue
-                            resized = cv2.resize(temp_jelly_norm, (w, h), interpolation=cv2.INTER_AREA)
-                            
-                            res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
-                            score = cv2.minMaxLoc(res)[1]
-                            if score > score_jellyfish:
-                                score_jellyfish = score
-                                best_scale_jelly = scale
+                    # 2. 잡어 5종 회피 레이스 스캔
+                    for img_name in trash_fishes:
+                        temp = IMAGE_CACHE.get(img_name)
+                        if temp is not None:
+                            temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
+                            for scale in [0.98, 1.0, 1.03]:
+                                w = int(temp_norm.shape[1] * scale)
+                                h = int(temp_norm.shape[0] * scale)
+                                if w < 10 or h < 10: continue
+                                resized = cv2.resize(temp_norm, (w, h), interpolation=cv2.INTER_AREA)
                                 
-                    # B. 전기뱀장어 매칭 스캔
-                    temp_eel = IMAGE_CACHE.get('eel.png')
-                    if temp_eel is not None:
-                        temp_eel_norm = cv2.normalize(temp_eel, None, 0, 255, cv2.NORM_MINMAX)
-                        
-                        for scale in [0.98, 1.0, 1.03]:
-                            w = int(temp_eel_norm.shape[1] * scale)
-                            h = int(temp_eel_norm.shape[0] * scale)
-                            if w < 10 or h < 10: continue
-                            resized = cv2.resize(temp_eel_norm, (w, h), interpolation=cv2.INTER_AREA)
-                            
-                            res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
-                            score = cv2.minMaxLoc(res)[1]
-                            if score > score_eel:
-                                score_eel = score
-                                best_scale_eel = scale
+                                res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
+                                score = cv2.minMaxLoc(res)[1]
                                 
-                    # 합격 기준선(0.60)을 넘기는 즉시 추가 루프를 종료하고 즉각 확정 포획으로 전이합니다.
-                    if max(score_jellyfish, score_eel) >= 0.60:
-                        break
-                        
-                    # [초고속 최적화 2] 0.1초의 대기 시간을 인게임 렌더링 한계치인 0.06초(60ms)로 대폭 깎아 수색 회수 속도를 가속합니다.
-                    time.sleep(0.06)
+                                if score >= 0.60:
+                                    bprint(f"  > 🔴 [레이스 승리] 잡어 검출! 줄 끊기 즉시 기동 (일치율: {score:.3f})")
+                                    score_jellyfish = 0.0
+                                    score_eel = 0.0
+                                    winner_found = True
+                                    break
+                            if winner_found: break
+                    if winner_found: break
+                    
+                    # 0.04초 주기로 미끄러지듯 연속 정밀 대조 프레임 확보
+                    time.sleep(0.04)
 
                 # [어종별 스캔 점수 실시간 출력] 최고 매칭 점수와 함께 실제 매칭된 배율을 소수점 둘째 자리까지 함께 출력합니다.
                 bprint(f"  > [어종 대조 결과] 해파리 일치율: {score_jellyfish:.3f} (배율: {best_scale_jelly:.2f}) | 전기뱀장어 일치율: {score_eel:.3f} (배율: {best_scale_eel:.2f})")

@@ -969,6 +969,48 @@ def preload_all_images():
                 
     bprint(f">>> [시스템] 총 {count}개의 낚시 이미지 RAM 캐싱 완료! (탐색 준비 끝) <<<\n")
 
+    # [부팅 시 사전 배율 리사이징 캐싱]
+    # 실시간 탐색 중 매번 리사이징 연산이 발생하는 비효율을 완벽히 해결하기 위해,
+    # 부팅 시점에 이미지 캐싱 완료 후 즉시 11단계 배율에 대한 사전 크기조절 및 정규화를 선행 완료하여 전역 메모리에 적재합니다.
+    global PRE_RESIZED_TARGETS, PRE_RESIZED_TRASH
+    PRE_RESIZED_TARGETS = []
+    PRE_RESIZED_TRASH = []
+    
+    # 1. 대상 어종 2종 사전 배율 리사이징 캐싱
+    targets = {'jellyfish.png': 'JELLY', 'eel.png': 'EEL'}
+    for img_name, fish_type in targets.items():
+        temp = IMAGE_CACHE.get(img_name)
+        if temp is not None:
+            temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
+            for scale in [0.98, 1.0, 1.03]:
+                w = int(temp_norm.shape[1] * scale)
+                h = int(temp_norm.shape[0] * scale)
+                if w < 10 or h < 10: continue
+                resized = cv2.resize(temp_norm, (w, h), interpolation=cv2.INTER_AREA)
+                PRE_RESIZED_TARGETS.append({
+                    'image': resized,
+                    'fish_type': fish_type,
+                    'scale': scale
+                })
+                
+    # 2. 잡어 7종 사전 배율 리사이징 캐싱
+    trash_fishes = ['none1.png', 'none2.png', 'none3.png', 'none4.png', 'none5.png', 'none6.png', 'none7.png']
+    trash_names = {'none1.png': '병어', 'none2.png': '청어', 'none3.png': '정어리', 'none4.png': '노던 파이크', 'none5.png': '바라쿠다', 'none6.png': '검은 농어', 'none7.png': '큰입 우럭'}
+    for img_name in trash_fishes:
+        temp = IMAGE_CACHE.get(img_name)
+        if temp is not None:
+            temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
+            for scale in [0.98, 1.0, 1.03]:
+                w = int(temp_norm.shape[1] * scale)
+                h = int(temp_norm.shape[0] * scale)
+                if w < 10 or h < 10: continue
+                resized = cv2.resize(temp_norm, (w, h), interpolation=cv2.INTER_AREA)
+                PRE_RESIZED_TRASH.append({
+                    'image': resized,
+                    'img_name': img_name,
+                    'display_name': trash_names.get(img_name, img_name)
+                })
+
 # [신규] 로깅 폴더 및 파일 설정
 LOG_DIR = os.path.join(BASE_IMG_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -3517,53 +3559,78 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [정규화 전처리] 하얀색 바닷물 반사로 인해 수축된 명도 대비(Contrast)를 0~255 범위로 강제 확장하여 글자 윤곽선을 복구합니다.
-                screen_norm = cv2.normalize(screen_gray, None, 0, 255, cv2.NORM_MINMAX)
-                
+                # [어종 총 7종 선착순 레이스 탐색 엔진 - 부팅 사전 캐시 매칭 버전]
+                # 부팅 시점에 이미 스케일 가공이 끝난 템플릿 데이터(PRE_RESIZED_TARGETS, PRE_RESIZED_TRASH)를 직접 수색합니다.
+                # 이를 통해 진입 전처리 딜레이를 0ms로 단축시켜 극상의 가벼움과 즉각적인 반응 속도를 제공합니다.
                 score_jellyfish = 0.0
+                best_scale_jelly = 1.0
                 score_eel = 0.0
+                best_scale_eel = 1.0
                 
-                # A. 해파리 5배율 매칭 (정규화 대조 매칭 적용)
-                temp_jelly = IMAGE_CACHE.get('jellyfish.png')
-                if temp_jelly is not None:
-                    temp_jelly_norm = cv2.normalize(temp_jelly, None, 0, 255, cv2.NORM_MINMAX)
+                race_start_time = time.time()
+                winner_found = False
+                winner_type = None
+                
+                # 최대 1.2초 동안 크기 변환 부하 없이 실시간 추적 레이스를 펼칩니다.
+                while time.time() - race_start_time < 1.2 and bot_active:
+                    sct_img = sct.grab(fish_roi)
+                    screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                     
-                    for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
-                        w = int(temp_jelly_norm.shape[1] * scale)
-                        h = int(temp_jelly_norm.shape[0] * scale)
-                        if w < 10 or h < 10: continue
-                        resized = cv2.resize(temp_jelly_norm, (w, h), interpolation=cv2.INTER_AREA)
-                        
-                        # 오탐 판별력이 가장 우수한 규격화 상관계수 매칭(TM_CCOEFF_NORMED) 수행
-                        res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
-                        score_jellyfish = max(score_jellyfish, cv2.minMaxLoc(res)[1])
-                        
-                # B. 전기뱀장어 5배율 매칭
-                temp_eel = IMAGE_CACHE.get('eel.png')
-                if temp_eel is not None:
-                    temp_eel_norm = cv2.normalize(temp_eel, None, 0, 255, cv2.NORM_MINMAX)
+                    # 수색 화면 캡처 및 정규화
+                    screen_norm = cv2.normalize(screen_gray, None, 0, 255, cv2.NORM_MINMAX)
                     
-                    for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
-                        w = int(temp_eel_norm.shape[1] * scale)
-                        h = int(temp_eel_norm.shape[0] * scale)
-                        if w < 10 or h < 10: continue
-                        resized = cv2.resize(temp_eel_norm, (w, h), interpolation=cv2.INTER_AREA)
+                    # 1. 대상 어종 스캔 (이미 부팅 시점에 크기 연산이 끝난 템플릿 목록만 즉각 매칭)
+                    for t_data in PRE_RESIZED_TARGETS:
+                        res = cv2.matchTemplate(screen_norm, t_data['image'], cv2.TM_CCOEFF_NORMED)
+                        score = cv2.minMaxLoc(res)[1]
                         
-                        res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
-                        score_eel = max(score_eel, cv2.minMaxLoc(res)[1])
+                        # 대상 어종 임계치 0.60 적용
+                        if score >= 0.60:
+                            display_name = "해파리" if t_data['fish_type'] == 'JELLY' else "전기뱀장어"
+                            bprint(f"  > 🎉 [레이스 승리] 대상 어종 '{display_name}' 검출 성공! (일치율: {score:.3f} / 배율: {t_data['scale']:.2f})")
+                            
+                            # [일원화] 이중 출력을 지우기 위해 상태 스위치와 한글 이름을 루프 내부에서 즉시 정립합니다.
+                            found_target = True
+                            target_name = display_name
+                            
+                            if t_data['fish_type'] == 'JELLY':
+                                score_jellyfish = score
+                                best_scale_jelly = t_data['scale']
+                            else:
+                                score_eel = score
+                                best_scale_eel = t_data['scale']
+                            winner_type = t_data['fish_type']
+                            winner_found = True
+                            break
+                    if winner_found: break
+                    
+                    # 2. 잡어 스캔 (이미 부팅 시점에 크기 연산이 끝난 템플릿 목록만 즉각 매칭)
+                    for t_data in PRE_RESIZED_TRASH:
+                        res = cv2.matchTemplate(screen_norm, t_data['image'], cv2.TM_CCOEFF_NORMED)
+                        score = cv2.minMaxLoc(res)[1]
+                        
+                        # 잡어 전용 임계치 0.70 적용 (형태 겹침 오탐 차단)
+                        if score >= 0.70:
+                            bprint(f"  > 🔴 [레이스 승리] 잡어 '{t_data['display_name']}' 검출! 줄 끊기 즉시 기동 (일치율: {score:.3f})")
+                            winner_type = 'TRASH'
+                            winner_found = True
+                            break
+                    if winner_found: break
+                    
+                    # 0.04초 주기로 미끄러지듯 연속 정밀 대조 프레임 확보
+                    time.sleep(0.04)
+
+                # 최종 다운스트림 변수 정합성 맵핑
+                if not winner_found or winner_type == 'TRASH':
+                    score_jellyfish = 0.0
+                    score_eel = 0.0
+
+                # [어종별 스캔 점수 실시간 출력] 최고 매칭 점수와 함께 실제 매칭된 배율을 소수점 둘째 자리까지 함께 출력합니다.
+                bprint(f"  > [어종 대조 결과] 해파리 일치율: {score_jellyfish:.3f} (배율: {best_scale_jelly:.2f}) | 전기뱀장어 일치율: {score_eel:.3f} (배율: {best_scale_eel:.2f})")
                 
-                # [어종별 스캔 점수 실시간 출력] 인식 성공 여부와 상관없이 두 어종의 일치율 점수를 무조건 노출합니다.
-                bprint(f"  > [어종 대조 결과] 해파리 일치율: {score_jellyfish:.3f} | 전기뱀장어 일치율: {score_eel:.3f}")
-                
-                best_score = max(score_jellyfish, score_eel)
-                
-                # 명도 왜곡 및 물결 간섭을 고려하여 안정적인 0.60 컷오프 적용
-                if best_score >= 0.60:
-                    target_name = "해파리" if score_jellyfish > score_eel else "전기뱀장어"
-                    bprint(f"  > 🎉 [타겟 감지] {target_name} 확정 포획 가동 (일치율: {best_score:.3f})")
-                    found_target = True
-                else:
-                    bprint(f"  > 🔴 [잡어 판정] 목표 타겟이 아니므로 줄 끊기 시퀀스를 개시합니다. (최고 일치율: {best_score:.3f})")
+                # [잡어 판정 통합 출력] 7종 레이스 탐색에서 아예 감지되지 않고 시간초과(Timeout)가 발생했을 때만 최종 실패 1회 출력하여 로그 중복을 방지합니다.
+                if not winner_found:
+                    bprint(f"  > 🔴 [잡어 판정] 어종 판별 실패로 줄 끊기를 시작 합니다.")
 
                 if found_target:
                     state = 4
@@ -3715,6 +3782,9 @@ def fishing_bot(max_allowed_seconds):
                             send_cmd('R')
                             current_active_key = None
                             miss_count = 0
+                            # [UI 안정화 딜레이] QTE 키 해제 직후 인게임 UI가 완전히 안착할 수 있도록 0.15초의 극소량 지연 시간을 부여합니다.
+                            # 이를 통해 레이스 컨디션을 예방하여 다음 프레임에서 fishing_mode.png를 고정 구역 내에서 오차 없이 인지하게 만듭니다.
+                            time.sleep(0.15)
                             
                     else:
                         # [신규 QTE 탐색 단계 - 광대역 전방위 검색]
@@ -3723,8 +3793,8 @@ def fishing_bot(max_allowed_seconds):
                         futures = {
                             qte_executor.submit(safe_find_image, 'fishing_hold_A.png', 0.70, None, None, True): 'HOLD_A',
                             qte_executor.submit(safe_find_image, 'fishing_hold_D.png', 0.70, None, None, True): 'HOLD_D',
-                            qte_executor.submit(safe_find_image, 'fishing_tap_A.png', 0.70, None, None, True): 'TAP_A',
-                            qte_executor.submit(safe_find_image, 'fishing_tap_D.png', 0.70, None, None, True): 'TAP_D'
+                            # qte_executor.submit(safe_find_image, 'fishing_tap_A.png', 0.70, None, None, True): 'TAP_A',
+                            # qte_executor.submit(safe_find_image, 'fishing_tap_D.png', 0.70, None, None, True): 'TAP_D'
                         }
                         
                         qte_scores = {}
@@ -3759,18 +3829,18 @@ def fishing_bot(max_allowed_seconds):
                                 current_active_key = 'D'
                                 miss_count = 0
                                     
-                            elif best_action == 'TAP_A':
-                                bprint(f"  > ⌨️ [QTE 탭] 'A' 키 탭 연타 입력 (일치율: {best_score:.3f})")
-                                send_cmd('R'); current_active_key = None
-                                send_cmd('A'); time.sleep(0.04); send_cmd('R')
+                            # elif best_action == 'TAP_A':
+                            #    bprint(f"  > ⌨️ [QTE 탭] 'A' 키 탭 연타 입력 (일치율: {best_score:.3f})")
+                            #    send_cmd('R'); current_active_key = None
+                            #    send_cmd('A'); time.sleep(0.04); send_cmd('R')
                                 
-                            elif best_action == 'TAP_D':
-                                bprint(f"  > ⌨️ [QTE 탭] 'D' 키 탭 연타 입력 (일치율: {best_score:.3f})")
-                                send_cmd('R'); current_active_key = None
-                                send_cmd('D'); time.sleep(0.04); send_cmd('R')
+                            # elif best_action == 'TAP_D':
+                            #     bprint(f"  > ⌨️ [QTE 탭] 'D' 키 탭 연타 입력 (일치율: {best_score:.3f})")
+                            #     send_cmd('R'); current_active_key = None
+                            #     send_cmd('D'); time.sleep(0.04); send_cmd('R')
                         else:
                             # 낚시 인터페이스(fishing_mode) 소멸 여부 실시간 확인 (1.5초 이상 소멸 시 대기 상태 복귀)
-                            if not safe_find_image('fishing_mode.png', 0.80):
+                            if not safe_find_image('fishing_mode.png', 0.70):
                                 missing_ui_count += 1
                                 if missing_ui_count >= 30:
                                     bprint("  > ⚠️ [실패] 낚시 인터페이스 1.5초간 미포착 -> 1단계 복귀")

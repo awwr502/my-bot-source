@@ -3517,9 +3517,9 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [어종 총 7종 선착순 레이스 탐색 엔진]
-                # 실시간으로 화면의 명암을 규격화한 뒤, 대상 어종 2종과 잡어 6종(none1~6)을 0.04초 간격으로 병렬 스캔합니다.
-                # 페이드인 도중 가장 먼저 임계치를 돌파하는 이미지를 정답으로 즉각 확정 짓고 0.1초 만에 조기 탈출합니다.
+                # [어종 총 7종 선착순 레이스 탐색 엔진 - 사전 크기 연산 버전]
+                # 매 프레임마다 동일한 이미지를 반복해서 resize하던 병목 현상을 해결하기 위해 루프 외부에서 크기 가공을 사전 완료합니다.
+                # 이를 통해 정확도는 그대로 유지하면서 루프 내부 연산 부하를 획기적으로 낮춥니다.
                 score_jellyfish = 0.0
                 best_scale_jelly = 1.0
                 score_eel = 0.0
@@ -3539,72 +3539,83 @@ def fishing_bot(max_allowed_seconds):
                     'none6.png': '검은 농어'
                 }
                 
+                # [루프 외부 사전 크기 연산] 대상 어종 2종 크기 사전 조절 및 규격화 동기화
+                pre_resized_targets = []
+                for img_name, fish_type in targets.items():
+                    temp = IMAGE_CACHE.get(img_name)
+                    if temp is not None:
+                        temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
+                        for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
+                            w = int(temp_norm.shape[1] * scale)
+                            h = int(temp_norm.shape[0] * scale)
+                            if w < 10 or h < 10: continue
+                            resized = cv2.resize(temp_norm, (w, h), interpolation=cv2.INTER_AREA)
+                            pre_resized_targets.append({
+                                'image': resized,
+                                'fish_type': fish_type,
+                                'scale': scale
+                            })
+                            
+                # [루프 외부 사전 크기 연산] 잡어 6종 크기 사전 조절 및 규격화 동기화
+                pre_resized_trash = []
+                for img_name in trash_fishes:
+                    temp = IMAGE_CACHE.get(img_name)
+                    if temp is not None:
+                        temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
+                        for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
+                            w = int(temp_norm.shape[1] * scale)
+                            h = int(temp_norm.shape[0] * scale)
+                            if w < 10 or h < 10: continue
+                            resized = cv2.resize(temp_norm, (w, h), interpolation=cv2.INTER_AREA)
+                            pre_resized_trash.append({
+                                'image': resized,
+                                'img_name': img_name
+                            })
+                
                 race_start_time = time.time()
                 winner_found = False
                 winner_type = None
                 
-                # 최대 1.2초 동안 페이드인 투명도 상승 흐름을 실시간 추적하며 레이스를 펼칩니다.
+                # 최대 1.2초 동안 크기 변환 부하 없이 실시간 추적 레이스를 펼칩니다.
                 while time.time() - race_start_time < 1.2 and bot_active:
                     sct_img = sct.grab(fish_roi)
                     screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                     
-                    # 캡처 및 인식부 연산 처리를 오리지널 표준 규격화로 변경
+                    # 수색 화면 캡처 및 정규화
                     screen_norm = cv2.normalize(screen_gray, None, 0, 255, cv2.NORM_MINMAX)
                     
-                    # 1. 대상 어종 2종 우선 정합성 레이스 스캔
-                    for img_name, fish_type in targets.items():
-                        temp = IMAGE_CACHE.get(img_name)
-                        if temp is not None:
-                            temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
-                            for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
-                                w = int(temp_norm.shape[1] * scale)
-                                h = int(temp_norm.shape[0] * scale)
-                                if w < 10 or h < 10: continue
-                                resized = cv2.resize(temp_norm, (w, h), interpolation=cv2.INTER_AREA)
-                                
-                                res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
-                                score = cv2.minMaxLoc(res)[1]
-                                
-                                # 대상 어종 임계치 0.60 적용
-                                if score >= 0.60:
-                                    # 파일명이 아닌 실제 한글 어종 명칭으로 매핑하여 콘솔에 이쁘게 출력합니다.
-                                    display_name = "해파리" if fish_type == 'JELLY' else "뱀장어"
-                                    bprint(f"  > 🎉 [레이스 승리] 대상 어종 '{display_name}' 검출 성공! (일치율: {score:.3f} / 배율: {scale:.2f})")
-                                    if fish_type == 'JELLY':
-                                        score_jellyfish = score
-                                        best_scale_jelly = scale
-                                    else:
-                                        score_eel = score
-                                        best_scale_eel = scale
-                                    winner_type = fish_type
-                                    winner_found = True
-                                    break
-                            if winner_found: break
+                    # 1. 대상 어종 2종 우선 정합성 레이스 스캔 (이미 연산이 완료된 템플릿 목록만 순회)
+                    for t_data in pre_resized_targets:
+                        res = cv2.matchTemplate(screen_norm, t_data['image'], cv2.TM_CCOEFF_NORMED)
+                        score = cv2.minMaxLoc(res)[1]
+                        
+                        # 대상 어종 임계치 0.60 적용
+                        if score >= 0.60:
+                            display_name = "해파리" if t_data['fish_type'] == 'JELLY' else "뱀장어"
+                            bprint(f"  > 🎉 [레이스 승리] 대상 어종 '{display_name}' 검출 성공! (일치율: {score:.3f} / 배율: {t_data['scale']:.2f})")
+                            if t_data['fish_type'] == 'JELLY':
+                                score_jellyfish = score
+                                best_scale_jelly = t_data['scale']
+                            else:
+                                score_eel = score
+                                best_scale_eel = t_data['scale']
+                            winner_type = t_data['fish_type']
+                            winner_found = True
+                            break
                     if winner_found: break
                     
-                    # 2. 잡어 6종 회피 레이스 스캔
-                    for img_name in trash_fishes:
-                        temp = IMAGE_CACHE.get(img_name)
-                        if temp is not None:
-                            temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
-                            for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
-                                w = int(temp_norm.shape[1] * scale)
-                                h = int(temp_norm.shape[0] * scale)
-                                if w < 10 or h < 10: continue
-                                resized = cv2.resize(temp_norm, (w, h), interpolation=cv2.INTER_AREA)
-                                
-                                res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
-                                score = cv2.minMaxLoc(res)[1]
-                                
-                                # 잡어 전용 임계치 0.75 적용 (형태 겹침 오탐 차단)
-                                if score >= 0.75:
-                                    # 파일명이 아닌 실제 잡어 한글 명칭 매핑 테이블을 거쳐 한글로 이쁘게 출력합니다.
-                                    display_name = trash_names.get(img_name, img_name)
-                                    bprint(f"  > 🔴 [레이스 승리] 잡어 목록 '{display_name}' 검출! 줄 끊기 즉시 기동 (일치율: {score:.3f})")
-                                    winner_type = 'TRASH'
-                                    winner_found = True
-                                    break
-                            if winner_found: break
+                    # 2. 잡어 6종 회피 레이스 스캔 (이미 연산이 완료된 템플릿 목록만 순회)
+                    for t_data in pre_resized_trash:
+                        res = cv2.matchTemplate(screen_norm, t_data['image'], cv2.TM_CCOEFF_NORMED)
+                        score = cv2.minMaxLoc(res)[1]
+                        
+                        # 잡어 전용 임계치 0.75 적용 (형태 겹침 오탐 차단)
+                        if score >= 0.75:
+                            display_name = trash_names.get(t_data['img_name'], t_data['img_name'])
+                            bprint(f"  > 🔴 [레이스 승리] 잡어 목록 '{display_name}' 검출! 줄 끊기 즉시 기동 (일치율: {score:.3f})")
+                            winner_type = 'TRASH'
+                            winner_found = True
+                            break
                     if winner_found: break
                     
                     # 0.04초 주기로 미끄러지듯 연속 정밀 대조 프레임 확보

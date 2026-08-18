@@ -943,15 +943,6 @@ def preload_all_images():
                 # 1. 기존 레거시 함수 호환용 Grayscale 적재
                 img_gray = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
                 if img_gray is not None:
-                    # [어종 템플릿 배경 차분화 정합성 동기화] 
-                    # 실시간 수색 화면의 가우시안 차분 상태와 100% 동일한 윤곽선 화소 구조를 만들기 위해,
-                    # 템플릿 외곽에 50픽셀 여백(Padding)을 임시로 부여한 뒤 동일한 15x15 차분 연산을 적용하여 적재합니다.
-                    if filename in ['jellyfish.png', 'eel.png']:
-                        padded = cv2.copyMakeBorder(img_gray, 50, 50, 50, 50, cv2.BORDER_REPLICATE)
-                        bg_temp = cv2.GaussianBlur(padded, (15, 15), 0)
-                        temp_sub = cv2.subtract(padded, bg_temp)
-                        img_gray = temp_sub[50:-50, 50:-50]
-                        
                     IMAGE_CACHE[filename] = img_gray
                     count += 1
                     
@@ -3526,65 +3517,36 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [어종 총 7종 선착순 레이스 탐색 엔진 - 원 스톱 전처리 버전]
-                # 템플릿과 화면의 형태 정합성을 맞추기 위해, 부팅 패치 없이 오직 이 구간에서만 템플릿 이미지 7종에 대한 배경 차분 전처리를 선행 자동 수행합니다.
-                # 이후 0.04초 간격으로 스캔하여 가장 먼저 임계치를 돌파하는 어종을 정답으로 선언하며, 실패 시에도 실제 도달한 최고 점수를 정직하게 출력합니다.
-                
-                # 1. 대상 어종 2종 실시간 자동 차분화 (글자 획 손상 방지용 패딩 융합)
-                temp_jelly = IMAGE_CACHE.get('jellyfish.png')
-                temp_jelly_processed = None
-                if temp_jelly is not None:
-                    padded = cv2.copyMakeBorder(temp_jelly, 50, 50, 50, 50, cv2.BORDER_REPLICATE)
-                    bg_temp = cv2.blur(padded, (15, 15))
-                    temp_sub = cv2.subtract(padded, bg_temp)
-                    temp_jelly_processed = temp_sub[50:-50, 50:-50]
-                    
-                temp_eel = IMAGE_CACHE.get('eel.png')
-                temp_eel_processed = None
-                if temp_eel is not None:
-                    padded = cv2.copyMakeBorder(temp_eel, 50, 50, 50, 50, cv2.BORDER_REPLICATE)
-                    bg_temp = cv2.blur(padded, (15, 15))
-                    temp_sub = cv2.subtract(padded, bg_temp)
-                    temp_eel_processed = temp_sub[50:-50, 50:-50]
-                
-                # 2. 잡어 5종 실시간 자동 차분화
-                trash_fishes = ['none1.png', 'none2.png', 'none3.png', 'none4.png', 'none5.png']
-                trash_processed = {}
-                for img_name in trash_fishes:
-                    temp = IMAGE_CACHE.get(img_name)
-                    if temp is not None:
-                        padded = cv2.copyMakeBorder(temp, 50, 50, 50, 50, cv2.BORDER_REPLICATE)
-                        bg_temp = cv2.blur(padded, (15, 15))
-                        temp_sub = cv2.subtract(padded, bg_temp)
-                        trash_processed[img_name] = temp_sub[50:-50, 50:-50]
-                        
-                # 변수 및 실시간 최고 점수 추적기 초기화 (0.000 콘솔 버그 해결)
+                # [어종 총 7종 선착순 레이스 탐색 엔진 - 오리지널 규격화 대조 버전]
+                # 사용자님의 7종 선착순 레이스 감시망(0.04초 간격, 잡어 5종 포함) 뼈대는 그대로 유지합니다.
+                # 대신, 루프 내부의 이미지 캡처 및 전처리 연산은 요청하신 오리지널 [Grayscale + cv2.normalize] 기법만 사용하도록 변경합니다.
                 score_jellyfish = 0.0
                 best_scale_jelly = 1.0
                 score_eel = 0.0
                 best_scale_eel = 1.0
                 
-                real_max_jelly = 0.0
-                real_max_eel = 0.0
+                # 감시 대상 분기 수립
+                targets = {'jellyfish.png': 'JELLY', 'eel.png': 'EEL'}
+                trash_fishes = ['none1.png', 'none2.png', 'none3.png', 'none4.png', 'none5.png']
                 
-                targets = {'JELLY': temp_jelly_processed, 'EEL': temp_eel_processed}
                 race_start_time = time.time()
                 winner_found = False
                 winner_type = None
                 
+                # 최대 1.2초 동안 페이드인 투명도 상승 흐름을 실시간 추적하며 레이스를 펼칩니다.
                 while time.time() - race_start_time < 1.2 and bot_active:
                     sct_img = sct.grab(fish_roi)
                     screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                     
-                    screen_bg = cv2.blur(screen_gray, (15, 15))
-                    screen_sub = cv2.subtract(screen_gray, screen_bg)
-                    screen_norm = cv2.normalize(screen_sub, None, 0, 255, cv2.NORM_MINMAX)
+                    # 캡처 및 인식부 연산 처리를 오리지널 표준 규격화로 변경
+                    screen_norm = cv2.normalize(screen_gray, None, 0, 255, cv2.NORM_MINMAX)
                     
-                    # A. 대상 어종 2종 우선 정밀 수색 레이스
-                    for fish_type, temp_p in targets.items():
-                        if temp_p is not None:
-                            temp_norm = cv2.normalize(temp_p, None, 0, 255, cv2.NORM_MINMAX)
-                            for scale in [0.98, 1.0, 1.03]:
+                    # 1. 대상 어종 2종 우선 정합성 레이스 스캔
+                    for img_name, fish_type in targets.items():
+                        temp = IMAGE_CACHE.get(img_name)
+                        if temp is not None:
+                            temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
+                            for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
                                 w = int(temp_norm.shape[1] * scale)
                                 h = int(temp_norm.shape[0] * scale)
                                 if w < 10 or h < 10: continue
@@ -3593,29 +3555,28 @@ def fishing_bot(max_allowed_seconds):
                                 res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
                                 score = cv2.minMaxLoc(res)[1]
                                 
-                                # 실시간 최고 도달 점수 추적 기록
-                                if fish_type == 'JELLY' and score > real_max_jelly:
-                                    real_max_jelly = score
-                                    best_scale_jelly = scale
-                                elif fish_type == 'EEL' and score > real_max_eel:
-                                    real_max_eel = score
-                                    best_scale_eel = scale
-                                    
+                                # 대상 어종 임계치 0.60 적용
                                 if score >= 0.60:
                                     display_name = "해파리" if fish_type == 'JELLY' else "뱀장어"
                                     bprint(f"  > 🎉 [레이스 승리] 대상 어종 '{display_name}' 검출 성공! (일치율: {score:.3f} / 배율: {scale:.2f})")
+                                    if fish_type == 'JELLY':
+                                        score_jellyfish = score
+                                        best_scale_jelly = scale
+                                    else:
+                                        score_eel = score
+                                        best_scale_eel = scale
                                     winner_type = fish_type
                                     winner_found = True
                                     break
                             if winner_found: break
                     if winner_found: break
                     
-                    # B. 잡어 5종 회피 스캔 레이스
+                    # 2. 잡어 5종 회피 레이스 스캔
                     for img_name in trash_fishes:
-                        temp_p = trash_processed.get(img_name)
-                        if temp_p is not None:
-                            temp_norm = cv2.normalize(temp_p, None, 0, 255, cv2.NORM_MINMAX)
-                            for scale in [0.98, 1.0, 1.03]:
+                        temp = IMAGE_CACHE.get(img_name)
+                        if temp is not None:
+                            temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
+                            for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
                                 w = int(temp_norm.shape[1] * scale)
                                 h = int(temp_norm.shape[0] * scale)
                                 if w < 10 or h < 10: continue
@@ -3624,6 +3585,7 @@ def fishing_bot(max_allowed_seconds):
                                 res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
                                 score = cv2.minMaxLoc(res)[1]
                                 
+                                # 잡어 전용 임계치 0.75 적용 (형태 겹침 오탐 차단)
                                 if score >= 0.75:
                                     bprint(f"  > 🔴 [레이스 승리] 잡어 목록 '{img_name}' 검출! 줄 끊기 즉시 기동 (일치율: {score:.3f})")
                                     winner_type = 'TRASH'
@@ -3632,25 +3594,16 @@ def fishing_bot(max_allowed_seconds):
                             if winner_found: break
                     if winner_found: break
                     
+                    # 0.04초 주기로 미끄러지듯 연속 정밀 대조 프레임 확보
                     time.sleep(0.04)
 
-                # 최종 다운스트림 전이 변수 정합성 매핑
-                if winner_found:
-                    if winner_type == 'JELLY':
-                        score_jellyfish = real_max_jelly
-                        score_eel = 0.0
-                    elif winner_type == 'EEL':
-                        score_eel = real_max_eel
-                        score_jellyfish = 0.0
-                    else:
-                        score_jellyfish = 0.0
-                        score_eel = 0.0
-                else:
+                # 최종 다운스트림 변수 정합성 맵핑
+                if not winner_found or winner_type == 'TRASH':
                     score_jellyfish = 0.0
                     score_eel = 0.0
 
-                # [어종별 스캔 점수 실시간 출력] 최고로 도달했던 실질 매치 점수와 배율을 정직하게 콘솔에 노출합니다.
-                bprint(f"  > [어종 대조 결과] 해파리 일치율: {real_max_jelly:.3f} (배율: {best_scale_jelly:.2f}) | 전기뱀장어 일치율: {real_max_eel:.3f} (배율: {best_scale_eel:.2f})")
+                # [어종별 스캔 점수 실시간 출력] 최고 매칭 점수와 함께 실제 매칭된 배율을 소수점 둘째 자리까지 함께 출력합니다.
+                bprint(f"  > [어종 대조 결과] 해파리 일치율: {score_jellyfish:.3f} (배율: {best_scale_jelly:.2f}) | 전기뱀장어 일치율: {score_eel:.3f} (배율: {best_scale_eel:.2f})")
                 
                 best_score = max(score_jellyfish, score_eel)
                 

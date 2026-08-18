@@ -943,12 +943,10 @@ def preload_all_images():
                 # 1. 기존 레거시 함수 호환용 Grayscale 적재
                 img_gray = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
                 if img_gray is not None:
-                    # [어종 템플릿 배경 차분화] 부팅 시 템플릿의 잔여 배경 명암을 제거하고 글씨만 순수하게 부각시켜 저장합니다.
+                    # [어종 템플릿 자동 마스크 생성] 백색광 물빛 간섭을 원천 차단하기 위해 글자 영역만 추출한 바이너리 마스크를 자동 생성합니다.
                     if filename in ['jellyfish.png', 'eel.png']:
-                        bg_temp = cv2.GaussianBlur(img_gray, (25, 25), 0)
-                        temp_sub = cv2.subtract(img_gray, bg_temp)
-                        temp_blur = cv2.bilateralFilter(temp_sub, 5, 30, 30)
-                        img_gray = cv2.normalize(temp_blur, None, 0, 255, cv2.NORM_MINMAX)
+                        _, mask = cv2.threshold(img_gray, 150, 255, cv2.THRESH_BINARY)
+                        IMAGE_MASK_CACHE[filename] = mask
                         
                     IMAGE_CACHE[filename] = img_gray
                     count += 1
@@ -3524,40 +3522,47 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [그레이스케일 배경 차분 엔진] 
-                # 25x25 대형 가우시안 블러를 통해 실시간 배경(바닷물의 고유 명암)을 산출한 뒤 원본에서 차감(Subtract)합니다.
-                # 이 조작으로 낮의 백색광과 밤의 어두운 바닷물은 모두 완벽한 검은색(0) 배경으로 단일화되고, 글씨 획만 예리하게 추출됩니다.
-                bg_screen = cv2.GaussianBlur(screen_gray, (25, 25), 0)
-                screen_sub = cv2.subtract(screen_gray, bg_screen)
-                screen_blur = cv2.bilateralFilter(screen_sub, 5, 30, 30)
-                screen_norm = cv2.normalize(screen_blur, None, 0, 255, cv2.NORM_MINMAX)
+                # [그레이스케일 마스크 템플릿 매칭 엔진]
+                # 바닷물이 눈이 멀 정도로 새하얗게 변한 상황(Luminance clipping)에서는 배경색을 바꾸는 전처리가 무의미합니다.
+                # 따라서 부팅 시 자동 생성한 글자 마스크(Mask)를 대입하여 글씨 영역 이외의 모든 백색 바닷물 영역을 수학적으로 100% 무시(Ignore)하게 만듭니다.
+                screen_norm = cv2.normalize(screen_gray, None, 0, 255, cv2.NORM_MINMAX)
 
                 score_jellyfish = 0.0
                 score_eel = 0.0
                 
-                # A. 해파리 5배율 매칭 (배경 차감형 그레이스케일)
-                temp_jelly_processed = IMAGE_CACHE.get('jellyfish.png')
-                if temp_jelly_processed is not None:
+                # A. 해파리 5배율 매칭 (마스크 적용 매칭)
+                temp_jelly = IMAGE_CACHE.get('jellyfish.png')
+                temp_jelly_mask = IMAGE_MASK_CACHE.get('jellyfish.png')
+                if temp_jelly is not None and temp_jelly_mask is not None:
+                    temp_jelly_norm = cv2.normalize(temp_jelly, None, 0, 255, cv2.NORM_MINMAX)
+                    
                     for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
-                        w = int(temp_jelly_processed.shape[1] * scale)
-                        h = int(temp_jelly_processed.shape[0] * scale)
+                        w = int(temp_jelly_norm.shape[1] * scale)
+                        h = int(temp_jelly_norm.shape[0] * scale)
                         if w < 10 or h < 10: continue
-                        resized = cv2.resize(temp_jelly_processed, (w, h), interpolation=cv2.INTER_AREA)
+                        resized_temp = cv2.resize(temp_jelly_norm, (w, h), interpolation=cv2.INTER_AREA)
                         
-                        # 배경 편차가 통제된 상태이므로 표준화 매칭 시 극도로 정확한 결과가 도출됩니다.
-                        res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
+                        # 바이너리 마스크의 크기 조절 시에는 픽셀 경계 손상을 막기 위해 INTER_NEAREST 보간법을 적용합니다.
+                        resized_mask = cv2.resize(temp_jelly_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+                        
+                        # 마스크 탐색을 지원하는 TM_CCORR_NORMED 방식을 사용하여 배경 간섭 없이 순수 글자 화소만 매칭합니다.
+                        res = cv2.matchTemplate(screen_norm, resized_temp, cv2.TM_CCORR_NORMED, mask=resized_mask)
                         score_jellyfish = max(score_jellyfish, cv2.minMaxLoc(res)[1])
                         
-                # B. 전기뱀장어 5배율 매칭 (배경 차감형 그레이스케일)
-                temp_eel_processed = IMAGE_CACHE.get('eel.png')
-                if temp_eel_processed is not None:
+                # B. 전기뱀장어 5배율 매칭 (마스크 적용 매칭)
+                temp_eel = IMAGE_CACHE.get('eel.png')
+                temp_eel_mask = IMAGE_MASK_CACHE.get('eel.png')
+                if temp_eel is not None and temp_eel_mask is not None:
+                    temp_eel_norm = cv2.normalize(temp_eel, None, 0, 255, cv2.NORM_MINMAX)
+                    
                     for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
-                        w = int(temp_eel_processed.shape[1] * scale)
-                        h = int(temp_eel_processed.shape[0] * scale)
+                        w = int(temp_eel_norm.shape[1] * scale)
+                        h = int(temp_eel_norm.shape[0] * scale)
                         if w < 10 or h < 10: continue
-                        resized = cv2.resize(temp_eel_processed, (w, h), interpolation=cv2.INTER_AREA)
+                        resized_temp = cv2.resize(temp_eel_norm, (w, h), interpolation=cv2.INTER_AREA)
+                        resized_mask = cv2.resize(temp_eel_mask, (w, h), interpolation=cv2.INTER_NEAREST)
                         
-                        res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
+                        res = cv2.matchTemplate(screen_norm, resized_temp, cv2.TM_CCORR_NORMED, mask=resized_mask)
                         score_eel = max(score_eel, cv2.minMaxLoc(res)[1])
                 
                 # [어종별 스캔 점수 실시간 출력] 인식 성공 여부와 상관없이 두 어종의 일치율 점수를 무조건 노출합니다.

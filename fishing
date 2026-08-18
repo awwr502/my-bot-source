@@ -3526,53 +3526,63 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [로컬 배경 감산 정규화 - 백색 도화지 방지 엔진]
-                # 임계값(Threshold) 이진화는 물빛이 밝을 때 화면 전체를 하얗게 채워버려 잡어까지 1.000으로 오탐하는 치명적인 문제가 있습니다.
-                # 이를 해결하기 위해, 화면에서 15x15 로컬 평균 배경(cv2.blur)을 감산하여 평평한 바닷물은 낮이든 밤이든 무조건 검은색(0)으로 평탄화합니다.
-                # 이로써 화면이 하얗게 타버리는 현상을 원천 방지하고, 흑백 표준 매칭 구조 내에서 잡어 일치율은 0.3대로 밀어내고 대상 어종만 0.8 이상으로 잡아냅니다.
-                screen_bg = cv2.blur(screen_gray, (15, 15))
-                screen_sub = cv2.subtract(screen_gray, screen_bg)
-                screen_norm = cv2.normalize(screen_sub, None, 0, 255, cv2.NORM_MINMAX)
-                
+                # [어종 실시간 3회 교차 감시 루프]
+                # 카메라 전환 렉이나 투명도 페이드인 지연으로 인한 간헐적 인식 미달을 해결하기 위해,
+                # 최대 3회(0.1초 간격) 동안 교차 수색을 진행하여 단 한 번이라도 합격하면 확정 포획으로 넘어갑니다.
                 score_jellyfish = 0.0
                 best_scale_jelly = 1.0
                 score_eel = 0.0
                 best_scale_eel = 1.0
                 
-                # A. 해파리 5배율 매칭 (정규화 대조 매칭 적용)
-                temp_jelly = IMAGE_CACHE.get('jellyfish.png')
-                if temp_jelly is not None:
-                    temp_jelly_norm = cv2.normalize(temp_jelly, None, 0, 255, cv2.NORM_MINMAX)
+                for attempt in range(3):
+                    # 실시간 수색 화면 캡처 및 배경 차분 정규화
+                    sct_img = sct.grab(fish_roi)
+                    screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                     
-                    for scale in [0.85, 0.90, 0.93, 0.95, 0.98, 1.0, 1.03, 1.05, 1.08, 1.10, 1.15]:
-                        w = int(temp_jelly_norm.shape[1] * scale)
-                        h = int(temp_jelly_norm.shape[0] * scale)
-                        if w < 10 or h < 10: continue
-                        resized = cv2.resize(temp_jelly_norm, (w, h), interpolation=cv2.INTER_AREA)
-                        
-                        # 오탐 판별력이 가장 우수한 규격화 상관계수 매칭(TM_CCOEFF_NORMED) 수행
-                        res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
-                        score = cv2.minMaxLoc(res)[1]
-                        if score > score_jellyfish:
-                            score_jellyfish = score
-                            best_scale_jelly = scale
-                        
-                # B. 전기뱀장어 5배율 매칭
-                temp_eel = IMAGE_CACHE.get('eel.png')
-                if temp_eel is not None:
-                    temp_eel_norm = cv2.normalize(temp_eel, None, 0, 255, cv2.NORM_MINMAX)
+                    screen_bg = cv2.blur(screen_gray, (15, 15))
+                    screen_sub = cv2.subtract(screen_gray, screen_bg)
+                    screen_norm = cv2.normalize(screen_sub, None, 0, 255, cv2.NORM_MINMAX)
                     
-                    for scale in [0.85, 0.90, 0.93, 0.95, 0.98, 1.0, 1.03, 1.05, 1.08, 1.10, 1.15]:
-                        w = int(temp_eel_norm.shape[1] * scale)
-                        h = int(temp_eel_norm.shape[0] * scale)
-                        if w < 10 or h < 10: continue
-                        resized = cv2.resize(temp_eel_norm, (w, h), interpolation=cv2.INTER_AREA)
+                    # A. 해파리 매칭 스캔
+                    temp_jelly = IMAGE_CACHE.get('jellyfish.png')
+                    if temp_jelly is not None:
+                        temp_jelly_norm = cv2.normalize(temp_jelly, None, 0, 255, cv2.NORM_MINMAX)
                         
-                        res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
-                        score = cv2.minMaxLoc(res)[1]
-                        if score > score_eel:
-                            score_eel = score
-                            best_scale_eel = scale
+                        for scale in [0.85, 0.90, 0.93, 0.95, 0.98, 1.0, 1.03, 1.05, 1.08, 1.10, 1.15]:
+                            w = int(temp_jelly_norm.shape[1] * scale)
+                            h = int(temp_jelly_norm.shape[0] * scale)
+                            if w < 10 or h < 10: continue
+                            resized = cv2.resize(temp_jelly_norm, (w, h), interpolation=cv2.INTER_AREA)
+                            
+                            res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
+                            score = cv2.minMaxLoc(res)[1]
+                            if score > score_jellyfish:
+                                score_jellyfish = score
+                                best_scale_jelly = scale
+                                
+                    # B. 전기뱀장어 매칭 스캔
+                    temp_eel = IMAGE_CACHE.get('eel.png')
+                    if temp_eel is not None:
+                        temp_eel_norm = cv2.normalize(temp_eel, None, 0, 255, cv2.NORM_MINMAX)
+                        
+                        for scale in [0.85, 0.90, 0.93, 0.95, 0.98, 1.0, 1.03, 1.05, 1.08, 1.10, 1.15]:
+                            w = int(temp_eel_norm.shape[1] * scale)
+                            h = int(temp_eel_norm.shape[0] * scale)
+                            if w < 10 or h < 10: continue
+                            resized = cv2.resize(temp_eel_norm, (w, h), interpolation=cv2.INTER_AREA)
+                            
+                            res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
+                            score = cv2.minMaxLoc(res)[1]
+                            if score > score_eel:
+                                score_eel = score
+                                best_scale_eel = scale
+                                
+                    # 합격 기준선(0.60)을 넘기는 즉시 추가 루프를 종료하고 즉각 확정 포획으로 전이합니다.
+                    if max(score_jellyfish, score_eel) >= 0.60:
+                        break
+                        
+                    # 불합격 시 글자가 선명해질 수 있도록 0.1초 대기 후 다음 캡처 프레임으로 리트라이
+                    time.sleep(0.1)
 
                 # [어종별 스캔 점수 실시간 출력] 최고 매칭 점수와 함께 실제 매칭된 배율을 소수점 둘째 자리까지 함께 출력합니다.
                 bprint(f"  > [어종 대조 결과] 해파리 일치율: {score_jellyfish:.3f} (배율: {best_scale_jelly:.2f}) | 전기뱀장어 일치율: {score_eel:.3f} (배율: {best_scale_eel:.2f})")

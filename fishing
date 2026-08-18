@@ -3517,8 +3517,13 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [정규화 전처리] 하얀색 바닷물 반사로 인해 수축된 명도 대비(Contrast)를 0~255 범위로 강제 확장하여 글자 윤곽선을 복구합니다.
-                screen_norm = cv2.normalize(screen_gray, None, 0, 255, cv2.NORM_MINMAX)
+                # [백색광 바닷물 무력화 - 미세 배경 차분 엔진 + 실시간 배율 진단]
+                # 사용자님의 오리지널 그레이스케일 매칭 구조를 100% 완벽히 보존하면서 백색 바닷물 문제를 해결합니다.
+                # 15x15 가우시안 블러를 통해 실시간 바닷물 배경의 평균 밝기를 산출한 뒤 원본에서 감산(Subtract)합니다.
+                # 이 조작으로 낮의 백색광은 검은색(0)으로 평평해지며, 최상 매칭 스케일 배율을 함께 추적하여 표시합니다.
+                bg_screen = cv2.GaussianBlur(screen_gray, (15, 15), 0)
+                screen_sub = cv2.subtract(screen_gray, bg_screen)
+                screen_norm = cv2.normalize(screen_sub, None, 0, 255, cv2.NORM_MINMAX)
                 
                 score_jellyfish = 0.0
                 best_scale_jelly = 1.0 # 해파리 최고 매칭 배율 기록기
@@ -3534,7 +3539,7 @@ def fishing_bot(max_allowed_seconds):
                         w = int(temp_jelly_norm.shape[1] * scale)
                         h = int(temp_jelly_norm.shape[0] * scale)
                         if w < 10 or h < 10: continue
-                        resized = cv2.resize(temp_jelly_norm, (w, h), interpolation=cv2.INTER_LANCZOS4)
+                        resized = cv2.resize(temp_jelly_norm, (w, h), interpolation=cv2.INTER_AREA)
                         
                         # 오탐 판별력이 가장 우수한 규격화 상관계수 매칭(TM_CCOEFF_NORMED) 수행
                         res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
@@ -3552,7 +3557,7 @@ def fishing_bot(max_allowed_seconds):
                         w = int(temp_eel_norm.shape[1] * scale)
                         h = int(temp_eel_norm.shape[0] * scale)
                         if w < 10 or h < 10: continue
-                        resized = cv2.resize(temp_eel_norm, (w, h), interpolation=cv2.INTER_LANCZOS4)
+                        resized = cv2.resize(temp_eel_norm, (w, h), interpolation=cv2.INTER_AREA)
                         
                         res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
                         score = cv2.minMaxLoc(res)[1]

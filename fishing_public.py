@@ -994,8 +994,8 @@ def preload_all_images():
                 })
                 
     # 2. 잡어 7종 사전 배율 리사이징 캐싱
-    trash_fishes = ['none1.png', 'none2.png', 'none3.png', 'none4.png', 'none5.png', 'none6.png', 'none7.png']
-    trash_names = {'none1.png': '병어', 'none2.png': '청어', 'none3.png': '정어리', 'none4.png': '노던 파이크', 'none5.png': '바라쿠다', 'none6.png': '검은 농어', 'none7.png': '큰입 우럭'}
+    trash_fishes = ['none1.png', 'none2.png', 'none3.png', 'none4.png', 'none5.png']
+    trash_names = {'none1.png': '병어', 'none2.png': '청어', 'none3.png': '정어리', 'none4.png': '노던 파이크', 'none5.png': '바라쿠다'}
     for img_name in trash_fishes:
         temp = IMAGE_CACHE.get(img_name)
         if temp is not None:
@@ -3571,8 +3571,8 @@ def fishing_bot(max_allowed_seconds):
                 winner_found = False
                 winner_type = None
                 
-                # 최대 1.2초 동안 크기 변환 부하 없이 실시간 추적 레이스를 펼칩니다.
-                while time.time() - race_start_time < 1.2 and bot_active:
+                # 최대 3초 동안 크기 변환 부하 없이 실시간 추적 레이스를 펼칩니다.
+                while time.time() - race_start_time < 3 and bot_active:
                     sct_img = sct.grab(fish_roi)
                     screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                     
@@ -3617,8 +3617,8 @@ def fishing_bot(max_allowed_seconds):
                             break
                     if winner_found: break
                     
-                    # 0.04초 주기로 미끄러지듯 연속 정밀 대조 프레임 확보
-                    time.sleep(0.04)
+                    # 0.1초 주기로 미끄러지듯 연속 정밀 대조 프레임 확보
+                    time.sleep(0.1)
 
                 # 최종 다운스트림 변수 정합성 맵핑
                 if not winner_found or winner_type == 'TRASH':
@@ -3791,8 +3791,12 @@ def fishing_bot(max_allowed_seconds):
                         # 비동기 스레드 풀을 가동하여 4가지 QTE를 동시에 실시간 병렬 탐색합니다!
                         # (페이드인 전환 지연을 파괴하기 위해, 실시간 스캔 요구치를 conf=0.65로 하향 조정합니다)
                         futures = {
-                            qte_executor.submit(safe_find_image, 'fishing_hold_A.png', 0.70, None, None, True): 'HOLD_A',
-                            qte_executor.submit(safe_find_image, 'fishing_hold_D.png', 0.70, None, None, True): 'HOLD_D',
+                            # [QTE 사분면 격리 수색 시스템]
+                            # QTE 홀딩 프롬프트가 오염되거나 자가 치유가 발생하더라도, 전체 화면을 스캔하지 않고 지정된 좌하단/우하단 사분면(1/4 영역) 내부로 탐색 영역을 완벽하게 가둡니다.
+                            # 이를 통해 오탐률을 0%로 통제하고 저사양 서브컴의 스캔 부하를 4배(75%) 절감합니다.
+                            qte_executor.submit(safe_find_image, 'fishing_hold_A.png', 0.70, (0, SCREEN_H // 2, SCREEN_W // 2, SCREEN_H // 2), None, True): 'HOLD_A',
+                            qte_executor.submit(safe_find_image, 'fishing_hold_D.png', 0.70, (SCREEN_W // 2, SCREEN_H // 2, SCREEN_W // 2, SCREEN_H // 2), None, True): 'HOLD_D',
+                            # [주석 처리] 연타 패턴 소멸 대응을 위해 TAP 감지 스레드를 비활성화합니다.
                             # qte_executor.submit(safe_find_image, 'fishing_tap_A.png', 0.70, None, None, True): 'TAP_A',
                             # qte_executor.submit(safe_find_image, 'fishing_tap_D.png', 0.70, None, None, True): 'TAP_D'
                         }

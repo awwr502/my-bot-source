@@ -3517,17 +3517,27 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [어종 총 7종 선착순 레이스 탐색 엔진 - 오리지널 규격화 대조 버전]
-                # 사용자님의 7종 선착순 레이스 감시망(0.04초 간격, 잡어 5종 포함) 뼈대는 그대로 유지합니다.
-                # 대신, 루프 내부의 이미지 캡처 및 전처리 연산은 요청하신 오리지널 [Grayscale + cv2.normalize] 기법만 사용하도록 변경합니다.
+                # [어종 총 7종 선착순 레이스 탐색 엔진]
+                # 실시간으로 화면의 명암을 규격화한 뒤, 대상 어종 2종과 잡어 6종(none1~6)을 0.04초 간격으로 병렬 스캔합니다.
+                # 페이드인 도중 가장 먼저 임계치를 돌파하는 이미지를 정답으로 즉각 확정 짓고 0.1초 만에 조기 탈출합니다.
                 score_jellyfish = 0.0
                 best_scale_jelly = 1.0
                 score_eel = 0.0
                 best_scale_eel = 1.0
                 
-                # 감시 대상 분기 수립
+                # 감시 대상 및 한글 매핑 분기 수립
                 targets = {'jellyfish.png': 'JELLY', 'eel.png': 'EEL'}
-                trash_fishes = ['none1.png', 'none2.png', 'none3.png', 'none4.png', 'none5.png', 'none6.png' ]
+                trash_fishes = ['none1.png', 'none2.png', 'none3.png', 'none4.png', 'none5.png', 'none6.png']
+                
+                # 잡어 고유 한글 명칭 매핑 테이블
+                trash_names = {
+                    'none1.png': '병어',
+                    'none2.png': '청어',
+                    'none3.png': '정어리',
+                    'none4.png': '노던 파이크',
+                    'none5.png': '바라쿠다',
+                    'none6.png': '검은 농어'
+                }
                 
                 race_start_time = time.time()
                 winner_found = False
@@ -3546,7 +3556,7 @@ def fishing_bot(max_allowed_seconds):
                         temp = IMAGE_CACHE.get(img_name)
                         if temp is not None:
                             temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
-                            for scale in [0.97, 1.0, 1.03]:
+                            for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
                                 w = int(temp_norm.shape[1] * scale)
                                 h = int(temp_norm.shape[0] * scale)
                                 if w < 10 or h < 10: continue
@@ -3557,6 +3567,7 @@ def fishing_bot(max_allowed_seconds):
                                 
                                 # 대상 어종 임계치 0.60 적용
                                 if score >= 0.60:
+                                    # 파일명이 아닌 실제 한글 어종 명칭으로 매핑하여 콘솔에 이쁘게 출력합니다.
                                     display_name = "해파리" if fish_type == 'JELLY' else "뱀장어"
                                     bprint(f"  > 🎉 [레이스 승리] 대상 어종 '{display_name}' 검출 성공! (일치율: {score:.3f} / 배율: {scale:.2f})")
                                     if fish_type == 'JELLY':
@@ -3576,7 +3587,7 @@ def fishing_bot(max_allowed_seconds):
                         temp = IMAGE_CACHE.get(img_name)
                         if temp is not None:
                             temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
-                            for scale in [0.97, 1.0, 1.03]:
+                            for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
                                 w = int(temp_norm.shape[1] * scale)
                                 h = int(temp_norm.shape[0] * scale)
                                 if w < 10 or h < 10: continue
@@ -3585,9 +3596,11 @@ def fishing_bot(max_allowed_seconds):
                                 res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
                                 score = cv2.minMaxLoc(res)[1]
                                 
-                                # 잡어 전용 임계치 0.70 적용 (형태 겹침 오탐 차단)
-                                if score >= 0.70:
-                                    bprint(f"  > 🔴 [레이스 승리] 잡어 목록 '{img_name}' 검출! 줄 끊기 즉시 기동 (일치율: {score:.3f})")
+                                # 잡어 전용 임계치 0.75 적용 (형태 겹침 오탐 차단)
+                                if score >= 0.75:
+                                    # 파일명이 아닌 실제 잡어 한글 명칭 매핑 테이블을 거쳐 한글로 이쁘게 출력합니다.
+                                    display_name = trash_names.get(img_name, img_name)
+                                    bprint(f"  > 🔴 [레이스 승리] 잡어 목록 '{display_name}' 검출! 줄 끊기 즉시 기동 (일치율: {score:.3f})")
                                     winner_type = 'TRASH'
                                     winner_found = True
                                     break

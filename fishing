@@ -3559,66 +3559,93 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [어종 총 7종 선착순 레이스 탐색 엔진 - 부팅 사전 캐시 매칭 버전]
-                # 부팅 시점에 이미 스케일 가공이 끝난 템플릿 데이터(PRE_RESIZED_TARGETS, PRE_RESIZED_TRASH)를 직접 수색합니다.
-                # 이를 통해 진입 전처리 딜레이를 0ms로 단축시켜 극상의 가벼움과 즉각적인 반응 속도를 제공합니다.
+                # [초경량 1회성 7종 탐색 엔진]
+                # 실시간 레이스 루프(매 프레임 캡처/매칭)는 저사양 서브컴의 CPU/GPU 병목을 유발하여 게임 프레임을 떨어뜨리고 일치율을 붕괴시킵니다.
+                # 이를 해결하기 위해, 0.22초 선행 대기(CPU 점유율 0%) 후 단 1장의 화면만 캡처하여 7종 어종을 초경량으로 대조합니다.
+                time.sleep(0.22)
+                
+                # 실시간 수색 화면 캡처 및 정규화 (단 1회 수행으로 저사양 서브컴 부하 완벽 해결)
+                sct_img = sct.grab(fish_roi)
+                screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
+                screen_norm = cv2.normalize(screen_gray, None, 0, 255, cv2.NORM_MINMAX)
+                
                 score_jellyfish = 0.0
                 best_scale_jelly = 1.0
                 score_eel = 0.0
                 best_scale_eel = 1.0
+                found_target = False
+                target_name = ""
                 
-                race_start_time = time.time()
+                # 감시 대상 및 한글 매핑 분기 수립
+                targets = {'jellyfish.png': 'JELLY', 'eel.png': 'EEL'}
+                trash_fishes = ['none1.png', 'none2.png', 'none3.png', 'none4.png', 'none5.png', 'none6.png']
+                
+                # 잡어 고유 한글 명칭 매핑 테이블
+                trash_names = {
+                    'none1.png': '병어',
+                    'none2.png': '청어',
+                    'none3.png': '정어리',
+                    'none4.png': '노던 파이크',
+                    'none5.png': '바라쿠다',
+                    'none6.png': '검은 농어',
+                    'none7.png': '큰입 우럭'
+                }
+                
+                # 1. 대상 어종 2종 단판 스캔 (기존 오리지널 방식 그대로 복원)
                 winner_found = False
                 winner_type = None
                 
-                # 최대 3초 동안 크기 변환 부하 없이 실시간 추적 레이스를 펼칩니다.
-                while time.time() - race_start_time < 3 and bot_active:
-                    sct_img = sct.grab(fish_roi)
-                    screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
-                    
-                    # 수색 화면 캡처 및 정규화
-                    screen_norm = cv2.normalize(screen_gray, None, 0, 255, cv2.NORM_MINMAX)
-                    
-                    # 1. 대상 어종 스캔 (이미 부팅 시점에 크기 연산이 끝난 템플릿 목록만 즉각 매칭)
-                    for t_data in PRE_RESIZED_TARGETS:
-                        res = cv2.matchTemplate(screen_norm, t_data['image'], cv2.TM_CCOEFF_NORMED)
-                        score = cv2.minMaxLoc(res)[1]
-                        
-                        # 대상 어종 임계치 0.60 적용
-                        if score >= 0.60:
-                            display_name = "해파리" if t_data['fish_type'] == 'JELLY' else "전기뱀장어"
-                            bprint(f"  > 🎉 [레이스 승리] 대상 어종 '{display_name}' 검출 성공! (일치율: {score:.3f} / 배율: {t_data['scale']:.2f})")
+                for img_name, fish_type in targets.items():
+                    temp = IMAGE_CACHE.get(img_name)
+                    if temp is not None:
+                        temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
+                        for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
+                            w = int(temp_norm.shape[1] * scale)
+                            h = int(temp_norm.shape[0] * scale)
+                            if w < 10 or h < 10: continue
+                            resized = cv2.resize(temp_norm, (w, h), interpolation=cv2.INTER_AREA)
                             
-                            # [일원화] 이중 출력을 지우기 위해 상태 스위치와 한글 이름을 루프 내부에서 즉시 정립합니다.
-                            found_target = True
-                            target_name = display_name
+                            res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
+                            score = cv2.minMaxLoc(res)[1]
                             
-                            if t_data['fish_type'] == 'JELLY':
-                                score_jellyfish = score
-                                best_scale_jelly = t_data['scale']
-                            else:
-                                score_eel = score
-                                best_scale_eel = t_data['scale']
-                            winner_type = t_data['fish_type']
-                            winner_found = True
-                            break
-                    if winner_found: break
-                    
-                    # 2. 잡어 스캔 (이미 부팅 시점에 크기 연산이 끝난 템플릿 목록만 즉각 매칭)
-                    for t_data in PRE_RESIZED_TRASH:
-                        res = cv2.matchTemplate(screen_norm, t_data['image'], cv2.TM_CCOEFF_NORMED)
-                        score = cv2.minMaxLoc(res)[1]
-                        
-                        # 잡어 전용 임계치 0.70 적용 (형태 겹침 오탐 차단)
-                        if score >= 0.70:
-                            bprint(f"  > 🔴 [레이스 승리] 잡어 '{t_data['display_name']}' 검출! 줄 끊기 즉시 기동 (일치율: {score:.3f})")
-                            winner_type = 'TRASH'
-                            winner_found = True
-                            break
-                    if winner_found: break
-                    
-                    # 0.1초 주기로 미끄러지듯 연속 정밀 대조 프레임 확보
-                    time.sleep(0.1)
+                            if score >= 0.60:
+                                display_name = "해파리" if fish_type == 'JELLY' else "뱀장어"
+                                bprint(f"  > 🎉 [매칭 성공] 대상 어종 '{display_name}' 검출 완료! (일치율: {score:.3f} / 배율: {scale:.2f})")
+                                found_target = True
+                                target_name = display_name
+                                if fish_type == 'JELLY':
+                                    score_jellyfish = score
+                                    best_scale_jelly = scale
+                                else:
+                                    score_eel = score
+                                    best_scale_eel = scale
+                                winner_type = fish_type
+                                winner_found = True
+                                break
+                        if winner_found: break
+                
+                # 2. 대상 어종 미검출 시에만 잡어 7종 단판 스캔 수행 (연산량 최소화)
+                if not winner_found:
+                    for img_name in trash_fishes:
+                        temp = IMAGE_CACHE.get(img_name)
+                        if temp is not None:
+                            temp_norm = cv2.normalize(temp, None, 0, 255, cv2.NORM_MINMAX)
+                            for scale in [0.90, 0.95, 1.0, 1.05, 1.10]:
+                                w = int(temp_norm.shape[1] * scale)
+                                h = int(temp_norm.shape[0] * scale)
+                                if w < 10 or h < 10: continue
+                                resized = cv2.resize(temp_norm, (w, h), interpolation=cv2.INTER_AREA)
+                                
+                                res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
+                                score = cv2.minMaxLoc(res)[1]
+                                
+                                if score >= 0.75:
+                                    display_name = trash_names.get(img_name, img_name)
+                                    bprint(f"  > 🔴 [매칭 성공] 잡어 목록 '{display_name}' 검출! 줄 끊기 즉시 기동 (일치율: {score:.3f})")
+                                    winner_type = 'TRASH'
+                                    winner_found = True
+                                    break
+                        if winner_found: break
 
                 # 최종 다운스트림 변수 정합성 맵핑
                 if not winner_found or winner_type == 'TRASH':
@@ -3628,9 +3655,9 @@ def fishing_bot(max_allowed_seconds):
                 # [어종별 스캔 점수 실시간 출력] 최고 매칭 점수와 함께 실제 매칭된 배율을 소수점 둘째 자리까지 함께 출력합니다.
                 bprint(f"  > [어종 대조 결과] 해파리 일치율: {score_jellyfish:.3f} (배율: {best_scale_jelly:.2f}) | 전기뱀장어 일치율: {score_eel:.3f} (배율: {best_scale_eel:.2f})")
                 
-                # [잡어 판정 통합 출력] 7종 레이스 탐색에서 아예 감지되지 않고 시간초과(Timeout)가 발생했을 때만 최종 실패 1회 출력하여 로그 중복을 방지합니다.
+                # [잡어 판정 통합 출력] 대상 어종 감지에 최종 실패했을 때만 1회 출력하여 로그 중복을 방지합니다.
                 if not winner_found:
-                    bprint(f"  > 🔴 [잡어 판정] 어종 판별 실패로 줄 끊기를 시작 합니다.")
+                    bprint(f"  > 🔴 [잡어 판정] 목표 타겟이 아니므로 줄 끊기 시퀀스를 개시합니다.")
 
                 if found_target:
                     state = 4

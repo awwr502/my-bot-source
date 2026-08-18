@@ -3521,24 +3521,27 @@ def fishing_bot(max_allowed_seconds):
                 screen_norm = cv2.normalize(screen_gray, None, 0, 255, cv2.NORM_MINMAX)
                 
                 score_jellyfish = 0.0
+                best_scale_jelly = 1.0 # 해파리 최고 매칭 배율 기록기
                 score_eel = 0.0
+                best_scale_eel = 1.0 # 전기뱀장어 최고 매칭 배율 기록기
                 
                 # A. 해파리 5배율 매칭 (정규화 대조 매칭 적용)
                 temp_jelly = IMAGE_CACHE.get('jellyfish.png')
                 if temp_jelly is not None:
                     temp_jelly_norm = cv2.normalize(temp_jelly, None, 0, 255, cv2.NORM_MINMAX)
                     
-                    # [최적화 1] 스케일 배율 단계를 조밀하게 나누어, 미세한 크기 불일치로 발생하는 인식 점수 누수를 방어합니다.
                     for scale in [0.85, 0.90, 0.93, 0.95, 0.98, 1.0, 1.03, 1.05, 1.08, 1.10, 1.15]:
                         w = int(temp_jelly_norm.shape[1] * scale)
                         h = int(temp_jelly_norm.shape[0] * scale)
                         if w < 10 or h < 10: continue
-                        # [최적화 2] 크기 조절 시 글자 경계선의 디테일을 가장 왜곡 없이 선명하게 유지하는 LANCZOS4 보간법을 적용합니다.
                         resized = cv2.resize(temp_jelly_norm, (w, h), interpolation=cv2.INTER_LANCZOS4)
                         
                         # 오탐 판별력이 가장 우수한 규격화 상관계수 매칭(TM_CCOEFF_NORMED) 수행
                         res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
-                        score_jellyfish = max(score_jellyfish, cv2.minMaxLoc(res)[1])
+                        score = cv2.minMaxLoc(res)[1]
+                        if score > score_jellyfish:
+                            score_jellyfish = score
+                            best_scale_jelly = scale
                         
                 # B. 전기뱀장어 5배율 매칭
                 temp_eel = IMAGE_CACHE.get('eel.png')
@@ -3552,7 +3555,13 @@ def fishing_bot(max_allowed_seconds):
                         resized = cv2.resize(temp_eel_norm, (w, h), interpolation=cv2.INTER_LANCZOS4)
                         
                         res = cv2.matchTemplate(screen_norm, resized, cv2.TM_CCOEFF_NORMED)
-                        score_eel = max(score_eel, cv2.minMaxLoc(res)[1])
+                        score = cv2.minMaxLoc(res)[1]
+                        if score > score_eel:
+                            score_eel = score
+                            best_scale_eel = scale
+
+                # [어종별 스캔 점수 실시간 출력] 최고 매칭 점수와 함께 실제 매칭된 배율을 소수점 둘째 자리까지 함께 출력합니다.
+                bprint(f"  > [어종 대조 결과] 해파리 일치율: {score_jellyfish:.3f} (배율: {best_scale_jelly:.2f}) | 전기뱀장어 일치율: {score_eel:.3f} (배율: {best_scale_eel:.2f})")
                 
                 # [어종별 스캔 점수 실시간 출력] 인식 성공 여부와 상관없이 두 어종의 일치율 점수를 무조건 노출합니다.
                 bprint(f"  > [어종 대조 결과] 해파리 일치율: {score_jellyfish:.3f} | 전기뱀장어 일치율: {score_eel:.3f}")

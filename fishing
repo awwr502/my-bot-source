@@ -3607,13 +3607,19 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [어종 총 7종 선착순 레이스 탐색 엔진 - 부팅 사전 캐시 매칭 버전]
-                # 부팅 시점에 이미 스케일 가공이 끝난 템플릿 데이터(PRE_RESIZED_TARGETS, PRE_RESIZED_TRASH)를 직접 수색합니다.
-                # 이를 통해 진입 전처리 딜레이를 0ms로 단축시켜 극상의 가벼움과 즉각적인 반응 속도를 제공합니다.
+                # [어종 총 7종 선착순 레이스 탐색 엔진 - 실시간 구동 통합 최적화 버전]
+                # 사용자님이 현재 사용 중이신 3초 타임아웃, 0.05초 지연, 0.70 잡어 임계치 뼈대 구조를 100% 원형 보존합니다.
+                # 여기에 실시간 최고 도달 점수 추적과 잡어 상위 3종의 내림차순 정렬 로그를 무부하 구조로 정밀 병합합니다.
                 score_jellyfish = 0.0
                 best_scale_jelly = 1.0
                 score_eel = 0.0
                 best_scale_eel = 1.0
+                
+                real_max_jelly = 0.0
+                real_max_eel = 0.0
+                
+                # 부팅 시 적재된 한국어 잡어 명칭들을 기반으로 점수 기록판을 실시간 동적 생성합니다.
+                trash_scores = {t_data['display_name']: 0.0 for t_data in PRE_RESIZED_TRASH}
                 
                 race_start_time = time.time()
                 winner_found = False
@@ -3632,21 +3638,25 @@ def fishing_bot(max_allowed_seconds):
                         res = cv2.matchTemplate(screen_norm, t_data['image'], cv2.TM_CCOEFF_NORMED)
                         score = cv2.minMaxLoc(res)[1]
                         
+                        # 실시간 최고 도달 점수 추적 기록 (정직한 출력 데이터 확보)
+                        if t_data['fish_type'] == 'JELLY':
+                            if score > real_max_jelly:
+                                real_max_jelly = score
+                                best_scale_jelly = t_data['scale']
+                        else:
+                            if score > real_max_eel:
+                                real_max_eel = score
+                                best_scale_eel = t_data['scale']
+                                
                         # 대상 어종 임계치 0.60 적용
                         if score >= 0.60:
                             display_name = "해파리" if t_data['fish_type'] == 'JELLY' else "전기뱀장어"
                             bprint(f"  > 🎉 [레이스 승리] 대상 어종 '{display_name}' 검출 성공! (일치율: {score:.3f} / 배율: {t_data['scale']:.2f})")
                             
-                            # [일원화] 이중 출력을 지우기 위해 상태 스위치와 한글 이름을 루프 내부에서 즉시 정립합니다.
+                            # [일원화] 이중 출력을 지우기 위해 상태 스위치와 한글 이름을 즉시 정의합니다.
                             found_target = True
                             target_name = display_name
                             
-                            if t_data['fish_type'] == 'JELLY':
-                                score_jellyfish = score
-                                best_scale_jelly = t_data['scale']
-                            else:
-                                score_eel = score
-                                best_scale_eel = t_data['scale']
                             winner_type = t_data['fish_type']
                             winner_found = True
                             break
@@ -3657,24 +3667,47 @@ def fishing_bot(max_allowed_seconds):
                         res = cv2.matchTemplate(screen_norm, t_data['image'], cv2.TM_CCOEFF_NORMED)
                         score = cv2.minMaxLoc(res)[1]
                         
+                        display_name = t_data['display_name']
+                        # 실시간 모든 잡어의 개별 최고 점수를 누적 기록합니다.
+                        if score > trash_scores[display_name]:
+                            trash_scores[display_name] = score
+                            
                         # 잡어 전용 임계치 0.70 적용 (형태 겹침 오탐 차단)
                         if score >= 0.70:
-                            bprint(f"  > 🔴 [레이스 승리] 잡어 '{t_data['display_name']}' 검출! 줄 끊기 즉시 기동 (일치율: {score:.3f})")
+                            bprint(f"  > 🔴 [레이스 승리] 잡어 '{display_name}' 검출! 줄 끊기 즉시 기동")
                             winner_type = 'TRASH'
                             winner_found = True
                             break
                     if winner_found: break
                     
-                    # 0.1초 주기로 미끄러지듯 연속 정밀 대조 프레임 확보
-                    time.sleep(0.1)
+                    # 0.05초 주기로 미끄러지듯 연속 정밀 대조 프레임 확보
+                    time.sleep(0.05)
 
-                # 최종 다운스트림 변수 정합성 맵핑
-                if not winner_found or winner_type == 'TRASH':
+                # 최종 다운스트림 변수 정합성 맵핑 (출력용 실시간 점수와 제어용 시퀀스 점수를 완벽히 분리)
+                if winner_found:
+                    if winner_type == 'JELLY':
+                        score_jellyfish = real_max_jelly
+                        score_eel = 0.0
+                    elif winner_type == 'EEL':
+                        score_eel = real_max_eel
+                        score_jellyfish = 0.0
+                    else:
+                        score_jellyfish = 0.0
+                        score_eel = 0.0
+                else:
                     score_jellyfish = 0.0
                     score_eel = 0.0
 
-                # [어종별 스캔 점수 실시간 출력] 최고 매칭 점수와 함께 실제 매칭된 배율을 소수점 둘째 자리까지 함께 출력합니다.
-                bprint(f"  > [어종 대조 결과] 해파리 일치율: {score_jellyfish:.3f} (배율: {best_scale_jelly:.2f}) | 전기뱀장어 일치율: {score_eel:.3f} (배율: {best_scale_eel:.2f})")
+                # 1번째 줄: 대상 어종에 대한 실질 매칭 일치율 및 배율 노출
+                bprint(f"  > [어종 대조 결과] 해파리 일치율: {real_max_jelly:.3f} (배율: {best_scale_jelly:.2f}) | 전기뱀장어 일치율: {score_eel:.3f} (배율: {best_scale_eel:.2f})")
+                
+                # [고성능 정렬 연산] 실시간 기록된 잡어의 점수를 내림차순 정렬하여 상위 3종을 동적 산출합니다.
+                sorted_trash = sorted(trash_scores.items(), key=lambda x: x[1], reverse=True)
+                top_3_parts = [f"{name} 일치율: {score:.3f}" for name, score in sorted_trash[:3]]
+                top_3_str = " | ".join(top_3_parts)
+                
+                # 2번째 줄: 대상 어종을 제외하고 가장 일치율이 높게 감지된 잡어 상위 3종 정밀 노출 (왼쪽에서 오른쪽 순)
+                bprint(f"  > [어종 대조 결과] {top_3_str}")
                 
                 # [잡어 판정 통합 출력] 7종 레이스 탐색에서 아예 감지되지 않고 시간초과(Timeout)가 발생했을 때만 최종 실패 1회 출력하여 로그 중복을 방지합니다.
                 if not winner_found:

@@ -158,6 +158,7 @@ is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 check_char_popup = True 
 
 bot_mode = 1 # 1: 일반 낚시, 3: 부캐 릴레이 낚시
+is_charging = False # [신규] 좌클릭 홀딩 차징 중 유무를 실시간 감지하는 전역 스레드 스위치
 char_index = 0 # 릴레이 모드 캐릭터 순번 추적기
 char_start_time = None # [신규] 개별 캐릭터 가동 시간 측정용
 char_pure_run_time = 0.0 # [신규] 개별 캐릭터 순수 가동 시간 누적기
@@ -1642,7 +1643,18 @@ def afk_monitor_loop():
                         send_blynk_notification("⚠️ 잠수 방지 감지")
                         dump_blackbox_log("잠수방지_비동기_감지")
                         
-                        # [연타 상자개방 방지 + 지연 보완 리트라이 융합] 
+                        # [배경 스레드 이원화 캐스팅 차단]
+                        # 전역 차징 스위치(is_charging) 값을 읽어와 현재가 1~3단계(차징 중)인지 4~5단계(비행 중)인지 정밀 진단합니다.
+                        is_casting_interrupted = False
+                        is_active_charge = globals().get('is_charging', False)
+                        
+                        if state == 1:
+                            is_casting_interrupted = True
+                            if is_active_charge:
+                                bprint("  > 🚨 [차징 중단 감지] 1~3단계(좌클릭 유지) 상황이므로 마우스를 계속 누른 채 알림창을 지웁니다.")
+                            else:
+                                bprint("  > 🚨 [비행 중단 감지] 4~5단계(찌 비행 중) 상황이므로 알림창 해제 후 찌를 즉시 취소합니다.")
+
                         # F를 1초에 단 1회씩만 안전하게 리트라이하여 보관함 강제 개방을 원천 방지하고 렉으로 인한 유실을 해결합니다.
                         while True:
                             # 1. 일단 해제 신호(F)를 1회 전송
@@ -1663,6 +1675,20 @@ def afk_monitor_loop():
                             if is_vanished:
                                 break
                             # 만약 1초가 초과되었는데도 여전히 알림창이 있다면, F 입력을 무시한 것으로 판단하여 2회차 입력을 진행합니다.
+
+                        # 알림창 해제가 완전히 완료되어 일반 단축키가 복구된 시점입니다. 상황별로 이원화 취소를 구동합니다.
+                        if is_casting_interrupted:
+                            if is_active_charge:
+                                # [1~3단계 취소]: 누르고 있던 좌클릭 차징을 취소하기 위해 ESC(E)를 먼저 보내고 마우스를 안전하게 해제(U)합니다. (찌 던지기 차단!)
+                                bprint("  > [보정] 알림 해제 완료 -> 1~3단계 취소: 마우스 유지 상태에서 ESC(E) 송신 후 좌클릭 해제(U) 완료.")
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                send_cmd('U'); time.sleep(0.1); send_cmd('R')
+                                globals()['is_charging'] = False # 차징 스위치 최종 리셋
+                            else:
+                                # [4~5단계 취소]: 이미 마우스는 풀렸으므로 공중의 찌 비행 모션만 ESC(E)로 깔끔하게 캔슬합니다.
+                                bprint("  > [보정] 알림 해제 완료 -> 4~5단계 취소: 공중 찌 회수를 위해 ESC(E) 즉시 송신 완료.")
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                            time.sleep(0.5)
                         
                         # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
                         def check_ui(img_name, conf):
@@ -3410,19 +3436,10 @@ def fishing_bot(max_allowed_seconds):
                 # 2. green_range.png 찾을 때까지 'L' 상태 유지하며 루프
                 cast_start = time.time()
                 found_gauge = False
+                globals()['is_charging'] = True # 마우스가 물리적으로 눌렸으므로 차징 스위치 ON (1~3단계 진입 마킹)
+                
                 while time.time() - cast_start < 1.5 and bot_active:
                     if keyboard.is_pressed(']'): break
-                    
-                    # [잠수방지 안전 인터셉터 A] 좌클릭 차징 중 잠수방지 알림이 뜬 경우,
-                    # 마우스를 성급하게 떼서 찌를 던지지 않고, 배경 스레드가 F키로 알림을 지워줄 때까지 마우스를 꾹 누른 채 대기합니다.
-                    # 알림이 지워지는 즉시, 마우스를 누른 상태에서 ESC(E)를 먼저 보내 차징을 캔슬한 뒤 마우스를 안전하게 뗍니다 (찌 투척 원천 차단).
-                    if safe_find_image('exit_notice.png', 0.75):
-                        bprint("  > 🚨 [잠수방지 감지] 좌클릭 유지 중 잠수방지 알림 감지! 해제 대기 중...")
-                        while safe_find_image('exit_notice.png', 0.75) and bot_active:
-                            time.sleep(0.05)
-                        send_cmd('E'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5); # ESC로 차징 취소
-                        send_cmd('U'); time.sleep(0.1); send_cmd('R') # 취소 후 마우스 버튼 안전 해제
-                        break
                     
                     # [핵심 수정] 강제 구역(region) 제한을 삭제하여 봇이 스스로 위치를 찾아 학습(동적 ROI)하도록 해방합니다.
                     if safe_find_image('green_range.png', 0.65):
@@ -3434,9 +3451,11 @@ def fishing_bot(max_allowed_seconds):
                     bprint("  > [성공] 게이지 렌더링 포착! 0.8초 추가 차징 후 투척합니다.")
                     time.sleep(0.8) # UI 확인 후 확정 차징 대기
                     send_cmd('U') # 즉시 떼기 (Mouse.releaseAll)
+                    globals()['is_charging'] = False # 마우스가 떼어지는 순간 차징 스위치 OFF (4~5단계 진입 마킹)
                 else:
                     # 루프를 빠져나왔는데 못 찾은 경우 안전을 위해 떼기
                     send_cmd('U')
+                    globals()['is_charging'] = False # 마우스 떼기 차징 스위치 OFF (4~5단계 진입 마킹)
                     bprint("  > [타임아웃] 게이지 미포착 -> 강제 해제")
                 
                 if not bot_active: raise BotStopException() # 즉각 폭파
@@ -3455,15 +3474,6 @@ def fishing_bot(max_allowed_seconds):
                         bprint("  > 💡 [자정 팝업] 찌 낙하 중 팝업 감지! ESC 1회 입력하여 닫습니다.")
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         time.sleep(0.5)
-                        break
-                        
-                    # [잠수방지 안전 인터셉터 B] 이미 찌가 날아간 대기 중에 잠수방지 알림이 뜬 경우,
-                    # 알림창이 꺼질 때까지 대기한 후 즉시 루프를 조기 탈출하여 메인 봇을 주차 상태로 전환시킵니다.
-                    # (이후 배경 스레드가 알림창을 지우고 잔여 찌를 ESC로 회수한 뒤 정상 보정 이동을 처리합니다.)
-                    if safe_find_image('exit_notice.png', 0.75):
-                        bprint("  > 🚨 [잠수방지 감지] 찌 낙하 중 잠수방지 알림 감지! 해제 대기 중...")
-                        while safe_find_image('exit_notice.png', 0.75) and bot_active:
-                            time.sleep(0.05)
                         break
                         
                     if safe_find_image('fishing.png', 0.78):

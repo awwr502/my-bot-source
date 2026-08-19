@@ -158,6 +158,7 @@ is_dimmed = False # 현재 밝기가 0%로 낮춰진 상태인지 추적
 check_char_popup = True 
 
 bot_mode = 1 # 1: 일반 낚시, 3: 부캐 릴레이 낚시
+is_charging = False # [신규] 좌클릭 홀딩 차징 중 유무를 실시간 감지하는 전역 스레드 스위치
 char_index = 0 # 릴레이 모드 캐릭터 순번 추적기
 char_start_time = None # [신규] 개별 캐릭터 가동 시간 측정용
 char_pure_run_time = 0.0 # [신규] 개별 캐릭터 순수 가동 시간 누적기
@@ -869,13 +870,13 @@ def load_roi_cache():
                     }
 
                 # [무효 캐시 자동 소멸 세척기]
-                # 이제 green_float.png와 reel_in.png는 다른 이미지의 ROI를 공유(차용)하므로,
-                # JSON 내부에 남아있던 그들의 과거 독자적인 학습 캐시(master_box)를 부팅 시 자동으로 안전하게 영구 소멸시키고 뇌를 깨끗하게 세척합니다.
-                if 'green_float.png' in ROI_SAMPLER or 'reel_in.png' in ROI_SAMPLER:
-                    ROI_SAMPLER.pop('green_float.png', None)
-                    ROI_SAMPLER.pop('reel_in.png', None)
+                # 이제 green_float.png와 QTE 홀딩 키들은 다른 최적의 ROI를 공유(차용)하거나 자체 강제 고정되므로,
+                # JSON 내부에 남아있던 그들의 과거 오염된 학습 캐시(master_box)를 부팅 시 자동으로 안전하게 영구 소멸시키고 뇌를 깨끗하게 세척합니다.
+                if 'fishing_hold_A.png' in ROI_SAMPLER or 'fishing_hold_D.png' in ROI_SAMPLER:
+                    ROI_SAMPLER.pop('fishing_hold_A.png', None)
+                    ROI_SAMPLER.pop('fishing_hold_D.png', None)
                     save_roi_cache()
-                    print("  > 🧹 [ROI 정리] 공유 전환으로 무효화된 기존 green_float/reel_in의 구형 독자 캐시를 자동 소멸 및 정화 완료했습니다.")
+                    print("  > 🧹 [ROI 정리] 무효화/오염된 기존 green_float 및 QTE 홀딩의 구형 독자 캐시를 자동 소멸 및 정화 완료했습니다.")
 
     except Exception as e:
         pass
@@ -1067,22 +1068,10 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             'history': deque(maxlen=30), 'is_locked': False, 'found': False, 'last_fail_time': 0.0
         })
 
-        # [ROI 피기백(공유) 리다이렉션]
-        # 1) green_float.png(줄거두기-챔질)는 수색 효율 극대화를 위해 fishing.png가 학습한 ROI 영역을 실시간 공유합니다.
-        # 2) reel_in.png(줄거두기-QTE)는 broken_rod.png가 학습한 ROI 영역을 실시간 공유합니다.
-        is_roi_sharing = False
-        lookup_path = img_path
-        if img_path == 'green_float.png':
-            lookup_path = 'fishing.png'
-            is_roi_sharing = True
-        elif img_path == 'reel_in.png':
-            lookup_path = 'broken_rod.png'
-            is_roi_sharing = True
-
-        if lookup_path not in ROI_SAMPLER:
-            ROI_SAMPLER[lookup_path] = {'samples': deque(maxlen=10), 'master_box': None}
+        if img_path not in ROI_SAMPLER:
+            ROI_SAMPLER[img_path] = {'samples': deque(maxlen=10), 'master_box': None}
             
-        cache_data = ROI_SAMPLER[lookup_path]
+        cache_data = ROI_SAMPLER[img_path]
         is_fallback_scan = (region == "FULL_SCREEN")
         target_monitor = None
 
@@ -1092,14 +1081,24 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
         if region and not is_fallback_scan:
             # 명시적으로 전달받은 범위(region)가 있는 경우 우선 적용
             target_monitor = {"left": int(region[0]), "top": int(region[1]), "width": int(region[2]), "height": int(region[3])}
-        elif img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']:
-            # QTE 프롬프트 수색 대역 격리 (하단 센터 영역: X 30~70%, Y: 50~95%)
+        # [QTE 사분면 자체 엔진 강제 고정 시스템]
+        # 사용자님의 정교한 제안에 따라, 외부 매개변수 편차에 영향받지 않도록 함수 자체에서 
+        # A와 D의 탐색 대역을 각각 모니터 가로 50% 기준의 좌측 하단 및 우측 하단으로 완전히 가두어 고정합니다. (교차 오염 물리적 원천 차단)
+        elif img_path in ['fishing_hold_A.png', 'fishing_tap_A.png']:
             p_mon = active_sct.monitors[1]
             target_monitor = {
-                "left": int(p_mon["left"] + p_mon["width"] * 0.30),
+                "left": int(p_mon["left"]),
                 "top": int(p_mon["top"] + p_mon["height"] * 0.50),
-                "width": int(p_mon["width"] * 0.40),
-                "height": int(p_mon["height"] * 0.45)
+                "width": int(p_mon["width"] * 0.50),
+                "height": int(p_mon["height"] * 0.50)
+            }
+        elif img_path in ['fishing_hold_D.png', 'fishing_tap_D.png']:
+            p_mon = active_sct.monitors[1]
+            target_monitor = {
+                "left": int(p_mon["left"] + p_mon["width"] * 0.50),
+                "top": int(p_mon["top"] + p_mon["height"] * 0.50),
+                "width": int(p_mon["width"] * 0.50),
+                "height": int(p_mon["height"] * 0.50)
             }
         elif img_path == 'treasure_box.png':
             # 보물상자 텍스트 탐색 대역 격리 (모니터 가로 5등분 중 양측 가장자리 1칸씩 제외한 중앙 3칸 영역만 스캔: X축 20% ~ 80% 구간)
@@ -1196,7 +1195,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
         # 2. [실시간 자가 치유 능동 폴백]
         # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재조준하여 스캔
         # [구조 결함 해결] master_box가 최초 학습 전(None)이라도 첫 탐색 실패 시 즉시 전체 화면으로 폴백하여 자율 복구 및 좌표 자동 학습을 수행할 수 있도록 보완합니다.
-        is_using_cache = (not is_fallback_scan and not region and not return_score)
+        # [QTE 홀딩 캐시 배제] 50% 사분면 고정 수색 방식이 수립되었으므로, 불필요한 자가치유 렉과 영토 오염을 원천 차단하기 위해 QTE 이미지들은 캐시 추적 대상에서 제외합니다.
+        is_qte_hold = img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']
+        is_using_cache = (not is_fallback_scan and not region and not return_score and not is_qte_hold)
         if max_val < active_conf and is_using_cache:
             full_monitor = active_sct.monitors[1]
             sct_img_full = active_sct.grab(full_monitor)
@@ -1369,8 +1370,7 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
                     ctx['last_fail_time'] = now
             return None
 
-        # [ROI 피기백 보호] 호스트 이미지(fishing.png, broken_rod.png)의 원본 학습 좌표가 오염되는 것을 원천 차단합니다.
-        if not is_roi_sharing and not region and not is_fallback_scan and not ctx['is_locked']:
+        if not region and not is_fallback_scan and not ctx['is_locked']:
             if max_val >= active_conf:
                 cache_data['samples'].append((real_x, real_y, w, h))
             
@@ -1642,7 +1642,18 @@ def afk_monitor_loop():
                         send_blynk_notification("⚠️ 잠수 방지 감지")
                         dump_blackbox_log("잠수방지_비동기_감지")
                         
-                        # [연타 상자개방 방지 + 지연 보완 리트라이 융합] 
+                        # [배경 스레드 이원화 캐스팅 차단]
+                        # 전역 차징 스위치(is_charging) 값을 읽어와 현재가 1~3단계(차징 중)인지 4~5단계(비행 중)인지 정밀 진단합니다.
+                        is_casting_interrupted = False
+                        is_active_charge = globals().get('is_charging', False)
+                        
+                        if state == 1:
+                            is_casting_interrupted = True
+                            if is_active_charge:
+                                bprint("  > 🚨 [차징 중단 감지] 1~3단계(좌클릭 유지) 상황이므로 마우스를 계속 누른 채 알림창을 지웁니다.")
+                            else:
+                                bprint("  > 🚨 [비행 중단 감지] 4~5단계(찌 비행 중) 상황이므로 알림창 해제 후 찌를 즉시 취소합니다.")
+
                         # F를 1초에 단 1회씩만 안전하게 리트라이하여 보관함 강제 개방을 원천 방지하고 렉으로 인한 유실을 해결합니다.
                         while True:
                             # 1. 일단 해제 신호(F)를 1회 전송
@@ -1663,6 +1674,20 @@ def afk_monitor_loop():
                             if is_vanished:
                                 break
                             # 만약 1초가 초과되었는데도 여전히 알림창이 있다면, F 입력을 무시한 것으로 판단하여 2회차 입력을 진행합니다.
+
+                        # 알림창 해제가 완전히 완료되어 일반 단축키가 복구된 시점입니다. 상황별로 이원화 취소를 구동합니다.
+                        if is_casting_interrupted:
+                            if is_active_charge:
+                                # [1~3단계 취소]: 누르고 있던 좌클릭 차징을 취소하기 위해 ESC(E)를 먼저 보내고 마우스를 안전하게 해제(U)합니다. (찌 던지기 차단!)
+                                bprint("  > [보정] 알림 해제 완료 -> 1~3단계 취소: 마우스 유지 상태에서 ESC(E) 송신 후 좌클릭 해제(U) 완료.")
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                                send_cmd('U'); time.sleep(0.1); send_cmd('R')
+                                globals()['is_charging'] = False # 차징 스위치 최종 리셋
+                            else:
+                                # [4~5단계 취소]: 이미 마우스는 풀렸으므로 공중의 찌 비행 모션만 ESC(E)로 깔끔하게 캔슬합니다.
+                                bprint("  > [보정] 알림 해제 완료 -> 4~5단계 취소: 공중 찌 회수를 위해 ESC(E) 즉시 송신 완료.")
+                                send_cmd('E'); time.sleep(0.15); send_cmd('R')
+                            time.sleep(0.5)
                         
                         # 낚시 UI, 보관함 UI, 수거 UI 잔존 확인 (0.5초 간격 탐색)
                         def check_ui(img_name, conf):
@@ -3410,19 +3435,10 @@ def fishing_bot(max_allowed_seconds):
                 # 2. green_range.png 찾을 때까지 'L' 상태 유지하며 루프
                 cast_start = time.time()
                 found_gauge = False
+                globals()['is_charging'] = True # 마우스가 물리적으로 눌렸으므로 차징 스위치 ON (1~3단계 진입 마킹)
+                
                 while time.time() - cast_start < 1.5 and bot_active:
                     if keyboard.is_pressed(']'): break
-                    
-                    # [잠수방지 안전 인터셉터 A] 좌클릭 차징 중 잠수방지 알림이 뜬 경우,
-                    # 마우스를 성급하게 떼서 찌를 던지지 않고, 배경 스레드가 F키로 알림을 지워줄 때까지 마우스를 꾹 누른 채 대기합니다.
-                    # 알림이 지워지는 즉시, 마우스를 누른 상태에서 ESC(E)를 먼저 보내 차징을 캔슬한 뒤 마우스를 안전하게 뗍니다 (찌 투척 원천 차단).
-                    if safe_find_image('exit_notice.png', 0.75):
-                        bprint("  > 🚨 [잠수방지 감지] 좌클릭 유지 중 잠수방지 알림 감지! 해제 대기 중...")
-                        while safe_find_image('exit_notice.png', 0.75) and bot_active:
-                            time.sleep(0.05)
-                        send_cmd('E'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5); # ESC로 차징 취소
-                        send_cmd('U'); time.sleep(0.1); send_cmd('R') # 취소 후 마우스 버튼 안전 해제
-                        break
                     
                     # [핵심 수정] 강제 구역(region) 제한을 삭제하여 봇이 스스로 위치를 찾아 학습(동적 ROI)하도록 해방합니다.
                     if safe_find_image('green_range.png', 0.65):
@@ -3434,9 +3450,11 @@ def fishing_bot(max_allowed_seconds):
                     bprint("  > [성공] 게이지 렌더링 포착! 0.8초 추가 차징 후 투척합니다.")
                     time.sleep(0.8) # UI 확인 후 확정 차징 대기
                     send_cmd('U') # 즉시 떼기 (Mouse.releaseAll)
+                    globals()['is_charging'] = False # 마우스가 떼어지는 순간 차징 스위치 OFF (4~5단계 진입 마킹)
                 else:
                     # 루프를 빠져나왔는데 못 찾은 경우 안전을 위해 떼기
                     send_cmd('U')
+                    globals()['is_charging'] = False # 마우스 떼기 차징 스위치 OFF (4~5단계 진입 마킹)
                     bprint("  > [타임아웃] 게이지 미포착 -> 강제 해제")
                 
                 if not bot_active: raise BotStopException() # 즉각 폭파
@@ -3455,15 +3473,6 @@ def fishing_bot(max_allowed_seconds):
                         bprint("  > 💡 [자정 팝업] 찌 낙하 중 팝업 감지! ESC 1회 입력하여 닫습니다.")
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         time.sleep(0.5)
-                        break
-                        
-                    # [잠수방지 안전 인터셉터 B] 이미 찌가 날아간 대기 중에 잠수방지 알림이 뜬 경우,
-                    # 알림창이 꺼질 때까지 대기한 후 즉시 루프를 조기 탈출하여 메인 봇을 주차 상태로 전환시킵니다.
-                    # (이후 배경 스레드가 알림창을 지우고 잔여 찌를 ESC로 회수한 뒤 정상 보정 이동을 처리합니다.)
-                    if safe_find_image('exit_notice.png', 0.75):
-                        bprint("  > 🚨 [잠수방지 감지] 찌 낙하 중 잠수방지 알림 감지! 해제 대기 중...")
-                        while safe_find_image('exit_notice.png', 0.75) and bot_active:
-                            time.sleep(0.05)
                         break
                         
                     if safe_find_image('fishing.png', 0.78):
@@ -3610,13 +3619,19 @@ def fishing_bot(max_allowed_seconds):
                 sct_img = sct.grab(fish_roi)
                 screen_gray = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2GRAY)
                 
-                # [어종 총 7종 선착순 레이스 탐색 엔진 - 부팅 사전 캐시 매칭 버전]
-                # 부팅 시점에 이미 스케일 가공이 끝난 템플릿 데이터(PRE_RESIZED_TARGETS, PRE_RESIZED_TRASH)를 직접 수색합니다.
-                # 이를 통해 진입 전처리 딜레이를 0ms로 단축시켜 극상의 가벼움과 즉각적인 반응 속도를 제공합니다.
+                # [어종 총 7종 선착순 레이스 탐색 엔진 - 실시간 구동 통합 최적화 버전]
+                # 사용자님이 현재 사용 중이신 3초 타임아웃, 0.05초 지연, 0.70 잡어 임계치 뼈대 구조를 100% 원형 보존합니다.
+                # 여기에 실시간 최고 도달 점수 추적과 잡어 상위 3종의 내림차순 정렬 로그를 무부하 구조로 정밀 병합합니다.
                 score_jellyfish = 0.0
                 best_scale_jelly = 1.0
                 score_eel = 0.0
                 best_scale_eel = 1.0
+                
+                real_max_jelly = 0.0
+                real_max_eel = 0.0
+                
+                # 부팅 시 적재된 한국어 잡어 명칭들을 기반으로 점수 기록판을 실시간 동적 생성합니다.
+                trash_scores = {t_data['display_name']: 0.0 for t_data in PRE_RESIZED_TRASH}
                 
                 race_start_time = time.time()
                 winner_found = False
@@ -3635,21 +3650,25 @@ def fishing_bot(max_allowed_seconds):
                         res = cv2.matchTemplate(screen_norm, t_data['image'], cv2.TM_CCOEFF_NORMED)
                         score = cv2.minMaxLoc(res)[1]
                         
+                        # 실시간 최고 도달 점수 추적 기록 (정직한 출력 데이터 확보)
+                        if t_data['fish_type'] == 'JELLY':
+                            if score > real_max_jelly:
+                                real_max_jelly = score
+                                best_scale_jelly = t_data['scale']
+                        else:
+                            if score > real_max_eel:
+                                real_max_eel = score
+                                best_scale_eel = t_data['scale']
+                                
                         # 대상 어종 임계치 0.60 적용
                         if score >= 0.60:
                             display_name = "해파리" if t_data['fish_type'] == 'JELLY' else "전기뱀장어"
                             bprint(f"  > 🎉 [레이스 승리] 대상 어종 '{display_name}' 검출 성공! (일치율: {score:.3f} / 배율: {t_data['scale']:.2f})")
                             
-                            # [일원화] 이중 출력을 지우기 위해 상태 스위치와 한글 이름을 루프 내부에서 즉시 정립합니다.
+                            # [일원화] 이중 출력을 지우기 위해 상태 스위치와 한글 이름을 즉시 정의합니다.
                             found_target = True
                             target_name = display_name
                             
-                            if t_data['fish_type'] == 'JELLY':
-                                score_jellyfish = score
-                                best_scale_jelly = t_data['scale']
-                            else:
-                                score_eel = score
-                                best_scale_eel = t_data['scale']
                             winner_type = t_data['fish_type']
                             winner_found = True
                             break
@@ -3660,24 +3679,47 @@ def fishing_bot(max_allowed_seconds):
                         res = cv2.matchTemplate(screen_norm, t_data['image'], cv2.TM_CCOEFF_NORMED)
                         score = cv2.minMaxLoc(res)[1]
                         
+                        display_name = t_data['display_name']
+                        # 실시간 모든 잡어의 개별 최고 점수를 누적 기록합니다.
+                        if score > trash_scores[display_name]:
+                            trash_scores[display_name] = score
+                            
                         # 잡어 전용 임계치 0.70 적용 (형태 겹침 오탐 차단)
                         if score >= 0.70:
-                            bprint(f"  > 🔴 [레이스 승리] 잡어 '{t_data['display_name']}' 검출! 줄 끊기 즉시 기동 (일치율: {score:.3f})")
+                            bprint(f"  > 🔴 [레이스 승리] 잡어 '{display_name}' 검출! 줄 끊기 즉시 기동")
                             winner_type = 'TRASH'
                             winner_found = True
                             break
                     if winner_found: break
                     
-                    # 0.1초 주기로 미끄러지듯 연속 정밀 대조 프레임 확보
-                    time.sleep(0.1)
+                    # 0.05초 주기로 미끄러지듯 연속 정밀 대조 프레임 확보
+                    time.sleep(0.05)
 
-                # 최종 다운스트림 변수 정합성 맵핑
-                if not winner_found or winner_type == 'TRASH':
+                # 최종 다운스트림 변수 정합성 맵핑 (출력용 실시간 점수와 제어용 시퀀스 점수를 완벽히 분리)
+                if winner_found:
+                    if winner_type == 'JELLY':
+                        score_jellyfish = real_max_jelly
+                        score_eel = 0.0
+                    elif winner_type == 'EEL':
+                        score_eel = real_max_eel
+                        score_jellyfish = 0.0
+                    else:
+                        score_jellyfish = 0.0
+                        score_eel = 0.0
+                else:
                     score_jellyfish = 0.0
                     score_eel = 0.0
 
-                # [어종별 스캔 점수 실시간 출력] 최고 매칭 점수와 함께 실제 매칭된 배율을 소수점 둘째 자리까지 함께 출력합니다.
-                bprint(f"  > [어종 대조 결과] 해파리 일치율: {score_jellyfish:.3f} (배율: {best_scale_jelly:.2f}) | 전기뱀장어 일치율: {score_eel:.3f} (배율: {best_scale_eel:.2f})")
+                # 1번째 줄: 실시간 최고 점수 변수인 real_max_eel을 정확하게 매핑하여 잡어 판정 시에도 뱀장어 일치율이 정상 출력되도록 수정합니다.
+                bprint(f"  > [어종 대조 결과] 해파리 일치율: {real_max_jelly:.3f} (배율: {best_scale_jelly:.2f}) | 전기뱀장어 일치율: {real_max_eel:.3f} (배율: {best_scale_eel:.2f})")
+                
+                # [고성능 정렬 연산] 루프 내부에서 이미 실시간 기록된 잡어의 점수를 정렬하여 상위 3종을 산출합니다. (추가 매칭 연산 0회!)
+                sorted_trash = sorted(trash_scores.items(), key=lambda x: x[1], reverse=True)
+                top_3_parts = [f"{name} 일치율: {score:.3f}" for name, score in sorted_trash[:3]]
+                top_3_str = " | ".join(top_3_parts)
+                
+                # 2번째 줄: 대상 어종을 제외하고 가장 일치율이 높게 감지된 잡어 상위 3종 정밀 노출 (왼쪽에서 오른쪽 순)
+                bprint(f"  > [어종 대조 결과] {top_3_str}")
                 
                 # [잡어 판정 통합 출력] 7종 레이스 탐색에서 아예 감지되지 않고 시간초과(Timeout)가 발생했을 때만 최종 실패 1회 출력하여 로그 중복을 방지합니다.
                 if not winner_found:
@@ -4171,7 +4213,9 @@ def fishing_bot(max_allowed_seconds):
                                 state = 10
                             # [모드 1: 일반 낚시] 5초간 안 떴다면 본캐 창고 풀로 간주하고 대기 상태가 아닌 잠수방지(AFK 주차) 모드로 스위칭합니다.
                             elif bot_mode == 1:
-                                bprint(f"  > 📦 [창고 풀] 창고가 가득 찼습니다! ({formatted_char_time} 가동) 캐릭터 보호를 위해 잠수방지 모드로 전환합니다.")
+                                bprint(f"  > 📦 [창고 풀] 창고가 가득 찼습니다!")
+                                send_cmd('E'); time.sleep(0.1); send_cmd('R') # ESC 1회 추가 전송하여 창고를 안전하게 닫습니다.
+                                time.sleep(0.5)
                                 state = 0
                                 send_blynk_notification(f"🛑 인벤토리 가득 참. 잠수방지 모드 전환 (⏱️ {formatted_char_time})")
                             break
@@ -4197,9 +4241,12 @@ def fishing_bot(max_allowed_seconds):
                             break
                         else:
                             bprint("  > [보관] 완료창(C) 미발견. H 재입력...")
-                    # [핵심 수정] 4-1 루프를 빠져나왔을 때, 상태가 1(잠수방지)이거나 10(창고만석)이라면
-                    # 4-2(ESC연타)와 5번(시점복구) 과정을 모조리 무시하고 즉시 다음 턴으로 점프합니다!
-                    if state in [1, 10]: continue
+
+                    # [상태 전이 동기화 탈출구] 
+                    # 이 이프문은 바깥쪽 State 5 루프(16칸 들여쓰기) 내부에 위치해야 하므로 정확히 20칸 들여쓰기를 유지해야 합니다.
+                    # 들여쓰기가 16칸으로 줄어들면 메인 봇 루프 전체를 부수고 프로그램이 아예 꺼지게 되므로 공백 칸수를 정밀 준수해야 합니다.
+                    if state in [0, 10]:
+                        continue
 
                     # 4-2. UI 정리 시퀀스 (B 소멸 능동 대기 및 ESC 반복)
                     bprint("  > [보관] 4-2. 보관함 UI(B) 소멸 능동 대기 (최대 1.5초)...")
@@ -4274,6 +4321,10 @@ def fishing_bot(max_allowed_seconds):
                     send_telegram_report()
                     time.sleep(1.0)
                     reset_stats()
+
+                    # [인벤토리 창 닫기 후 AFK 전환] 마지막 캐릭터 대기 전이 직전, ESC(E) 1회 추가 송신으로 인벤토리창이나 화면의 안내창을 부드럽게 닫아줍니다.
+                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.5)
                     
                     # 마지막 캐릭터 처리를 정지하지 않고 잠수방지 모드(State 0)로 안정화합니다.
                     char_index += 1 

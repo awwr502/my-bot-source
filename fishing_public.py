@@ -867,6 +867,16 @@ def load_roi_cache():
                         'active_conf': locked_conf if is_locked else 0.6,
                         'is_locked': is_locked, 'locked_conf': locked_conf
                     }
+
+                # [무효 캐시 자동 소멸 세척기]
+                # 이제 green_float.png와 reel_in.png는 다른 이미지의 ROI를 공유(차용)하므로,
+                # JSON 내부에 남아있던 그들의 과거 독자적인 학습 캐시(master_box)를 부팅 시 자동으로 안전하게 영구 소멸시키고 뇌를 깨끗하게 세척합니다.
+                if 'green_float.png' in ROI_SAMPLER or 'reel_in.png' in ROI_SAMPLER:
+                    ROI_SAMPLER.pop('green_float.png', None)
+                    ROI_SAMPLER.pop('reel_in.png', None)
+                    save_roi_cache()
+                    print("  > 🧹 [ROI 정리] 공유 전환으로 무효화된 기존 green_float/reel_in의 구형 독자 캐시를 자동 소멸 및 정화 완료했습니다.")
+
     except Exception as e:
         pass
 
@@ -1057,10 +1067,22 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             'history': deque(maxlen=30), 'is_locked': False, 'found': False, 'last_fail_time': 0.0
         })
 
-        if img_path not in ROI_SAMPLER:
-            ROI_SAMPLER[img_path] = {'samples': deque(maxlen=10), 'master_box': None}
+        # [ROI 피기백(공유) 리다이렉션]
+        # 1) green_float.png(줄거두기-챔질)는 수색 효율 극대화를 위해 fishing.png가 학습한 ROI 영역을 실시간 공유합니다.
+        # 2) reel_in.png(줄거두기-QTE)는 broken_rod.png가 학습한 ROI 영역을 실시간 공유합니다.
+        is_roi_sharing = False
+        lookup_path = img_path
+        if img_path == 'green_float.png':
+            lookup_path = 'fishing.png'
+            is_roi_sharing = True
+        elif img_path == 'reel_in.png':
+            lookup_path = 'broken_rod.png'
+            is_roi_sharing = True
+
+        if lookup_path not in ROI_SAMPLER:
+            ROI_SAMPLER[lookup_path] = {'samples': deque(maxlen=10), 'master_box': None}
             
-        cache_data = ROI_SAMPLER[img_path]
+        cache_data = ROI_SAMPLER[lookup_path]
         is_fallback_scan = (region == "FULL_SCREEN")
         target_monitor = None
 
@@ -1347,7 +1369,8 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
                     ctx['last_fail_time'] = now
             return None
 
-        if not region and not is_fallback_scan and not ctx['is_locked']:
+        # [ROI 피기백 보호] 호스트 이미지(fishing.png, broken_rod.png)의 원본 학습 좌표가 오염되는 것을 원천 차단합니다.
+        if not is_roi_sharing and not region and not is_fallback_scan and not ctx['is_locked']:
             if max_val >= active_conf:
                 cache_data['samples'].append((real_x, real_y, w, h))
             
@@ -1590,6 +1613,19 @@ def afk_monitor_loop():
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         time.sleep(0.5) # 팝업 소멸 안정화 대기
                         continue # 해제 후 루프 처음으로 이동하여 추가 연산 생략
+
+                # --- [추가] 사냥 알림 팝업 제거 루틴 (메인 스레드 동결 없이 즉각 ESC 해제) ---
+                template_hunt = IMAGE_CACHE.get('hunt_pop.png')
+                if template_hunt is not None:
+                    res_hunt = cv2.matchTemplate(screen_gray, template_hunt, cv2.TM_CCOEFF_NORMED)
+                    _, max_val_hunt, _, _ = cv2.minMaxLoc(res_hunt)
+                    if max_val_hunt >= 0.80:
+                        bprint("\n=============================================")
+                        bprint("  > 🎯 [전역 감시망] Hunt 팝업 감지! ESC 1회로 즉각 제거합니다.")
+                        bprint("=============================================")
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                        time.sleep(0.5) # 팝업 소멸 안정화 대기
+                        continue
 
                 # --- 기존 잠수방지 루틴 ---
                 template = IMAGE_CACHE.get('exit_notice.png')

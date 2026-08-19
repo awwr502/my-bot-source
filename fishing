@@ -1195,7 +1195,9 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
         # 2. [실시간 자가 치유 능동 폴백]
         # 캐시된 master_box 내에서 매칭에 실패한 경우, 즉시 전체화면으로 재조준하여 스캔
         # [구조 결함 해결] master_box가 최초 학습 전(None)이라도 첫 탐색 실패 시 즉시 전체 화면으로 폴백하여 자율 복구 및 좌표 자동 학습을 수행할 수 있도록 보완합니다.
-        is_using_cache = (not is_fallback_scan and not region and not return_score)
+        # [QTE 홀딩 캐시 배제] 50% 사분면 고정 수색 방식이 수립되었으므로, 불필요한 자가치유 렉과 영토 오염을 원천 차단하기 위해 QTE 이미지들은 캐시 추적 대상에서 제외합니다.
+        is_qte_hold = img_path in ['fishing_hold_A.png', 'fishing_hold_D.png', 'fishing_tap_A.png', 'fishing_tap_D.png']
+        is_using_cache = (not is_fallback_scan and not region and not return_score and not is_qte_hold)
         if max_val < active_conf and is_using_cache:
             full_monitor = active_sct.monitors[1]
             sct_img_full = active_sct.grab(full_monitor)
@@ -4212,6 +4214,8 @@ def fishing_bot(max_allowed_seconds):
                             # [모드 1: 일반 낚시] 5초간 안 떴다면 본캐 창고 풀로 간주하고 대기 상태가 아닌 잠수방지(AFK 주차) 모드로 스위칭합니다.
                             elif bot_mode == 1:
                                 bprint(f"  > 📦 [창고 풀] 창고가 가득 찼습니다! ({formatted_char_time} 가동) 캐릭터 보호를 위해 잠수방지 모드로 전환합니다.")
+                                send_cmd('E'); time.sleep(0.1); send_cmd('R') # ESC 1회 추가 전송하여 창고를 안전하게 닫습니다.
+                                time.sleep(0.5)
                                 state = 0
                                 send_blynk_notification(f"🛑 인벤토리 가득 참. 잠수방지 모드 전환 (⏱️ {formatted_char_time})")
                             break
@@ -4314,6 +4318,10 @@ def fishing_bot(max_allowed_seconds):
                     send_telegram_report()
                     time.sleep(1.0)
                     reset_stats()
+
+                    # [인벤토리 창 닫기 후 AFK 전환] 마지막 캐릭터 대기 전이 직전, ESC(E) 1회 추가 송신으로 인벤토리창이나 화면의 안내창을 부드럽게 닫아줍니다.
+                    send_cmd('E'); time.sleep(0.1); send_cmd('R')
+                    time.sleep(0.5)
                     
                     # 마지막 캐릭터 처리를 정지하지 않고 잠수방지 모드(State 0)로 안정화합니다.
                     char_index += 1 

@@ -3377,16 +3377,22 @@ def fishing_bot(max_allowed_seconds):
                 while time.time() - cast_start < 1.5 and bot_active:
                     if keyboard.is_pressed(']'): break
                     
+                    # [잠수방지 안전 인터셉터 A] 좌클릭 차징 중 잠수방지 알림이 뜬 경우,
+                    # 마우스를 성급하게 떼서 찌를 던지지 않고, 배경 스레드가 F키로 알림을 지워줄 때까지 마우스를 꾹 누른 채 대기합니다.
+                    # 알림이 지워지는 즉시, 마우스를 누른 상태에서 ESC(E)를 먼저 보내 차징을 캔슬한 뒤 마우스를 안전하게 뗍니다 (찌 투척 원천 차단).
+                    if safe_find_image('exit_notice.png', 0.75):
+                        bprint("  > 🚨 [잠수방지 감지] 좌클릭 유지 중 잠수방지 알림 감지! 해제 대기 중...")
+                        while safe_find_image('exit_notice.png', 0.75) and bot_active:
+                            time.sleep(0.05)
+                        send_cmd('E'); time.sleep(0.1); send_cmd('R'); time.sleep(0.5); # ESC로 차징 취소
+                        send_cmd('U'); time.sleep(0.1); send_cmd('R') # 취소 후 마우스 버튼 안전 해제
+                        break
+                    
                     # [핵심 수정] 강제 구역(region) 제한을 삭제하여 봇이 스스로 위치를 찾아 학습(동적 ROI)하도록 해방합니다.
                     if safe_find_image('green_range.png', 0.65):
                         found_gauge = True
                         break
                     time.sleep(0.01) # 스캔 주기 최적화
-                
-                # [전체화면 폴백] 타임아웃 이후 딱 1번 스캔 (자가치유 기회 부여)
-                if not found_gauge and bot_active:
-                    if safe_find_image('green_range.png', 0.65, region="FULL_SCREEN"):
-                        found_gauge = True
 
                 if found_gauge:
                     bprint("  > [성공] 게이지 렌더링 포착! 0.8초 추가 차징 후 투척합니다.")
@@ -3413,6 +3419,15 @@ def fishing_bot(max_allowed_seconds):
                         bprint("  > 💡 [자정 팝업] 찌 낙하 중 팝업 감지! ESC 1회 입력하여 닫습니다.")
                         send_cmd('E'); time.sleep(0.1); send_cmd('R')
                         time.sleep(0.5)
+                        break
+                        
+                    # [잠수방지 안전 인터셉터 B] 이미 찌가 날아간 대기 중에 잠수방지 알림이 뜬 경우,
+                    # 알림창이 꺼질 때까지 대기한 후 즉시 루프를 조기 탈출하여 메인 봇을 주차 상태로 전환시킵니다.
+                    # (이후 배경 스레드가 알림창을 지우고 잔여 찌를 ESC로 회수한 뒤 정상 보정 이동을 처리합니다.)
+                    if safe_find_image('exit_notice.png', 0.75):
+                        bprint("  > 🚨 [잠수방지 감지] 찌 낙하 중 잠수방지 알림 감지! 해제 대기 중...")
+                        while safe_find_image('exit_notice.png', 0.75) and bot_active:
+                            time.sleep(0.05)
                         break
                         
                     if safe_find_image('fishing.png', 0.78):
@@ -4215,19 +4230,18 @@ def fishing_bot(max_allowed_seconds):
                     if char_start_time is not None: current_char_time += (time.time() - char_start_time)
                     formatted_char_time = get_formatted_time(current_char_time)
                     
-                    bprint(f"\n🛑 [릴레이 종료] 등록된 모든 부캐릭터의 인벤토리가 가득 찼습니다! 봇을 대기 상태로 전환합니다. (마지막 캐릭터 가동: {formatted_char_time})")
-                    send_blynk_notification(f"🛑 모든 캐릭터 낚시 완료 (마지막 ⏱️ {formatted_char_time})")
+                    bprint(f"\n🛑 [릴레이 종료] 모든 캐릭터 완료! 잠수방지 모드로 전환합니다. (⏱️ {formatted_char_time})")
+                    send_blynk_notification(f"🛑 모든 캐릭터 낚시 완료 -> 잠수방지 모드 전환 (⏱️ {formatted_char_time})")
                     
-                    # [보고서 및 초기화 로직 추가] 봇 정지 전 최종 결산 보고서 발송 및 일일 통계 초기화
+                    # [보고서 및 초기화 로직 추가] 최종 결산 보고서 발송 및 일일 통계 초기화
                     bprint("  > [시스템] 릴레이 사이클 종료. 최종 결산 보고서를 발송하고 일일 통계를 초기화합니다.")
                     send_telegram_report()
-                    time.sleep(1.0) # 보고서 발송 통신 대기 (데이터 0 찍힘 방지)
+                    time.sleep(1.0)
                     reset_stats()
                     
-                    # [스마트 순환 메모리] 마지막 캐릭터까지 완전히 끝났음을 시스템에 마킹합니다.
+                    # 마지막 캐릭터 처리를 정지하지 않고 잠수방지 모드(State 0)로 안정화합니다.
                     char_index += 1 
-                    
-                    toggle_stop()
+                    state = 0
                     continue
                     
                 next_char = MY_CHARACTERS[char_index + 1]

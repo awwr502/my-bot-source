@@ -2710,10 +2710,39 @@ def oblivion_bot_loop():
                 
                 # 6단계: 방향 정렬 및 앵커 수색
                 oblivion_stage = 6
-                oprint("[6단계 시작] 방향 정렬 및 앵커 수색")
+                oprint("[6단계 시작] 방향 정렬 및 보상 데비안트 수색")
                 
+                # 보상 데비안트 전용 초고속 PID 에임 정렬 헬퍼 정의
+                def align_view_by_deviant(timeout=2.0):
+                    start_time = time.time()
+                    DYNAMIC_P = 0.75  # 낚시 모드와 동일한 고성능 게인 적용
+                    while time.time() - start_time < timeout and oblivion_active:
+                        box = find_deviant_by_color(thread_sct)
+                        if box:
+                            cx = box.left + box.width // 2
+                            cy = box.top + box.height // 2
+                            err_x = cx - CENTER_X
+                            err_y = cy - CENTER_Y
+                            dist = math.hypot(err_x, err_y)
+                            if dist < 10: return True
+                            
+                            dx, dy = int(err_x * DYNAMIC_P), int(err_y * DYNAMIC_P)
+                            dx = max(-95, min(95, dx))  # 최대 이동 보정각을 95픽셀로 확대
+                            dy = max(-95, min(95, dy))
+                            if abs(dx) < 2: dx = 0
+                            if abs(dy) < 2: dy = 0
+                            
+                            if dx != 0 or dy != 0:
+                                send_cmd(f'M{dx},{dy}')
+                            
+                            start_time = time.time() - 0.5
+                            time.sleep(0.01)
+                        else:
+                            time.sleep(0.01)
+                    return False
+
                 # [오탐 회피 필터] 상자 파밍 직후에는 정면 벽면(전투 구역)의 잔상이 가시 범위에 남습니다.
-                # 진짜 앵커(파란 포탈)는 정반대 방향(180도 뒤)에 위치하므로, 탐색 시작 전에 좌측으로 180도 고속 회전을 선제 가동하여 노이즈를 회피합니다.
+                # 탐색 시작 전에 좌측으로 180도 고속 회전을 선제 가동하여 노이즈를 회피합니다.
                 oprint("  > [회전] 전투 구역의 잔상 노이즈 회피 및 180도 뒤돌기를 위해 좌회전(10회 고속 회전) 선제 가동...")
                 for _ in range(10):
                     if not oblivion_active: raise BotStopException()
@@ -2721,12 +2750,11 @@ def oblivion_bot_loop():
                     time.sleep(0.01)
                 time.sleep(0.2) # 회전 정지 후 화면 안정화
                 
-                oprint("  > [회전] 파란 포탈 장벽('anchor1.png')의 고유 색채 정밀 수색 가동")
+                oprint("  > [회전] 파란 포탈 대신 보상 데비안트('find_deviant_by_color') 고유 색채 직접 수색 가동")
                 while oblivion_active:
-                    # 전용 컬러 매칭 엔진을 사용하여 회전 중에도 0.001초 만에 대상을 정확히 격리합니다.
-                    box = find_anchor1_by_color(thread_sct)
+                    box = find_deviant_by_color(thread_sct)
                     if box:
-                        oprint(f"  > 🎉 [성공] 'anchor1.png' 파란 포탈 포착 완료!")
+                        oprint(f"  > 🎉 [성공] 보상 데비안트 포착 완료!")
                         break
                         
                     # 미감지 시 지정해주신 M-260 단위 초고속 좌회전 및 미세 안정화 대기
@@ -2735,42 +2763,36 @@ def oblivion_bot_loop():
                     
                 if not oblivion_active: raise BotStopException()
                 
-                # [에임 정밀 조준] 낚시모드와 동일한 PID 기반의 조준선 정렬 적용
-                oprint("  > 🎯 [조준] 'anchor1.png' 정중앙에 에임이 놓이도록 정밀 조준을 시작합니다.")
-                align_view_by_anchor('anchor1.png')
+                # [에임 정밀 조준] 보상물체 전용 초고속 조준선 정렬 적용
+                oprint("  > 🎯 [조준] 보상 데비안트 정중앙에 에임이 놓이도록 초고속 정밀 조준을 시작합니다.")
+                align_view_by_deviant()
                 time.sleep(0.2)
                 
                 # 7~8단계 통합: 보상 수거 시퀀스 (자가 정렬 및 동적 추적 주행)
-                oprint("[7~8단계 시작] 아노말리 수색 및 실시간 트래킹 전진 수거 가동")
+                oprint("[7~8단계 시작] 진짜 보상 정렬 및 실시간 초고속 트래킹 전진 수거 가동")
                 
                 looted = False
                 attempts = 0
                 
                 while oblivion_active and not looted:
-                    # 1단계: 파란 포탈(anchor1.png) 정렬 및 에임 락온
-                    oprint("  > [정렬] 'anchor1.png'(파란 포탈) 수색 및 초기 정렬...")
-                    
-                    # 가로 5등분 중앙 3칸 격리 스캔의 확실한 감지를 위해, 리트라이 회차 여부와 관계없이 언제나 오차 10픽셀 미만의 정밀 정렬을 수행합니다.
-                    # 포탈이 시야 내에 이미 존재하므로 회전 탐색 없이 즉각 미세 조준(약 0.05초 소요)만 수행하므로 시야 흔들림이 전혀 없습니다.
+                    # 1단계: 진짜 보상 데비안트 수색 및 초기 에임 초고속 고정
+                    oprint("  > [정렬] 보상 데비안트 수색 및 초고속 정밀 조준...")
                     while oblivion_active:
-                        pos = find_anchor_final('anchor1.png')
-                        if pos: break
+                        box = find_deviant_by_color(thread_sct)
+                        if box: break
                         send_cmd('M-260,0') # 수색 회전
                         time.sleep(0.04)
-                    align_view_by_anchor('anchor1.png')
+                    align_view_by_deviant()
                     time.sleep(0.1)
 
-                    # 2단계: 진짜 데비안트(발광 핑크) 정밀 수색 및 락온
-                    oprint("  > [수색] 정면 시야각에서 진짜 보상 데비안트 탐색 시작...")
+                    # 2단계: 진짜 데비안트(발광 핑크) 정밀 수색 및 락온 (이미 정면에 정렬되었으므로 재검증 수준으로 변경)
+                    oprint("  > [수색] 정면 시야각에서 진짜 보상 데비안트 재검증...")
                     target_found = False
-                    for _ in range(5):
-                        box = find_deviant_by_color(thread_sct)
-                        if box:
-                            target_found = True; break
-                        time.sleep(0.1)
-                        
-                    if not target_found:
-                        oprint("  > [수색] 정면 미검출: 좌우 미세 수색으로 진짜 데비안트 포착 시도...")
+                    box = find_deviant_by_color(thread_sct)
+                    if box:
+                        target_found = True
+                    else:
+                        oprint("  > [수색] 정면 일시 유실: 좌우 미세 수색으로 진짜 데비안트 재포착 시도...")
                         sweep_steps = ['M-100,0', 'M200,0', 'M-100,0']
                         for step in sweep_steps:
                             send_cmd(step); time.sleep(0.1)
@@ -2780,38 +2802,30 @@ def oblivion_bot_loop():
 
                     # 3단계: 전진 주행 (데비안트 락온 및 실시간 에임 고정 유지)
                     if target_found:
-                        # 수색에 완벽 성공했으므로, 실패 카운트(attempts)를 즉시 0으로 초기화합니다! (무한 자율 복구 보장)
                         if attempts > 0:
-                            oprint("  > 🎉 [성공] 진짜 보상 재검출 완료! 실패 카운트를 0으로 초기화하고 재전진을 개시합니다.")
+                            oprint("  > 🎉 [성공] 보상 재검출 완료! 실패 카운트를 0으로 초기화하고 재전진을 개시합니다.")
                             attempts = 0
                             
-                        # 최대 전진 시간을 사용자 요구에 부합하도록 5초로 하향 조정합니다.
-                        oprint("  > [전진] 진짜 보상 방향으로 에임을 고정한 채 최대 5초간 전진 시작...")
+                        oprint("  > [전진] 진짜 보상 방향으로 에임을 초고속 고정한 채 최대 8초간 전진 시작...")
                         send_cmd('W') # 전진 키 누름
                         
                         start_walk_t = time.time()
                         box_detected = False
                         
-                        # 최대 5.0초 동안 전진을 누르고 가면서도, 실시간으로 보상물체를 찾아 미끄러지듯 조준을 보정해 나갑니다!
                         while oblivion_active:
-                            # 전진 시간 상한을 8초로 타이트하게 세팅합니다.
                             if time.time() - start_walk_t > 8.0:
                                 oprint("  > ⚠️ [경고] 최대 8초간 전진했으나 상자 미검출. 조준선 재정렬을 위해 전진을 멈춥니다.")
                                 break
                             
-                            # [와리가리 흔들림 원천 차단 필터]
-                            # 전진 도중 오직 진짜 보상 데비안트의 고유 핑크색(find_deviant_by_color)만 연속 추적합니다!
-                            # 파란 포탈(anchor1)로 되돌아가 조준점을 맞추는 복구 분기를 전면 제거하여,
-                            # 포탈과 데비안트 사이에서 에임이 매 프레임 교차하며 요동치는 현상을 영구히 박멸합니다.
                             box = find_deviant_by_color(thread_sct)
                             if box:
                                 cx = box.left + box.width // 2
                                 err_x = cx - CENTER_X
                                 
-                                # 가속 상태에서도 에임이 미쳐 날뛰며 요동치지 않도록, 0.40의 비틀림 댐핑 보정식을 실시간 연속 전송합니다!
+                                # 에임 트래킹 반응 속도 대폭 상향 (게인 0.75, 최대 스텝 95로 일괄 지정)
                                 if abs(err_x) > 10:
-                                    dx = int(err_x * 0.40)
-                                    dx = max(-65, min(65, dx))
+                                    dx = int(err_x * 0.75)
+                                    dx = max(-95, min(95, dx))
                                     send_cmd(f'M{dx},0')
                                     
                             # 실시간으로 보물상자 텍스트('treasure_box.png') 출현 감시
@@ -2820,7 +2834,7 @@ def oblivion_bot_loop():
                                 box_detected = True
                                 break
                             time.sleep(0.05)
-                            
+                        
                         send_cmd('R') # W 키 해제 (정지)
                         time.sleep(0.2)
                         

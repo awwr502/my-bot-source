@@ -57,6 +57,7 @@ CENTER_X, CENTER_Y = SCREEN_W // 2, SCREEN_H // 2
 
 # [초고속화 1] PyAutoGUI의 숨겨진 기본 딜레이(0.1초) 강제 해제
 pyautogui.PAUSE = 0
+pyautogui.FAILSAFE = False
 # [초고속화 2] OpenCV 내부 C++ 하드웨어 가속 최적화 강제 활성화
 cv2.setUseOptimized(True)
 

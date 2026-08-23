@@ -2684,49 +2684,9 @@ def oblivion_bot_loop():
                 send_cmd('L')
                 check_and_repair() # 홀딩 시작 직후 1차 즉시 검사
                 
-                # 보스의 가슴에 피어있는 어두운 보라~핑크빛 약점 꽃을 실시간 색상 면적만으로 원격 트래킹하는 스캐너 정의
-                def find_boss_weakspot_by_color(custom_sct):
-                    try:
-                        monitor = custom_sct.monitors[1]
-                        sct_img = custom_sct.grab(monitor)
-                        img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
-                        img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-                        
-                        # 채도가 낮고 어두운 보라~핑크 대역까지 넓게 아우르는 HSV 범위 지정
-                        # (H: 125~175, S: 40~255, V: 50~255)
-                        lower_pink = np.array([125, 40, 50])
-                        upper_pink = np.array([175, 255, 255])
-                        mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
-                        
-                        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                        morph = cv2.morphologyEx(mask_pink, cv2.MORPH_CLOSE, kernel)
-                        contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                        
-                        best_target = None
-                        max_area = 0
-                        for c in contours:
-                            area = cv2.contourArea(c)
-                            # 보스 가슴 영역에 흩어진 꽃 픽셀 집합 필터 (40 ~ 15000)
-                            if area < 40 or area > 15000: continue
-                            
-                            # 가려짐 등으로 왜곡되는 형태배율(Aspect Ratio) 체크를 완벽히 배제하고, 색채 덩어리 면적이 가장 큰 곳을 직접 조준합니다.
-                            if area > max_area:
-                                max_area = area
-                                x, y, w, h = cv2.boundingRect(c)
-                                best_target = (x, y, w, h)
-                                    
-                        if best_target:
-                            x, y, w, h = best_target
-                            cx = x + w // 2
-                            cy = y + h // 2
-                            return Box(cx - w//2, cy - h//2, w, h)
-                        return None
-                    except:
-                        return None
-
-                # 실시간 비주얼 트래킹 에임락을 사격 루프에 주입합니다.
-                PULL_RIGHT_DX = 4  # 약점 가려짐 발생 시 백업용 우측 이동 값
-                PULL_DOWN_DY = 12  # 약점 가려짐 발생 시 백업용 하향 이동 값
+                # 수직/수평 반동을 완전히 상쇄하기 위해 매 루프마다 마우스를 아래(10) 및 우측(3)으로 동시에 부드럽게 끌어내립니다.
+                PULL_RIGHT_DX = 4  # 우측 이동 값 (오른쪽으로 3픽셀)
+                PULL_DOWN_DY = 12  # 하향 이동 값 (아래로 10픽셀)
                 
                 while oblivion_active:
                     check_and_repair() # 홀딩 유지 도중 실시간 지속 검사
@@ -2734,25 +2694,8 @@ def oblivion_bot_loop():
                     if find_img('reward.png', conf=0.70, full_screen=False):
                         break
                         
-                    # 실시간 약점 꽃 감지 및 조준선 유기적 락온
-                    weakspot = find_boss_weakspot_by_color(thread_sct)
-                    if weakspot:
-                        cx = weakspot.left + weakspot.width // 2
-                        cy = weakspot.top + weakspot.height // 2
-                        err_x = cx - CENTER_X
-                        err_y = cy - CENTER_Y
-                        
-                        # 반동 및 렌더링 흔들림으로 카메라가 튀지 않도록 조준 댐핑 보정(0.25)
-                        dx = int(err_x * 0.25)
-                        dy = int(err_y * 0.25)
-                        dx = max(-50, min(50, dx))
-                        dy = max(-50, min(50, dy))
-                        
-                        send_cmd(f'M{dx},{dy}')
-                    else:
-                        # 타격 이펙트 등으로 보이지 않는 순간에는 기본 반동 제어로 임시 대체
-                        send_cmd(f'M{PULL_RIGHT_DX},{PULL_DOWN_DY}')
-                        
+                    # 단 한 번의 마우스 제어 명령(M)으로 아래와 오른쪽을 동시 이동시켜 부드럽고 완벽한 대각선 복합 반동 보정을 가동합니다.
+                    send_cmd(f'M{PULL_RIGHT_DX},{PULL_DOWN_DY}')
                     time.sleep(0.02)
                 
                 if not oblivion_active: raise BotStopException()

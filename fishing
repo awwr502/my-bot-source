@@ -2684,9 +2684,48 @@ def oblivion_bot_loop():
                 send_cmd('L')
                 check_and_repair() # 홀딩 시작 직후 1차 즉시 검사
                 
-                # 수직/수평 반동을 완전히 상쇄하기 위해 매 루프마다 마우스를 아래(10) 및 우측(3)으로 동시에 부드럽게 끌어내립니다.
-                PULL_RIGHT_DX = 4  # 우측 이동 값 (오른쪽으로 3픽셀)
-                PULL_DOWN_DY = 12  # 하향 이동 값 (아래로 10픽셀)
+                # 보스의 분홍색 꽃(약점)을 정밀 필터링하여 실시간 추적하는 네온 핑크 HSV 스캐너 정의
+                def find_boss_weakspot_by_color(custom_sct):
+                    try:
+                        monitor = custom_sct.monitors[1]
+                        sct_img = custom_sct.grab(monitor)
+                        img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+                        img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+                        
+                        lower_pink = np.array([135, 100, 140])
+                        upper_pink = np.array([170, 255, 255])
+                        mask_pink = cv2.inRange(img_hsv, lower_pink, upper_pink)
+                        
+                        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+                        morph = cv2.morphologyEx(mask_pink, cv2.MORPH_CLOSE, kernel)
+                        contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        
+                        best_target = None
+                        max_area = 0
+                        for c in contours:
+                            area = cv2.contourArea(c)
+                            if area < 40 or area > 15000: continue
+                            
+                            x, y, w, h = cv2.boundingRect(c)
+                            aspect_ratio = h / float(w) if w > 0 else 0
+                            # 꽃 모양 특유의 정사각/정원 형태 검증 (0.6 ~ 1.6)
+                            if 0.6 <= aspect_ratio <= 1.6:
+                                if area > max_area:
+                                    max_area = area
+                                    best_target = (x, y, w, h)
+                                    
+                        if best_target:
+                            x, y, w, h = best_target
+                            cx = x + w // 2
+                            cy = y + h // 2
+                            return Box(cx - w//2, cy - h//2, w, h)
+                        return None
+                    except:
+                        return None
+
+                # 실시간 비주얼 트래킹 에임락을 사격 루프에 주입합니다.
+                PULL_RIGHT_DX = 4  # 약점 가려짐 발생 시 백업용 우측 이동 값
+                PULL_DOWN_DY = 12  # 약점 가려짐 발생 시 백업용 하향 이동 값
                 
                 while oblivion_active:
                     check_and_repair() # 홀딩 유지 도중 실시간 지속 검사
@@ -2694,8 +2733,25 @@ def oblivion_bot_loop():
                     if find_img('reward.png', conf=0.70, full_screen=False):
                         break
                         
-                    # 단 한 번의 마우스 제어 명령(M)으로 아래와 오른쪽을 동시 이동시켜 부드럽고 완벽한 대각선 복합 반동 보정을 가동합니다.
-                    send_cmd(f'M{PULL_RIGHT_DX},{PULL_DOWN_DY}')
+                    # 실시간 약점 꽃 감지 및 조준선 유기적 락온
+                    weakspot = find_boss_weakspot_by_color(thread_sct)
+                    if weakspot:
+                        cx = weakspot.left + weakspot.width // 2
+                        cy = weakspot.top + weakspot.height // 2
+                        err_x = cx - CENTER_X
+                        err_y = cy - CENTER_Y
+                        
+                        # 반동 및 렌더링 흔들림으로 카메라가 튀지 않도록 조준 댐핑 보정(0.25)
+                        dx = int(err_x * 0.25)
+                        dy = int(err_y * 0.25)
+                        dx = max(-50, min(50, dx))
+                        dy = max(-50, min(50, dy))
+                        
+                        send_cmd(f'M{dx},{dy}')
+                    else:
+                        # 타격 이펙트 등으로 보이지 않는 순간에는 기본 반동 제어로 임시 대체
+                        send_cmd(f'M{PULL_RIGHT_DX},{PULL_DOWN_DY}')
+                        
                     time.sleep(0.02)
                 
                 if not oblivion_active: raise BotStopException()

@@ -836,21 +836,74 @@ class Box:
         self.width = width
         self.height = height
 
+def save_roi_image(img_path, sct_obj, box_coords, current_count, is_locked):
+    """학습 상태 및 진행도에 따라 매우 직관적인 한글 파일명을 부여하고, 구형 버전을 자동 청소하며 이미지를 저장합니다."""
+    try:
+        # 1. locked_rois 폴더가 존재하지 않는 경우 자동 생성
+        if not os.path.exists(LOCKED_ROI_DIR):
+            os.makedirs(LOCKED_ROI_DIR, exist_ok=True)
+            
+        # 2. 기존 폴더 내부에 남아있던 이 이미지 관련 모든 잔여 파편 파일들을 검색하여 영구 선제 소멸 (꼬임 방지)
+        for filename in os.listdir(LOCKED_ROI_DIR):
+            if img_path in filename:
+                try:
+                    os.remove(os.path.join(LOCKED_ROI_DIR, filename))
+                except:
+                    pass
+        
+        # 3. 새 이름 작명 및 저장 경로 설정
+        if is_locked:
+            new_filename = f"[확정]_{img_path}"
+        else:
+            new_filename = f"[학습중_{current_count}_30]_{img_path}"
+            
+        save_path = os.path.join(LOCKED_ROI_DIR, new_filename)
+        
+        # 4. mss 캡처 대역을 OpenCV 포맷으로 변환 후 고화질 png 파일로 보존
+        roi_img = np.array(sct_obj.grab(box_coords))
+        success, encoded_img = cv2.imencode('.png', cv2.cvtColor(roi_img, cv2.COLOR_BGRA2BGR))
+        if success:
+            with open(save_path, 'wb') as f:
+                f.write(encoded_img.tobytes())
+    except Exception as e:
+        print(f"  > ⚠️ [ROI 사진 저장 오류] {img_path} 크롭 실패: {e}")
+
 def load_roi_cache():
-    """저장된 ROI 기억(json) 및 학습 고정 상태, 진행도를 모두 불러옵니다."""
+    """저장된 ROI 기억(json) 및 상태를 불러옵니다. 단, locked_rois 폴더에서 지워진 이미지는 캐시를 즉시 영구 삭제(리셋)합니다."""
     global ROI_SAMPLER
     if not hasattr(safe_find_image, 'session'): safe_find_image.session = {}
+    
+    # 1. 실시간 폴더 내 파일 리스트 스캔
+    existing_files = []
+    if os.path.exists(LOCKED_ROI_DIR):
+        existing_files = os.listdir(LOCKED_ROI_DIR)
+        
     try:
         if os.path.exists(ROI_CACHE_FILE):
             with open(ROI_CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                purged_data = {}
+                
                 for k, v in data.items():
+                    # k(원본 이미지 이름)가 포함된 크롭 사진이 폴더 내에 실제로 존재하는지 판별
+                    has_file = False
+                    for filename in existing_files:
+                        if k in filename:
+                            has_file = True
+                            break
+                    
+                    # [비주얼 리셋 핵심] 과거 기록은 있으나, 사용자가 폴더에서 크롭 사진을 수동으로 삭제한 경우!
+                    if not has_file:
+                        print(f"  > 🧹 [ROI 리셋] '{k}'의 확정/학습 사진이 삭제되어 캐시 데이터를 완전히 파괴하고 초기 재학습 상태로 복구합니다.")
+                        continue
+                        
+                    # 사진 파일이 무사히 존재한다면 정상 메모리 및 데이터 복구 수행
+                    purged_data[k] = v
                     ROI_SAMPLER[k] = {
                         'samples': deque(v.get('samples', []), maxlen=10),
                         'master_box': v.get('master_box')
                     }
                     
-                    # [핵심] 진행 중인 1/30 ~ 29/30 데이터까지 하드디스크에서 완벽 복구
                     is_locked = v.get('is_locked', False)
                     locked_conf = v.get('locked_conf', 0.6)
                     saved_history = v.get('history', [])
@@ -868,18 +921,13 @@ def load_roi_cache():
                         'active_conf': locked_conf if is_locked else 0.6,
                         'is_locked': is_locked, 'locked_conf': locked_conf
                     }
-
-                # [무효 캐시 자동 소멸 세척기]
-                # 이제 green_float.png와 QTE 홀딩 키들은 다른 최적의 ROI를 공유(차용)하거나 자체 강제 고정되므로,
-                # JSON 내부에 남아있던 그들의 과거 오염된 학습 캐시(master_box)를 부팅 시 자동으로 안전하게 영구 소멸시키고 뇌를 깨끗하게 세척합니다.
-                if 'fishing_hold_A.png' in ROI_SAMPLER or 'fishing_hold_D.png' in ROI_SAMPLER:
-                    ROI_SAMPLER.pop('fishing_hold_A.png', None)
-                    ROI_SAMPLER.pop('fishing_hold_D.png', None)
-                    save_roi_cache()
-                    print("  > 🧹 [ROI 정리] 무효화/오염된 기존 green_float 및 QTE 홀딩의 구형 독자 캐시를 자동 소멸 및 정화 완료했습니다.")
-
+                
+                # 정제된 동기화 상태 데이터를 JSON 파일에 무결하게 즉시 재정렬 덮어쓰기
+                with open(ROI_CACHE_FILE, "w", encoding="utf-8") as f_out:
+                    json.dump(purged_data, f_out, indent=4, ensure_ascii=False)
+                    
     except Exception as e:
-        pass
+        print(f"  > ⚠️ [ROI 비주얼 복구 오류] {e}")
 
 def save_roi_cache():
     """현재까지 학습된 ROI 좌표와 고정(Lock) 상태, 진행도(History)를 json 파일로 영구 저장합니다."""
@@ -901,7 +949,7 @@ def save_roi_cache():
                 'master_box': v['master_box'],
                 'is_locked': is_locked,
                 'locked_conf': locked_conf,
-                'history': history_list # 학습 진행도 영구 저장 추가
+                'history': history_list
             }
         with open(ROI_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(save_data, f, indent=4, ensure_ascii=False)
@@ -1311,20 +1359,15 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
                         min_c = min(ctx['history'])
                         max_c = max(ctx['history'])
                         print(f"  > 🔒 [학습 완료] '{img_path}' 누적 30회 인식 성공! (최저: {min_c:.3f} / 최고: {max_c:.3f})")
-                        
                         log_confidence_to_csv("학습완료", img_path, conf, max_val, min_c, max_c, "30회 누적 고정완료")
-                        try:
-                            if cache_data['master_box']:
-                                mb = cache_data['master_box']
-                                roi_img = np.array(active_sct.grab(mb))
-                                save_path = os.path.join(LOCKED_ROI_DIR, f"locked_{img_path}")
-                                success, encoded_img = cv2.imencode('.png', cv2.cvtColor(roi_img, cv2.COLOR_BGRA2BGR))
-                                if success:
-                                    with open(save_path, 'wb') as f:
-                                        f.write(encoded_img.tobytes())
-                                print(f"  > 📸 [ROI 캡처] '{img_path}' 고정 범위가 '{save_path}'에 저장되었습니다.")
-                        except Exception as e:
-                            print(f"  > ⚠️ ROI 이미지 저장 실패: {e}")
+                        
+                        # [확정] 이미지 저장 및 구형 학습중 파일들 정리
+                        if cache_data['master_box']:
+                            save_roi_image(img_path, active_sct, cache_data['master_box'], 30, True)
+                    else:
+                        # [학습중] 실시간 진행도 이미지 저장 및 이전 구형 단계 파일 자동 제거 (원본 len 함수 직통 사용)
+                        if cache_data['master_box']:
+                            save_roi_image(img_path, active_sct, cache_data['master_box'], len(ctx['history']), False)
 
         if not ctx['found'] and max_val >= active_conf:
             mode_str = "🔒고정" if ctx['is_locked'] else f"⚙️학습({len(ctx['history'])}/30)"
@@ -1332,18 +1375,11 @@ def safe_find_image(img_path, conf=0.6, region=None, custom_sct=None, return_sco
             print(f"  > 🟢 [인식 완료] {img_path} | 일치율: {max_val:.3f} / 컷오프({mode_str}): {active_conf:.3f}{recheck_str}")
             ctx['found'] = True
 
+            # 이미 고정된 확정 상태인데 폴더 내에 [확정]_ 파일이 실수로 날아갔을 경우 안전 자가 복구 저장 수행
             if ctx['is_locked'] and cache_data.get('master_box'):
-                save_path = os.path.join(LOCKED_ROI_DIR, f"locked_{img_path}")
-                if not os.path.exists(save_path):
-                    try:
-                        mb = cache_data['master_box']
-                        roi_img = np.array(active_sct.grab(mb))
-                        success, encoded_img = cv2.imencode('.png', cv2.cvtColor(roi_img, cv2.COLOR_BGRA2BGR))
-                        if success:
-                            with open(save_path, 'wb') as f:
-                                f.write(encoded_img.tobytes())
-                            print(f"  > 📸 [ROI 복구 캡처] '{img_path}'의 누락된 고정 범위 사진을 다시 저장했습니다.")
-                    except: pass
+                save_path_confirm = os.path.join(LOCKED_ROI_DIR, f"[확정]_{img_path}")
+                if not os.path.exists(save_path_confirm):
+                    save_roi_image(img_path, active_sct, cache_data['master_box'], 30, True)
 
         # [인식 실패 연동 및 디버그용 콘솔 알림] (10초당 1회만 노출, 무음 플래그 선행 반환)
         if max_val < active_conf:

@@ -339,7 +339,7 @@ FUSION_CONF = {
 
 # [2/5 자동화] 마스터 배열 캐릭터들의 인식률(0.92)을 FUSION_CONF에 자동 등록
 for c in MY_CHARACTERS:
-    FUSION_CONF[c["img"]] = 0.92
+    FUSION_CONF[c["img"]] = 0.87
 
 FUSION_CACHE = {}
 GRAY_IMAGES = [

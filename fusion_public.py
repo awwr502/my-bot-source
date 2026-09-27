@@ -1641,7 +1641,7 @@ def fusion_bot_loop():
                         
                         found_char = False
                         wait_g = time.time()
-                        while time.time() - wait_g < 1.5 and bot_active:
+                        while time.time() - wait_g < 3.0 and bot_active:
                             if check_img(target_char, thread_sct, force_full=True):
                                 found_char = True
                                 break
@@ -3940,7 +3940,7 @@ def force_change_character(char_key):
                     
                     found_char = False
                     wait_g = time.time()
-                    while time.time() - wait_g < 1.5 and char_thread_active:
+                    while time.time() - wait_g < 3.0 and char_thread_active:
                         if check_img(char_key, thread_sct, force_full=True):
                             found_char = True
                             break
